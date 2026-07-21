@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Question Board</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>❓</text></svg>">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-row">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">?</span>
+        <div>
+          <h1>Question Board</h1>
+          <p class="tagline">a running ledger of AI engineering questions</p>
+        </div>
+      </div>
+      <div class="view-switch" role="group" aria-label="Switch view">
+        <button type="button" data-view="board" aria-pressed="true">Board</button>
+        <button type="button" data-view="backlog" aria-pressed="false">Backlog</button>
+      </div>
+      <div class="toolbar">
+        <input id="search" type="search" placeholder="Search questions…" aria-label="Search questions">
+        <select id="priority-filter" aria-label="Filter by priority">
+          <option value="">All priorities</option>
+          <option value="high">High</option>
+          <option value="medium">Medium</option>
+          <option value="low">Low</option>
+        </select>
+        <button id="export-btn" class="btn ghost" title="Download the board as a JSON file">Export JSON</button>
+        <button id="import-btn" class="btn ghost" title="Restore the board from a JSON file">Import JSON</button>
+        <input id="import-input" type="file" accept="application/json,.json" hidden>
+        <button id="theme-toggle" class="btn icon" aria-label="Toggle light/dark theme">🌙</button>
+      </div>
+    </div>
+    <div id="tag-bar" class="tag-bar" role="group" aria-label="Filter by tag" hidden></div>
+  </header>
+
+  <main id="board" class="board" aria-label="Question board"></main>
+
+  <dialog id="card-dialog">
+    <form id="card-form">
+      <h2 id="dialog-title">Edit question</h2>
+      <label class="field">Question
+        <textarea id="card-title" rows="2" required></textarea>
+      </label>
+      <label class="field">Notes / answer
+        <textarea id="card-notes" rows="5" placeholder="Research notes, links, the answer…"></textarea>
+      </label>
+      <fieldset class="priority-picker">
+        <legend>Priority</legend>
+        <label><input type="radio" name="priority" value="high"><span class="badge high">High</span></label>
+        <label><input type="radio" name="priority" value="medium"><span class="badge medium">Medium</span></label>
+        <label><input type="radio" name="priority" value="low"><span class="badge low">Low</span></label>
+      </fieldset>
+      <label class="field">Tags <span class="hint">(comma separated)</span>
+        <input id="card-tags" type="text" placeholder="rag, evals, prompting">
+      </label>
+      <p id="card-meta" class="card-meta-line"></p>
+      <div class="dialog-actions">
+        <button type="button" id="delete-card" class="btn danger">Delete question</button>
+        <span class="spacer"></span>
+        <button type="button" id="cancel-dialog" class="btn ghost">Cancel</button>
+        <button type="submit" class="btn primary">Save changes</button>
+      </div>
+    </form>
+  </dialog>
+
+  <footer class="app-footer">
+    <p>Drag cards to move them · with a card focused: <kbd>Enter</kbd> edit · <kbd>[</kbd>/<kbd>]</kbd> change column · <kbd>Alt</kbd>+<kbd>↑</kbd>/<kbd>↓</kbd> reorder · <kbd>Del</kbd> delete</p>
+  </footer>
+
+  <div id="live-region" class="visually-hidden" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>
