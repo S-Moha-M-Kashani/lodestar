@@ -1,0 +1,28 @@
+name: CI
+
+# Every button and flow is exercised end-to-end before anything ships.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install Playwright's Chromium
+        run: uv run --with playwright playwright install --with-deps chromium
+
+      - name: Run the end-to-end suite (starts the SQLite-backed server itself)
+        run: uv run --with playwright python tests/e2e_test.py
