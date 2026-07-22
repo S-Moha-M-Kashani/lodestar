@@ -23,6 +23,9 @@ with sync_playwright() as p:
     errors = []
     page.on("pageerror", lambda e: errors.append(str(e)))
     page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+    confirms = []  # every native confirm() is recorded and accepted
+    page.on("dialog", lambda d: (confirms.append(d.message), d.accept()))
+    context.grant_permissions(["clipboard-read", "clipboard-write"], origin=URL)
 
     page.goto(URL)
     page.wait_for_selector(".card")
@@ -74,7 +77,7 @@ with sync_playwright() as p:
           first_badge.inner_text().lower() == "high")
 
     # 7. Search filter
-    page.fill("#search", "kv cache")
+    page.fill("#search", "runway")
     page.wait_for_timeout(100)
     check("filter: search narrows to 1 card", page.locator(".card").count() == 1)
     page.fill("#search", "")
@@ -88,10 +91,10 @@ with sync_playwright() as p:
     page.select_option("#priority-filter", "")
 
     # 9. Tag chip filter
-    page.locator('.tag-chip:has-text("rag")').first.click()
+    page.locator('.tag-chip:has-text("planning")').first.click()
     page.wait_for_timeout(100)
-    check("filter: tag chip 'rag' shows 2 cards", page.locator(".card").count() == 2)
-    page.locator('.tag-chip:has-text("rag")').first.click()
+    check("filter: tag chip 'planning' shows 2 cards", page.locator(".card").count() == 2)
+    page.locator('.tag-chip:has-text("planning")').first.click()
 
     # 10. Drag & drop: drag first Inbox card to Answered
     src = page.locator('[data-col="inbox"] .card').first
@@ -109,13 +112,25 @@ with sync_playwright() as p:
           page.locator(".card").count() == count_before
           and page.locator('[data-col="answered"] .card').count() == 1)
 
-    # 12. Export produces valid JSON with all cards
+    # 12. Export dialog: download produces valid JSON; Copy JSON works too
+    page.click("#export-btn")
+    page.wait_for_selector("#export-dialog[open]")
     with page.expect_download() as dl:
-        page.click("#export-btn")
+        page.click("#download-export")
     path = dl.value.path()
     data = json.loads(open(path).read())
-    check("export: valid JSON, version 1, all cards",
+    check("export: download is valid JSON, version 1, all cards",
           data.get("version") == 1 and len(data.get("cards", [])) == count_before)
+    check("export: dialog closes after download",
+          page.locator("#export-dialog[open]").count() == 0)
+    page.click("#export-btn")
+    page.wait_for_selector("#export-dialog[open]")
+    page.click("#copy-export")
+    copied = page.evaluate("navigator.clipboard.readText()")
+    check("export: Copy JSON puts the whole board on the clipboard",
+          json.loads(copied).get("version") == 1
+          and len(json.loads(copied).get("cards", [])) == count_before)
+    page.click("#cancel-export")
 
     # 13. Theme modes: all four apply, persist across reload, Day is plain white
     for theme in ("white", "sepia", "dark", "light"):
@@ -137,13 +152,42 @@ with sync_playwright() as p:
     page.select_option("#theme-select", "light")
 
     # 14. Delete via modal (accept confirm)
-    page.on("dialog", lambda d: d.accept())
     page.locator('[data-col="answered"] .card').first.click()
     page.wait_for_selector("#card-dialog[open]")
     page.click("#delete-card")
     page.wait_for_timeout(150)
     check("delete: card removed from Answered",
           page.locator('[data-col="answered"] .card').count() == 0)
+
+    # 14b. Undo brings the deleted card back
+    page.click("#undo-btn")
+    page.wait_for_timeout(150)
+    check("undo: deleted card restored to Answered",
+          page.locator('[data-col="answered"] .card').count() == 1)
+
+    # 14c. History dialog: full log, jump to any state and back
+    page.click("#history-btn")
+    page.wait_for_selector("#history-dialog[open]")
+    check("history: log records the session's actions",
+          page.locator(".history-row").count() >= 8)
+    check("history: exactly one entry marked current",
+          page.locator(".history-row.current").count() == 1)
+    check("history: entries carry timestamp and action text",
+          page.locator(".history-row .history-time").count()
+          == page.locator(".history-row .history-action").count())
+    page.screenshot(path=shot("history-dialog.png"))
+    # jump all the way back to the opening state (4 seed questions)
+    page.locator(".history-row .history-restore").last.click()
+    page.wait_for_timeout(150)
+    check("history: restored the opening state",
+          page.locator(".card").count() == 4
+          and page.locator(".card", has_text="speculative decoding").count() == 0)
+    # come forward again to the newest entry — nothing was lost
+    page.locator(".history-row .history-restore").first.click()
+    page.wait_for_timeout(150)
+    check("history: came forward again, later state intact",
+          page.locator(".card", has_text="speculative decoding").count() == 1)
+    page.click("#close-history")
 
     # 15. Mobile viewport renders horizontally scrollable board
     page.set_viewport_size({"width": 375, "height": 800})
@@ -184,32 +228,52 @@ with sync_playwright() as p:
           '"version": 1' in schema_text and '"cards"' in schema_text
           and "inbox | to-research | in-progress | answered" in schema_text)
     page.screenshot(path=shot("import-dialog.png"))
-    context.grant_permissions(["clipboard-read", "clipboard-write"], origin=URL)
     page.click("#copy-schema")
     clipboard = page.evaluate("navigator.clipboard.readText()")
     check("import: 'Copy schema' puts the schema on the clipboard",
           '"version": 1' in clipboard)
 
-    # 20. Importing a file generated from the schema replaces the board
+    # 20. Importing ADDS to the board by default
     import_file = shot("generated-import.json")
     with open(import_file, "w") as f:
         json.dump({"version": 1, "cards": [
-            {"title": "Imported: how do I eval tool use?", "columnId": "to-research",
-             "priority": "high", "tags": ["evals"]},
-            {"title": "Imported: KV cache sizing rule of thumb?"},
+            {"title": "Imported: which venue for the offsite?", "columnId": "to-research",
+             "priority": "high", "tags": ["planning"]},
+            {"title": "Imported: who owns the onboarding doc?"},
         ]}, f)
-    page.set_input_files("#import-input", import_file)  # confirm accepted by handler above
-    page.wait_for_timeout(250)
-    check("import: dialog closed after choosing a file",
-          page.locator("#import-dialog[open]").count() == 0)
-    check("import: board replaced with the 2 imported questions",
+    count_before_import = page.locator(".card").count()
+    page.set_input_files("#import-input", import_file)
+    page.wait_for_selector("#import-mode-dialog[open]")
+    check("import: add-or-substitute choice offered after picking a file",
+          page.locator("#import-add").count() == 1
+          and page.locator("#import-replace").count() == 1)
+    page.click("#import-add")
+    page.wait_for_timeout(200)
+    check("import: questions added on top of the existing board",
+          page.locator(".card").count() == count_before_import + 2)
+    check("import: added card kept its column, defaults fill the gaps",
+          page.locator('[data-col="to-research"] .card', has_text="offsite").count() == 1
+          and page.locator('[data-col="inbox"] .card', has_text="onboarding doc").count() == 1)
+    nums = page.locator(".card-num").all_inner_texts()
+    check("import: ledger numbers stay unique after adding",
+          len(nums) == len(set(nums)) and all(n.startswith("Q-0") for n in nums))
+
+    # 21. Substituting asks are-you-sure, then replaces the whole board
+    confirms.clear()
+    page.set_input_files("#import-input", import_file)
+    page.wait_for_selector("#import-mode-dialog[open]")
+    page.click("#import-replace")  # its confirm() is auto-accepted and recorded
+    page.wait_for_timeout(200)
+    check("import: substitute asked 'Are you sure?' first",
+          any("Are you sure" in m for m in confirms))
+    check("import: substitute replaced the whole board",
           page.locator(".card").count() == 2)
-    check("import: columnId honored, defaults fill the gaps",
-          page.locator('[data-col="to-research"] .card', has_text="eval tool use").count() == 1
-          and page.locator('[data-col="inbox"] .card', has_text="KV cache sizing").count() == 1
-          and page.locator('[data-col="inbox"] .badge.medium').count() == 1)
-    check("import: ledger numbers assigned automatically",
-          page.locator(".card-num").first.inner_text().startswith("Q-0"))
+
+    # 22. Undo rolls back even a full substitution
+    page.click("#undo-btn")
+    page.wait_for_timeout(150)
+    check("undo: substitution rolled back",
+          page.locator(".card").count() == count_before_import + 2)
 
     check("console: no JS errors during entire run", not errors)
     if errors:
