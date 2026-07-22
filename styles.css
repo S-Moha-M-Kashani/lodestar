@@ -661,6 +661,212 @@ input, select, textarea { font: inherit; color: inherit; }
 }
 
 /* ---------------------------------------------------------------------------
+   Plotted views — Overview (semantic map) & Matrix, as plates on the grid.
+   The signature element is the "stamped question dot": a rotated ruled circle
+   bearing the mono ledger number, inked in its column's accent.
+--------------------------------------------------------------------------- */
+.overview,
+.matrix {
+  flex: 1;
+  padding: 16px 28px 32px;
+  overflow-y: auto;
+}
+
+.plot-sheet {
+  max-width: 940px;
+  margin: 0 auto;
+  background: var(--card);
+  border: 1px solid var(--card-line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lift);
+  padding: 22px 24px 24px;
+}
+
+.plot-head {
+  padding-bottom: 12px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--rule-red) 55%, transparent);
+}
+
+.plot-title {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 15px;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+}
+
+.plot-caption {
+  margin: 5px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+}
+
+.plot-status {
+  margin: 7px 0 0;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  color: var(--ink-soft);
+}
+.plot-status::before { content: "▸ "; color: var(--rule-red); }
+
+/* Legend — colour reads as which column a question lives in */
+.plot-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin-bottom: 14px;
+}
+
+.plot-legend-item {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.03em;
+  color: var(--ink-soft);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.plot-legend-item::before {
+  content: "";
+  width: 9px; height: 9px;
+  border-radius: 999px;
+  background: var(--dot);
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--dot) 40%, transparent);
+}
+
+/* The plotting field — a plate of engineering paper */
+.plot-field {
+  position: relative;
+  height: min(60vh, 540px);
+  border: 1px solid var(--card-line);
+  border-radius: var(--radius);
+  background-color: var(--paper);
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 22px 22px;
+  overflow: hidden;
+}
+
+/* Overview crosshair drawn through the data centroid, red-pencil style */
+.plot-cross-x, .plot-cross-y {
+  position: absolute;
+  background: color-mix(in srgb, var(--rule-red) 30%, transparent);
+}
+.plot-cross-x { left: 6%; right: 6%; top: 50%; height: 1px; }
+.plot-cross-y { top: 6%; bottom: 6%; left: 50%; width: 1px; }
+
+.plot-axis-x, .plot-axis-y {
+  position: absolute;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--ink-soft);
+}
+.plot-axis-x { right: 10px; top: calc(50% + 5px); }
+.plot-axis-y { left: calc(50% + 6px); top: 8px; }
+
+/* The stamped question dot */
+.plot-dot {
+  position: absolute;
+  transform: translate(-50%, -50%) rotate(-2deg);
+  width: 30px; height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  border: 1.5px solid color-mix(in srgb, var(--dot) 60%, var(--card));
+  background: var(--dot);
+  color: var(--paper);
+  box-shadow: var(--shadow-card);
+  padding: 0;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, left 0.6s ease, top 0.6s ease;
+  z-index: 1;
+}
+
+.plot-dot:hover,
+.plot-dot:focus-visible {
+  transform: translate(-50%, -50%) scale(1.22) rotate(-2deg);
+  box-shadow: var(--shadow-lift);
+  z-index: 3;
+}
+
+.plot-dot-num {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.plot-empty {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--card);
+}
+
+/* Hover/focus tooltip — a miniature index card */
+.plot-tip {
+  position: fixed;
+  z-index: 50;
+  pointer-events: none;
+  width: min(300px, calc(100vw - 24px));
+  background: var(--card);
+  border: 1px solid var(--card-line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-modal);
+  padding: 11px 13px 12px;
+}
+.plot-tip[hidden] { display: none; }
+
+.plot-tip-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 6px;
+  margin-bottom: 7px;
+  border-bottom: 1px solid color-mix(in srgb, var(--rule-red) 55%, transparent);
+}
+.plot-tip-head .card-num { margin-right: auto; }
+
+.plot-tip-title {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 500;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.plot-tip-meta {
+  margin: 6px 0 0;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-soft);
+}
+
+.plot-tip-notes {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.plot-tip .card-tags { margin-top: 8px; }
+
+@media (max-width: 640px) {
+  .overview, .matrix { padding: 12px 14px 20px; }
+  .plot-sheet { padding: 18px 16px 18px; }
+  .plot-field { height: 66vh; }
+}
+
+/* ---------------------------------------------------------------------------
    Dialog — one big index card
 --------------------------------------------------------------------------- */
 dialog {
@@ -704,7 +910,8 @@ dialog::backdrop {
 .field .hint { opacity: 0.75; }
 
 .field textarea,
-.field input {
+.field input,
+.field select {
   display: block;
   width: 100%;
   margin-top: 6px;
@@ -717,6 +924,23 @@ dialog::backdrop {
   color: var(--ink);
   resize: vertical;
 }
+
+/* Importance + urgency sit side by side, above the Matrix hint */
+.field-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+.field-row .field { flex: 1; margin-bottom: 11px; }
+
+.field-hint {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+  margin: 0 0 16px;
+}
+.field-hint strong { color: var(--ink); font-weight: 600; }
 
 .priority-picker {
   border: none;

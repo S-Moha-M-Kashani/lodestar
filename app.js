@@ -102,10 +102,12 @@
   let draggedId = null;
   let dealCards = true; // deal-in animation runs on first render only
 
-  let view = 'board'; // 'board' | 'backlog'
+  const VIEWS = ['board', 'backlog', 'overview'];
+  const VIEW_LABELS = { board: 'Board', backlog: 'Backlog', overview: 'Overview', matrix: 'Matrix' };
+  let view = 'board';
   try {
     const v = localStorage.getItem(VIEW_KEY);
-    if (v === 'board' || v === 'backlog') view = v;
+    if (VIEWS.includes(v)) view = v;
   } catch (_) { /* private mode */ }
 
   const nextNum = () => state.cards.reduce((m, c) => Math.max(m, c.num || 0), 0) + 1;
@@ -333,10 +335,13 @@
 
   function render() {
     const board = $('#board');
-    board.className = view === 'backlog' ? 'backlog' : 'board';
+    board.className = view;
     board.innerHTML = '';
+    hidePlotTip();
     if (view === 'backlog') {
       board.appendChild(renderBacklog());
+    } else if (view === 'overview') {
+      board.appendChild(renderOverview());
     } else {
       for (const col of COLUMNS) board.appendChild(renderColumn(col));
     }
@@ -638,6 +643,386 @@
     row.addEventListener('click', () => openDialog(card.id));
     row.addEventListener('keydown', (e) => onCardKeydown(e, card.id));
     return row;
+  }
+
+  // --------------------------------------------------------------------------
+  // Plotted views — shared "stamped question dots" on the engineering grid.
+  // Overview (a semantic map) and the Matrix both place questions as dots that
+  // reveal an index-card tooltip on hover and open the full editor on click.
+  // Each dot is inked in its column's accent, so colour reads as lifecycle stage.
+  // --------------------------------------------------------------------------
+
+  const COLUMN_ACCENT = {
+    'inbox': 'var(--ink-blue)',
+    'to-research': 'var(--ink-violet)',
+    'in-progress': 'var(--ink-amber)',
+    'answered': 'var(--ink-green)',
+  };
+
+  const IU_LABEL = { high: 'High', low: 'Low', '': 'not set' };
+
+  function dotAriaLabel(card) {
+    let s = `${qLabel(card)}: ${card.title} — ${card.priority} priority, in ${columnTitle(card.columnId)}`;
+    if (card.importance || card.urgency) {
+      s += `, importance ${IU_LABEL[iuVal(card.importance)]}, urgency ${IU_LABEL[iuVal(card.urgency)]}`;
+    }
+    return s;
+  }
+
+  // One shared tooltip, moved to whichever dot is hovered or focused.
+  let plotTip = null;
+  function ensurePlotTip() {
+    if (plotTip) return plotTip;
+    plotTip = document.createElement('div');
+    plotTip.className = 'plot-tip';
+    plotTip.hidden = true;
+    document.body.append(plotTip);
+    return plotTip;
+  }
+
+  function showPlotTip(card, dotEl) {
+    const tip = ensurePlotTip();
+    tip.innerHTML = '';
+
+    const head = document.createElement('div');
+    head.className = 'plot-tip-head';
+    const num = document.createElement('span');
+    num.className = 'card-num';
+    num.textContent = qLabel(card);
+    const badge = document.createElement('span');
+    badge.className = `badge ${card.priority}`;
+    badge.textContent = card.priority;
+    head.append(num, badge);
+
+    const title = document.createElement('p');
+    title.className = 'plot-tip-title';
+    title.textContent = card.title;
+
+    const meta = document.createElement('p');
+    meta.className = 'plot-tip-meta';
+    meta.textContent = `in ${columnTitle(card.columnId)}`;
+    if (card.importance || card.urgency) {
+      meta.textContent += ` · importance ${IU_LABEL[iuVal(card.importance)]} · urgency ${IU_LABEL[iuVal(card.urgency)]}`;
+    }
+
+    tip.append(head, title, meta);
+
+    if (card.notes.trim()) {
+      const notes = document.createElement('p');
+      notes.className = 'plot-tip-notes';
+      notes.textContent = card.notes.trim();
+      tip.append(notes);
+    }
+    if (card.tags.length) {
+      const tags = document.createElement('div');
+      tags.className = 'card-tags';
+      for (const t of card.tags) {
+        const chip = document.createElement('span');
+        chip.className = 'card-tag';
+        chip.textContent = t;
+        tags.append(chip);
+      }
+      tip.append(tags);
+    }
+
+    tip.hidden = false;
+    positionPlotTip(dotEl);
+  }
+
+  function positionPlotTip(dotEl) {
+    if (!plotTip || plotTip.hidden) return;
+    const r = dotEl.getBoundingClientRect();
+    const t = plotTip.getBoundingClientRect();
+    let left = r.left + r.width / 2 - t.width / 2;
+    let top = r.top - t.height - 10;
+    if (top < 8) top = r.bottom + 10; // flip below when there's no room above
+    left = Math.max(8, Math.min(left, window.innerWidth - t.width - 8));
+    plotTip.style.left = `${left}px`;
+    plotTip.style.top = `${top}px`;
+  }
+
+  const hidePlotTip = () => { if (plotTip) plotTip.hidden = true; };
+
+  function renderPlotDot(card, leftPct, topPct) {
+    const dot = document.createElement('button');
+    dot.type = 'button';
+    dot.className = 'plot-dot';
+    dot.dataset.id = card.id;
+    dot.dataset.col = card.columnId;
+    dot.style.left = `${leftPct}%`;
+    dot.style.top = `${topPct}%`;
+    dot.style.setProperty('--dot', COLUMN_ACCENT[card.columnId] || 'var(--ink-blue)');
+    dot.setAttribute('aria-label', dotAriaLabel(card));
+
+    const n = document.createElement('span');
+    n.className = 'plot-dot-num';
+    n.textContent = String(card.num);
+    dot.append(n);
+
+    dot.addEventListener('click', () => openDialog(card.id));
+    dot.addEventListener('mouseenter', () => showPlotTip(card, dot));
+    dot.addEventListener('mouseleave', hidePlotTip);
+    dot.addEventListener('focus', () => showPlotTip(card, dot));
+    dot.addEventListener('blur', hidePlotTip);
+    return dot;
+  }
+
+  function renderPlotLegend() {
+    const legend = document.createElement('div');
+    legend.className = 'plot-legend';
+    for (const col of COLUMNS) {
+      const item = document.createElement('span');
+      item.className = 'plot-legend-item';
+      item.style.setProperty('--dot', COLUMN_ACCENT[col.id]);
+      item.textContent = col.title;
+      legend.append(item);
+    }
+    return legend;
+  }
+
+  function plotEmptyHint(text) {
+    const hint = document.createElement('div');
+    hint.className = 'empty-hint plot-empty';
+    hint.textContent = text;
+    return hint;
+  }
+
+  // --- Embeddings + PCA -----------------------------------------------------
+  // Each question becomes a vector; PCA projects those vectors to two dimensions
+  // (PC-1, PC-2). Real semantic vectors come from a HuggingFace model
+  // (Transformers.js) loaded lazily from a CDN; until it's ready — or if it
+  // can't load (offline) — a deterministic keyword vector stands in, so the map
+  // always renders and never needs the network.
+
+  const EMBED_DIM = 128;
+  const cardText = (card) => `${card.title} ${card.notes}`.trim();
+
+  function textHash(s) {
+    let h = 2166136261;
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return (h >>> 0).toString(36);
+  }
+
+  function l2normalize(v) {
+    let s = 0;
+    for (let i = 0; i < v.length; i++) s += v[i] * v[i];
+    s = Math.sqrt(s);
+    if (s > 0) for (let i = 0; i < v.length; i++) v[i] /= s;
+    return v;
+  }
+
+  function localEmbed(text) {
+    const v = new Float64Array(EMBED_DIM);
+    const tokens = String(text).toLowerCase().match(/[a-z0-9]+/g) || [];
+    for (const tok of tokens) {
+      let h = 2166136261;
+      for (let k = 0; k < tok.length; k++) { h ^= tok.charCodeAt(k); h = Math.imul(h, 16777619); }
+      v[(h >>> 0) % EMBED_DIM] += 1;
+    }
+    return l2normalize(v);
+  }
+
+  const vdot = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; };
+
+  // Dominant eigenvector of the centred data's covariance, via power iteration;
+  // pass `deflate` to get the next component orthogonal to the first.
+  function powerIteration(X, d, deflate) {
+    const n = X.length;
+    let v = new Float64Array(d);
+    for (let j = 0; j < d; j++) v[j] = ((Math.imul(j + 1, 2654435761) >>> 0) % 2000) / 1000 - 1; // deterministic seed
+    l2normalize(v);
+    for (let iter = 0; iter < 60; iter++) {
+      if (deflate) { const p = vdot(v, deflate); for (let j = 0; j < d; j++) v[j] -= p * deflate[j]; }
+      const Xv = new Float64Array(n);
+      for (let i = 0; i < n; i++) Xv[i] = vdot(X[i], v);
+      const w = new Float64Array(d);
+      for (let i = 0; i < n; i++) { const row = X[i], c = Xv[i]; for (let j = 0; j < d; j++) w[j] += row[j] * c; }
+      if (deflate) { const p = vdot(w, deflate); for (let j = 0; j < d; j++) w[j] -= p * deflate[j]; }
+      if (vdot(w, w) === 0) break;
+      l2normalize(w);
+      v = w;
+    }
+    return v;
+  }
+
+  function pca2(vectors) {
+    const n = vectors.length, d = vectors[0].length;
+    const mean = new Float64Array(d);
+    for (const v of vectors) for (let j = 0; j < d; j++) mean[j] += v[j];
+    for (let j = 0; j < d; j++) mean[j] /= n;
+    const X = vectors.map((v) => { const r = new Float64Array(d); for (let j = 0; j < d; j++) r[j] = v[j] - mean[j]; return r; });
+    const pc1 = powerIteration(X, d, null);
+    const pc2 = powerIteration(X, d, pc1);
+    return X.map((r) => [vdot(r, pc1), vdot(r, pc2)]);
+  }
+
+  // Map raw 2-D points to plotting fractions in [0.06, 0.94], centred so the
+  // data mean sits at the middle crosshair. A degenerate spread falls back to a ring.
+  function normalizePoints(cards, pts) {
+    const coords = new Map();
+    const n = cards.length;
+    let mx = 0, my = 0;
+    for (const [x, y] of pts) { mx += x; my += y; }
+    mx /= n; my /= n;
+    let sx = 0, sy = 0;
+    for (const [x, y] of pts) { sx = Math.max(sx, Math.abs(x - mx)); sy = Math.max(sy, Math.abs(y - my)); }
+    if (Math.max(sx, sy) < 1e-9) {
+      cards.forEach((c, i) => {
+        const a = (i / n) * Math.PI * 2;
+        coords.set(c.id, { x: 0.5 + 0.32 * Math.cos(a), y: 0.5 + 0.32 * Math.sin(a) });
+      });
+      return coords;
+    }
+    cards.forEach((c, i) => {
+      const [x, y] = pts[i];
+      coords.set(c.id, {
+        x: 0.5 + 0.44 * (x - mx) / (sx || 1),
+        y: 0.5 - 0.44 * (y - my) / (sy || 1), // invert so PC-2 grows upward
+      });
+    });
+    return coords;
+  }
+
+  let semanticState = 'idle'; // idle | loading | ready | unavailable
+  const semanticCache = new Map(); // textHash -> Float32Array
+  let extractorPromise = null;
+
+  function overviewStatusText() {
+    switch (semanticState) {
+      case 'ready': return 'positioned by meaning · MiniLM sentence embeddings';
+      case 'loading': return 'positioned by keyword overlap — reading the questions…';
+      case 'unavailable': return 'positioned by keyword overlap — language model offline';
+      default: return 'positioned by keyword overlap';
+    }
+  }
+
+  const haveSemanticFor = (cards) =>
+    cards.length > 0 && cards.every((c) => semanticCache.has(textHash(cardText(c))));
+
+  // Lay out ALL cards together so a dot keeps its place when tag/priority
+  // filters hide its neighbours.
+  function overviewCoords(cards) {
+    if (cards.length === 0) return new Map();
+    if (cards.length === 1) return new Map([[cards[0].id, { x: 0.5, y: 0.5 }]]);
+    const useSemantic = semanticState === 'ready' && haveSemanticFor(cards);
+    const vecs = useSemantic
+      ? cards.map((c) => semanticCache.get(textHash(cardText(c))))
+      : cards.map((c) => localEmbed(cardText(c)));
+    return normalizePoints(cards, pca2(vecs));
+  }
+
+  function getExtractor() {
+    if (extractorPromise) return extractorPromise;
+    extractorPromise = (async () => {
+      const mod = await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.2');
+      mod.env.allowLocalModels = false; // fetch weights from the HuggingFace hub
+      return mod.pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
+    })();
+    return extractorPromise;
+  }
+
+  // Load the model once, embed any not-yet-embedded questions, then slide the
+  // dots to their semantic positions. Every failure degrades to the keyword
+  // layout — the network is never required. Set window.QBOARD_DISABLE_SEMANTIC
+  // to force the offline path (the e2e suite does this to stay network-free).
+  async function ensureSemanticLayout() {
+    if (semanticState === 'unavailable') return;
+    if (window.QBOARD_DISABLE_SEMANTIC) { semanticState = 'unavailable'; updateOverviewStatus(); return; }
+    const cards = state.cards.slice();
+    if (haveSemanticFor(cards)) {
+      if (semanticState !== 'ready') { semanticState = 'ready'; updateOverviewPlot(); }
+      return;
+    }
+    if (semanticState === 'loading') return;
+    semanticState = 'loading';
+    updateOverviewStatus();
+    try {
+      const extractor = await getExtractor();
+      for (const c of cards) {
+        const key = textHash(cardText(c));
+        if (semanticCache.has(key)) continue;
+        const out = await extractor(cardText(c) || ' ', { pooling: 'mean', normalize: true });
+        semanticCache.set(key, Float32Array.from(out.data));
+      }
+      semanticState = 'ready';
+    } catch (err) {
+      console.warn('Semantic layout unavailable — keeping the keyword-overlap map.', err);
+      semanticState = 'unavailable';
+    }
+    updateOverviewPlot();
+  }
+
+  function updateOverviewStatus() {
+    const s = document.querySelector('#board .plot-status');
+    if (s) s.textContent = overviewStatusText();
+  }
+
+  // Reposition the existing dots (they CSS-transition to their new spots)
+  // rather than re-render, so the shift to the semantic layout animates.
+  function updateOverviewPlot() {
+    if (view !== 'overview') return;
+    const field = document.querySelector('#board .plot-field');
+    if (!field) return;
+    const coords = overviewCoords(state.cards);
+    for (const d of field.querySelectorAll('.plot-dot')) {
+      const c = coords.get(d.dataset.id);
+      if (c) { d.style.left = `${c.x * 100}%`; d.style.top = `${c.y * 100}%`; }
+    }
+    updateOverviewStatus();
+  }
+
+  function buildCrosshair(xLabel, yLabel) {
+    const cross = document.createElement('div');
+    cross.className = 'plot-cross';
+    const vx = document.createElement('span'); vx.className = 'plot-cross-x';
+    const vy = document.createElement('span'); vy.className = 'plot-cross-y';
+    const xl = document.createElement('span'); xl.className = 'plot-axis-x'; xl.textContent = `${xLabel} →`;
+    const yl = document.createElement('span'); yl.className = 'plot-axis-y'; yl.textContent = `${yLabel} ↑`;
+    cross.append(vx, vy, xl, yl);
+    return cross;
+  }
+
+  function renderOverview() {
+    const sheet = document.createElement('div');
+    sheet.className = 'plot-sheet';
+
+    const head = document.createElement('div');
+    head.className = 'plot-head';
+    const title = document.createElement('h2');
+    title.className = 'plot-title';
+    title.textContent = 'Overview';
+    const caption = document.createElement('p');
+    caption.className = 'plot-caption';
+    caption.textContent = 'Every question mapped by meaning — the closer two dots sit, the more alike they read.';
+    const status = document.createElement('p');
+    status.className = 'plot-status';
+    status.textContent = overviewStatusText();
+    head.append(title, caption, status);
+    sheet.append(head, renderPlotLegend());
+
+    const field = document.createElement('div');
+    field.className = 'plot-field';
+    field.append(buildCrosshair('PC-1', 'PC-2'));
+
+    const all = state.cards;
+    if (all.length === 0) {
+      field.append(plotEmptyHint('Add a question and it will appear on the map'));
+      sheet.append(field);
+      return sheet;
+    }
+
+    const visible = all.filter(matchesFilters);
+    const coords = overviewCoords(all);
+    for (const card of visible) {
+      const c = coords.get(card.id);
+      if (c) field.append(renderPlotDot(card, c.x * 100, c.y * 100));
+    }
+    if (visible.length === 0) field.append(plotEmptyHint('No questions match'));
+
+    sheet.append(field);
+    // Run after this sheet is attached to #board so status/position updates land.
+    Promise.resolve().then(ensureSemanticLayout); // upgrade to semantic positions in the background
+    return sheet;
   }
 
   // --------------------------------------------------------------------------
@@ -1088,13 +1473,13 @@
   }
 
   function setView(next) {
-    if (next === view || (next !== 'board' && next !== 'backlog')) return;
+    if (next === view || !VIEWS.includes(next)) return;
     view = next;
     try { localStorage.setItem(VIEW_KEY, view); } catch (_) { /* private mode */ }
     syncViewButtons();
     dealCards = true; // re-deal for a gentle transition between views
     render();
-    announce(view === 'backlog' ? 'Backlog view' : 'Board view');
+    announce(`${VIEW_LABELS[view]} view`);
   }
 
   for (const btn of viewButtons) btn.addEventListener('click', () => setView(btn.dataset.view));
