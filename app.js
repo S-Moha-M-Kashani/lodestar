@@ -837,10 +837,12 @@
     const a = document.createElement('a');
     a.href = url;
     a.download = 'questions.json';
+    a.rel = 'noopener';
     document.body.append(a);
     a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    // Revoke/remove on a later tick — doing it synchronously can cancel the
+    // download before the browser has started it (notably Firefox/Safari).
+    setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 1000);
     exportDialog.close();
     announce('Exported board as questions.json');
   });
