@@ -4,6 +4,8 @@
   const STORAGE_KEY = 'question-board:v1';
   const THEME_KEY = 'question-board:theme';
   const VIEW_KEY = 'question-board:view';
+  const HISTORY_KEY = 'question-board:history';
+  const HISTORY_LIMIT = 50; // snapshots kept; oldest fall off like a rotated log
 
   const COLUMNS = [
     { id: 'inbox', title: 'Inbox' },
@@ -95,13 +97,66 @@
 
   const nextNum = () => state.cards.reduce((m, c) => Math.max(m, c.num || 0), 0) + 1;
 
-  function commit() {
+  // --------------------------------------------------------------------------
+  // History — an append-only timeline of board snapshots, like a git reflog.
+  // `index` is where the board currently stands; undo/restore only move the
+  // pointer, so no state is ever lost until it falls off the HISTORY_LIMIT end.
+  // --------------------------------------------------------------------------
+
+  const snapshot = (cards) => JSON.parse(JSON.stringify(cards));
+  const short = (s) => (s.length > 42 ? s.slice(0, 39) + '…' : s);
+
+  let timeline = { entries: [], index: -1 };
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && Array.isArray(parsed.entries) && Number.isInteger(parsed.index)) timeline = parsed;
+    }
+  } catch (_) { /* private mode */ }
+  if (!timeline.entries.length) {
+    timeline.entries = [{ ts: Date.now(), action: 'Board opened', cards: snapshot(state.cards) }];
+  }
+  timeline.index = Math.min(Math.max(timeline.index, 0), timeline.entries.length - 1);
+
+  function saveTimeline() {
+    try {
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(timeline));
+    } catch (err) {
+      console.warn('Could not save history.', err);
+    }
+  }
+
+  function saveState() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     } catch (err) {
       console.warn('Could not save board.', err);
     }
+  }
+
+  function commit(action) {
+    saveState();
+    timeline.entries.push({ ts: Date.now(), action, cards: snapshot(state.cards) });
+    if (timeline.entries.length > HISTORY_LIMIT) {
+      timeline.entries.splice(0, timeline.entries.length - HISTORY_LIMIT);
+    }
+    timeline.index = timeline.entries.length - 1;
+    saveTimeline();
     render();
+  }
+
+  /** Point the board at timeline entry `i` without writing a new entry. */
+  function restoreEntry(i, message) {
+    const entry = timeline.entries[i];
+    if (!entry) return;
+    state = { version: 1, columns: COLUMNS, cards: snapshot(entry.cards) };
+    timeline.index = i;
+    saveState();
+    saveTimeline();
+    dealCards = true;
+    render();
+    announce(message);
   }
 
   // --------------------------------------------------------------------------
@@ -151,7 +206,7 @@
       if (lastInColumn === -1) index = state.cards.length;
     }
     state.cards.splice(index, 0, card);
-    commit();
+    commit(`Moved ${qLabel(card)} to ${columnTitle(columnId)}`);
   }
 
   // --------------------------------------------------------------------------
@@ -168,6 +223,7 @@
       for (const col of COLUMNS) board.appendChild(renderColumn(col));
     }
     renderTagBar();
+    $('#undo-btn').disabled = timeline.index <= 0;
 
     if (dealCards) {
       board.querySelectorAll('.card, .backlog-row').forEach((el, i) => {
@@ -266,7 +322,7 @@
       // New captures go to the top of the Inbox
       const firstInbox = state.cards.findIndex((c) => c.columnId === 'inbox');
       state.cards.splice(firstInbox === -1 ? state.cards.length : firstInbox, 0, card);
-      commit();
+      commit(`Added ${qLabel(card)} “${short(title)}”`);
       announce(`Added “${title}” to Inbox`);
       const fresh = $('#board .quick-add input');
       if (fresh) fresh.focus();
@@ -574,14 +630,14 @@
     if (!card) return;
     if (!confirm(`Delete this question?\n\n“${card.title}”`)) return;
     state.cards = state.cards.filter((c) => c.id !== cardId);
-    commit();
+    commit(`Deleted ${qLabel(card)} “${short(card.title)}”`);
     announce(`Deleted “${card.title}”`);
   }
 
   function sortColumnByPriority(columnId) {
     const sorted = columnCards(columnId).sort((a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority]);
     state.cards = [...state.cards.filter((c) => c.columnId !== columnId), ...sorted];
-    commit();
+    commit(`Sorted ${columnTitle(columnId)} by priority`);
     announce(`Sorted ${columnTitle(columnId)} by priority`);
   }
 
@@ -620,7 +676,7 @@
         .map((t) => t.trim().toLowerCase())
         .filter(Boolean);
       card.updatedAt = Date.now();
-      commit();
+      commit(`Edited ${qLabel(card)} “${short(card.title)}”`);
     }
     dialog.close();
   });
@@ -778,6 +834,74 @@
     commit(`Imported ${n} question(s), substituted the board`);
     announce('Board substituted with the imported questions');
   });
+
+  // --------------------------------------------------------------------------
+  // Undo & history dialog
+  // --------------------------------------------------------------------------
+
+  $('#undo-btn').addEventListener('click', () => {
+    if (timeline.index <= 0) return;
+    const undone = timeline.entries[timeline.index].action;
+    restoreEntry(timeline.index - 1, `Undid “${undone}”`);
+  });
+
+  const historyDialog = $('#history-dialog');
+
+  $('#history-btn').addEventListener('click', () => {
+    renderHistory();
+    historyDialog.showModal();
+  });
+
+  $('#close-history').addEventListener('click', () => historyDialog.close());
+
+  function renderHistory() {
+    const list = $('#history-list');
+    list.innerHTML = '';
+    const fmt = (ts) =>
+      new Date(ts).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+    for (let i = timeline.entries.length - 1; i >= 0; i--) {
+      const entry = timeline.entries[i];
+      const row = document.createElement('div');
+      row.className = 'history-row' + (i === timeline.index ? ' current' : '');
+
+      const time = document.createElement('span');
+      time.className = 'history-time';
+      time.textContent = fmt(entry.ts);
+
+      const main = document.createElement('div');
+      main.className = 'history-main';
+
+      const action = document.createElement('p');
+      action.className = 'history-action';
+      action.textContent = entry.action;
+
+      const meta = document.createElement('span');
+      meta.className = 'history-meta';
+      meta.textContent = `${entry.cards.length} question${entry.cards.length === 1 ? '' : 's'}`;
+
+      main.append(action, meta);
+      row.append(time, main);
+
+      if (i === timeline.index) {
+        const mark = document.createElement('span');
+        mark.className = 'history-current';
+        mark.textContent = 'current';
+        row.append(mark);
+      } else {
+        const btn = document.createElement('button');
+        btn.className = 'btn ghost history-restore';
+        btn.textContent = 'Restore';
+        btn.addEventListener('click', () => {
+          restoreEntry(i, `Restored board to “${entry.action}”`);
+          renderHistory(); // keep the dialog open, move the “current” mark
+        });
+        row.append(btn);
+      }
+
+      list.append(row);
+    }
+  }
 
   const THEMES = ['light', 'white', 'sepia', 'dark'];
   const themeSelect = $('#theme-select');

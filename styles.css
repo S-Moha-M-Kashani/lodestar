@@ -818,6 +818,64 @@ dialog::backdrop {
   margin: 0 0 18px;
 }
 
+/* History dialog — the ledger's change log */
+#history-dialog { width: min(640px, calc(100vw - 32px)); }
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 46vh;
+  overflow-y: auto;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  margin-bottom: 18px;
+}
+
+.history-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.history-row:last-child { border-bottom: none; }
+
+.history-row.current { background: color-mix(in srgb, var(--ink-blue) 8%, transparent); }
+
+.history-time {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.history-main { flex: 1; min-width: 0; }
+
+.history-action {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.history-meta {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-soft);
+}
+
+.history-current {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-blue);
+}
+
+.history-restore { padding: 4px 10px; }
+
 /* ---------------------------------------------------------------------------
    Footer
 --------------------------------------------------------------------------- */

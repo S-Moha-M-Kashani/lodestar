@@ -29,6 +29,8 @@
           <option value="medium">Medium</option>
           <option value="low">Low</option>
         </select>
+        <button id="undo-btn" class="btn ghost" title="Undo the last change">Undo</button>
+        <button id="history-btn" class="btn ghost" title="Board history — jump back to any state">History</button>
         <button id="export-btn" class="btn ghost" title="Download the board as a JSON file">Export JSON</button>
         <button id="import-btn" class="btn ghost" title="Restore the board from a JSON file">Import JSON</button>
         <input id="import-input" type="file" accept="application/json,.json" hidden>
@@ -111,6 +113,18 @@
         <span class="spacer"></span>
         <button type="button" id="import-replace" class="btn danger">Substitute board…</button>
         <button type="button" id="import-add" class="btn primary">Add to board</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="history-dialog">
+    <div class="dialog-body">
+      <h2>Board history</h2>
+      <p class="import-copy">Every change is logged here, newest first. Restore any earlier state — moving around never deletes history, so you can always come forward again.</p>
+      <div id="history-list" class="history-list"></div>
+      <div class="dialog-actions">
+        <span class="spacer"></span>
+        <button type="button" id="close-history" class="btn ghost">Close</button>
       </div>
     </div>
   </dialog>
