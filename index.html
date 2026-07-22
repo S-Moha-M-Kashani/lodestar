@@ -14,7 +14,7 @@
         <span class="brand-mark" aria-hidden="true">?</span>
         <div>
           <h1>Question Board</h1>
-          <p class="tagline">a running ledger of AI engineering questions</p>
+          <p class="tagline">a running ledger of open questions</p>
         </div>
       </div>
       <div class="view-switch" role="group" aria-label="Switch view">
@@ -29,10 +29,17 @@
           <option value="medium">Medium</option>
           <option value="low">Low</option>
         </select>
+        <button id="undo-btn" class="btn ghost" title="Undo the last change">Undo</button>
+        <button id="history-btn" class="btn ghost" title="Board history — jump back to any state">History</button>
         <button id="export-btn" class="btn ghost" title="Download the board as a JSON file">Export JSON</button>
         <button id="import-btn" class="btn ghost" title="Restore the board from a JSON file">Import JSON</button>
         <input id="import-input" type="file" accept="application/json,.json" hidden>
-        <button id="theme-toggle" class="btn icon" aria-label="Toggle light/dark theme">🌙</button>
+        <select id="theme-select" aria-label="Color theme" title="Color theme">
+          <option value="light">Morning</option>
+          <option value="white">Day</option>
+          <option value="sepia">Dusk</option>
+          <option value="dark">Night</option>
+        </select>
       </div>
     </div>
     <div id="tag-bar" class="tag-bar" role="group" aria-label="Filter by tag" hidden></div>
@@ -56,7 +63,7 @@
         <label><input type="radio" name="priority" value="low"><span class="badge low">Low</span></label>
       </fieldset>
       <label class="field">Tags <span class="hint">(comma separated)</span>
-        <input id="card-tags" type="text" placeholder="rag, evals, prompting">
+        <input id="card-tags" type="text" placeholder="planning, ideas, follow-up">
       </label>
       <p id="card-meta" class="card-meta-line"></p>
       <div class="dialog-actions">
@@ -64,6 +71,73 @@
         <span class="spacer"></span>
         <button type="button" id="cancel-dialog" class="btn ghost">Cancel</button>
         <button type="submit" class="btn primary">Save changes</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="export-dialog">
+    <div class="dialog-body">
+      <h2>Export questions</h2>
+      <p class="import-copy">Save the whole board as <code>questions.json</code>. If your browser blocks the download (some embedded viewers do), copy the JSON below and paste it into a file instead.</p>
+      <textarea id="export-json" class="export-json" readonly rows="9" aria-label="The board as JSON" spellcheck="false"></textarea>
+      <div class="dialog-actions">
+        <button type="button" id="copy-export" class="btn ghost">Copy JSON</button>
+        <span class="spacer"></span>
+        <button type="button" id="cancel-export" class="btn ghost">Cancel</button>
+        <button type="button" id="download-export" class="btn primary">Download questions.json</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="import-dialog">
+    <div class="dialog-body">
+      <h2>Import questions</h2>
+      <p class="import-copy">Choose a Question Board JSON file. You'll then decide whether to <strong>add</strong> its questions to the board or <strong>substitute</strong> the whole board.</p>
+      <p class="import-copy">Writing the file yourself, or asking an AI to generate one? It must match this shape:</p>
+      <pre id="import-schema" class="import-schema" tabindex="0" aria-label="Expected JSON file format"></pre>
+      <p class="import-hint">Only "title" is required per question — everything else gets a default: questions land in the Inbox at medium priority, "num" (the permanent Q-012 ledger number) is assigned automatically, timestamps are Unix milliseconds.</p>
+      <div class="dialog-actions">
+        <button type="button" id="copy-schema" class="btn ghost">Copy schema</button>
+        <span class="spacer"></span>
+        <button type="button" id="cancel-import" class="btn ghost">Cancel</button>
+        <button type="button" id="choose-import-file" class="btn primary">Choose file…</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="import-mode-dialog">
+    <div class="dialog-body">
+      <h2>File looks good</h2>
+      <p id="import-mode-copy" class="import-copy"></p>
+      <div class="dialog-actions">
+        <button type="button" id="cancel-import-mode" class="btn ghost">Cancel</button>
+        <span class="spacer"></span>
+        <button type="button" id="import-replace" class="btn danger">Substitute board…</button>
+        <button type="button" id="import-add" class="btn primary">Add to board</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="history-dialog">
+    <div class="dialog-body">
+      <h2>Board history</h2>
+      <p class="import-copy">Every change is logged here, newest first. Restore any earlier state — moving around never deletes history, so you can always come forward again.</p>
+      <div id="history-list" class="history-list"></div>
+      <div class="dialog-actions">
+        <span class="spacer"></span>
+        <button type="button" id="close-history" class="btn ghost">Close</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="confirm-dialog">
+    <form method="dialog" class="dialog-body">
+      <h2 id="confirm-title"></h2>
+      <p id="confirm-copy" class="import-copy"></p>
+      <div class="dialog-actions">
+        <span class="spacer"></span>
+        <button value="cancel" id="confirm-cancel" class="btn ghost">Cancel</button>
+        <button value="ok" id="confirm-ok" class="btn primary"></button>
       </div>
     </form>
   </dialog>

@@ -4,6 +4,8 @@
   const STORAGE_KEY = 'question-board:v1';
   const THEME_KEY = 'question-board:theme';
   const VIEW_KEY = 'question-board:view';
+  const HISTORY_KEY = 'question-board:history';
+  const HISTORY_LIMIT = 50; // snapshots kept; oldest fall off like a rotated log
 
   const COLUMNS = [
     { id: 'inbox', title: 'Inbox' },
@@ -27,10 +29,10 @@
     const mk = (title, columnId, priority, tags, notes = '') =>
       ({ id: uid(), columnId, title, notes, priority, tags, createdAt: now, updatedAt: now });
     return [
-      mk('How should I evaluate RAG retrieval quality beyond simple hit-rate?', 'inbox', 'high', ['rag', 'evals']),
-      mk('When is fine-tuning worth it versus few-shot prompting?', 'inbox', 'medium', ['fine-tuning', 'prompting']),
-      mk('What chunking strategy works best for long, structured PDFs?', 'to-research', 'medium', ['rag']),
-      mk('How does the KV cache affect inference latency and memory?', 'to-research', 'low', ['inference']),
+      mk('What should we build next quarter?', 'inbox', 'high', ['planning', 'product']),
+      mk('How do we make our weekly reviews shorter?', 'inbox', 'medium', ['process']),
+      mk('Which tool should we adopt for shared notes?', 'to-research', 'medium', ['tools', 'planning']),
+      mk('How much runway do we have at the current burn rate?', 'to-research', 'low', ['finance']),
     ].map((c, i) => ({ ...c, num: i + 1 }));
   }
 
@@ -95,13 +97,66 @@
 
   const nextNum = () => state.cards.reduce((m, c) => Math.max(m, c.num || 0), 0) + 1;
 
-  function commit() {
+  // --------------------------------------------------------------------------
+  // History — an append-only timeline of board snapshots, like a git reflog.
+  // `index` is where the board currently stands; undo/restore only move the
+  // pointer, so no state is ever lost until it falls off the HISTORY_LIMIT end.
+  // --------------------------------------------------------------------------
+
+  const snapshot = (cards) => JSON.parse(JSON.stringify(cards));
+  const short = (s) => (s.length > 42 ? s.slice(0, 39) + '…' : s);
+
+  let timeline = { entries: [], index: -1 };
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && Array.isArray(parsed.entries) && Number.isInteger(parsed.index)) timeline = parsed;
+    }
+  } catch (_) { /* private mode */ }
+  if (!timeline.entries.length) {
+    timeline.entries = [{ ts: Date.now(), action: 'Board opened', cards: snapshot(state.cards) }];
+  }
+  timeline.index = Math.min(Math.max(timeline.index, 0), timeline.entries.length - 1);
+
+  function saveTimeline() {
+    try {
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(timeline));
+    } catch (err) {
+      console.warn('Could not save history.', err);
+    }
+  }
+
+  function saveState() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     } catch (err) {
       console.warn('Could not save board.', err);
     }
+  }
+
+  function commit(action) {
+    saveState();
+    timeline.entries.push({ ts: Date.now(), action, cards: snapshot(state.cards) });
+    if (timeline.entries.length > HISTORY_LIMIT) {
+      timeline.entries.splice(0, timeline.entries.length - HISTORY_LIMIT);
+    }
+    timeline.index = timeline.entries.length - 1;
+    saveTimeline();
     render();
+  }
+
+  /** Point the board at timeline entry `i` without writing a new entry. */
+  function restoreEntry(i, message) {
+    const entry = timeline.entries[i];
+    if (!entry) return;
+    state = { version: 1, columns: COLUMNS, cards: snapshot(entry.cards) };
+    timeline.index = i;
+    saveState();
+    saveTimeline();
+    dealCards = true;
+    render();
+    announce(message);
   }
 
   // --------------------------------------------------------------------------
@@ -132,6 +187,33 @@
   }
 
   /**
+   * In-app replacement for confirm()/alert(). Native dialogs are silently
+   * blocked in sandboxed embeds (e.g. artifact viewers), so all confirmations
+   * go through this <dialog> instead. Pass cancelLabel: null for an alert.
+   */
+  function ask({ title, message, okLabel = 'OK', cancelLabel = 'Cancel', danger = false }) {
+    return new Promise((resolve) => {
+      const confirmDialog = $('#confirm-dialog');
+      $('#confirm-title').textContent = title;
+      $('#confirm-copy').textContent = message;
+      const ok = $('#confirm-ok');
+      ok.textContent = okLabel;
+      ok.className = 'btn ' + (danger ? 'danger' : 'primary');
+      const cancel = $('#confirm-cancel');
+      cancel.hidden = cancelLabel === null;
+      if (cancelLabel !== null) cancel.textContent = cancelLabel;
+      confirmDialog.returnValue = '';
+      confirmDialog.addEventListener(
+        'close',
+        () => resolve(confirmDialog.returnValue === 'ok'),
+        { once: true }
+      );
+      confirmDialog.showModal();
+      ok.focus();
+    });
+  }
+
+  /**
    * Move a card to a column, placed before the card with id `beforeId`
    * (or at the end of the column when beforeId is null).
    */
@@ -151,7 +233,7 @@
       if (lastInColumn === -1) index = state.cards.length;
     }
     state.cards.splice(index, 0, card);
-    commit();
+    commit(`Moved ${qLabel(card)} to ${columnTitle(columnId)}`);
   }
 
   // --------------------------------------------------------------------------
@@ -168,6 +250,7 @@
       for (const col of COLUMNS) board.appendChild(renderColumn(col));
     }
     renderTagBar();
+    $('#undo-btn').disabled = timeline.index <= 0;
 
     if (dealCards) {
       board.querySelectorAll('.card, .backlog-row').forEach((el, i) => {
@@ -266,7 +349,7 @@
       // New captures go to the top of the Inbox
       const firstInbox = state.cards.findIndex((c) => c.columnId === 'inbox');
       state.cards.splice(firstInbox === -1 ? state.cards.length : firstInbox, 0, card);
-      commit();
+      commit(`Added ${qLabel(card)} “${short(title)}”`);
       announce(`Added “${title}” to Inbox`);
       const fresh = $('#board .quick-add input');
       if (fresh) fresh.focus();
@@ -569,19 +652,25 @@
   // Card actions
   // --------------------------------------------------------------------------
 
-  function deleteCard(cardId) {
+  async function deleteCard(cardId) {
     const card = getCard(cardId);
     if (!card) return;
-    if (!confirm(`Delete this question?\n\n“${card.title}”`)) return;
+    const sure = await ask({
+      title: 'Delete this question?',
+      message: `${qLabel(card)} “${card.title}” will be removed from the board. You can bring it back with Undo or History.`,
+      okLabel: 'Delete question',
+      danger: true,
+    });
+    if (!sure) return;
     state.cards = state.cards.filter((c) => c.id !== cardId);
-    commit();
+    commit(`Deleted ${qLabel(card)} “${short(card.title)}”`);
     announce(`Deleted “${card.title}”`);
   }
 
   function sortColumnByPriority(columnId) {
     const sorted = columnCards(columnId).sort((a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority]);
     state.cards = [...state.cards.filter((c) => c.columnId !== columnId), ...sorted];
-    commit();
+    commit(`Sorted ${columnTitle(columnId)} by priority`);
     announce(`Sorted ${columnTitle(columnId)} by priority`);
   }
 
@@ -620,7 +709,7 @@
         .map((t) => t.trim().toLowerCase())
         .filter(Boolean);
       card.updatedAt = Date.now();
-      commit();
+      commit(`Edited ${qLabel(card)} “${short(card.title)}”`);
     }
     dialog.close();
   });
@@ -649,45 +738,240 @@
     render();
   });
 
+  const exportDialog = $('#export-dialog');
+  const exportJson = () => JSON.stringify(state, null, 2);
+
   $('#export-btn').addEventListener('click', () => {
-    const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+    $('#export-json').value = exportJson();
+    exportDialog.showModal();
+  });
+  $('#cancel-export').addEventListener('click', () => exportDialog.close());
+
+  $('#download-export').addEventListener('click', () => {
+    const blob = new Blob([exportJson()], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = 'questions.json';
+    document.body.append(a);
     a.click();
+    a.remove();
     URL.revokeObjectURL(url);
+    exportDialog.close();
     announce('Exported board as questions.json');
   });
 
-  $('#import-btn').addEventListener('click', () => $('#import-input').click());
+  $('#copy-export').addEventListener('click', async () => {
+    const btn = $('#copy-export');
+    const done = () => {
+      btn.textContent = 'Copied ✓';
+      setTimeout(() => { btn.textContent = 'Copy JSON'; }, 1600);
+      announce('Board JSON copied to clipboard');
+    };
+    try {
+      await navigator.clipboard.writeText(exportJson());
+      done();
+    } catch (_) {
+      // Clipboard API blocked (e.g. sandboxed embed) — select the JSON and
+      // try the legacy path; worst case the text is left selected to copy.
+      const ta = $('#export-json');
+      ta.focus();
+      ta.select();
+      if (document.execCommand('copy')) {
+        done();
+      } else {
+        btn.textContent = 'Press ⌘C / Ctrl+C';
+        setTimeout(() => { btn.textContent = 'Copy JSON'; }, 2500);
+        announce('JSON selected — press Ctrl+C or Cmd+C to copy');
+      }
+    }
+  });
+
+  // The import dialog doubles as the file-format reference: the schema below is
+  // shown verbatim and copyable, so a valid file can be written by hand or by an AI.
+  const IMPORT_SCHEMA = `{
+  "version": 1,
+  "cards": [
+    {
+      "title": "The question, as plain text (required)",
+      "columnId": "inbox | to-research | in-progress | answered",
+      "priority": "high | medium | low",
+      "notes": "Optional free-form notes or the answer",
+      "tags": ["optional", "lowercase", "tags"],
+      "num": 12,
+      "createdAt": 1721606400000,
+      "updatedAt": 1721606400000
+    }
+  ]
+}`;
+
+  const importDialog = $('#import-dialog');
+  $('#import-schema').textContent = IMPORT_SCHEMA;
+
+  $('#import-btn').addEventListener('click', () => importDialog.showModal());
+  $('#cancel-import').addEventListener('click', () => importDialog.close());
+  $('#choose-import-file').addEventListener('click', () => $('#import-input').click());
+
+  $('#copy-schema').addEventListener('click', async () => {
+    const btn = $('#copy-schema');
+    try {
+      await navigator.clipboard.writeText(IMPORT_SCHEMA);
+      btn.textContent = 'Copied ✓';
+      setTimeout(() => { btn.textContent = 'Copy schema'; }, 1600);
+      announce('Schema copied to clipboard');
+    } catch (_) {
+      // Clipboard unavailable (e.g. non-secure context) — select the text instead
+      const range = document.createRange();
+      range.selectNodeContents($('#import-schema'));
+      const selection = getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      announce('Schema selected — copy it manually');
+    }
+  });
+
+  // A parsed file waits here while the add-or-substitute dialog is open
+  let pendingImport = null;
+  const importModeDialog = $('#import-mode-dialog');
 
   $('#import-input').addEventListener('change', async (e) => {
     const file = e.target.files[0];
     e.target.value = '';
+    importDialog.close();
     if (!file) return;
     try {
-      const imported = parseState(await file.text());
-      if (!confirm(`Replace the current board with ${imported.cards.length} imported question(s)?`)) return;
-      state = imported;
-      commit();
-      announce('Board imported');
+      pendingImport = parseState(await file.text());
+      const n = pendingImport.cards.length;
+      $('#import-mode-copy').textContent =
+        `The file contains ${n} question${n === 1 ? '' : 's'}. Add ${n === 1 ? 'it' : 'them'} to the current board, ` +
+        `or substitute the whole board with the file's contents?`;
+      importModeDialog.showModal();
     } catch (err) {
-      alert('Could not import this file — it does not look like a Question Board export.');
+      pendingImport = null;
+      ask({
+        title: 'Could not import this file',
+        message: 'It does not match the Question Board format — open Import JSON to see (and copy) the expected schema.',
+        cancelLabel: null,
+      });
     }
   });
 
-  const themeToggle = $('#theme-toggle');
+  $('#cancel-import-mode').addEventListener('click', () => {
+    pendingImport = null;
+    importModeDialog.close();
+  });
 
-  function applyTheme(theme) {
-    document.documentElement.dataset.theme = theme;
-    themeToggle.textContent = theme === 'dark' ? '☀️' : '🌙';
+  $('#import-add').addEventListener('click', () => {
+    if (!pendingImport) return;
+    // Fresh ids and ledger numbers so the same file can be imported twice safely
+    const added = pendingImport.cards.map((c) => ({ ...c, id: uid(), num: 0 }));
+    state.cards = ensureNums([...state.cards, ...added]);
+    pendingImport = null;
+    importModeDialog.close();
+    dealCards = true;
+    commit(`Imported ${added.length} question(s), added to the board`);
+    announce(`Added ${added.length} imported question(s) to the board`);
+  });
+
+  $('#import-replace').addEventListener('click', async () => {
+    if (!pendingImport) return;
+    const n = pendingImport.cards.length;
+    const sure = await ask({
+      title: 'Are you sure?',
+      message: `This substitutes the whole board — your current ${state.cards.length} question(s) ` +
+        `will be replaced by the ${n} from the file. You can still roll back from History.`,
+      okLabel: 'Substitute board',
+      danger: true,
+    });
+    if (!sure || !pendingImport) return;
+    state = pendingImport;
+    pendingImport = null;
+    importModeDialog.close();
+    dealCards = true; // deal the imported cards in like a fresh sheet
+    commit(`Imported ${n} question(s), substituted the board`);
+    announce('Board substituted with the imported questions');
+  });
+
+  // --------------------------------------------------------------------------
+  // Undo & history dialog
+  // --------------------------------------------------------------------------
+
+  $('#undo-btn').addEventListener('click', () => {
+    if (timeline.index <= 0) return;
+    const undone = timeline.entries[timeline.index].action;
+    restoreEntry(timeline.index - 1, `Undid “${undone}”`);
+  });
+
+  const historyDialog = $('#history-dialog');
+
+  $('#history-btn').addEventListener('click', () => {
+    renderHistory();
+    historyDialog.showModal();
+  });
+
+  $('#close-history').addEventListener('click', () => historyDialog.close());
+
+  function renderHistory() {
+    const list = $('#history-list');
+    list.innerHTML = '';
+    const fmt = (ts) =>
+      new Date(ts).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+    for (let i = timeline.entries.length - 1; i >= 0; i--) {
+      const entry = timeline.entries[i];
+      const row = document.createElement('div');
+      row.className = 'history-row' + (i === timeline.index ? ' current' : '');
+
+      const time = document.createElement('span');
+      time.className = 'history-time';
+      time.textContent = fmt(entry.ts);
+
+      const main = document.createElement('div');
+      main.className = 'history-main';
+
+      const action = document.createElement('p');
+      action.className = 'history-action';
+      action.textContent = entry.action;
+
+      const meta = document.createElement('span');
+      meta.className = 'history-meta';
+      meta.textContent = `${entry.cards.length} question${entry.cards.length === 1 ? '' : 's'}`;
+
+      main.append(action, meta);
+      row.append(time, main);
+
+      if (i === timeline.index) {
+        const mark = document.createElement('span');
+        mark.className = 'history-current';
+        mark.textContent = 'current';
+        row.append(mark);
+      } else {
+        const btn = document.createElement('button');
+        btn.className = 'btn ghost history-restore';
+        btn.textContent = 'Restore';
+        btn.addEventListener('click', () => {
+          restoreEntry(i, `Restored board to “${entry.action}”`);
+          renderHistory(); // keep the dialog open, move the “current” mark
+        });
+        row.append(btn);
+      }
+
+      list.append(row);
+    }
   }
 
-  themeToggle.addEventListener('click', () => {
-    const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
-    applyTheme(next);
-    try { localStorage.setItem(THEME_KEY, next); } catch (_) { /* private mode */ }
+  const THEMES = ['light', 'white', 'sepia', 'dark'];
+  const themeSelect = $('#theme-select');
+
+  function applyTheme(theme) {
+    if (!THEMES.includes(theme)) theme = 'light';
+    document.documentElement.dataset.theme = theme;
+    themeSelect.value = theme;
+  }
+
+  themeSelect.addEventListener('change', () => {
+    applyTheme(themeSelect.value);
+    try { localStorage.setItem(THEME_KEY, themeSelect.value); } catch (_) { /* private mode */ }
   });
 
   let savedTheme = null;
