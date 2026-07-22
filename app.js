@@ -102,7 +102,7 @@
   let draggedId = null;
   let dealCards = true; // deal-in animation runs on first render only
 
-  const VIEWS = ['board', 'backlog', 'overview'];
+  const VIEWS = ['board', 'backlog', 'overview', 'matrix'];
   const VIEW_LABELS = { board: 'Board', backlog: 'Backlog', overview: 'Overview', matrix: 'Matrix' };
   let view = 'board';
   try {
@@ -342,6 +342,8 @@
       board.appendChild(renderBacklog());
     } else if (view === 'overview') {
       board.appendChild(renderOverview());
+    } else if (view === 'matrix') {
+      board.appendChild(renderMatrix());
     } else {
       for (const col of COLUMNS) board.appendChild(renderColumn(col));
     }
@@ -749,8 +751,10 @@
     dot.className = 'plot-dot';
     dot.dataset.id = card.id;
     dot.dataset.col = card.columnId;
-    dot.style.left = `${leftPct}%`;
-    dot.style.top = `${topPct}%`;
+    // Overview passes fractions to place dots absolutely; the Matrix omits them
+    // and lets the dots flow inside their quadrant (positioned via CSS).
+    if (leftPct != null) dot.style.left = `${leftPct}%`;
+    if (topPct != null) dot.style.top = `${topPct}%`;
     dot.style.setProperty('--dot', COLUMN_ACCENT[card.columnId] || 'var(--ink-blue)');
     dot.setAttribute('aria-label', dotAriaLabel(card));
 
@@ -1022,6 +1026,87 @@
     sheet.append(field);
     // Run after this sheet is attached to #board so status/position updates land.
     Promise.resolve().then(ensureSemanticLayout); // upgrade to semantic positions in the background
+    return sheet;
+  }
+
+  // --------------------------------------------------------------------------
+  // Matrix view — the Eisenhower matrix: importance × urgency. A question is
+  // placed only once both are set; its dot flows into the matching quadrant.
+  // --------------------------------------------------------------------------
+
+  // Ordered so colour tracks how pressing the recommended action is.
+  const QUADRANTS = [
+    { imp: 'high', urg: 'low', verb: 'Schedule', sub: 'important · not urgent', accent: 'var(--ink-blue)' },
+    { imp: 'high', urg: 'high', verb: 'Answer now', sub: 'important · urgent', accent: 'var(--high)' },
+    { imp: 'low', urg: 'low', verb: 'Drop', sub: 'not important · not urgent', accent: 'var(--ink-soft)' },
+    { imp: 'low', urg: 'high', verb: 'Delegate', sub: 'not important · urgent', accent: 'var(--ink-amber)' },
+  ];
+
+  function matrixAxis(className, text) {
+    const el = document.createElement('span');
+    el.className = className;
+    el.textContent = text;
+    return el;
+  }
+
+  function renderMatrix() {
+    const sheet = document.createElement('div');
+    sheet.className = 'plot-sheet matrix-plate';
+
+    const head = document.createElement('div');
+    head.className = 'plot-head';
+    const title = document.createElement('h2');
+    title.className = 'plot-title';
+    title.textContent = 'Matrix';
+    const caption = document.createElement('p');
+    caption.className = 'plot-caption';
+    caption.textContent = 'The Eisenhower matrix — importance against urgency. Set both on a question to place it here.';
+    const status = document.createElement('p');
+    status.className = 'plot-status';
+    const placed = state.cards.filter((c) => c.importance && c.urgency && matchesFilters(c));
+    const awaiting = state.cards.filter((c) => !(c.importance && c.urgency)).length;
+    status.textContent = `${placed.length} placed`
+      + (awaiting ? ` · ${awaiting} awaiting importance & urgency` : '');
+    head.append(title, caption, status);
+    sheet.append(head, renderPlotLegend());
+
+    const grid = document.createElement('div');
+    grid.className = 'matrix-grid';
+    grid.append(matrixAxis('matrix-axis-imp', 'IMPORTANCE ↑'), matrixAxis('matrix-axis-urg', 'URGENCY →'));
+
+    for (const q of QUADRANTS) {
+      const cell = document.createElement('section');
+      cell.className = 'matrix-quad';
+      cell.dataset.imp = q.imp;
+      cell.dataset.urg = q.urg;
+      cell.style.setProperty('--quad', q.accent);
+      cell.setAttribute('aria-label', `${q.verb} — ${q.sub}`);
+
+      const qhead = document.createElement('div');
+      qhead.className = 'matrix-quad-head';
+      const verb = document.createElement('span');
+      verb.className = 'matrix-quad-verb';
+      verb.textContent = q.verb;
+      const sub = document.createElement('span');
+      sub.className = 'matrix-quad-sub';
+      sub.textContent = q.sub;
+      qhead.append(verb, sub);
+
+      const cards = placed.filter((c) => c.importance === q.imp && c.urgency === q.urg);
+      const count = document.createElement('span');
+      count.className = 'matrix-quad-count';
+      count.textContent = cards.length;
+      qhead.append(count);
+      cell.append(qhead);
+
+      const dots = document.createElement('div');
+      dots.className = 'matrix-quad-dots';
+      for (const card of cards) dots.append(renderPlotDot(card));
+      cell.append(dots);
+      grid.append(cell);
+    }
+
+    sheet.append(grid);
     return sheet;
   }
 

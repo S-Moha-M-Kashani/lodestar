@@ -860,10 +860,101 @@ input, select, textarea { font: inherit; color: inherit; }
 
 .plot-tip .card-tags { margin-top: 8px; }
 
+/* Eisenhower matrix — a 2×2 of quadrants with axis gutters */
+.matrix-grid {
+  display: grid;
+  grid-template-columns: 24px 1fr 1fr;
+  grid-template-rows: 1fr 1fr 24px;
+  gap: 10px;
+}
+
+.matrix-axis-imp,
+.matrix-axis-urg {
+  display: grid;
+  place-items: center;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--ink-soft);
+}
+.matrix-axis-imp {
+  grid-column: 1; grid-row: 1 / span 2;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+}
+.matrix-axis-urg { grid-column: 2 / span 2; grid-row: 3; }
+
+.matrix-quad[data-imp="high"][data-urg="low"]  { grid-column: 2; grid-row: 1; }
+.matrix-quad[data-imp="high"][data-urg="high"] { grid-column: 3; grid-row: 1; }
+.matrix-quad[data-imp="low"][data-urg="low"]   { grid-column: 2; grid-row: 2; }
+.matrix-quad[data-imp="low"][data-urg="high"]  { grid-column: 3; grid-row: 2; }
+
+.matrix-quad {
+  min-height: 156px;
+  border: 1px solid var(--card-line);
+  border-top: 2px solid var(--quad);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--quad) 4%, var(--paper));
+  padding: 11px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.matrix-quad-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px dashed var(--card-line);
+}
+
+.matrix-quad-verb {
+  font-family: var(--display);
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--quad);
+}
+
+.matrix-quad-sub {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-soft);
+}
+
+.matrix-quad-count {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-soft);
+}
+.matrix-quad-count::before { content: "("; }
+.matrix-quad-count::after { content: ")"; }
+
+.matrix-quad-dots {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 12px 10px;
+  padding: 4px 2px;
+}
+
+/* In the matrix the dots flow inside their quadrant instead of being placed */
+.matrix-quad-dots .plot-dot {
+  position: static;
+  transform: rotate(-2deg);
+}
+.matrix-quad-dots .plot-dot:hover,
+.matrix-quad-dots .plot-dot:focus-visible {
+  transform: scale(1.22) rotate(-2deg);
+}
+
 @media (max-width: 640px) {
   .overview, .matrix { padding: 12px 14px 20px; }
   .plot-sheet { padding: 18px 16px 18px; }
   .plot-field { height: 66vh; }
+  .matrix-quad { min-height: 120px; }
 }
 
 /* ---------------------------------------------------------------------------
