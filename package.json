@@ -1,0 +1,12 @@
+{
+  "name": "question-board",
+  "version": "0.3.0",
+  "description": "A kanban-style board for open questions, with a SQLite-backed server so nothing is lost.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=23.4.0"
+  }
+}

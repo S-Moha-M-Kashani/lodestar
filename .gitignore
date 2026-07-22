@@ -11,3 +11,9 @@ wheels/
 
 # Test artifacts
 tests/artifacts/
+
+# Node / SQLite
+node_modules/
+*.db
+*.db-journal
+*.db-wal
