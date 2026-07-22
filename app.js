@@ -29,10 +29,10 @@
     const mk = (title, columnId, priority, tags, notes = '') =>
       ({ id: uid(), columnId, title, notes, priority, tags, createdAt: now, updatedAt: now });
     return [
-      mk('How should I evaluate RAG retrieval quality beyond simple hit-rate?', 'inbox', 'high', ['rag', 'evals']),
-      mk('When is fine-tuning worth it versus few-shot prompting?', 'inbox', 'medium', ['fine-tuning', 'prompting']),
-      mk('What chunking strategy works best for long, structured PDFs?', 'to-research', 'medium', ['rag']),
-      mk('How does the KV cache affect inference latency and memory?', 'to-research', 'low', ['inference']),
+      mk('What should we build next quarter?', 'inbox', 'high', ['planning', 'product']),
+      mk('How do we make our weekly reviews shorter?', 'inbox', 'medium', ['process']),
+      mk('Which tool should we adopt for shared notes?', 'to-research', 'medium', ['tools', 'planning']),
+      mk('How much runway do we have at the current burn rate?', 'to-research', 'low', ['finance']),
     ].map((c, i) => ({ ...c, num: i + 1 }));
   }
 
