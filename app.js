@@ -17,6 +17,10 @@
   const PRIORITIES = ['high', 'medium', 'low'];
   const PRIORITY_RANK = { high: 0, medium: 1, low: 2 };
 
+  // Importance & urgency are each High, Low, or unset ('') — a question needs
+  // both to be placed on the Eisenhower matrix.
+  const iuVal = (v) => (v === 'high' || v === 'low' ? v : '');
+
   // --------------------------------------------------------------------------
   // State & persistence
   // --------------------------------------------------------------------------
@@ -26,13 +30,14 @@
 
   function seedCards() {
     const now = Date.now();
-    const mk = (title, columnId, priority, tags, notes = '') =>
-      ({ id: uid(), columnId, title, notes, priority, tags, createdAt: now, updatedAt: now });
+    const mk = (title, columnId, priority, tags, importance = '', urgency = '', notes = '') =>
+      ({ id: uid(), columnId, title, notes, priority, importance, urgency, tags, createdAt: now, updatedAt: now });
+    // Seeds span all four matrix quadrants so the Matrix view has something to show.
     return [
-      mk('What should we build next quarter?', 'inbox', 'high', ['planning', 'product']),
-      mk('How do we make our weekly reviews shorter?', 'inbox', 'medium', ['process']),
-      mk('Which tool should we adopt for shared notes?', 'to-research', 'medium', ['tools', 'planning']),
-      mk('How much runway do we have at the current burn rate?', 'to-research', 'low', ['finance']),
+      mk('What should we build next quarter?', 'inbox', 'high', ['planning', 'product'], 'high', 'low'),
+      mk('How do we make our weekly reviews shorter?', 'inbox', 'medium', ['process'], 'low', 'low'),
+      mk('Which tool should we adopt for shared notes?', 'to-research', 'medium', ['tools', 'planning'], 'low', 'high'),
+      mk('How much runway do we have at the current burn rate?', 'to-research', 'low', ['finance'], 'high', 'high'),
     ].map((c, i) => ({ ...c, num: i + 1 }));
   }
 
@@ -56,6 +61,8 @@
       title: raw.title.trim(),
       notes: typeof raw.notes === 'string' ? raw.notes : '',
       priority: PRIORITIES.includes(raw.priority) ? raw.priority : 'medium',
+      importance: iuVal(raw.importance),
+      urgency: iuVal(raw.urgency),
       num: Number.isInteger(raw.num) && raw.num > 0 ? raw.num : 0,
       tags: Array.isArray(raw.tags) ? raw.tags.map((t) => String(t).trim().toLowerCase()).filter(Boolean) : [],
       createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : Date.now(),
@@ -156,7 +163,7 @@
 
   // Order-sensitive fingerprint, to skip redundant work when nothing changed.
   const boardFingerprint = (cards) =>
-    cards.map((c) => [c.id, c.columnId, c.title, c.notes, c.priority, c.num, (c.tags || []).join('|')].join('␟')).join('␞');
+    cards.map((c) => [c.id, c.columnId, c.title, c.notes, c.priority, c.importance || '', c.urgency || '', c.num, (c.tags || []).join('|')].join('␟')).join('␞');
 
   function pushToServer() {
     if (!serverAvailable) return;
@@ -429,7 +436,7 @@
       const title = input.value.trim();
       if (!title) return;
       const now = Date.now();
-      const card = { id: uid(), columnId: 'inbox', title, notes: '', priority: 'medium', num: nextNum(), tags: [], createdAt: now, updatedAt: now };
+      const card = { id: uid(), columnId: 'inbox', title, notes: '', priority: 'medium', importance: '', urgency: '', num: nextNum(), tags: [], createdAt: now, updatedAt: now };
       // New captures go to the top of the Inbox
       const firstInbox = state.cards.findIndex((c) => c.columnId === 'inbox');
       state.cards.splice(firstInbox === -1 ? state.cards.length : firstInbox, 0, card);
@@ -773,6 +780,8 @@
     $('#card-title').value = card.title;
     $('#card-notes').value = card.notes;
     $('#card-tags').value = card.tags.join(', ');
+    $('#card-importance').value = iuVal(card.importance);
+    $('#card-urgency').value = iuVal(card.urgency);
     for (const radio of form.elements.priority) radio.checked = radio.value === card.priority;
     const fmt = (ts) => new Date(ts).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
     $('#card-meta').textContent =
@@ -788,6 +797,8 @@
       card.title = $('#card-title').value.trim() || card.title;
       card.notes = $('#card-notes').value;
       card.priority = form.elements.priority.value || card.priority;
+      card.importance = iuVal($('#card-importance').value);
+      card.urgency = iuVal($('#card-urgency').value);
       card.tags = $('#card-tags').value
         .split(',')
         .map((t) => t.trim().toLowerCase())
@@ -882,6 +893,8 @@
       "title": "The question, as plain text (required)",
       "columnId": "inbox | to-research | in-progress | answered",
       "priority": "high | medium | low",
+      "importance": "high | low  (optional — for the Matrix)",
+      "urgency": "high | low  (optional — for the Matrix)",
       "notes": "Optional free-form notes or the answer",
       "tags": ["optional", "lowercase", "tags"],
       "num": 12,
