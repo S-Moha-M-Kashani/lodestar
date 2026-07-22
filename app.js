@@ -187,6 +187,33 @@
   }
 
   /**
+   * In-app replacement for confirm()/alert(). Native dialogs are silently
+   * blocked in sandboxed embeds (e.g. artifact viewers), so all confirmations
+   * go through this <dialog> instead. Pass cancelLabel: null for an alert.
+   */
+  function ask({ title, message, okLabel = 'OK', cancelLabel = 'Cancel', danger = false }) {
+    return new Promise((resolve) => {
+      const confirmDialog = $('#confirm-dialog');
+      $('#confirm-title').textContent = title;
+      $('#confirm-copy').textContent = message;
+      const ok = $('#confirm-ok');
+      ok.textContent = okLabel;
+      ok.className = 'btn ' + (danger ? 'danger' : 'primary');
+      const cancel = $('#confirm-cancel');
+      cancel.hidden = cancelLabel === null;
+      if (cancelLabel !== null) cancel.textContent = cancelLabel;
+      confirmDialog.returnValue = '';
+      confirmDialog.addEventListener(
+        'close',
+        () => resolve(confirmDialog.returnValue === 'ok'),
+        { once: true }
+      );
+      confirmDialog.showModal();
+      ok.focus();
+    });
+  }
+
+  /**
    * Move a card to a column, placed before the card with id `beforeId`
    * (or at the end of the column when beforeId is null).
    */
@@ -625,10 +652,16 @@
   // Card actions
   // --------------------------------------------------------------------------
 
-  function deleteCard(cardId) {
+  async function deleteCard(cardId) {
     const card = getCard(cardId);
     if (!card) return;
-    if (!confirm(`Delete this question?\n\n“${card.title}”`)) return;
+    const sure = await ask({
+      title: 'Delete this question?',
+      message: `${qLabel(card)} “${card.title}” will be removed from the board. You can bring it back with Undo or History.`,
+      okLabel: 'Delete question',
+      danger: true,
+    });
+    if (!sure) return;
     state.cards = state.cards.filter((c) => c.id !== cardId);
     commit(`Deleted ${qLabel(card)} “${short(card.title)}”`);
     announce(`Deleted “${card.title}”`);
@@ -798,7 +831,11 @@
       importModeDialog.showModal();
     } catch (err) {
       pendingImport = null;
-      alert('Could not import this file — it does not match the Question Board format (see Import JSON for the schema).');
+      ask({
+        title: 'Could not import this file',
+        message: 'It does not match the Question Board format — open Import JSON to see (and copy) the expected schema.',
+        cancelLabel: null,
+      });
     }
   });
 
@@ -819,14 +856,17 @@
     announce(`Added ${added.length} imported question(s) to the board`);
   });
 
-  $('#import-replace').addEventListener('click', () => {
+  $('#import-replace').addEventListener('click', async () => {
     if (!pendingImport) return;
     const n = pendingImport.cards.length;
-    if (!confirm(
-      `Are you sure? This substitutes the whole board — your current ` +
-      `${state.cards.length} question(s) will be replaced by the ${n} from the file.\n\n` +
-      `(You can still roll back from History.)`
-    )) return;
+    const sure = await ask({
+      title: 'Are you sure?',
+      message: `This substitutes the whole board — your current ${state.cards.length} question(s) ` +
+        `will be replaced by the ${n} from the file. You can still roll back from History.`,
+      okLabel: 'Substitute board',
+      danger: true,
+    });
+    if (!sure || !pendingImport) return;
     state = pendingImport;
     pendingImport = null;
     importModeDialog.close();
