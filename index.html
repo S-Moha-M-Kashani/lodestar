@@ -32,7 +32,12 @@
         <button id="export-btn" class="btn ghost" title="Download the board as a JSON file">Export JSON</button>
         <button id="import-btn" class="btn ghost" title="Restore the board from a JSON file">Import JSON</button>
         <input id="import-input" type="file" accept="application/json,.json" hidden>
-        <button id="theme-toggle" class="btn icon" aria-label="Toggle light/dark theme">🌙</button>
+        <select id="theme-select" aria-label="Color theme" title="Color theme">
+          <option value="light">Morning</option>
+          <option value="white">Day</option>
+          <option value="sepia">Dusk</option>
+          <option value="dark">Night</option>
+        </select>
       </div>
     </div>
     <div id="tag-bar" class="tag-bar" role="group" aria-label="Filter by tag" hidden></div>
@@ -66,6 +71,22 @@
         <button type="submit" class="btn primary">Save changes</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog id="import-dialog">
+    <div class="import-body">
+      <h2>Import questions</h2>
+      <p class="import-copy">Choose a Question Board JSON file. Importing <strong>replaces</strong> the whole board — export first if you need a backup.</p>
+      <p class="import-copy">Writing the file yourself, or asking an AI to generate one? It must match this shape:</p>
+      <pre id="import-schema" class="import-schema" tabindex="0" aria-label="Expected JSON file format"></pre>
+      <p class="import-hint">Only "title" is required per question — everything else gets a default: questions land in the Inbox at medium priority, "num" (the permanent Q-012 ledger number) is assigned automatically, timestamps are Unix milliseconds.</p>
+      <div class="dialog-actions">
+        <button type="button" id="copy-schema" class="btn ghost">Copy schema</button>
+        <span class="spacer"></span>
+        <button type="button" id="cancel-import" class="btn ghost">Cancel</button>
+        <button type="button" id="choose-import-file" class="btn primary">Choose file…</button>
+      </div>
+    </div>
   </dialog>
 
   <footer class="app-footer">

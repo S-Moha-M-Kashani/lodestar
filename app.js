@@ -660,34 +660,78 @@
     announce('Exported board as questions.json');
   });
 
-  $('#import-btn').addEventListener('click', () => $('#import-input').click());
+  // The import dialog doubles as the file-format reference: the schema below is
+  // shown verbatim and copyable, so a valid file can be written by hand or by an AI.
+  const IMPORT_SCHEMA = `{
+  "version": 1,
+  "cards": [
+    {
+      "title": "The question, as plain text (required)",
+      "columnId": "inbox | to-research | in-progress | answered",
+      "priority": "high | medium | low",
+      "notes": "Optional free-form notes or the answer",
+      "tags": ["optional", "lowercase", "tags"],
+      "num": 12,
+      "createdAt": 1721606400000,
+      "updatedAt": 1721606400000
+    }
+  ]
+}`;
+
+  const importDialog = $('#import-dialog');
+  $('#import-schema').textContent = IMPORT_SCHEMA;
+
+  $('#import-btn').addEventListener('click', () => importDialog.showModal());
+  $('#cancel-import').addEventListener('click', () => importDialog.close());
+  $('#choose-import-file').addEventListener('click', () => $('#import-input').click());
+
+  $('#copy-schema').addEventListener('click', async () => {
+    const btn = $('#copy-schema');
+    try {
+      await navigator.clipboard.writeText(IMPORT_SCHEMA);
+      btn.textContent = 'Copied ✓';
+      setTimeout(() => { btn.textContent = 'Copy schema'; }, 1600);
+      announce('Schema copied to clipboard');
+    } catch (_) {
+      // Clipboard unavailable (e.g. non-secure context) — select the text instead
+      const range = document.createRange();
+      range.selectNodeContents($('#import-schema'));
+      const selection = getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      announce('Schema selected — copy it manually');
+    }
+  });
 
   $('#import-input').addEventListener('change', async (e) => {
     const file = e.target.files[0];
     e.target.value = '';
+    importDialog.close();
     if (!file) return;
     try {
       const imported = parseState(await file.text());
       if (!confirm(`Replace the current board with ${imported.cards.length} imported question(s)?`)) return;
       state = imported;
+      dealCards = true; // deal the imported cards in like a fresh sheet
       commit();
       announce('Board imported');
     } catch (err) {
-      alert('Could not import this file — it does not look like a Question Board export.');
+      alert('Could not import this file — it does not match the Question Board format (see Import JSON for the schema).');
     }
   });
 
-  const themeToggle = $('#theme-toggle');
+  const THEMES = ['light', 'white', 'sepia', 'dark'];
+  const themeSelect = $('#theme-select');
 
   function applyTheme(theme) {
+    if (!THEMES.includes(theme)) theme = 'light';
     document.documentElement.dataset.theme = theme;
-    themeToggle.textContent = theme === 'dark' ? '☀️' : '🌙';
+    themeSelect.value = theme;
   }
 
-  themeToggle.addEventListener('click', () => {
-    const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
-    applyTheme(next);
-    try { localStorage.setItem(THEME_KEY, next); } catch (_) { /* private mode */ }
+  themeSelect.addEventListener('change', () => {
+    applyTheme(themeSelect.value);
+    try { localStorage.setItem(THEME_KEY, themeSelect.value); } catch (_) { /* private mode */ }
   });
 
   let savedTheme = null;

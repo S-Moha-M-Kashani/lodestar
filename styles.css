@@ -61,6 +61,62 @@
   --shadow-modal: 0 24px 60px rgba(0, 0, 0, 0.65);
 }
 
+/* Day — a plain white desk: no grid, darker ink, tuned for easy reading */
+[data-theme="white"] {
+  --paper: #ffffff;
+  --grid: transparent;
+  --ink: #172029;
+  --ink-soft: #4e5a64;
+  --line: #d7dde2;
+  --card: #ffffff;
+  --card-line: #d9dfe4;
+  --rule-red: #bf4f42;
+
+  --ink-blue: #2b5487;
+  --ink-violet: #645293;
+  --ink-amber: #96682a;
+  --ink-green: #42704c;
+
+  --high: #a83a29;
+  --medium: #96682a;
+  --low: #42704c;
+  --danger: #a83a29;
+
+  --shadow-card: 0 1px 2px rgba(23, 32, 41, 0.08), 0 1px 1px rgba(23, 32, 41, 0.05);
+  --shadow-lift: 0 6px 16px rgba(23, 32, 41, 0.12), 0 2px 4px rgba(23, 32, 41, 0.07);
+  --shadow-modal: 0 24px 60px rgba(23, 32, 41, 0.28);
+}
+
+/* Day mode also sets question text a step larger — legibility over density */
+[data-theme="white"] .card-title { font-size: 14px; }
+[data-theme="white"] .row-title { font-size: 14.5px; }
+
+/* Dusk — warm sepia paper, ink gone brown, lamplight-pleasant */
+[data-theme="sepia"] {
+  --paper: #f2e8d5;
+  --grid: rgba(151, 108, 55, 0.09);
+  --ink: #37291b;
+  --ink-soft: #77644c;
+  --line: #ddcdad;
+  --card: #faf3e3;
+  --card-line: #e4d6b9;
+  --rule-red: #b04f38;
+
+  --ink-blue: #4c6485;
+  --ink-violet: #74588b;
+  --ink-amber: #9a6b24;
+  --ink-green: #55764a;
+
+  --high: #a53d26;
+  --medium: #9a6b24;
+  --low: #55764a;
+  --danger: #a53d26;
+
+  --shadow-card: 0 1px 2px rgba(55, 41, 27, 0.12), 0 1px 1px rgba(55, 41, 27, 0.07);
+  --shadow-lift: 0 6px 16px rgba(55, 41, 27, 0.16), 0 2px 4px rgba(55, 41, 27, 0.09);
+  --shadow-modal: 0 24px 60px rgba(55, 41, 27, 0.32);
+}
+
 /* Base */
 * { box-sizing: border-box; }
 
@@ -205,7 +261,11 @@ input, select, textarea { font: inherit; color: inherit; }
 }
 .btn.danger:hover { background: color-mix(in srgb, var(--danger) 10%, transparent); }
 
-.btn.icon { padding: 7px 9px; line-height: 1; }
+#theme-select {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: 0.03em;
+}
 
 /* Tag filter bar */
 .tag-bar {
@@ -620,7 +680,8 @@ dialog::backdrop {
 
 #card-form { padding: 24px; }
 
-#card-form h2 {
+#card-form h2,
+.import-body h2 {
   margin: 0 0 18px;
   font-family: var(--display);
   font-size: 16px;
@@ -715,6 +776,38 @@ dialog::backdrop {
 }
 
 .dialog-actions .spacer { flex: 1; }
+
+/* Import dialog — filing instructions for the ledger */
+#import-dialog { width: min(620px, calc(100vw - 32px)); }
+
+.import-body { padding: 24px; }
+
+.import-copy {
+  font-size: 13px;
+  line-height: 1.55;
+  margin: 0 0 12px;
+}
+
+.import-schema {
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.65;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin: 0 0 10px;
+  overflow-x: auto;
+}
+
+.import-hint {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--ink-soft);
+  margin: 0 0 18px;
+}
 
 /* ---------------------------------------------------------------------------
    Footer
