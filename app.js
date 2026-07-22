@@ -649,15 +649,36 @@
     render();
   });
 
-  $('#export-btn').addEventListener('click', () => {
-    const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+  const exportDialog = $('#export-dialog');
+  const exportJson = () => JSON.stringify(state, null, 2);
+
+  $('#export-btn').addEventListener('click', () => exportDialog.showModal());
+  $('#cancel-export').addEventListener('click', () => exportDialog.close());
+
+  $('#download-export').addEventListener('click', () => {
+    const blob = new Blob([exportJson()], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = 'questions.json';
+    document.body.append(a);
     a.click();
+    a.remove();
     URL.revokeObjectURL(url);
+    exportDialog.close();
     announce('Exported board as questions.json');
+  });
+
+  $('#copy-export').addEventListener('click', async () => {
+    const btn = $('#copy-export');
+    try {
+      await navigator.clipboard.writeText(exportJson());
+      btn.textContent = 'Copied ✓';
+      setTimeout(() => { btn.textContent = 'Copy JSON'; }, 1600);
+      announce('Board JSON copied to clipboard');
+    } catch (_) {
+      announce('Could not copy — use the download button instead');
+    }
   });
 
   // The import dialog doubles as the file-format reference: the schema below is

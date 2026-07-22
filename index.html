@@ -73,8 +73,21 @@
     </form>
   </dialog>
 
+  <dialog id="export-dialog">
+    <div class="dialog-body">
+      <h2>Export questions</h2>
+      <p class="import-copy">Save the whole board as <code>questions.json</code>. If your browser blocks the download (some embedded viewers do), copy the JSON instead and paste it into a file.</p>
+      <div class="dialog-actions">
+        <button type="button" id="copy-export" class="btn ghost">Copy JSON</button>
+        <span class="spacer"></span>
+        <button type="button" id="cancel-export" class="btn ghost">Cancel</button>
+        <button type="button" id="download-export" class="btn primary">Download questions.json</button>
+      </div>
+    </div>
+  </dialog>
+
   <dialog id="import-dialog">
-    <div class="import-body">
+    <div class="dialog-body">
       <h2>Import questions</h2>
       <p class="import-copy">Choose a Question Board JSON file. Importing <strong>replaces</strong> the whole board — export first if you need a backup.</p>
       <p class="import-copy">Writing the file yourself, or asking an AI to generate one? It must match this shape:</p>
