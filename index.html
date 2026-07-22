@@ -89,7 +89,7 @@
   <dialog id="import-dialog">
     <div class="dialog-body">
       <h2>Import questions</h2>
-      <p class="import-copy">Choose a Question Board JSON file. Importing <strong>replaces</strong> the whole board — export first if you need a backup.</p>
+      <p class="import-copy">Choose a Question Board JSON file. You'll then decide whether to <strong>add</strong> its questions to the board or <strong>substitute</strong> the whole board.</p>
       <p class="import-copy">Writing the file yourself, or asking an AI to generate one? It must match this shape:</p>
       <pre id="import-schema" class="import-schema" tabindex="0" aria-label="Expected JSON file format"></pre>
       <p class="import-hint">Only "title" is required per question — everything else gets a default: questions land in the Inbox at medium priority, "num" (the permanent Q-012 ledger number) is assigned automatically, timestamps are Unix milliseconds.</p>
@@ -98,6 +98,19 @@
         <span class="spacer"></span>
         <button type="button" id="cancel-import" class="btn ghost">Cancel</button>
         <button type="button" id="choose-import-file" class="btn primary">Choose file…</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="import-mode-dialog">
+    <div class="dialog-body">
+      <h2>File looks good</h2>
+      <p id="import-mode-copy" class="import-copy"></p>
+      <div class="dialog-actions">
+        <button type="button" id="cancel-import-mode" class="btn ghost">Cancel</button>
+        <span class="spacer"></span>
+        <button type="button" id="import-replace" class="btn danger">Substitute board…</button>
+        <button type="button" id="import-add" class="btn primary">Add to board</button>
       </div>
     </div>
   </dialog>

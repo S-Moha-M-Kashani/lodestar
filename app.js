@@ -724,21 +724,59 @@
     }
   });
 
+  // A parsed file waits here while the add-or-substitute dialog is open
+  let pendingImport = null;
+  const importModeDialog = $('#import-mode-dialog');
+
   $('#import-input').addEventListener('change', async (e) => {
     const file = e.target.files[0];
     e.target.value = '';
     importDialog.close();
     if (!file) return;
     try {
-      const imported = parseState(await file.text());
-      if (!confirm(`Replace the current board with ${imported.cards.length} imported question(s)?`)) return;
-      state = imported;
-      dealCards = true; // deal the imported cards in like a fresh sheet
-      commit();
-      announce('Board imported');
+      pendingImport = parseState(await file.text());
+      const n = pendingImport.cards.length;
+      $('#import-mode-copy').textContent =
+        `The file contains ${n} question${n === 1 ? '' : 's'}. Add ${n === 1 ? 'it' : 'them'} to the current board, ` +
+        `or substitute the whole board with the file's contents?`;
+      importModeDialog.showModal();
     } catch (err) {
+      pendingImport = null;
       alert('Could not import this file — it does not match the Question Board format (see Import JSON for the schema).');
     }
+  });
+
+  $('#cancel-import-mode').addEventListener('click', () => {
+    pendingImport = null;
+    importModeDialog.close();
+  });
+
+  $('#import-add').addEventListener('click', () => {
+    if (!pendingImport) return;
+    // Fresh ids and ledger numbers so the same file can be imported twice safely
+    const added = pendingImport.cards.map((c) => ({ ...c, id: uid(), num: 0 }));
+    state.cards = ensureNums([...state.cards, ...added]);
+    pendingImport = null;
+    importModeDialog.close();
+    dealCards = true;
+    commit(`Imported ${added.length} question(s), added to the board`);
+    announce(`Added ${added.length} imported question(s) to the board`);
+  });
+
+  $('#import-replace').addEventListener('click', () => {
+    if (!pendingImport) return;
+    const n = pendingImport.cards.length;
+    if (!confirm(
+      `Are you sure? This substitutes the whole board — your current ` +
+      `${state.cards.length} question(s) will be replaced by the ${n} from the file.\n\n` +
+      `(You can still roll back from History.)`
+    )) return;
+    state = pendingImport;
+    pendingImport = null;
+    importModeDialog.close();
+    dealCards = true; // deal the imported cards in like a fresh sheet
+    commit(`Imported ${n} question(s), substituted the board`);
+    announce('Board substituted with the imported questions');
   });
 
   const THEMES = ['light', 'white', 'sepia', 'dark'];
