@@ -73,10 +73,16 @@
     };
   }
 
+  let loadedFromStorage = false; // true when this browser already had a saved board
+
   function loadState() {
     try {
       const json = localStorage.getItem(STORAGE_KEY);
-      if (json) return parseState(json);
+      if (json) {
+        const saved = parseState(json);
+        loadedFromStorage = true;
+        return saved;
+      }
     } catch (err) {
       console.warn('Could not load saved board, starting fresh.', err);
     }
@@ -133,6 +139,84 @@
     } catch (err) {
       console.warn('Could not save board.', err);
     }
+    pushToServer(); // keep the SQLite-backed server in sync when one is present
+  }
+
+  // --------------------------------------------------------------------------
+  // Server sync — when a backend is reachable the board is persisted to its
+  // SQLite database; otherwise the app runs entirely on localStorage. The
+  // whole board is pushed on every change, so deleting a question is the only
+  // thing that removes its row server-side.
+  // --------------------------------------------------------------------------
+
+  const API = '/api/state';
+  let serverAvailable = false;
+  let serverOffline = false; // true once a push has failed, to warn only once
+  let pushTimer = null;
+
+  // Order-sensitive fingerprint, to skip redundant work when nothing changed.
+  const boardFingerprint = (cards) =>
+    cards.map((c) => [c.id, c.columnId, c.title, c.notes, c.priority, c.num, (c.tags || []).join('|')].join('␟')).join('␞');
+
+  function pushToServer() {
+    if (!serverAvailable) return;
+    clearTimeout(pushTimer);
+    pushTimer = setTimeout(async () => {
+      try {
+        const res = await fetch(API, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ version: 1, cards: state.cards }),
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        if (serverOffline) { serverOffline = false; announce('Reconnected — changes saved to the server'); }
+      } catch (err) {
+        if (!serverOffline) {
+          serverOffline = true;
+          announce('Server unreachable — changes are saved locally for now');
+        }
+        console.warn('Could not save to server.', err);
+      }
+    }, 150);
+  }
+
+  async function initServerSync() {
+    let board;
+    try {
+      const res = await fetch(API, { headers: { Accept: 'application/json' } });
+      if (!res.ok) return; // no usable backend — stay in localStorage mode
+      board = await res.json();
+    } catch (_) {
+      return; // static / offline — localStorage mode
+    }
+    if (!board || !Array.isArray(board.cards)) return;
+    serverAvailable = true;
+
+    // A browser that already has its own board wins on load — this guarantees
+    // unsynced local edits are never clobbered — and we converge the server to
+    // it. A fresh browser (no local board) instead loads from the database.
+    if (loadedFromStorage && state.cards.length > 0) {
+      pushToServer();
+      return;
+    }
+
+    if (board.cards.length === 0) {
+      if (state.cards.length > 0) pushToServer(); // fresh DB — save our seed board
+      return;
+    }
+
+    const incoming = ensureNums(board.cards.map(sanitizeCard).filter(Boolean));
+    if (boardFingerprint(incoming) === boardFingerprint(state.cards)) return; // already in sync
+
+    // Fresh browser, and the database has a board — adopt it as the source of truth.
+    state = { version: 1, columns: COLUMNS, cards: incoming };
+    saveState();
+    timeline.entries.push({ ts: Date.now(), action: `Loaded ${incoming.length} question(s) from the server`, cards: snapshot(incoming) });
+    if (timeline.entries.length > HISTORY_LIMIT) timeline.entries.splice(0, timeline.entries.length - HISTORY_LIMIT);
+    timeline.index = timeline.entries.length - 1;
+    saveTimeline();
+    dealCards = true;
+    render();
   }
 
   function commit(action) {
@@ -753,10 +837,12 @@
     const a = document.createElement('a');
     a.href = url;
     a.download = 'questions.json';
+    a.rel = 'noopener';
     document.body.append(a);
     a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    // Revoke/remove on a later tick — doing it synchronously can cancel the
+    // download before the browser has started it (notably Firefox/Safari).
+    setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 1000);
     exportDialog.close();
     announce('Exported board as questions.json');
   });
@@ -1005,5 +1091,6 @@
   // Go
   // --------------------------------------------------------------------------
 
-  render();
+  render();          // instant paint from localStorage
+  initServerSync();  // then reconcile with the SQLite backend if one is running
 })();
