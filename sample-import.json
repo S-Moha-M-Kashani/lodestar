@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "cards": [
+    {
+      "title": "Book the venue for the Q3 team offsite",
+      "columnId": "inbox",
+      "priority": "high",
+      "notes": "Need capacity for 25, projector, within 30 min of the office.",
+      "tags": ["planning", "offsite"]
+    },
+    {
+      "title": "Decide on a shared notes tool",
+      "columnId": "to-research",
+      "priority": "medium",
+      "notes": "Compare Notion vs Obsidian vs plain Markdown in git.",
+      "tags": ["tools"]
+    },
+    {
+      "title": "Draft the new-hire onboarding checklist",
+      "columnId": "in-progress",
+      "priority": "medium",
+      "tags": ["process", "hiring"]
+    },
+    {
+      "title": "Review last month's cloud spend",
+      "columnId": "in-progress",
+      "priority": "low",
+      "tags": ["finance"]
+    },
+    {
+      "title": "Publish the updated on-call rotation",
+      "columnId": "answered",
+      "priority": "high",
+      "notes": "Shared in #eng on the 1st. Everyone acknowledged.",
+      "tags": ["process", "on-call"]
+    }
+  ]
+}
