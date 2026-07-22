@@ -79,6 +79,10 @@ try:
             viewport={"width": 1440, "height": 900}, accept_downloads=True
         )
         context.grant_permissions(["clipboard-read", "clipboard-write"], origin=URL)
+        # Keep the run network-free and deterministic: force the Overview map onto
+        # its offline keyword-overlap layout instead of downloading the HuggingFace
+        # model. The semantic upgrade is a progressive enhancement exercised by hand.
+        context.add_init_script("window.QBOARD_DISABLE_SEMANTIC = true;")
         page = context.new_page()
 
         errors = []
@@ -299,13 +303,87 @@ try:
         check("backlog: switching back restores the board",
               page.locator('.column[data-col="inbox"]').count() == 1)
 
+        # ---- Overview view (semantic map, kept offline for a network-free test) ----
+        n_all = page.locator(".card").count()
+        page.locator('.view-switch button[data-view="overview"]').click()
+        page.wait_for_selector("#board.overview .plot-dot")
+        check("overview: one dot per question", page.locator(".plot-dot").count() == n_all)
+        check("overview: view button marked pressed",
+              page.get_attribute('.view-switch button[data-view="overview"]', "aria-pressed") == "true")
+        check("overview: layout falls back to keyword overlap when the model is offline",
+              "keyword overlap" in page.locator(".plot-status").inner_text())
+
+        page.locator(".plot-dot").first.hover()
+        page.wait_for_timeout(120)
+        check("overview: hovering a dot reveals its details",
+              page.locator(".plot-tip").is_visible()
+              and page.locator(".plot-tip .plot-tip-title").inner_text() != "")
+
+        page.locator('.tag-chip:has-text("planning")').first.click()
+        page.wait_for_timeout(100)
+        k = page.locator(".plot-dot").count()
+        check("overview: tag filter narrows the map", 0 < k < n_all)
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector("#board.board")
+        check("overview: its tag filter matches the board's own filtering",
+              page.locator(".card").count() == k)
+        page.locator('.tag-chip:has-text("planning")').first.click()  # clear the filter
+        page.wait_for_timeout(60)
+
+        page.locator('.view-switch button[data-view="overview"]').click()
+        page.wait_for_selector("#board.overview .plot-dot")
+        page.locator(".plot-dot").first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        check("overview: clicking a dot opens the question editor",
+              page.locator("#card-dialog[open]").count() == 1)
+        page.click("#cancel-dialog")
+        page.screenshot(path=shot("overview.png"))
+
+        # ---- Matrix view (Eisenhower importance × urgency) ------------------
+        page.locator('.view-switch button[data-view="matrix"]').click()
+        page.wait_for_selector("#board.matrix .matrix-grid")
+        check("matrix: view button marked pressed",
+              page.get_attribute('.view-switch button[data-view="matrix"]', "aria-pressed") == "true")
+        check("matrix: four quadrants drawn", page.locator(".matrix-quad").count() == 4)
+        page.wait_for_timeout(300)
+        placed_expected = sum(1 for c in api_state()["cards"] if c.get("importance") and c.get("urgency"))
+        check("matrix: one dot per question that has both importance and urgency",
+              page.locator(".matrix-quad-dots .plot-dot").count() == placed_expected)
+        page.screenshot(path=shot("matrix.png"))
+
+        # Routing: set an unplaced question to Important + not urgent → the Schedule quadrant
+        hl_before = page.locator('.matrix-quad[data-imp="high"][data-urg="low"] .plot-dot').count()
+        placed_before = page.locator(".matrix-quad-dots .plot-dot").count()
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector("#board.board")
+        page.locator('.card', has_text="speculative decoding").first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        page.select_option("#card-importance", "high")
+        page.select_option("#card-urgency", "low")
+        page.click('#card-form button[type="submit"]')
+        page.wait_for_timeout(150)
+        page.locator('.view-switch button[data-view="matrix"]').click()
+        page.wait_for_selector("#board.matrix .matrix-grid")
+        check("matrix: setting importance & urgency routes the question to its quadrant",
+              page.locator('.matrix-quad[data-imp="high"][data-urg="low"] .plot-dot').count() == hl_before + 1
+              and page.locator(".matrix-quad-dots .plot-dot").count() == placed_before + 1)
+
+        page.wait_for_timeout(450)
+        spec = next((c for c in api_state()["cards"] if "speculative decoding" in c["title"]), None)
+        check("matrix: importance & urgency persist to the database",
+              spec is not None and spec.get("importance") == "high" and spec.get("urgency") == "low")
+
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector("#board.board")
+
         # ---- Import: schema dialog -----------------------------------------
         page.click("#import-btn")
         page.wait_for_selector("#import-dialog[open]")
         schema_text = page.locator("#import-schema").inner_text()
         check("import: dialog shows the JSON schema",
               '"version": 1' in schema_text and '"cards"' in schema_text
-              and "inbox | to-research | in-progress | answered" in schema_text)
+              and "inbox | to-research | in-progress | answered" in schema_text
+              and '"importance"' in schema_text and '"urgency"' in schema_text)
         page.screenshot(path=shot("import-dialog.png"))
         page.click("#copy-schema")
         check("import: 'Copy schema' puts the schema on the clipboard",
@@ -339,7 +417,7 @@ try:
         check("import: added card kept its column, defaults fill the gaps",
               page.locator('[data-col="to-research"] .card', has_text="offsite").count() == 1
               and page.locator('[data-col="inbox"] .card', has_text="onboarding doc").count() == 1)
-        nums = page.locator(".card-num").all_inner_texts()
+        nums = page.locator("#board .card-num").all_inner_texts()
         check("import: ledger numbers stay unique after adding",
               len(nums) == len(set(nums)) and all(n.startswith("Q-0") for n in nums))
 

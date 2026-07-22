@@ -7,9 +7,11 @@ The design is a "question ledger": quad-ruled engineering paper, questions as ru
 ## Features
 
 - **Four-column question lifecycle**: Inbox → To Research → In Progress → Answered
-- **Board / Backlog views**: switch the whole board to a clean, scannable ledger list of the Inbox for triaging many questions at once
+- **Four views**: **Board** (the columns), **Backlog** (the Inbox as a scannable ledger list), **Overview** (a semantic map — see below), and **Matrix** (the Eisenhower importance × urgency grid)
 - **Drag & drop** cards within and between columns, with drop-position indicator
 - **Priorities**: High / Medium / Low color-coded badges, plus a per-column "sort by priority" button
+- **Importance & urgency**: set each to High or Low on a question to place it on the **Matrix** (Answer now / Schedule / Delegate / Drop)
+- **Overview map**: every question is plotted by meaning — its text is embedded and PCA reduces that to two axes (PC-1 / PC-2), so questions that read alike sit close together. Embeddings come from a HuggingFace model ([Transformers.js](https://huggingface.co/docs/transformers.js), `Xenova/all-MiniLM-L6-v2`) loaded on demand from a CDN — **no login or API key needed**; the ~30 MB model downloads once and is cached by the browser. When it's still loading or the browser is offline, the map falls back to a keyword-overlap layout, so it always renders with no network. Hover a dot for details, click to open the full editor, and the tag/priority/search filters apply just like the board.
 - **Quick capture**: type a question in the Inbox and press Enter
 - **Edit modal**: notes, priority, and tags per question
 - **Search & filters**: free-text search, priority filter, tag chips
