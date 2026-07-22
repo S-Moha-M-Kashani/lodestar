@@ -741,7 +741,10 @@
   const exportDialog = $('#export-dialog');
   const exportJson = () => JSON.stringify(state, null, 2);
 
-  $('#export-btn').addEventListener('click', () => exportDialog.showModal());
+  $('#export-btn').addEventListener('click', () => {
+    $('#export-json').value = exportJson();
+    exportDialog.showModal();
+  });
   $('#cancel-export').addEventListener('click', () => exportDialog.close());
 
   $('#download-export').addEventListener('click', () => {
@@ -760,13 +763,27 @@
 
   $('#copy-export').addEventListener('click', async () => {
     const btn = $('#copy-export');
-    try {
-      await navigator.clipboard.writeText(exportJson());
+    const done = () => {
       btn.textContent = 'Copied ✓';
       setTimeout(() => { btn.textContent = 'Copy JSON'; }, 1600);
       announce('Board JSON copied to clipboard');
+    };
+    try {
+      await navigator.clipboard.writeText(exportJson());
+      done();
     } catch (_) {
-      announce('Could not copy — use the download button instead');
+      // Clipboard API blocked (e.g. sandboxed embed) — select the JSON and
+      // try the legacy path; worst case the text is left selected to copy.
+      const ta = $('#export-json');
+      ta.focus();
+      ta.select();
+      if (document.execCommand('copy')) {
+        done();
+      } else {
+        btn.textContent = 'Press ⌘C / Ctrl+C';
+        setTimeout(() => { btn.textContent = 'Copy JSON'; }, 2500);
+        announce('JSON selected — press Ctrl+C or Cmd+C to copy');
+      }
     }
   });
 
