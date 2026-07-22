@@ -117,12 +117,24 @@ with sync_playwright() as p:
     check("export: valid JSON, version 1, all cards",
           data.get("version") == 1 and len(data.get("cards", [])) == count_before)
 
-    # 13. Theme toggle persists
-    page.click("#theme-toggle")
+    # 13. Theme modes: all four apply, persist across reload, Day is plain white
+    for theme in ("white", "sepia", "dark", "light"):
+        page.select_option("#theme-select", theme)
+        page.wait_for_timeout(50)
+        check(f"theme: '{theme}' mode applied",
+              page.evaluate("document.documentElement.dataset.theme") == theme)
+    page.select_option("#theme-select", "sepia")
+    page.screenshot(path=shot("theme-dusk.png"))
+    page.select_option("#theme-select", "white")
+    page.screenshot(path=shot("theme-day.png"))
     page.reload()
     page.wait_for_selector(".card")
-    theme = page.evaluate("document.documentElement.dataset.theme")
-    check("theme: toggle persisted across reload", theme in ("dark", "light"))
+    check("theme: choice persisted across reload",
+          page.evaluate("document.documentElement.dataset.theme") == "white"
+          and page.evaluate("document.querySelector('#theme-select').value") == "white")
+    check("theme: Day mode uses a plain white background",
+          page.evaluate("getComputedStyle(document.body).backgroundColor") == "rgb(255, 255, 255)")
+    page.select_option("#theme-select", "light")
 
     # 14. Delete via modal (accept confirm)
     page.on("dialog", lambda d: d.accept())
@@ -163,6 +175,41 @@ with sync_playwright() as p:
     page.wait_for_selector("#board.board")
     check("backlog: switching back restores the board",
           page.locator('.column[data-col="inbox"]').count() == 1)
+
+    # 19. Import dialog documents the file format
+    page.click("#import-btn")
+    page.wait_for_selector("#import-dialog[open]")
+    schema_text = page.locator("#import-schema").inner_text()
+    check("import: dialog shows the JSON schema",
+          '"version": 1' in schema_text and '"cards"' in schema_text
+          and "inbox | to-research | in-progress | answered" in schema_text)
+    page.screenshot(path=shot("import-dialog.png"))
+    context.grant_permissions(["clipboard-read", "clipboard-write"], origin=URL)
+    page.click("#copy-schema")
+    clipboard = page.evaluate("navigator.clipboard.readText()")
+    check("import: 'Copy schema' puts the schema on the clipboard",
+          '"version": 1' in clipboard)
+
+    # 20. Importing a file generated from the schema replaces the board
+    import_file = shot("generated-import.json")
+    with open(import_file, "w") as f:
+        json.dump({"version": 1, "cards": [
+            {"title": "Imported: how do I eval tool use?", "columnId": "to-research",
+             "priority": "high", "tags": ["evals"]},
+            {"title": "Imported: KV cache sizing rule of thumb?"},
+        ]}, f)
+    page.set_input_files("#import-input", import_file)  # confirm accepted by handler above
+    page.wait_for_timeout(250)
+    check("import: dialog closed after choosing a file",
+          page.locator("#import-dialog[open]").count() == 0)
+    check("import: board replaced with the 2 imported questions",
+          page.locator(".card").count() == 2)
+    check("import: columnId honored, defaults fill the gaps",
+          page.locator('[data-col="to-research"] .card', has_text="eval tool use").count() == 1
+          and page.locator('[data-col="inbox"] .card', has_text="KV cache sizing").count() == 1
+          and page.locator('[data-col="inbox"] .badge.medium').count() == 1)
+    check("import: ledger numbers assigned automatically",
+          page.locator(".card-num").first.inner_text().startswith("Q-0"))
 
     check("console: no JS errors during entire run", not errors)
     if errors:
