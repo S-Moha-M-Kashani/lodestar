@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "cards": [
+    { "title": "How do we shorten new-hire onboarding to one week?", "columnId": "to-research", "priority": "high", "importance": "high", "urgency": "high", "tags": ["hiring", "onboarding", "process"], "notes": "Buddy system, a checklist, and day-one access." },
+    { "title": "What should the new-hire onboarding checklist cover?", "columnId": "in-progress", "priority": "medium", "importance": "high", "urgency": "low", "tags": ["hiring", "onboarding"] },
+    { "title": "Who owns updating the onboarding docs each quarter?", "columnId": "inbox", "priority": "low", "importance": "low", "urgency": "low", "tags": ["hiring", "onboarding", "ownership"] },
+    { "title": "Should we record onboarding sessions for async viewing?", "columnId": "inbox", "priority": "low", "tags": ["hiring", "onboarding"] },
+
+    { "title": "Why did last month's cloud spend jump 40%?", "columnId": "to-research", "priority": "high", "importance": "high", "urgency": "high", "tags": ["infra", "cloud", "cost"], "notes": "Suspect the new staging cluster left running over weekends." },
+    { "title": "Can we right-size the staging cluster to cut cost?", "columnId": "inbox", "priority": "medium", "importance": "high", "urgency": "low", "tags": ["infra", "cloud", "cost"] },
+    { "title": "What is our current p99 API latency under load?", "columnId": "to-research", "priority": "medium", "importance": "high", "urgency": "high", "tags": ["infra", "reliability", "performance"] },
+    { "title": "Do we need multi-region failover this year?", "columnId": "inbox", "priority": "low", "importance": "high", "urgency": "low", "tags": ["infra", "reliability"] },
+
+    { "title": "What should we build next quarter?", "columnId": "inbox", "priority": "high", "importance": "high", "urgency": "low", "tags": ["product", "roadmap", "planning"] },
+    { "title": "Which roadmap bets have the highest upside?", "columnId": "to-research", "priority": "medium", "importance": "high", "urgency": "low", "tags": ["product", "roadmap"] },
+    { "title": "Should we sunset the legacy dashboard?", "columnId": "inbox", "priority": "medium", "importance": "low", "urgency": "low", "tags": ["product", "roadmap"] },
+    { "title": "How do we measure whether a feature succeeded?", "columnId": "to-research", "priority": "medium", "tags": ["product", "metrics"] },
+
+    { "title": "How do we make our weekly reviews shorter?", "columnId": "inbox", "priority": "medium", "importance": "low", "urgency": "low", "tags": ["process", "meetings"] },
+    { "title": "Which recurring meetings can we cancel?", "columnId": "inbox", "priority": "low", "importance": "low", "urgency": "high", "tags": ["process", "meetings"] },
+    { "title": "What is the agenda for the Q3 planning offsite?", "columnId": "in-progress", "priority": "high", "importance": "high", "urgency": "high", "tags": ["planning", "offsite", "process"] },
+    { "title": "Where should we hold the team offsite?", "columnId": "to-research", "priority": "medium", "importance": "low", "urgency": "high", "tags": ["planning", "offsite"] },
+
+    { "title": "Are we rotating production secrets on a schedule?", "columnId": "to-research", "priority": "high", "importance": "high", "urgency": "high", "tags": ["security", "compliance"] },
+    { "title": "Do we need a formal access-review process?", "columnId": "inbox", "priority": "medium", "importance": "high", "urgency": "low", "tags": ["security", "compliance", "process"] },
+    { "title": "Which third-party libraries are unmaintained?", "columnId": "inbox", "priority": "low", "importance": "low", "urgency": "high", "tags": ["security", "dependencies"] },
+
+    { "title": "What is the top reason customers churn?", "columnId": "to-research", "priority": "high", "importance": "high", "urgency": "high", "tags": ["customer", "retention"] },
+    { "title": "How fast is our support first-response time?", "columnId": "inbox", "priority": "medium", "importance": "low", "urgency": "high", "tags": ["customer", "support"] },
+    { "title": "Which feature requests come up most in support?", "columnId": "inbox", "priority": "low", "tags": ["customer", "support", "product"] },
+
+    { "title": "How much runway do we have at the current burn rate?", "columnId": "to-research", "priority": "high", "importance": "high", "urgency": "high", "tags": ["finance"] },
+    { "title": "Should we move annual billing to net-30 terms?", "columnId": "inbox", "priority": "low", "importance": "low", "urgency": "low", "tags": ["finance"] }
+  ]
+}
