@@ -975,9 +975,38 @@ input, select, textarea { font: inherit; color: inherit; }
 /* Eisenhower matrix — a 2×2 of quadrants with axis gutters */
 .matrix-grid {
   display: grid;
-  grid-template-columns: 24px 1fr 1fr;
+  grid-template-columns: 24px 1fr 1fr; /* column count overridden inline per lens */
   grid-template-rows: 1fr 1fr 24px;
   gap: 10px;
+}
+
+/* The lens picker — small stamped tabs in the plot head */
+.matrix-switch {
+  display: inline-flex;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--paper);
+}
+.matrix-switch button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 5px 13px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+.matrix-switch button + button { border-left: 1px solid var(--line); }
+.matrix-switch button:not([aria-pressed="true"]):hover { color: var(--ink); }
+.matrix-switch button[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--paper);
 }
 
 .matrix-axis-imp,
@@ -996,10 +1025,8 @@ input, select, textarea { font: inherit; color: inherit; }
 }
 .matrix-axis-urg { grid-column: 2 / span 2; grid-row: 3; }
 
-.matrix-quad[data-imp="high"][data-urg="low"]  { grid-column: 2; grid-row: 1; }
-.matrix-quad[data-imp="high"][data-urg="high"] { grid-column: 3; grid-row: 1; }
-.matrix-quad[data-imp="low"][data-urg="low"]   { grid-column: 2; grid-row: 2; }
-.matrix-quad[data-imp="low"][data-urg="high"]  { grid-column: 3; grid-row: 2; }
+/* Quadrant placement is set inline by renderMatrix — lenses vary in column
+   count, and the Eisenhower x-axis runs urgent→calm (urgent on the left). */
 
 .matrix-quad {
   min-height: 156px;
