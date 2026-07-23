@@ -23,6 +23,7 @@
         <button type="button" data-view="overview" aria-pressed="false">Overview</button>
         <button type="button" data-view="matrix" aria-pressed="false">Matrix</button>
         <button type="button" data-view="areas" aria-pressed="false">Areas</button>
+        <button type="button" data-view="review" aria-pressed="false">Review</button>
         <button type="button" data-view="assistant" aria-pressed="false">Assistant</button>
       </div>
       <div class="toolbar">
@@ -68,6 +69,18 @@
       <label class="field">Notes / answer
         <textarea id="card-notes" rows="5" placeholder="Research notes, links, the answer…"></textarea>
       </label>
+      <!-- Decisional balance: on cards tagged “decision”, notes lines starting
+           with + / − read back as a two-column pro/con sheet. -->
+      <div id="balance-preview" class="balance-sheet" hidden>
+        <div class="balance-col balance-pro">
+          <h4>Pros +</h4>
+          <ul></ul>
+        </div>
+        <div class="balance-col balance-con">
+          <h4>Cons −</h4>
+          <ul></ul>
+        </div>
+      </div>
       <fieldset class="type-picker">
         <legend>Type</legend>
         <div id="type-picker-options" class="picker-options"></div>

@@ -779,7 +779,8 @@ input, select, textarea { font: inherit; color: inherit; }
 --------------------------------------------------------------------------- */
 .overview,
 .matrix,
-.areas {
+.areas,
+.review {
   flex: 1;
   padding: 16px 28px 32px;
   overflow-y: auto;
@@ -1617,6 +1618,103 @@ kbd {
 .learn-burnup polyline { fill: none; stroke-width: 1.5; }
 .learn-burnup .burnup-asked { stroke: var(--ink-soft); stroke-dasharray: 3 3; }
 .learn-burnup .burnup-answered { stroke: var(--cat); }
+
+/* ----------------------------------------------------------------------------
+   Review view — the weekly sweep: stat tiles, drift, neglect, resurfacing
+---------------------------------------------------------------------------- */
+.review-sheet { display: grid; gap: 14px; }
+.review-sheet .plot-head { margin-bottom: 0; }
+.review-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+}
+.review-tile {
+  border: 1px solid var(--card-line);
+  border-radius: var(--radius);
+  background: var(--card);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.review-num { font-family: var(--display); font-size: 26px; line-height: 1.1; }
+.review-label {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-soft);
+}
+.review-delta-row {
+  display: flex;
+  gap: 14px;
+  align-items: baseline;
+  padding: 4px 2px;
+  border-bottom: 1px dashed var(--line);
+  font-size: 12.5px;
+}
+.review-delta-row:last-child { border-bottom: 0; }
+.review-delta-cat {
+  flex: 0 0 92px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--cat);
+}
+.review-delta-stat { font-family: var(--mono); font-size: 11px; color: var(--ink-soft); }
+.review-delta-stat b { color: var(--ink); font-weight: 600; }
+
+.resurface-card {
+  border: 1px solid var(--card-line);
+  border-left: 4px solid var(--cat);
+  border-radius: var(--radius);
+  background: var(--card);
+  padding: 10px 12px;
+}
+.resurface-card + .resurface-card { margin-top: 8px; }
+.resurface-card[data-kept="true"] { opacity: 0.7; }
+.resurface-head { display: flex; gap: 8px; align-items: baseline; }
+.resurface-age { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--ink-amber); }
+.resurface-title { margin: 6px 0 9px; font-size: 13.5px; line-height: 1.4; }
+.resurface-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.review-stamp-row { display: flex; align-items: center; gap: 14px; }
+.review-stamped {
+  font-family: var(--mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--rule-red);
+  border: 1.5px solid currentColor;
+  border-radius: 4px;
+  padding: 3px 9px;
+  transform: rotate(-2deg);
+}
+
+/* Decisional balance — the pro/con sheet under the notes box */
+.balance-sheet[hidden] { display: none; }
+.balance-sheet {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin: -4px 0 12px;
+}
+.balance-col h4 {
+  margin: 0 0 4px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.balance-pro h4 { color: var(--ink-blue); }
+.balance-con h4 { color: var(--high); }
+.balance-col ul { margin: 0; padding-left: 16px; font-size: 12.5px; line-height: 1.5; }
 
 /* ----------------------------------------------------------------------------
    Assistant view — chat sheet in the ledger idiom
