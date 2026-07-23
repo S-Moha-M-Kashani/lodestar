@@ -1,4 +1,4 @@
-// Question Board server — serves the static app and persists the board to a
+// Lodestar server — serves the static app and persists the board to a
 // local SQLite file so questions survive restarts. Zero npm dependencies:
 // Node's built-in http server and node:sqlite do all the work.
 //
@@ -258,5 +258,5 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`Question Board running at http://localhost:${PORT}  (db: ${DB_PATH})`);
+  console.log(`Lodestar running at http://localhost:${PORT}  (db: ${DB_PATH})`);
 });

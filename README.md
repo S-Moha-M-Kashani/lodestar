@@ -1,6 +1,6 @@
-# Question Board
+# Lodestar
 
-A kanban-style board to collect and prioritize open questions — any team's, any topic's. Vanilla HTML/CSS/JavaScript front end, with an optional tiny server that persists the board to a local **SQLite** database. No build step and no npm dependencies — the server uses Node's built-in `node:sqlite` and `http`.
+*Your compass for open questions.* Lodestar is a place to get every open question out of your head, see what actually matters, and never lose a thought — so you can follow through, privately and at work. A kanban-style board to collect and prioritize open questions — any team's, any topic's. Vanilla HTML/CSS/JavaScript front end, with an optional tiny server that persists the board to a local **SQLite** database. No build step and no npm dependencies — the server uses Node's built-in `node:sqlite` and `http`.
 
 The design is a "question ledger": quad-ruled engineering paper, questions as ruled index cards with permanent ledger IDs (`Q-001`, `Q-002`, …), and priorities as ink stamps.
 

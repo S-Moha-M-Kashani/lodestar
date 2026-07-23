@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Question Board</title>
+  <title>Lodestar</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>❓</text></svg>">
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -13,8 +13,8 @@
       <div class="brand">
         <span class="brand-mark" aria-hidden="true">?</span>
         <div>
-          <h1>Question Board</h1>
-          <p class="tagline">a running ledger of open questions</p>
+          <h1>Lodestar</h1>
+          <p class="tagline">your compass for open questions</p>
         </div>
       </div>
       <div class="view-switch" role="group" aria-label="Switch view">
@@ -47,7 +47,7 @@
     <div id="tag-bar" class="tag-bar" role="group" aria-label="Filter by tag" hidden></div>
   </header>
 
-  <main id="board" class="board" aria-label="Question board"></main>
+  <main id="board" class="board" aria-label="Lodestar board"></main>
 
   <dialog id="card-dialog">
     <form id="card-form">
@@ -111,7 +111,7 @@
   <dialog id="import-dialog">
     <div class="dialog-body">
       <h2>Import questions</h2>
-      <p class="import-copy">Choose a Question Board JSON file. You'll then decide whether to <strong>add</strong> its questions to the board or <strong>substitute</strong> the whole board.</p>
+      <p class="import-copy">Choose a Lodestar JSON file. You'll then decide whether to <strong>add</strong> its questions to the board or <strong>substitute</strong> the whole board.</p>
       <p class="import-copy">Writing the file yourself, or asking an AI to generate one? It must match this shape:</p>
       <pre id="import-schema" class="import-schema" tabindex="0" aria-label="Expected JSON file format"></pre>
       <p class="import-hint">Only "title" is required per question — everything else gets a default: questions land in the Inbox at medium priority, "num" (the permanent Q-012 ledger number) is assigned automatically, timestamps are Unix milliseconds.</p>

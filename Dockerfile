@@ -1,4 +1,4 @@
-# Question Board — runs the SQLite-backed server. Node 23.4+ is required for the
+# Lodestar — runs the SQLite-backed server. Node 23.4+ is required for the
 # built-in node:sqlite module; there are no npm dependencies, so there is no
 # install step. The board itself lives on a mounted volume (see
 # docker-compose.yml), never inside the container, so data survives rebuilds.

@@ -1483,7 +1483,7 @@
       pendingImport = null;
       ask({
         title: 'Could not import this file',
-        message: 'It does not match the Question Board format — open Import JSON to see (and copy) the expected schema.',
+        message: 'It does not match the Lodestar format — open Import JSON to see (and copy) the expected schema.',
         cancelLabel: null,
       });
     }
