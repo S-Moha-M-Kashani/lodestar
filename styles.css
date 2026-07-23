@@ -980,8 +980,10 @@ input, select, textarea { font: inherit; color: inherit; }
   gap: 10px;
 }
 
-/* The lens picker — small stamped tabs in the plot head */
-.matrix-switch {
+/* Small stamped tab groups in the plot head — the matrix lens picker and the
+   Overview projection toggle share one look */
+.matrix-switch,
+.plot-proj-toggle {
   display: inline-flex;
   flex-wrap: wrap;
   margin-top: 10px;
@@ -990,7 +992,8 @@ input, select, textarea { font: inherit; color: inherit; }
   overflow: hidden;
   background: var(--paper);
 }
-.matrix-switch button {
+.matrix-switch button,
+.plot-proj-toggle button {
   appearance: none;
   border: 0;
   background: transparent;
@@ -1002,9 +1005,12 @@ input, select, textarea { font: inherit; color: inherit; }
   color: var(--ink-soft);
   cursor: pointer;
 }
-.matrix-switch button + button { border-left: 1px solid var(--line); }
-.matrix-switch button:not([aria-pressed="true"]):hover { color: var(--ink); }
-.matrix-switch button[aria-pressed="true"] {
+.matrix-switch button + button,
+.plot-proj-toggle button + button { border-left: 1px solid var(--line); }
+.matrix-switch button:not([aria-pressed="true"]):hover,
+.plot-proj-toggle button:not([aria-pressed="true"]):hover { color: var(--ink); }
+.matrix-switch button[aria-pressed="true"],
+.plot-proj-toggle button[aria-pressed="true"] {
   background: var(--ink);
   color: var(--paper);
 }
