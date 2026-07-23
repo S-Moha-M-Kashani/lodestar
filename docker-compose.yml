@@ -1,0 +1,16 @@
+services:
+  question-board:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      # The SQLite database lives on the named volume below, so questions persist
+      # across restarts, upgrades, and rebuilds. Removing the volume
+      # (`docker volume rm`) is the only thing that erases them.
+      BOARD_DB: /data/board.db
+    volumes:
+      - board-data:/data
+    restart: unless-stopped
+
+volumes:
+  board-data:
