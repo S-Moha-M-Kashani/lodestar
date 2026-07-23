@@ -5,6 +5,8 @@
       "title": "Book the venue for the Q3 team offsite",
       "columnId": "inbox",
       "priority": "high",
+      "importance": "high",
+      "urgency": "high",
       "notes": "Need capacity for 25, projector, within 30 min of the office.",
       "tags": ["planning", "offsite"]
     },
@@ -12,6 +14,8 @@
       "title": "Decide on a shared notes tool",
       "columnId": "to-research",
       "priority": "medium",
+      "importance": "high",
+      "urgency": "low",
       "notes": "Compare Notion vs Obsidian vs plain Markdown in git.",
       "tags": ["tools"]
     },

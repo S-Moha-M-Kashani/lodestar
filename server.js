@@ -22,6 +22,7 @@ const DB_PATH = process.env.BOARD_DB || join(ROOT, 'board.db');
 
 const COLUMN_IDS = ['inbox', 'to-research', 'in-progress', 'answered'];
 const PRIORITIES = ['high', 'medium', 'low'];
+const iuVal = (v) => (v === 'high' || v === 'low' ? v : '');
 
 // --------------------------------------------------------------------------
 // Database
@@ -35,6 +36,8 @@ db.exec(`
     title      TEXT    NOT NULL,
     notes      TEXT    NOT NULL DEFAULT '',
     priority   TEXT    NOT NULL DEFAULT 'medium',
+    importance TEXT    NOT NULL DEFAULT '',
+    urgency    TEXT    NOT NULL DEFAULT '',
     num        INTEGER NOT NULL DEFAULT 0,
     tags       TEXT    NOT NULL DEFAULT '[]',
     created_at INTEGER NOT NULL,
@@ -43,12 +46,20 @@ db.exec(`
   );
 `);
 
+// Migrate databases created before importance/urgency existed: add the columns
+// if they're missing so older board.db files keep working untouched.
+const columnNames = new Set(db.prepare('PRAGMA table_info(cards)').all().map((c) => c.name));
+if (!columnNames.has('importance')) db.exec("ALTER TABLE cards ADD COLUMN importance TEXT NOT NULL DEFAULT ''");
+if (!columnNames.has('urgency')) db.exec("ALTER TABLE cards ADD COLUMN urgency TEXT NOT NULL DEFAULT ''");
+
 const rowToCard = (r) => ({
   id: r.id,
   columnId: r.column_id,
   title: r.title,
   notes: r.notes,
   priority: r.priority,
+  importance: r.importance || '',
+  urgency: r.urgency || '',
   num: r.num,
   tags: safeTags(r.tags),
   createdAt: r.created_at,
@@ -80,6 +91,8 @@ function cleanCard(raw, now) {
     title: raw.title.trim(),
     notes: typeof raw.notes === 'string' ? raw.notes : '',
     priority: PRIORITIES.includes(raw.priority) ? raw.priority : 'medium',
+    importance: iuVal(raw.importance),
+    urgency: iuVal(raw.urgency),
     num: Number.isInteger(raw.num) && raw.num > 0 ? raw.num : 0,
     tags: Array.isArray(raw.tags) ? raw.tags.map((t) => String(t).trim().toLowerCase()).filter(Boolean) : [],
     createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : now,
@@ -97,11 +110,12 @@ function writeBoard(cards) {
 
   const del = db.prepare('DELETE FROM cards WHERE id = ?');
   const upsert = db.prepare(`
-    INSERT INTO cards (id, column_id, title, notes, priority, num, tags, created_at, updated_at, position)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO cards (id, column_id, title, notes, priority, importance, urgency, num, tags, created_at, updated_at, position)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       column_id = excluded.column_id, title = excluded.title, notes = excluded.notes,
-      priority = excluded.priority, num = excluded.num, tags = excluded.tags,
+      priority = excluded.priority, importance = excluded.importance, urgency = excluded.urgency,
+      num = excluded.num, tags = excluded.tags,
       created_at = excluded.created_at, updated_at = excluded.updated_at, position = excluded.position
   `);
 
@@ -111,7 +125,7 @@ function writeBoard(cards) {
       if (!keep.has(id)) del.run(id);
     }
     clean.forEach((c, i) =>
-      upsert.run(c.id, c.columnId, c.title, c.notes, c.priority, c.num, JSON.stringify(c.tags), c.createdAt, c.updatedAt, i));
+      upsert.run(c.id, c.columnId, c.title, c.notes, c.priority, c.importance, c.urgency, c.num, JSON.stringify(c.tags), c.createdAt, c.updatedAt, i));
     db.exec('COMMIT');
   } catch (err) {
     db.exec('ROLLBACK');

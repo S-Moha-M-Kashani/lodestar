@@ -20,6 +20,8 @@
       <div class="view-switch" role="group" aria-label="Switch view">
         <button type="button" data-view="board" aria-pressed="true">Board</button>
         <button type="button" data-view="backlog" aria-pressed="false">Backlog</button>
+        <button type="button" data-view="overview" aria-pressed="false">Overview</button>
+        <button type="button" data-view="matrix" aria-pressed="false">Matrix</button>
       </div>
       <div class="toolbar">
         <input id="search" type="search" placeholder="Search questions…" aria-label="Search questions">
@@ -62,6 +64,23 @@
         <label><input type="radio" name="priority" value="medium"><span class="badge medium">Medium</span></label>
         <label><input type="radio" name="priority" value="low"><span class="badge low">Low</span></label>
       </fieldset>
+      <div class="field-row">
+        <label class="field">Importance
+          <select id="card-importance">
+            <option value="">Not set</option>
+            <option value="high">High</option>
+            <option value="low">Low</option>
+          </select>
+        </label>
+        <label class="field">Urgency
+          <select id="card-urgency">
+            <option value="">Not set</option>
+            <option value="high">High</option>
+            <option value="low">Low</option>
+          </select>
+        </label>
+      </div>
+      <p class="field-hint">Set both to place this question on the <strong>Matrix</strong>.</p>
       <label class="field">Tags <span class="hint">(comma separated)</span>
         <input id="card-tags" type="text" placeholder="planning, ideas, follow-up">
       </label>
