@@ -361,7 +361,88 @@ input, select, textarea { font: inherit; color: inherit; }
   padding-bottom: 6px;
 }
 
-.cat-tab-count { font-size: 9.5px; opacity: 0.75; }
+/* "All" — the whole board at once; neutral ink, never a category colour */
+.cat-tab-all { font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; font-size: 10px; }
+
+/* ✎ Edit — quiet utility tab at the end of the rail */
+.cat-tab-edit {
+  margin-left: auto;
+  color: var(--ink-soft);
+  background: transparent;
+  border-style: dashed;
+}
+.cat-tab-edit:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, var(--card)); }
+
+/* Categories editor dialog */
+.cats-list {
+  display: flex;
+  flex-direction: column;
+  margin: 10px 0 14px;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.cats-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 2px;
+  border-bottom: 1px dashed var(--line);
+}
+.cats-row:last-child { border-bottom: none; }
+.cats-row .cat-swatch { color: var(--cat); }
+
+.cats-row-count {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.cats-remove { font-size: 11px; padding: 3px 10px; }
+
+.cat-add-form {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.cat-add-form input[type="text"] {
+  flex: 1 1 150px;
+  min-width: 0;
+  font: inherit;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 6px 9px;
+}
+
+.cat-hue-options { display: flex; gap: 4px; flex-wrap: wrap; }
+.cat-hue { cursor: pointer; }
+.cat-hue input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.cat-hue-dot {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--cat);
+  border: 2px solid transparent;
+  box-sizing: border-box;
+}
+.cat-hue input:checked + .cat-hue-dot {
+  border-color: var(--ink);
+  box-shadow: 0 0 0 2px var(--paper) inset;
+}
+.cat-hue input:focus-visible + .cat-hue-dot { outline: 2px solid var(--rule-red); outline-offset: 1px; }
 
 /* Tag filter bar */
 .tag-bar {
@@ -1233,6 +1314,8 @@ dialog::backdrop {
 
 /* Export / import dialogs — filing instructions for the ledger */
 #import-dialog { width: min(620px, calc(100vw - 32px)); }
+
+#cats-dialog { width: min(520px, calc(100vw - 32px)); }
 
 .dialog-body { padding: 24px; }
 

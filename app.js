@@ -26,9 +26,11 @@
   const TYPE_RANK = Object.fromEntries(TYPES.map((t, i) => [t, i]));
 
   // Life areas — the coloured celluloid tabs of the ledger. Each category is an
-  // oklch hue; every theme sets --cat-l/--cat-c once, so all eight inks stay
+  // oklch hue; every theme sets --cat-l/--cat-c once, so every ink stays
   // legible on Morning/Day/Dusk/Night without per-theme colour tables.
-  const CATEGORIES = [
+  // The set is the user's own: categories can be added and removed (✎ on the
+  // rail), and the registry is saved with the board and synced to the server.
+  const DEFAULT_CATEGORIES = [
     { id: 'work',   label: 'Work',   h: 255 },
     { id: 'love',   label: 'Love',   h: 15 },
     { id: 'family', label: 'Family', h: 60 },
@@ -39,14 +41,42 @@
     { id: 'home',   label: 'Home',   h: 90 },
     { id: 'money',  label: 'Money',  h: 40 },
   ];
-  const CATEGORY_IDS = CATEGORIES.map((c) => c.id);
-  const CAT_HUE = Object.fromEntries(CATEGORIES.map((c) => [c.id, c.h]));
-  const catColor = (id) =>
-    id in CAT_HUE ? `oklch(var(--cat-l) var(--cat-c) ${CAT_HUE[id]})` : 'var(--ink-soft)';
-  const catLabel = (id) => (CATEGORIES.find((c) => c.id === id) || { label: '' }).label;
+  const CAT_LIMIT = 24;
+  // Hues a new category can be inked in, spread around the oklch wheel.
+  const HUE_CHOICES = [15, 40, 60, 90, 120, 150, 180, 200, 230, 255, 285, 310, 340];
+
+  let categories = DEFAULT_CATEGORIES.map((c) => ({ ...c }));
+
+  const catSlug = (s) =>
+    String(s).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24);
+  const catById = (id) => categories.find((c) => c.id === id);
+  const catColor = (id) => {
+    const c = catById(id);
+    return c ? `oklch(var(--cat-l) var(--cat-c) ${c.h})` : 'var(--ink-soft)';
+  };
+  const catLabel = (id) => (catById(id) || { label: '' }).label;
+
+  function sanitizeCategories(raw) {
+    if (!Array.isArray(raw)) return null;
+    const seen = new Set();
+    const out = [];
+    for (const c of raw) {
+      if (!c || typeof c !== 'object') continue;
+      const id = typeof c.id === 'string' ? catSlug(c.id) : '';
+      const label = typeof c.label === 'string' && c.label.trim() ? c.label.trim().slice(0, 24) : '';
+      const h = Number.isFinite(c.h) ? ((Math.round(c.h) % 360) + 360) % 360 : null;
+      if (!id || !label || h === null || seen.has(id)) continue;
+      seen.add(id);
+      out.push({ id, label, h });
+      if (out.length >= CAT_LIMIT) break;
+    }
+    return out.length ? out : null;
+  }
 
   const typeVal = (t) => (TYPES.includes(t) ? t : 'question');
-  const catVal = (c) => (CATEGORY_IDS.includes(c) ? c : '');
+  // Validate against the live registry by default; imports pass the file's own
+  // registry so custom categories survive the round trip.
+  const catVal = (c, reg = categories) => (reg.some((x) => x.id === c) ? c : '');
 
   // Importance & urgency are each High, Low, or unset ('') — a question needs
   // both to be placed on the Eisenhower matrix.
@@ -99,7 +129,7 @@
 
   const qLabel = (card) => 'Q-' + String(card.num).padStart(3, '0');
 
-  function sanitizeCard(raw) {
+  function sanitizeCard(raw, reg = categories) {
     if (!raw || typeof raw !== 'object' || typeof raw.title !== 'string' || !raw.title.trim()) return null;
     return {
       id: typeof raw.id === 'string' && raw.id ? raw.id : uid(),
@@ -107,7 +137,7 @@
       title: raw.title.trim(),
       notes: typeof raw.notes === 'string' ? raw.notes : '',
       type: typeVal(raw.type),
-      category: catVal(raw.category),
+      category: catVal(raw.category, reg),
       importance: iuVal(raw.importance),
       urgency: iuVal(raw.urgency),
       effort: effortVal(raw.effort),
@@ -124,10 +154,14 @@
   function parseState(json) {
     const data = JSON.parse(json);
     if (!data || data.version !== 1 || !Array.isArray(data.cards)) throw new Error('Unrecognized data format');
+    // Files/saves that predate custom categories have no registry — cats stays
+    // null and the caller keeps whatever registry it already has.
+    const cats = sanitizeCategories(data.categories);
     return {
       version: 1,
       columns: COLUMNS,
-      cards: ensureNums(data.cards.map(sanitizeCard).filter(Boolean)),
+      categories: cats,
+      cards: ensureNums(data.cards.map((c) => sanitizeCard(c, cats || categories)).filter(Boolean)),
     };
   }
 
@@ -138,6 +172,7 @@
       const json = localStorage.getItem(STORAGE_KEY);
       if (json) {
         const saved = parseState(json);
+        if (saved.categories) categories = saved.categories;
         loadedFromStorage = true;
         return saved;
       }
@@ -195,7 +230,7 @@
 
   function saveState() {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...state, categories }));
     } catch (err) {
       console.warn('Could not save board.', err);
     }
@@ -228,7 +263,7 @@
         const res = await fetch(API, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ version: 1, cards: state.cards }),
+          body: JSON.stringify({ version: 1, cards: state.cards, categories }),
         });
         if (!res.ok) throw new Error('HTTP ' + res.status);
         if (serverOffline) { serverOffline = false; announce('Reconnected — changes saved to the server'); }
@@ -253,6 +288,7 @@
     }
     if (!board || !Array.isArray(board.cards)) return;
     serverAvailable = true;
+    const serverCats = sanitizeCategories(board.categories);
 
     // A browser that already has its own board wins on load — this guarantees
     // unsynced local edits are never clobbered — and we converge the server to
@@ -262,12 +298,14 @@
       return;
     }
 
+    if (serverCats) categories = serverCats; // fresh browser — the DB's registry wins
+
     if (board.cards.length === 0) {
       if (state.cards.length > 0) pushToServer(); // fresh DB — save our seed board
       return;
     }
 
-    const incoming = ensureNums(board.cards.map(sanitizeCard).filter(Boolean));
+    const incoming = ensureNums(board.cards.map((c) => sanitizeCard(c)).filter(Boolean));
     if (boardFingerprint(incoming) === boardFingerprint(state.cards)) return; // already in sync
 
     // Fresh browser, and the database has a board — adopt it as the source of truth.
@@ -321,7 +359,7 @@
       const res = await fetch(TRASH_API, { headers: { Accept: 'application/json' } });
       if (!res.ok) return [];
       const data = await res.json();
-      return Array.isArray(data.cards) ? data.cards.map(sanitizeCard).filter(Boolean) : [];
+      return Array.isArray(data.cards) ? data.cards.map((c) => sanitizeCard(c)).filter(Boolean) : [];
     } catch (_) {
       return [];
     }
@@ -561,12 +599,25 @@
     form.addEventListener('submit', (e) => {
       e.preventDefault();
       const title = input.value.trim();
-      if (!title) return;
+      if (!title) { input.focus(); return; } // nothing to add — put the cursor back
       const now = Date.now();
-      const card = { id: uid(), columnId: 'inbox', title, notes: '', type: 'question', category: '', importance: '', urgency: '', num: nextNum(), tags: [], createdAt: now, updatedAt: now };
+      // A capture inherits the drawer it was written in: with a category tab or
+      // type filter active, the new card belongs there — and stays visible.
+      const card = { id: uid(), columnId: 'inbox', title, notes: '',
+        type: filters.type || 'question', category: filters.category,
+        importance: '', urgency: '',
+        effort: 'medium', control: 'influence', effortSrc: 'default', controlSrc: 'default',
+        num: nextNum(), tags: [], createdAt: now, updatedAt: now };
       // New captures go to the top of the Inbox
       const firstInbox = state.cards.findIndex((c) => c.columnId === 'inbox');
       state.cards.splice(firstInbox === -1 ? state.cards.length : firstInbox, 0, card);
+      // A search or tag filter could still hide the fresh card — clear those so
+      // the capture never vanishes silently.
+      if (!matchesFilters(card)) {
+        filters.search = '';
+        filters.tags.clear();
+        $('#search').value = '';
+      }
       commit(`Added ${qLabel(card)} “${short(title)}”`);
       announce(`Added “${title}” to Inbox`);
       const fresh = $('#board .quick-add input');
@@ -659,40 +710,39 @@
     return el;
   }
 
-  // The category rail — coloured index-tabs, one per life area in use.
-  // Clicking a tab filters the whole board to that drawer; clicking it again
-  // slides the drawer shut.
+  // The category rail — coloured index-tabs, one per life area. "All" opens
+  // every drawer at once (the whole-life visualization); clicking a category
+  // filters the board to that drawer; ✎ Edit manages the registry itself.
   function renderCatRail() {
     const rail = $('#cat-rail');
-    const counts = new Map();
-    for (const c of state.cards) if (c.category) counts.set(c.category, (counts.get(c.category) || 0) + 1);
-    if (filters.category && !counts.has(filters.category)) filters.category = '';
-
-    const inUse = CATEGORIES.filter((c) => counts.has(c.id));
-    rail.hidden = inUse.length === 0;
+    if (filters.category && !catById(filters.category)) filters.category = '';
+    rail.hidden = false;
     rail.innerHTML = '';
-    if (!inUse.length) return;
 
-    for (const cat of inUse) {
+    const mkTab = (id, label, color, extraClass = '') => {
       const tab = document.createElement('button');
-      tab.className = 'cat-tab';
-      tab.dataset.cat = cat.id;
-      tab.style.setProperty('--cat', catColor(cat.id));
-      tab.setAttribute('aria-pressed', String(filters.category === cat.id));
-
-      const name = document.createElement('span');
-      name.textContent = cat.label;
-      const n = document.createElement('span');
-      n.className = 'cat-tab-count';
-      n.textContent = counts.get(cat.id);
-      tab.append(name, n);
-
+      tab.className = ('cat-tab ' + extraClass).trim();
+      tab.dataset.cat = id;
+      tab.style.setProperty('--cat', color);
+      tab.setAttribute('aria-pressed', String(filters.category === id));
+      tab.textContent = label;
       tab.addEventListener('click', () => {
-        filters.category = filters.category === cat.id ? '' : cat.id;
+        filters.category = filters.category === id ? '' : id;
         render();
       });
-      rail.append(tab);
-    }
+      return tab;
+    };
+
+    rail.append(mkTab('', 'All', 'var(--ink)', 'cat-tab-all'));
+    for (const cat of categories) rail.append(mkTab(cat.id, cat.label, catColor(cat.id)));
+
+    const edit = document.createElement('button');
+    edit.id = 'edit-cats-btn';
+    edit.className = 'cat-tab cat-tab-edit';
+    edit.title = 'Add or remove categories';
+    edit.textContent = '✎ Edit';
+    edit.addEventListener('click', openCatsDialog);
+    rail.append(edit);
   }
 
   function renderTagBar() {
@@ -946,7 +996,7 @@
     const legend = document.createElement('div');
     legend.className = 'plot-legend';
     const inUse = new Set(state.cards.map((c) => c.category));
-    const entries = CATEGORIES.filter((c) => inUse.has(c.id)).map((c) => [c.id, c.label]);
+    const entries = categories.filter((c) => inUse.has(c.id)).map((c) => [c.id, c.label]);
     if (inUse.has('')) entries.push(['', 'Uncategorized']);
     for (const [id, label] of entries) {
       const item = document.createElement('span');
@@ -1405,6 +1455,8 @@
       if (!res.ok) return;
       const data = await res.json();
       if (data && Array.isArray(data.cards)) {
+        const cats = sanitizeCategories(data.categories);
+        if (cats) categories = cats;
         state.cards = data.cards;
         saveState();
       }
@@ -1544,8 +1596,8 @@
   const form = $('#card-form');
   let editingId = null;
 
-  // Build the type and category pickers once from the registries, so the
-  // dialog can never drift from what the board understands.
+  // The type picker is built once (types are fixed); the category picker is
+  // rebuilt on every open, because the registry is the user's to change.
   (() => {
     const typeWrap = $('#type-picker-options');
     for (const t of TYPES) {
@@ -1560,8 +1612,11 @@
       label.append(input, span);
       typeWrap.append(label);
     }
+  })();
 
+  function rebuildCategoryPicker() {
     const catWrap = $('#category-picker-options');
+    catWrap.innerHTML = '';
     const mkCat = (value, text, color) => {
       const label = document.createElement('label');
       const input = document.createElement('input');
@@ -1576,13 +1631,14 @@
       return label;
     };
     catWrap.append(mkCat('', 'None', 'var(--ink-soft)'));
-    for (const c of CATEGORIES) catWrap.append(mkCat(c.id, c.label, catColor(c.id)));
-  })();
+    for (const c of categories) catWrap.append(mkCat(c.id, c.label, catColor(c.id)));
+  }
 
   function openDialog(cardId) {
     const card = getCard(cardId);
     if (!card) return;
     editingId = cardId;
+    rebuildCategoryPicker();
     $('#card-title').value = card.title;
     $('#card-notes').value = card.notes;
     $('#card-tags').value = card.tags.join(', ');
@@ -1636,6 +1692,125 @@
   dialog.addEventListener('close', () => { editingId = null; });
 
   // --------------------------------------------------------------------------
+  // Categories editor — the ✎ tab on the rail. Add a life area (name + hue) or
+  // remove one; removing never touches cards, they just become uncategorized.
+  // --------------------------------------------------------------------------
+
+  const catsDialog = $('#cats-dialog');
+
+  function openCatsDialog() {
+    renderCatsList();
+    renderHuePicker();
+    $('#cat-add-name').value = '';
+    catsDialog.showModal();
+    $('#cat-add-name').focus();
+  }
+
+  function renderCatsList() {
+    const list = $('#cats-list');
+    list.innerHTML = '';
+    const counts = new Map();
+    for (const c of state.cards) if (c.category) counts.set(c.category, (counts.get(c.category) || 0) + 1);
+
+    for (const cat of categories) {
+      const row = document.createElement('div');
+      row.className = 'cats-row';
+
+      const swatch = document.createElement('span');
+      swatch.className = 'cat-swatch';
+      swatch.style.setProperty('--cat', catColor(cat.id));
+      swatch.textContent = cat.label;
+
+      const n = counts.get(cat.id) || 0;
+      const meta = document.createElement('span');
+      meta.className = 'cats-row-count';
+      meta.textContent = n ? `${n} card${n === 1 ? '' : 's'}` : 'no cards';
+
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'btn ghost cats-remove';
+      remove.textContent = 'Remove';
+      remove.setAttribute('aria-label', `Remove category ${cat.label}`);
+      remove.addEventListener('click', () => removeCategory(cat.id));
+
+      row.append(swatch, meta, remove);
+      list.append(row);
+    }
+  }
+
+  function renderHuePicker() {
+    const wrap = $('#cat-hue-options');
+    wrap.innerHTML = '';
+    const used = new Set(categories.map((c) => c.h));
+    const preferred = HUE_CHOICES.find((h) => !used.has(h)) ?? HUE_CHOICES[0];
+    for (const h of HUE_CHOICES) {
+      const label = document.createElement('label');
+      label.className = 'cat-hue';
+      const input = document.createElement('input');
+      input.type = 'radio';
+      input.name = 'cat-hue';
+      input.value = String(h);
+      input.checked = h === preferred;
+      input.setAttribute('aria-label', `Hue ${h}`);
+      const dot = document.createElement('span');
+      dot.className = 'cat-hue-dot';
+      dot.style.setProperty('--cat', `oklch(var(--cat-l) var(--cat-c) ${h})`);
+      label.append(input, dot);
+      wrap.append(label);
+    }
+  }
+
+  $('#cat-add-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const nameInput = $('#cat-add-name');
+    const label = nameInput.value.trim().slice(0, 24);
+    const id = catSlug(label);
+    if (!label || !id) { nameInput.focus(); return; }
+    if (catById(id)) {
+      ask({ title: 'Already on the rail', message: `A category called “${catLabel(id)}” already exists.`, cancelLabel: null });
+      return;
+    }
+    if (categories.length >= CAT_LIMIT) {
+      ask({ title: 'The rail is full', message: `Up to ${CAT_LIMIT} categories fit — remove one to make room.`, cancelLabel: null });
+      return;
+    }
+    const checked = $('#cat-hue-options input:checked');
+    const h = checked ? Number(checked.value) : HUE_CHOICES[0];
+    categories.push({ id, label, h });
+    commit(`Added category “${label}”`);
+    announce(`Added category “${label}”`);
+    renderCatsList();
+    renderHuePicker();
+    nameInput.value = '';
+    nameInput.focus();
+  });
+
+  async function removeCategory(id) {
+    const cat = catById(id);
+    if (!cat) return;
+    const affected = state.cards.filter((c) => c.category === id).length;
+    const sure = await ask({
+      title: `Remove “${cat.label}”?`,
+      message: affected
+        ? `${affected} card${affected === 1 ? '' : 's'} carry this label — they stay on the board and become uncategorized. You can add the category back any time.`
+        : 'No cards use it. You can add it back any time.',
+      okLabel: 'Remove category',
+      danger: true,
+    });
+    if (!sure) return;
+    categories = categories.filter((c) => c.id !== id);
+    if (filters.category === id) filters.category = '';
+    const now = Date.now();
+    for (const c of state.cards) if (c.category === id) { c.category = ''; c.updatedAt = now; }
+    commit(`Removed category “${cat.label}”`);
+    announce(`Removed category “${cat.label}”`);
+    renderCatsList();
+    renderHuePicker();
+  }
+
+  $('#close-cats').addEventListener('click', () => catsDialog.close());
+
+  // --------------------------------------------------------------------------
   // Toolbar: search, type filter, the actions menu, theme
   // --------------------------------------------------------------------------
 
@@ -1674,7 +1849,7 @@
   });
 
   const exportDialog = $('#export-dialog');
-  const exportJson = () => JSON.stringify(state, null, 2);
+  const exportJson = () => JSON.stringify({ ...state, categories }, null, 2);
 
   $('#export-btn').addEventListener('click', () => {
     $('#export-json').value = exportJson();
@@ -1733,7 +1908,7 @@
       "title": "The card's text (required)",
       "columnId": "inbox | in-progress | answered",
       "type": "question | problem | task | idea | plan",
-      "category": "work | love | family | health | mind | music | travel | home | money  (optional)",
+      "category": "one of your category ids — work, love, family, health, mind, music, travel, home, money by default  (optional)",
       "importance": "high | low  (optional — for the Matrix)",
       "urgency": "high | low  (optional — for the Matrix)",
       "effort": "low | medium | high  (optional — defaults to medium)",
@@ -1744,6 +1919,9 @@
       "createdAt": 1721606400000,
       "updatedAt": 1721606400000
     }
+  ],
+  "categories": [
+    { "id": "work", "label": "Work", "h": 255 }
   ]
 }`;
 
@@ -1805,6 +1983,11 @@
 
   $('#import-add').addEventListener('click', () => {
     if (!pendingImport) return;
+    // Categories the file defines but this board doesn't yet: adopt them, so
+    // the imported cards keep their labels and colours.
+    for (const cat of pendingImport.categories || []) {
+      if (!catById(cat.id) && categories.length < CAT_LIMIT) categories.push({ ...cat });
+    }
     // Fresh ids and ledger numbers so the same file can be imported twice safely
     const added = pendingImport.cards.map((c) => ({ ...c, id: uid(), num: 0 }));
     state.cards = ensureNums([...state.cards, ...added]);
@@ -1826,7 +2009,8 @@
       danger: true,
     });
     if (!sure || !pendingImport) return;
-    state = pendingImport;
+    if (pendingImport.categories) categories = pendingImport.categories.map((c) => ({ ...c }));
+    state = { version: 1, columns: COLUMNS, cards: pendingImport.cards };
     pendingImport = null;
     importModeDialog.close();
     dealCards = true; // deal the imported cards in like a fresh sheet

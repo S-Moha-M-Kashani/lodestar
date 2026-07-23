@@ -7,7 +7,9 @@ from .base import Tool
 
 COLUMNS = ['inbox', 'in-progress', 'answered']
 TYPES = ['question', 'problem', 'task', 'idea', 'plan']
-CATEGORIES = ['work', 'love', 'family', 'health', 'mind', 'music', 'travel', 'home', 'money']
+# Categories are a user-defined registry (add/remove in the app, stored by the
+# Node server) — so 'category' is a plain string here, validated server-side:
+# an id the registry doesn't know is stored as '' (uncategorized), never an error.
 
 
 class BoardClient:
@@ -78,7 +80,10 @@ def make_board_tools(client: BoardClient) -> list[Tool]:
 
     enum = {'column': {'type': 'string', 'enum': COLUMNS},
             'card_type': {'type': 'string', 'enum': TYPES},
-            'category': {'type': 'string', 'enum': CATEGORIES + ['']}}
+            'category': {'type': 'string',
+                         'description': "a category id from the user's own registry "
+                                        "(e.g. work, love, health — list_questions shows "
+                                        "what's in use), or '' for uncategorized"}}
     return [
         Tool('list_questions',
              'List cards on the board, optionally filtered by column or free text.',

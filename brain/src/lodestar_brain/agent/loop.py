@@ -20,8 +20,10 @@ community ids — same community = same theme; point out likely duplicates).
 
 Board columns: inbox, in-progress, answered. \
 Card types: question, problem, task, idea, plan. \
-Categories (life areas): work, love, family, health, mind, music, travel, home, \
-money — or empty. Importance/urgency: high, low, or empty.
+Categories (life areas) are the user's own registry — work, love, family, \
+health, mind, music, travel, home, money by default, but they can add or \
+remove areas, so check existing cards for the ids in use; '' = uncategorized. \
+Importance/urgency: high, low, or empty.
 
 Rules: never invent question ids — look them up with list_questions or \
 find_related first. When you change the board, say exactly what you changed. \
