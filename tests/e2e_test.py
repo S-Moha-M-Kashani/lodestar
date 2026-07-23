@@ -62,6 +62,21 @@ def api_state():
         return json.loads(r.read())
 
 
+def api_trash():
+    with urllib.request.urlopen(URL + "/api/trash", timeout=3) as r:
+        return json.loads(r.read())
+
+
+def api_put(cards):
+    body = json.dumps({"version": 1, "cards": cards}).encode()
+    req = urllib.request.Request(
+        URL + "/api/state", data=body, method="PUT",
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=3) as r:
+        return json.loads(r.read())
+
+
 def launch_browser(p):
     # Prefer the system Chrome locally; fall back to bundled Chromium (CI).
     try:
@@ -258,20 +273,21 @@ try:
         # ---- History --------------------------------------------------------
         page.click("#history-btn")
         page.wait_for_selector("#history-dialog[open]")
-        check("history: log records many actions", page.locator(".history-row").count() >= 10)
+        # Scope to #history-list: the Trash panel reuses .history-row inside #trash-list.
+        check("history: log records many actions", page.locator("#history-list .history-row").count() >= 10)
         check("history: exactly one entry marked current",
-              page.locator(".history-row.current").count() == 1)
+              page.locator("#history-list .history-row.current").count() == 1)
         check("history: every entry carries a timestamp and an action",
-              page.locator(".history-row .history-time").count()
-              == page.locator(".history-row .history-action").count()
-              == page.locator(".history-row").count())
+              page.locator("#history-list .history-row .history-time").count()
+              == page.locator("#history-list .history-row .history-action").count()
+              == page.locator("#history-list .history-row").count())
         page.screenshot(path=shot("history-dialog.png"))
-        page.locator(".history-row .history-restore").last.click()
+        page.locator("#history-list .history-row .history-restore").last.click()
         page.wait_for_timeout(150)
         check("history: restored the opening state (4 seeds)",
               page.locator(".card").count() == 4
               and page.locator(".card", has_text="speculative decoding").count() == 0)
-        page.locator(".history-row .history-restore").first.click()
+        page.locator("#history-list .history-row .history-restore").first.click()
         page.wait_for_timeout(150)
         check("history: came forward again, later state intact",
               page.locator(".card", has_text="speculative decoding").count() == 1)
@@ -476,15 +492,35 @@ try:
               fresh_page.locator(".card", has_text="PERSIST-MARKER-alpha").count() == 1)
         fresh.close()
 
-        # Delete on the main board, and confirm it leaves the database too
+        # Delete on the main board: it leaves the live board but is NOT destroyed —
+        # it is soft-deleted, kept in the database, and listed in the Trash.
         page.locator('.card', has_text="PERSIST-MARKER-alpha").first.click()
         page.wait_for_selector("#card-dialog[open]")
         page.click("#delete-card")
         page.wait_for_selector("#confirm-dialog[open]")
         page.click("#confirm-ok")
         page.wait_for_timeout(500)
-        check("db: deleting a question removes it from the database",
+        check("db: deleting a question removes it from the live board",
               all(c["title"] != "PERSIST-MARKER-alpha" for c in api_state()["cards"]))
+        check("db: a deleted question is kept in the Trash (recoverable, never destroyed)",
+              any(c["title"] == "PERSIST-MARKER-alpha" for c in api_trash()["cards"]))
+
+        # Second step of the two-step delete: permanently erase it from the Trash
+        # panel in the History dialog — the ONLY action that truly destroys data.
+        page.click("#history-btn")
+        page.wait_for_selector("#history-dialog[open]")
+        page.wait_for_selector("#trash-section:not([hidden])")
+        trash_rows = page.locator("#trash-list .history-row", has_text="PERSIST-MARKER-alpha")
+        check("trash: deleted question is listed in the Trash panel",
+              trash_rows.count() == 1)
+        trash_rows.first.locator("button.danger").click()
+        page.wait_for_selector("#confirm-dialog[open]")
+        page.click("#confirm-ok")
+        page.wait_for_timeout(400)
+        check("trash: Delete permanently erases it from the database for good",
+              all(c["title"] != "PERSIST-MARKER-alpha" for c in api_trash()["cards"])
+              and all(c["title"] != "PERSIST-MARKER-alpha" for c in api_state()["cards"]))
+        page.click("#close-history")
 
         # ---- Survives a server restart (proves on-disk SQLite) --------------
         page.fill(".quick-add input", "RESTART-MARKER-beta")
@@ -506,6 +542,18 @@ try:
         check("db: a fresh browser after restart still shows the persisted board",
               after_page.locator(".card", has_text="RESTART-MARKER-beta").count() == 1)
         after.close()
+
+        # ---- Soft-delete guard at the API layer -----------------------------
+        # The core promise: a save that simply omits a question must archive it,
+        # never hard-delete it — so a partial or buggy write can't lose data.
+        base = api_state()["cards"]
+        api_put(base + [{"id": "omit-guard-1", "title": "OMIT-GUARD-gamma", "columnId": "inbox"}])
+        check("db: omit-guard question saved",
+              any(c["title"] == "OMIT-GUARD-gamma" for c in api_state()["cards"]))
+        api_put(base)  # save again WITHOUT the guard card
+        check("db: a save that omits a question archives it, never hard-deletes",
+              all(c["title"] != "OMIT-GUARD-gamma" for c in api_state()["cards"])
+              and any(c["title"] == "OMIT-GUARD-gamma" for c in api_trash()["cards"]))
 
         check("console: no JS errors during entire run", not errors)
         if errors:

@@ -7,11 +7,16 @@
 //
 // The board is stored one row per question. The client sends its whole state
 // on every change (PUT /api/state); the server upserts the rows it sees and
-// deletes the rows it doesn't — so a deleted question is the only thing that
-// ever leaves the database.
+// SOFT-deletes the rows it doesn't (marks them, never removes them) — so a
+// partial or buggy save can never lose a question. Soft-deleted rows live on in
+// the Trash (GET /api/trash) and are recoverable until an explicit, deliberate
+// purge (DELETE /api/cards/:id). That purge is the ONLY thing that truly erases
+// a question from the database; otherwise the only way to lose data is to delete
+// the database file itself.
 
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
+import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -28,6 +33,10 @@ const iuVal = (v) => (v === 'high' || v === 'low' ? v : '');
 // Database
 // --------------------------------------------------------------------------
 
+// Make sure the DB's directory exists — on Azure App Service we point
+// BOARD_DB at /home/data (persistent storage) which may not exist on first boot.
+mkdirSync(dirname(DB_PATH), { recursive: true });
+
 const db = new DatabaseSync(DB_PATH);
 db.exec(`
   CREATE TABLE IF NOT EXISTS cards (
@@ -42,15 +51,18 @@ db.exec(`
     tags       TEXT    NOT NULL DEFAULT '[]',
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
-    position   INTEGER NOT NULL DEFAULT 0
+    position   INTEGER NOT NULL DEFAULT 0,
+    deleted_at INTEGER
   );
 `);
 
-// Migrate databases created before importance/urgency existed: add the columns
-// if they're missing so older board.db files keep working untouched.
+// Migrate databases created before newer columns existed: add any that are
+// missing so older board.db files keep working untouched. deleted_at is NULL
+// for a live question and a timestamp once it has been soft-deleted (trashed).
 const columnNames = new Set(db.prepare('PRAGMA table_info(cards)').all().map((c) => c.name));
 if (!columnNames.has('importance')) db.exec("ALTER TABLE cards ADD COLUMN importance TEXT NOT NULL DEFAULT ''");
 if (!columnNames.has('urgency')) db.exec("ALTER TABLE cards ADD COLUMN urgency TEXT NOT NULL DEFAULT ''");
+if (!columnNames.has('deleted_at')) db.exec('ALTER TABLE cards ADD COLUMN deleted_at INTEGER');
 
 const rowToCard = (r) => ({
   id: r.id,
@@ -75,8 +87,16 @@ function safeTags(json) {
   }
 }
 
+// The live board is only the questions that have not been soft-deleted.
 function readBoard() {
-  const rows = db.prepare('SELECT * FROM cards ORDER BY position ASC').all();
+  const rows = db.prepare('SELECT * FROM cards WHERE deleted_at IS NULL ORDER BY position ASC').all();
+  return { version: 1, cards: rows.map(rowToCard) };
+}
+
+// The Trash is the soft-deleted questions, newest deletion first. They are still
+// in the database and can be restored (re-added by the client) until purged.
+function readTrash() {
+  const rows = db.prepare('SELECT * FROM cards WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC').all();
   return { version: 1, cards: rows.map(rowToCard) };
 }
 
@@ -102,27 +122,35 @@ function cleanCard(raw, now) {
 
 const cryptoId = () => 'id-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
 
-/** Replace the stored board with `cards`: upsert what's present, delete the rest. */
+/**
+ * Reconcile the stored board with the `cards` the client currently shows:
+ * upsert every card present, and SOFT-delete (archive) any live row that is
+ * absent. Nothing is ever hard-deleted here — that is the whole safety net, so
+ * a partial or accidental save can never destroy a question; it only moves to
+ * the Trash, from where it can be restored. Upserting a card clears its
+ * deleted_at, so re-adding or restoring a question brings it back to life.
+ */
 function writeBoard(cards) {
   const now = Date.now();
   const clean = cards.map((c) => cleanCard(c, now)).filter(Boolean);
   const keep = new Set(clean.map((c) => c.id));
 
-  const del = db.prepare('DELETE FROM cards WHERE id = ?');
+  const softDelete = db.prepare('UPDATE cards SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL');
   const upsert = db.prepare(`
-    INSERT INTO cards (id, column_id, title, notes, priority, importance, urgency, num, tags, created_at, updated_at, position)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO cards (id, column_id, title, notes, priority, importance, urgency, num, tags, created_at, updated_at, position, deleted_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
     ON CONFLICT(id) DO UPDATE SET
       column_id = excluded.column_id, title = excluded.title, notes = excluded.notes,
       priority = excluded.priority, importance = excluded.importance, urgency = excluded.urgency,
       num = excluded.num, tags = excluded.tags,
-      created_at = excluded.created_at, updated_at = excluded.updated_at, position = excluded.position
+      created_at = excluded.created_at, updated_at = excluded.updated_at, position = excluded.position,
+      deleted_at = NULL
   `);
 
   db.exec('BEGIN');
   try {
-    for (const { id } of db.prepare('SELECT id FROM cards').all()) {
-      if (!keep.has(id)) del.run(id);
+    for (const { id } of db.prepare('SELECT id FROM cards WHERE deleted_at IS NULL').all()) {
+      if (!keep.has(id)) softDelete.run(now, id);
     }
     clean.forEach((c, i) =>
       upsert.run(c.id, c.columnId, c.title, c.notes, c.priority, c.importance, c.urgency, c.num, JSON.stringify(c.tags), c.createdAt, c.updatedAt, i));
@@ -132,6 +160,15 @@ function writeBoard(cards) {
     throw err;
   }
   return readBoard();
+}
+
+/**
+ * Permanently remove one question from the database. This is the deliberate
+ * second step ("delete from History") and the only operation that truly erases
+ * data. Returns true if a row was removed.
+ */
+function purgeCard(id) {
+  return db.prepare('DELETE FROM cards WHERE id = ?').run(id).changes > 0;
 }
 
 // --------------------------------------------------------------------------
@@ -183,6 +220,22 @@ const server = createServer(async (req, res) => {
       } catch (err) {
         return sendJson(res, 400, { error: 'Invalid JSON: ' + err.message });
       }
+    }
+    return sendJson(res, 405, { error: 'Method not allowed' });
+  }
+
+  // The Trash — soft-deleted questions, recoverable until purged.
+  if (path === '/api/trash') {
+    if (req.method === 'GET') return sendJson(res, 200, readTrash());
+    return sendJson(res, 405, { error: 'Method not allowed' });
+  }
+
+  // Permanent delete of a single question (the deliberate second step).
+  if (path.startsWith('/api/cards/')) {
+    const id = decodeURIComponent(path.slice('/api/cards/'.length));
+    if (req.method === 'DELETE') {
+      if (!id) return sendJson(res, 400, { error: 'Missing card id' });
+      return sendJson(res, 200, { ok: purgeCard(id) });
     }
     return sendJson(res, 405, { error: 'Method not allowed' });
   }

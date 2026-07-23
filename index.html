@@ -142,6 +142,13 @@
       <h2>Board history</h2>
       <p class="import-copy">Every change is logged here, newest first. Restore any earlier state — moving around never deletes history, so you can always come forward again.</p>
       <div id="history-list" class="history-list"></div>
+
+      <section id="trash-section" class="trash-section" hidden>
+        <h3 class="trash-head">Deleted questions</h3>
+        <p class="import-copy">Deleted questions are kept in the database and stay recoverable here. <strong>Delete permanently</strong> is the only thing that truly erases one — nothing else, not even clearing this browser, can lose it.</p>
+        <div id="trash-list" class="history-list"></div>
+      </section>
+
       <div class="dialog-actions">
         <span class="spacer"></span>
         <button type="button" id="close-history" class="btn ghost">Close</button>
