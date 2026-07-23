@@ -1742,7 +1742,7 @@
     const sheet = document.createElement('div');
     sheet.className = 'plot-sheet areas-sheet';
 
-    const inUse = CATEGORIES
+    const inUse = categories
       .map((cat) => ({ cat, stats: areaStats(cat.id) }))
       .filter(({ stats }) => stats.cards.length > 0);
     const openTotal = inUse.reduce((s, { stats }) => s + stats.open.length, 0);
@@ -2193,7 +2193,7 @@
     sheet.append(tiles);
 
     // Week-over-week drift per life area.
-    const inUse = CATEGORIES.filter((c) => state.cards.some((k) => k.category === c.id));
+    const inUse = categories.filter((c) => state.cards.some((k) => k.category === c.id));
     if (inUse.length) {
       const deltas = detailPanel('Week over week', 'New and answered per area — this week against last.');
       deltas.classList.add('review-deltas');
