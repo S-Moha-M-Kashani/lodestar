@@ -1,4 +1,4 @@
-"""End-to-end verification of Question Board.
+"""End-to-end verification of Lodestar.
 
 Launches the real SQLite-backed server, drives the app in headless Chrome, and
 exercises every button and flow — including the in-app confirm dialogs and that

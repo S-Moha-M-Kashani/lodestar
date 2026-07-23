@@ -1,0 +1,10 @@
+.git
+.github
+.claude
+node_modules
+tests
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+plan.md
