@@ -1,6 +1,6 @@
 {
   "name": "lodestar",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Lodestar — your compass for open questions: capture them, prioritize them, and never lose one. SQLite-backed so nothing is lost.",
   "type": "module",
   "scripts": {
