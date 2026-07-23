@@ -8,3 +8,6 @@ tests
 *.db-wal
 *.db-shm
 plan.md
+brain
+.venv
+docs

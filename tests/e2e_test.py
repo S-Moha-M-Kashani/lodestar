@@ -17,6 +17,7 @@ from playwright.sync_api import sync_playwright
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PORT = int(os.environ.get("TEST_PORT", "8799"))
+BRAIN_PORT = int(os.environ.get("TEST_BRAIN_PORT", "8798"))
 URL = f"http://localhost:{PORT}"
 DB_PATH = os.path.join(tempfile.mkdtemp(prefix="qboard-test-"), "board.db")
 
@@ -35,7 +36,8 @@ def start_server():
     proc = subprocess.Popen(
         ["node", "server.js"],
         cwd=ROOT,
-        env={**os.environ, "PORT": str(PORT), "BOARD_DB": DB_PATH, "NODE_NO_WARNINGS": "1"},
+        env={**os.environ, "PORT": str(PORT), "BOARD_DB": DB_PATH, "NODE_NO_WARNINGS": "1",
+             "AGENT_URL": f"http://127.0.0.1:{BRAIN_PORT}"},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -55,6 +57,27 @@ def stop_server(proc):
         proc.wait(timeout=5)
     except subprocess.TimeoutExpired:
         proc.kill()
+
+
+def start_brain():
+    # The brain runs fully offline here: deterministic fake LLM + hash embedder.
+    proc = subprocess.Popen(
+        ["uv", "run", "--project", "brain", "uvicorn",
+         "lodestar_brain.server:app", "--port", str(BRAIN_PORT)],
+        cwd=ROOT,
+        env={**os.environ, "BRAIN_LLM": "fake", "BRAIN_EMBEDDER": "hash",
+             "BOARD_API_URL": f"http://127.0.0.1:{PORT}"},
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    for _ in range(300):
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{BRAIN_PORT}/health", timeout=1)
+            return proc
+        except Exception:
+            time.sleep(0.1)
+    proc.terminate()
+    raise RuntimeError("brain did not become ready")
 
 
 def api_state():
@@ -86,6 +109,7 @@ def launch_browser(p):
 
 
 server = start_server()
+brain = start_brain()
 browser = None
 try:
     with sync_playwright() as p:
@@ -239,8 +263,17 @@ try:
         page.wait_for_selector(".card")
         check("theme: choice persisted across reload",
               page.evaluate("document.documentElement.dataset.theme") == "white")
-        check("theme: Day mode uses a plain white background",
-              page.evaluate("getComputedStyle(document.body).backgroundColor") == "rgb(255, 255, 255)")
+        # The body background transitions for 0.25s when the theme is applied after
+        # first paint (which happens under load), so wait for it to settle instead
+        # of sampling one instant.
+        try:
+            page.wait_for_function(
+                "getComputedStyle(document.body).backgroundColor === 'rgb(255, 255, 255)'",
+                timeout=3000)
+            day_bg_white = True
+        except Exception:
+            day_bg_white = False
+        check("theme: Day mode uses a plain white background", day_bg_white)
         page.select_option("#theme-select", "light")
 
         # ---- Delete (in-app confirm dialog) ---------------------------------
@@ -555,6 +588,29 @@ try:
               all(c["title"] != "OMIT-GUARD-gamma" for c in api_state()["cards"])
               and any(c["title"] == "OMIT-GUARD-gamma" for c in api_trash()["cards"]))
 
+        # ---- Assistant view (brain service in offline fake mode) ------------
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector("#chat-input")
+        check("assistant: view opens with composer",
+              page.get_attribute('.view-switch button[data-view="assistant"]', "aria-pressed") == "true")
+        page.fill("#chat-input", "hello brain")
+        page.click("#chat-send")
+        page.wait_for_selector(".chat-msg.assistant")
+        check("assistant: chat roundtrip through the Node proxy",
+              "FAKE: hello brain" in page.inner_text(".chat-log"))
+
+        page.fill("#chat-input", "add: What is Leiden clustering?")
+        page.click("#chat-send")
+        page.wait_for_function(
+            "document.querySelectorAll('.chat-msg.assistant').length >= 2")
+        check("assistant: tool chip shown for create_question",
+              "create_question" in page.inner_text(".chat-log"))
+        check("assistant: agent created the card via the board API",
+              any(c["title"] == "What is Leiden clustering?" for c in api_state()["cards"]))
+        page.locator('.view-switch button[data-view="board"]').click()
+        check("assistant: created card visible on the board",
+              page.locator(".card-title", has_text="What is Leiden clustering?").count() >= 1)
+
         check("console: no JS errors during entire run", not errors)
         if errors:
             print("Errors:", errors)
@@ -568,6 +624,7 @@ finally:
         except Exception:
             pass
     stop_server(server)
+    stop_server(brain)
 
 failed = [n for n, ok in results if not ok]
 print(f"\n{len(results) - len(failed)}/{len(results)} checks passed")

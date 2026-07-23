@@ -24,6 +24,7 @@ import { DatabaseSync } from 'node:sqlite';
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 3000;
 const DB_PATH = process.env.BOARD_DB || join(ROOT, 'board.db');
+const AGENT_URL = process.env.AGENT_URL || 'http://127.0.0.1:8000';
 
 const COLUMN_IDS = ['inbox', 'to-research', 'in-progress', 'answered'];
 const PRIORITIES = ['high', 'medium', 'low'];
@@ -238,6 +239,30 @@ const server = createServer(async (req, res) => {
       return sendJson(res, 200, { ok: purgeCard(id) });
     }
     return sendJson(res, 405, { error: 'Method not allowed' });
+  }
+
+  // Assistant/RAG proxy — the brain service holds the LLM key; the browser never sees it.
+  if (path.startsWith('/api/agent/') || path.startsWith('/api/rag/')) {
+    const target = AGENT_URL + path.slice('/api'.length) + url.search;
+    try {
+      const body = req.method === 'GET' || req.method === 'HEAD'
+        ? undefined
+        : await readBody(req);
+      const upstream = await fetch(target, {
+        method: req.method,
+        headers: { 'content-type': req.headers['content-type'] || 'application/json' },
+        body,
+        signal: AbortSignal.timeout(120000),
+      });
+      const text = await upstream.text();
+      res.writeHead(upstream.status, {
+        'Content-Type': upstream.headers.get('content-type') || 'application/json',
+      });
+      res.end(text);
+    } catch {
+      sendJson(res, 503, { error: 'assistant unavailable' });
+    }
+    return;
   }
 
   // Static (whitelisted — no arbitrary filesystem access)

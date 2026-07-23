@@ -102,8 +102,8 @@
   let draggedId = null;
   let dealCards = true; // deal-in animation runs on first render only
 
-  const VIEWS = ['board', 'backlog', 'overview', 'matrix'];
-  const VIEW_LABELS = { board: 'Board', backlog: 'Backlog', overview: 'Overview', matrix: 'Matrix' };
+  const VIEWS = ['board', 'backlog', 'overview', 'matrix', 'assistant'];
+  const VIEW_LABELS = { board: 'Board', backlog: 'Backlog', overview: 'Overview', matrix: 'Matrix', assistant: 'Assistant' };
   let view = 'board';
   try {
     const v = localStorage.getItem(VIEW_KEY);
@@ -408,6 +408,8 @@
       board.appendChild(renderOverview());
     } else if (view === 'matrix') {
       board.appendChild(renderMatrix());
+    } else if (view === 'assistant') {
+      board.appendChild(renderAssistant());
     } else {
       for (const col of COLUMNS) board.appendChild(renderColumn(col));
     }
@@ -1172,6 +1174,133 @@
 
     sheet.append(grid);
     return sheet;
+  }
+
+  // --------------------------------------------------------------------------
+  // Assistant view — chat with the brain service via /api/agent/chat
+  // --------------------------------------------------------------------------
+
+  const assistantState = { messages: [], busy: false };
+
+  function renderAssistant() {
+    const sheet = document.createElement('section');
+    sheet.className = 'assistant-sheet';
+
+    const heading = document.createElement('h2');
+    heading.textContent = 'Assistant';
+    sheet.appendChild(heading);
+
+    const log = document.createElement('div');
+    log.className = 'chat-log';
+    if (!assistantState.messages.length) {
+      const hint = document.createElement('p');
+      hint.className = 'chat-status';
+      hint.textContent = 'Ask about your questions — research one, triage the inbox, or find connections.';
+      log.appendChild(hint);
+    }
+    for (const msg of assistantState.messages) {
+      const el = document.createElement('div');
+      el.className = `chat-msg ${msg.role}${msg.error ? ' error' : ''}`;
+      el.textContent = msg.content;
+      if (msg.steps && msg.steps.length) {
+        const steps = document.createElement('div');
+        steps.className = 'chat-steps';
+        for (const step of msg.steps) {
+          const chip = document.createElement('span');
+          chip.className = 'chat-step';
+          chip.textContent = step.tool;
+          steps.appendChild(chip);
+        }
+        el.appendChild(steps);
+      }
+      log.appendChild(el);
+    }
+    sheet.appendChild(log);
+
+    const status = document.createElement('div');
+    status.className = 'chat-status';
+    status.textContent = assistantState.busy ? 'Thinking…' : '';
+    sheet.appendChild(status);
+
+    const form = document.createElement('form');
+    form.className = 'chat-composer';
+    const input = document.createElement('textarea');
+    input.id = 'chat-input';
+    input.placeholder = 'Message the assistant…';
+    input.disabled = assistantState.busy;
+    const send = document.createElement('button');
+    send.type = 'submit';
+    send.id = 'chat-send';
+    send.className = 'btn primary';
+    send.textContent = 'Send';
+    send.disabled = assistantState.busy;
+    form.appendChild(input);
+    form.appendChild(send);
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const text = input.value.trim();
+      if (text && !assistantState.busy) sendChat(text);
+    });
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        form.requestSubmit();
+      }
+    });
+    sheet.appendChild(form);
+
+    requestAnimationFrame(() => { log.scrollTop = log.scrollHeight; });
+    return sheet;
+  }
+
+  async function sendChat(text) {
+    assistantState.messages.push({ role: 'user', content: text });
+    assistantState.busy = true;
+    render();
+    try {
+      const history = assistantState.messages
+        .filter((m) => !m.error && (m.role === 'user' || m.role === 'assistant'))
+        .map(({ role, content }) => ({ role, content }));
+      const res = await fetch('/api/agent/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: history }),
+      });
+      if (!res.ok) throw new Error(`agent ${res.status}`);
+      const data = await res.json();
+      assistantState.messages.push({
+        role: 'assistant',
+        content: data.reply || '',
+        steps: data.steps || [],
+      });
+      if (data.mutated) await adoptServerBoard();
+      announce('Assistant replied');
+    } catch {
+      assistantState.messages.push({
+        role: 'assistant',
+        content: 'The assistant is unavailable right now. Check that the brain service is running.',
+        error: true,
+      });
+      announce('Assistant unavailable');
+    }
+    assistantState.busy = false;
+    render();
+    const nextInput = document.getElementById('chat-input');
+    if (nextInput) nextInput.focus();
+  }
+
+  async function adoptServerBoard() {
+    // The agent mutated the DB through the Node API; adopt the server's board so a
+    // debounced local push can't overwrite the agent's change with stale state.
+    try {
+      const res = await fetch(API);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data && Array.isArray(data.cards)) {
+        state.cards = data.cards;
+        saveState();
+      }
+    } catch { /* offline — keep the local board */ }
   }
 
   // --------------------------------------------------------------------------

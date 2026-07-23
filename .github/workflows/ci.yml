@@ -16,13 +16,17 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          # node:sqlite needs >=23.4; matches the Dockerfile's node:24
+          node-version: "24"
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v5
 
+      - name: Brain unit tests (offline — fake LLM, hash embedder)
+        run: uv run --project brain pytest brain/tests -v
+
       - name: Install Playwright's Chromium
         run: uv run --with playwright playwright install --with-deps chromium
 
-      - name: Run the end-to-end suite (starts the SQLite-backed server itself)
+      - name: Run the end-to-end suite (starts the server and the brain itself)
         run: uv run --with playwright python tests/e2e_test.py
