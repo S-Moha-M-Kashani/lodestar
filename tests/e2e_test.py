@@ -648,6 +648,174 @@ try:
         check("assistant: created card visible on the board",
               page.locator(".card-title", has_text="What is Leiden clustering?").count() >= 1)
 
+        # ---- Import the grown life sample (substitute) -----------------------
+        sample_path = os.path.join(ROOT, "sample-overview.json")
+        sample = json.load(open(sample_path))
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector("#board.board")
+        page.set_input_files("#import-input", sample_path)
+        page.wait_for_selector("#import-mode-dialog[open]")
+        page.click("#import-replace")
+        page.wait_for_selector("#confirm-dialog[open]")
+        page.click("#confirm-ok")
+        page.wait_for_timeout(300)
+        check("sample: the grown sample file imports, count matches",
+              page.locator(".card").count() == len(sample["cards"]))
+        page.wait_for_timeout(600)  # let the substitute reach the database
+        srv_cards = api_state()["cards"]
+        c10k = next((c for c in srv_cards if c["title"] == "Couch to 10k by October"), None)
+        visa = next((c for c in srv_cards if "visa paperwork" in c["title"]), None)
+        check("sample: effort/control and their provenance survive the save",
+              c10k is not None and c10k.get("effort") == "high" and c10k.get("effortSrc") == "user"
+              and visa is not None and visa.get("control") == "none" and visa.get("controlSrc") == "user")
+        page.reload()
+        page.wait_for_selector(".card")
+        check("sample: board intact after reload", page.locator(".card").count() == len(sample["cards"]))
+
+        # ---- Editor: effort & control --------------------------------------
+        page.fill(".quick-add input", "EFFORT-CONTROL-probe")
+        page.press(".quick-add input", "Enter")
+        page.locator('[data-col="inbox"] .card', has_text="EFFORT-CONTROL-probe").first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        check("editor: effort & control default to the middle of the scale",
+              page.input_value("#card-effort") == "medium"
+              and page.input_value("#card-control") == "influence")
+        page.select_option("#card-effort", "low")
+        page.select_option("#card-control", "act")
+        page.click('#card-form button[type="submit"]')
+        page.wait_for_timeout(600)
+        probe = next((c for c in api_state()["cards"] if c["title"] == "EFFORT-CONTROL-probe"), None)
+        check("editor: edited effort/control persist to the database as user-set",
+              probe is not None and probe.get("effort") == "low" and probe.get("control") == "act"
+              and probe.get("effortSrc") == "user" and probe.get("controlSrc") == "user")
+        page.reload()
+        page.wait_for_selector(".card")
+        page.locator('[data-col="inbox"] .card', has_text="EFFORT-CONTROL-probe").first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        check("editor: effort/control survive a reload round-trip",
+              page.input_value("#card-effort") == "low"
+              and page.input_value("#card-control") == "act")
+        page.click("#cancel-dialog")
+
+        # ---- Overview: PCA ⇄ t-SNE toggle -----------------------------------
+        page.locator('.view-switch button[data-view="overview"]').click()
+        page.wait_for_selector("#board.overview .plot-dot")
+        n_dots = page.locator(".plot-dot").count()
+        check("tsne: projection toggle renders with PCA pressed by default",
+              page.locator(".plot-proj-toggle button").count() == 2
+              and page.get_attribute('.plot-proj-toggle button[data-proj="pca"]', "aria-pressed") == "true"
+              and "PC-1" in page.locator(".plot-axis-x").inner_text())
+        pca_pos = page.eval_on_selector_all(
+            ".plot-dot", "els => els.map(e => e.dataset.id + '@' + e.style.left + ',' + e.style.top)")
+        page.click('.plot-proj-toggle button[data-proj="tsne"]')
+        page.wait_for_selector('.plot-proj-toggle button[data-proj="tsne"][aria-pressed="true"]')
+        check("tsne: axis labels switch to t-SNE-1/2",
+              "t-SNE-1" in page.locator(".plot-axis-x").inner_text())
+        page.wait_for_function(
+            "document.querySelector('.plot-status').textContent.includes('t-SNE layout')",
+            timeout=30000)
+        check("tsne: one dot per question, unchanged by the projection",
+              page.locator(".plot-dot").count() == n_dots)
+        tsne_pos = page.eval_on_selector_all(
+            ".plot-dot", "els => els.map(e => e.dataset.id + '@' + e.style.left + ',' + e.style.top)")
+        check("tsne: layout actually moves the dots (differs from PCA)", tsne_pos != pca_pos)
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector("#board.board")
+        page.locator('.view-switch button[data-view="overview"]').click()
+        page.wait_for_selector("#board.overview .plot-dot")
+        check("tsne: preference survives leaving and re-entering the view",
+              page.get_attribute('.plot-proj-toggle button[data-proj="tsne"]', "aria-pressed") == "true")
+        page.click('.plot-proj-toggle button[data-proj="pca"]')
+        page.wait_for_selector('.plot-proj-toggle button[data-proj="pca"][aria-pressed="true"]')
+        check("tsne: toggling back restores the PCA layout",
+              "PC-1" in page.locator(".plot-axis-x").inner_text())
+
+        # ---- Matrix: the four-lens picker -----------------------------------
+        page.locator('.view-switch button[data-view="matrix"]').click()
+        page.wait_for_selector("#board.matrix .matrix-grid")
+        check("matrices: picker offers the four lenses",
+              page.locator(".matrix-switch button").count() == 4
+              and page.get_attribute('.matrix-switch button[data-matrix="eisenhower"]',
+                                     "aria-pressed") == "true")
+        check("matrices: Eisenhower 'Answer now' sits top-LEFT (urgent first)",
+              page.eval_on_selector('.matrix-quad[data-imp="high"][data-urg="high"]',
+                                    "el => getComputedStyle(el).gridColumnStart") == "2"
+              and "answer now" in page.locator(
+                  '.matrix-quad[data-imp="high"][data-urg="high"] .matrix-quad-verb')
+                  .inner_text().lower())
+        srv_cards = api_state()["cards"]
+        n_importance = sum(1 for c in srv_cards if c.get("importance"))
+        for lens in ("leverage", "serenity"):
+            page.click(f'.matrix-switch button[data-matrix="{lens}"]')
+            page.wait_for_selector(f'.matrix-switch button[data-matrix="{lens}"][aria-pressed="true"]')
+            check(f"matrices: {lens} shows 6 cells and places every importance-set card",
+                  page.locator(".matrix-quad").count() == 6
+                  and page.locator(".matrix-quad-dots .plot-dot").count() == n_importance)
+        page.click('.matrix-switch button[data-matrix="followthrough"]')
+        page.wait_for_selector('.matrix-switch button[data-matrix="followthrough"][aria-pressed="true"]')
+        n_ft = sum(1 for c in srv_cards
+                   if c.get("importance") and c.get("columnId") != "answered")
+        cols_with_dots = page.evaluate(
+            """() => new Set([...document.querySelectorAll('.matrix-quad')]
+                 .filter(q => q.querySelector('.plot-dot')).map(q => q.dataset.x)).size""")
+        check("matrices: follow-through buckets open cards by age",
+              page.locator(".matrix-quad-dots .plot-dot").count() == n_ft
+              and cols_with_dots >= 2)
+        page.click('.matrix-switch button[data-matrix="eisenhower"]')
+
+        # ---- Areas view ------------------------------------------------------
+        page.locator('.view-switch button[data-view="areas"]').click()
+        page.wait_for_selector("#board.areas .area-tile")
+        in_use = len({c["category"] for c in api_state()["cards"] if c.get("category")})
+        check("areas: one tile per life area in use, wheel drawn",
+              page.locator(".area-tile").count() == in_use
+              and page.locator("svg.wheel").count() == 1)
+        page.click('.area-tile[data-cat="money"]')
+        page.wait_for_selector(".area-detail")
+        check("areas: money detail shows the purchase cooling-off panel",
+              page.locator(".cooloff-row").count() >= 3
+              and "decide now" in page.eval_on_selector_all(
+                  ".cooloff-days", "els => els.map(e => e.textContent).join('|')"))
+        check("areas: money problems grouped on the serenity strip",
+              page.locator(".serenity-strip .area-row").count() >= 1)
+        page.click('.area-tile[data-cat="mind"]')
+        page.wait_for_selector(".area-learning")
+        check("areas: mind detail shows learning progress and a burn-up chart",
+              page.locator(".learn-row").count() >= 2
+              and page.locator(".learn-burnup polyline").count() == 2)
+        page.click('.area-tile[data-cat="mind"]')  # clear the focus + category filter
+        page.wait_for_timeout(100)
+        check("areas: clicking the open tile again closes the detail",
+              page.locator(".area-detail").count() == 0)
+        page.screenshot(path=shot("areas.png"))
+
+        # ---- Review view -----------------------------------------------------
+        page.locator('.view-switch button[data-view="review"]').click()
+        page.wait_for_selector("#board.review .review-tiles")
+        check("review: the four stat tiles render",
+              page.locator(".review-tile").count() == 4
+              and all(page.locator(f'.review-tile[data-stat="{k}"]').count() == 1
+                      for k in ("inbox", "answered-week", "new-week", "open")))
+        check("review: resurfacing offers exactly 3 cards",
+              page.locator(".resurface-card").count() == 3)
+        target_id = page.get_attribute(".resurface-card", "data-id")
+        page.click(f'.resurface-card[data-id="{target_id}"] .resurface-actions button:first-child')
+        page.wait_for_selector(f'.resurface-card[data-id="{target_id}"][data-kept="true"]')
+        page.wait_for_timeout(600)
+        bumped = next((c for c in api_state()["cards"] if c["id"] == target_id), None)
+        check("review: 'Still matters' bumps the card's updated stamp",
+              bumped is not None
+              and time.time() * 1000 - bumped["updatedAt"] < 60_000)
+        page.click("#review-stamp")
+        page.wait_for_selector(".review-stamped")
+        page.reload()
+        page.wait_for_selector("#board.review .review-tiles")
+        check("review: the Reviewed stamp persists in localStorage",
+              page.locator(".review-stamped").count() == 1)
+        page.screenshot(path=shot("review.png"))
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector("#board.board")
+
         check("console: no JS errors during entire run", not errors)
         if errors:
             print("Errors:", errors)
