@@ -157,20 +157,57 @@ try:
         check("menu: Escape closes the panel", page.locator("#menu-panel").is_hidden())
 
         # ---- Category rail ---------------------------------------------------
-        check("categories: rail shows one tab per category in use",
-              page.locator(".cat-tab").count() == 6)
+        # The rail always shows: All + every defined category + the ✎ Edit tab.
+        check("categories: rail shows All + all 9 defined areas + Edit",
+              page.locator(".cat-tab").count() == 11
+              and page.locator(".cat-tab-all").count() == 1
+              and page.locator("#edit-cats-btn").count() == 1)
+        check("categories: tabs carry no count badge",
+              page.locator(".cat-tab-count").count() == 0)
+        check("categories: 'All' is pressed when nothing is filtered",
+              page.get_attribute(".cat-tab-all", "aria-pressed") == "true")
         check("categories: cards carry their category spine",
               page.locator(".card.categorized").count() == 6)
         page.locator('.cat-tab[data-cat="love"]').click()
         page.wait_for_timeout(100)
         check("categories: clicking a tab filters the board to that life area",
               page.locator(".card").count() == 1
-              and page.get_attribute('.cat-tab[data-cat="love"]', "aria-pressed") == "true")
-        page.locator('.cat-tab[data-cat="love"]').click()
+              and page.get_attribute('.cat-tab[data-cat="love"]', "aria-pressed") == "true"
+              and page.get_attribute(".cat-tab-all", "aria-pressed") == "false")
+        page.locator(".cat-tab-all").click()
         page.wait_for_timeout(100)
-        check("categories: clicking the open tab again clears the filter",
-              page.locator(".card").count() == 6)
+        check("categories: 'All' clears the filter — the whole life on one board",
+              page.locator(".card").count() == 6
+              and page.get_attribute(".cat-tab-all", "aria-pressed") == "true")
         page.screenshot(path=shot("board-categories.png"))
+
+        # ---- Category management (the ✎ Edit tab) -----------------------------
+        page.click("#edit-cats-btn")
+        page.wait_for_selector("#cats-dialog[open]")
+        check("categories: editor lists all 9 areas, each removable",
+              page.locator("#cats-list .cats-row").count() == 9
+              and page.locator("#cats-list .cats-remove").count() == 9)
+        page.fill("#cat-add-name", "Reading")
+        page.click("#cat-add-btn")
+        page.wait_for_timeout(150)
+        check("categories: adding 'Reading' puts it in the editor and on the rail",
+              page.locator("#cats-list .cats-row").count() == 10
+              and page.locator('.cat-tab[data-cat="reading"]').count() == 1)
+        page.wait_for_timeout(600)  # debounced push
+        check("categories: the new registry is saved to the database",
+              any(c.get("id") == "reading" for c in api_state().get("categories", [])))
+        page.screenshot(path=shot("cats-dialog.png"))
+        page.locator('#cats-list .cats-row:has-text("Reading") .cats-remove').click()
+        page.wait_for_selector("#confirm-dialog[open]")
+        page.click("#confirm-ok")
+        page.wait_for_timeout(150)
+        check("categories: removing 'Reading' takes it off the rail again",
+              page.locator("#cats-list .cats-row").count() == 9
+              and page.locator('.cat-tab[data-cat="reading"]').count() == 0)
+        page.click("#close-cats")
+        page.wait_for_timeout(600)
+        check("categories: the removal is saved to the database",
+              not any(c.get("id") == "reading" for c in api_state().get("categories", [])))
 
         # ---- Quick add ------------------------------------------------------
         page.fill(".quick-add input", "What is speculative decoding?")
@@ -469,7 +506,8 @@ try:
               '"version": 1' in schema_text and '"cards"' in schema_text
               and "inbox | in-progress | answered" in schema_text
               and '"type"' in schema_text and '"category"' in schema_text
-              and '"importance"' in schema_text and '"urgency"' in schema_text)
+              and '"importance"' in schema_text and '"urgency"' in schema_text
+              and '"categories"' in schema_text)
         page.screenshot(path=shot("import-dialog.png"))
         page.click("#copy-schema")
         check("import: 'Copy schema' puts the schema on the clipboard",
@@ -545,6 +583,31 @@ try:
         page.click("#confirm-ok")
 
         check("regression: no native browser dialogs were used", not native_dialogs)
+
+        # ---- Quick-add: empty input and adding inside an open drawer ---------
+        count_now = page.locator(".card").count()
+        page.press(".quick-add input", "Enter")
+        page.wait_for_timeout(80)
+        check("quick-add: empty input adds nothing and keeps focus in the input",
+              page.locator(".card").count() == count_now
+              and page.evaluate(
+                  "document.activeElement === document.querySelector('.quick-add input')"))
+
+        # A capture written inside an open category drawer belongs to that
+        # drawer — it inherits the category and must never vanish behind the filter.
+        page.locator('.cat-tab[data-cat="love"]').click()
+        page.wait_for_timeout(100)
+        love_before = page.locator(".card").count()
+        page.fill(".quick-add input", "Plan a surprise picnic FILTER-MARKER")
+        page.press(".quick-add input", "Enter")
+        page.wait_for_timeout(100)
+        marker = page.locator(".card", has_text="FILTER-MARKER")
+        check("quick-add: a card added inside an open drawer stays visible",
+              page.locator(".card").count() == love_before + 1 and marker.count() == 1)
+        check("quick-add: it inherits the drawer's category",
+              marker.first.locator(".card-cat").inner_text() == "Love")
+        page.locator(".cat-tab-all").click()
+        page.wait_for_timeout(100)
 
         # ---- Database persistence (the whole point of the server) -----------
         page.fill(".quick-add input", "PERSIST-MARKER-alpha")
