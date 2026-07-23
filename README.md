@@ -64,6 +64,43 @@ The database is the durable source of truth, with one deliberate guarantee: **a 
 
 Each machine keeps its own database — the board does not sync between laptops. To move a board deliberately, copy the SQLite file (or the volume), or use Export → Import.
 
+## The brain (assistant service)
+
+The **Assistant** view talks to a separate Python service — the *brain* — that runs one function-calling agent with four jobs: research a question (web search, cited urls), operate the board in plain language ("triage my inbox"), break fuzzy questions into concrete sub-questions, and surface connections between questions using **Leiden community detection** over a similarity graph of your board.
+
+```
+browser ── :3000 Node (board + SQLite + static) ──proxy /api/agent/*──▶ :8000 brain (FastAPI)
+                      ▲                                                     │
+                      └────────── board reads/writes via /api/state ────────┘
+```
+
+The brain **never touches SQLite directly** — every board change goes through the Node API, so the Trash/purge durability guarantee above applies to agent edits too. The browser never sees the LLM key; it stays in the brain's environment.
+
+Every capability sits behind a small interface chosen by env vars, so each piece can be swapped without touching the rest:
+
+| Env var | Default | Meaning |
+| --- | --- | --- |
+| `OPENROUTER_API_KEY` | *(empty)* | LLM access. Without it the assistant errors politely; the board is unaffected |
+| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | Any OpenAI-compatible endpoint works (e.g. a local Ollama later) |
+| `BRAIN_MODEL` | `openai/gpt-4o-mini` | Default model; any OpenRouter model id |
+| `BRAIN_LLM` | `openrouter` | `fake` = deterministic offline provider (tests/CI) |
+| `BRAIN_EMBEDDER` | `auto` | `fastembed` (semantic), `hash` (offline), `auto` = fastembed with hash fallback |
+| `BRAIN_MAX_STEPS` | `8` | Tool-call budget per chat turn |
+| `BOARD_API_URL` | `http://127.0.0.1:3000` | Where the brain finds the board API |
+| `AGENT_URL` | `http://127.0.0.1:8000` | Where the Node proxy finds the brain |
+
+Run it locally (requires uv; deps install on first run):
+
+```sh
+export OPENROUTER_API_KEY=sk-or-...
+uv run --project brain uvicorn lodestar_brain.server:app --reload --port 8000
+# in another terminal: npm start, then open http://localhost:3000 → Assistant
+```
+
+With Compose, both services start together (`docker compose up`); put `OPENROUTER_API_KEY` in your environment or a `.env` file first. Fully offline mode — used by the tests — is `BRAIN_LLM=fake BRAIN_EMBEDDER=hash`.
+
+Swap points, each one file: the LLM provider (`brain/src/lodestar_brain/llm/`), the search provider (`tools/websearch.py`), the embedder (`rag/embedder.py`), and the agent loop itself (`agent/loop.py`).
+
 ## Keyboard shortcuts (with a card focused)
 
 | Key | Action |

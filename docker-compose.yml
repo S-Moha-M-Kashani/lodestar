@@ -10,8 +10,21 @@ services:
       # across restarts, upgrades, and rebuilds. Removing the volume
       # (`docker volume rm`) is the only thing that erases them.
       BOARD_DB: /data/board.db
+      AGENT_URL: http://brain:8000
     volumes:
       - board-data:/data
+    restart: unless-stopped
+
+  # The "brain" — agent, web search, and Leiden RAG. Internal only: the browser
+  # reaches it through the Node proxy, and the OpenRouter key never leaves it.
+  brain:
+    build: ./brain
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
+      BRAIN_MODEL: ${BRAIN_MODEL:-openai/gpt-4o-mini}
+      BRAIN_LLM: ${BRAIN_LLM:-openrouter}
+      BOARD_API_URL: http://lodestar:3000
     restart: unless-stopped
 
 volumes:
