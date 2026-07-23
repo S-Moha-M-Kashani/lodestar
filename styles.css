@@ -1208,6 +1208,23 @@ dialog::backdrop {
 
 .history-restore { padding: 4px 10px; }
 
+.trash-section { margin: 2px 0 18px; }
+
+.trash-head {
+  margin: 0 0 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.trash-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
 /* ---------------------------------------------------------------------------
    Footer
 --------------------------------------------------------------------------- */

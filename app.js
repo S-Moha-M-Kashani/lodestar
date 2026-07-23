@@ -253,6 +253,70 @@
   }
 
   // --------------------------------------------------------------------------
+  // Trash — deleting a question from the board only hides it; the server keeps
+  // the row (soft delete) so it stays recoverable even if this browser's local
+  // history is cleared. Only an explicit "Delete permanently" purges it for
+  // good. The Trash is server-backed, so it only appears when a backend is
+  // running (localStorage-only mode relies on the History timeline instead).
+  // --------------------------------------------------------------------------
+
+  const TRASH_API = '/api/trash';
+
+  async function fetchTrash() {
+    if (!serverAvailable) return [];
+    try {
+      const res = await fetch(TRASH_API, { headers: { Accept: 'application/json' } });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data.cards) ? data.cards.map(sanitizeCard).filter(Boolean) : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function restoreFromTrash(card) {
+    if (getCard(card.id)) return; // already back on the board
+    const revived = { ...card, columnId: COLUMNS.some((c) => c.id === card.columnId) ? card.columnId : 'inbox' };
+    state.cards = [...state.cards, revived];
+    ensureNums(state.cards);
+    commit(`Restored ${qLabel(revived)} “${short(revived.title)}”`); // re-adds the row server-side (clears deleted_at)
+    announce(`Restored “${revived.title}”`);
+  }
+
+  async function purgeFromTrash(card) {
+    const sure = await ask({
+      title: 'Delete permanently?',
+      message: `${qLabel(card)} “${card.title}” will be erased from the database for good. This is the only action that truly deletes it, and it cannot be undone.`,
+      okLabel: 'Delete permanently',
+      danger: true,
+    });
+    if (!sure) return false;
+    try {
+      const res = await fetch(`/api/cards/${encodeURIComponent(card.id)}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+    } catch (err) {
+      announce('Could not delete permanently — the server was unreachable');
+      console.warn('Purge failed.', err);
+      return false;
+    }
+    scrubFromTimeline(card.id);
+    announce(`Permanently deleted “${card.title}”`);
+    return true;
+  }
+
+  // Once a question is purged, drop it from every local history snapshot too, so
+  // time-travelling back through History can't resurrect what was deleted for good.
+  function scrubFromTimeline(id) {
+    let changed = false;
+    for (const entry of timeline.entries) {
+      const before = entry.cards.length;
+      entry.cards = entry.cards.filter((c) => c.id !== id);
+      if (entry.cards.length !== before) changed = true;
+    }
+    if (changed) saveTimeline();
+  }
+
+  // --------------------------------------------------------------------------
   // Helpers
   // --------------------------------------------------------------------------
 
@@ -1218,7 +1282,7 @@
     if (!card) return;
     const sure = await ask({
       title: 'Delete this question?',
-      message: `${qLabel(card)} “${card.title}” will be removed from the board. You can bring it back with Undo or History.`,
+      message: `${qLabel(card)} “${card.title}” will be moved off the board. It stays recoverable — bring it back with Undo, or from the History panel — until you delete it permanently there.`,
       okLabel: 'Delete question',
       danger: true,
     });
@@ -1525,6 +1589,67 @@
         row.append(btn);
       }
 
+      list.append(row);
+    }
+
+    refreshTrash(); // populate the "Deleted questions" section from the server
+  }
+
+  // Fill the Trash section of the History dialog with the server's soft-deleted
+  // questions. Hidden entirely when there's no backend or nothing is trashed.
+  async function refreshTrash() {
+    const section = $('#trash-section');
+    const list = $('#trash-list');
+    if (!section || !list) return;
+    if (!serverAvailable) { section.hidden = true; return; }
+
+    const trashed = await fetchTrash();
+    if (!trashed.length) { section.hidden = true; list.innerHTML = ''; return; }
+    section.hidden = false;
+    list.innerHTML = '';
+
+    for (const card of trashed) {
+      const row = document.createElement('div');
+      row.className = 'history-row';
+
+      const label = document.createElement('span');
+      label.className = 'history-time';
+      label.textContent = qLabel(card);
+
+      const main = document.createElement('div');
+      main.className = 'history-main';
+      const title = document.createElement('p');
+      title.className = 'history-action';
+      title.textContent = card.title;
+      const meta = document.createElement('span');
+      meta.className = 'history-meta';
+      meta.textContent = card.tags && card.tags.length ? card.tags.map((t) => '#' + t).join(' ') : 'no tags';
+      main.append(title, meta);
+
+      const actions = document.createElement('div');
+      actions.className = 'trash-actions';
+
+      const restore = document.createElement('button');
+      restore.className = 'btn ghost history-restore';
+      restore.textContent = 'Restore';
+      restore.addEventListener('click', () => {
+        restoreFromTrash(card);
+        row.remove(); // optimistic — the server clears deleted_at on the next push
+        if (!list.children.length) section.hidden = true;
+      });
+
+      const purge = document.createElement('button');
+      purge.className = 'btn danger history-restore';
+      purge.textContent = 'Delete permanently';
+      purge.addEventListener('click', async () => {
+        if (await purgeFromTrash(card)) {
+          row.remove();
+          if (!list.children.length) section.hidden = true;
+        }
+      });
+
+      actions.append(restore, purge);
+      row.append(label, main, actions);
       list.append(row);
     }
   }
