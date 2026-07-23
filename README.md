@@ -1,23 +1,25 @@
 # Lodestar
 
-*Your compass for open questions.* Lodestar is a place to get every open question out of your head, see what actually matters, and never lose a thought — so you can follow through, privately and at work. A kanban-style board to collect and prioritize open questions — any team's, any topic's. Vanilla HTML/CSS/JavaScript front end, with an optional tiny server that persists the board to a local **SQLite** database. No build step and no npm dependencies — the server uses Node's built-in `node:sqlite` and `http`.
+*Your compass for open questions.* Lodestar is a place to get every open question out of your head, see what actually matters, and never lose a thought — so you can follow through, privately and at work. A kanban-style board that is one dashboard for your whole life — work questions, plans with your partner, sports, music, reading, holidays — everything in one place. Vanilla HTML/CSS/JavaScript front end, with an optional tiny server that persists the board to a local **SQLite** database. No build step and no npm dependencies — the server uses Node's built-in `node:sqlite` and `http`.
 
-The design is a "question ledger": quad-ruled engineering paper, questions as ruled index cards with permanent ledger IDs (`Q-001`, `Q-002`, …), and priorities as ink stamps.
+The design is a "question ledger": quad-ruled engineering paper, cards as ruled index cards with permanent ledger IDs (`Q-001`, `Q-002`, …), card types as ink stamps, and life-area categories as coloured index tabs — every category gets its own ink, in all four themes.
 
 ## Features
 
-- **Four-column question lifecycle**: Inbox → To Research → In Progress → Answered
+- **Three-column lifecycle**: Inbox → In Progress → Answered
 - **Four views**: **Board** (the columns), **Backlog** (the Inbox as a scannable ledger list), **Overview** (a semantic map — see below), and **Matrix** (the Eisenhower importance × urgency grid)
 - **Drag & drop** cards within and between columns, with drop-position indicator
-- **Priorities**: High / Medium / Low color-coded badges, plus a per-column "sort by priority" button
-- **Importance & urgency**: set each to High or Low on a question to place it on the **Matrix** (Answer now / Schedule / Delegate / Drop)
-- **Overview map**: every question is plotted by meaning — its text is embedded and PCA reduces that to two axes (PC-1 / PC-2), so questions that read alike sit close together. Embeddings come from a HuggingFace model ([Transformers.js](https://huggingface.co/docs/transformers.js), `Xenova/all-MiniLM-L6-v2`) loaded on demand from a CDN — **no login or API key needed**; the ~30 MB model downloads once and is cached by the browser. When it's still loading or the browser is offline, the map falls back to a keyword-overlap layout, so it always renders with no network. Hover a dot for details, click to open the full editor, and the tag/priority/search filters apply just like the board.
-- **Quick capture**: type a question in the Inbox and press Enter
-- **Edit modal**: notes, priority, and tags per question
-- **Search & filters**: free-text search, priority filter, tag chips
+- **Card types**: question, problem, task, idea, plan — stamped on each card in neutral ink, with a per-column "sort by type" button
+- **Categories**: eight life areas (Work, Love, Family, Health, Mind, Music, Travel, Home), each with its own colour; cards carry a coloured spine, and a rail of coloured tabs under the header filters the board to one life area
+- **Importance & urgency**: set each to High or Low on a card to place it on the **Matrix** (Answer now / Schedule / Delegate / Drop)
+- **Overview map**: every question is plotted by meaning — its text is embedded and PCA reduces that to two axes (PC-1 / PC-2), so questions that read alike sit close together. Embeddings come from a HuggingFace model ([Transformers.js](https://huggingface.co/docs/transformers.js), `Xenova/all-MiniLM-L6-v2`) loaded on demand from a CDN — **no login or API key needed**; the ~30 MB model downloads once and is cached by the browser. When it's still loading or the browser is offline, the map falls back to a keyword-overlap layout, so it always renders with no network. Hover a dot for details, click to open the full editor, and the tag/type/category/search filters apply just like the board. Dots are inked in their category's colour, so the map reads by life area.
+- **Quick capture**: write anything into the Inbox and press Enter
+- **Edit modal**: notes, type, category, and tags per card
+- **Search & filters**: free-text search, type filter, category tabs, tag chips
 - **Persistence**: runs on localStorage on its own; when the server is running it also saves to a SQLite database, so questions survive restarts and reopen on any browser. See **How your data is stored** below for the exact durability guarantee. Export/Import as JSON for backups
 - **Database sync rule**: a browser that already has its own board keeps it (and pushes it to the server), so unsynced local edits are never clobbered; a fresh browser loads the board from the database
-- **Export dialog**: download `questions.json`, or copy the JSON when the browser blocks downloads
+- **One Menu button**: Undo, History, Export and Import fold into a single expanding menu in the toolbar
+- **Export dialog**: download `lodestar.json`, or copy the JSON when the browser blocks downloads
 - **Import with a documented schema**: the Import dialog shows the expected JSON format (copyable), so a valid board file can be written by hand — or generated by an AI; imported questions are **added** to the board by default, and substituting the whole board requires an extra are-you-sure confirmation
 - **Undo & History**: every change (add, edit, move, sort, delete, import, restore) is logged with a timestamp; Undo steps back one state, and the History dialog can restore *any* logged state, git-style. Deleting a question only moves it to the **Trash** in the History dialog, where it stays recoverable until you choose **Delete permanently** — the only action that truly erases it
 - **Four themes**: Morning (ruled paper), Day (plain white, high-contrast for easy reading), Dusk (warm sepia), Night (dark); follows your system preference until you pick one

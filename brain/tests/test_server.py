@@ -24,7 +24,7 @@ def board_state(cards):
 
 def card(id, title):
     return {'id': id, 'columnId': 'inbox', 'title': title, 'notes': '',
-            'priority': 'medium', 'importance': '', 'urgency': '', 'num': 1,
+            'type': 'question', 'category': '', 'importance': '', 'urgency': '', 'num': 1,
             'tags': [], 'createdAt': 1, 'updatedAt': 1}
 
 

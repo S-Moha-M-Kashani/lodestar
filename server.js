@@ -26,9 +26,15 @@ const PORT = Number(process.env.PORT) || 3000;
 const DB_PATH = process.env.BOARD_DB || join(ROOT, 'board.db');
 const AGENT_URL = process.env.AGENT_URL || 'http://127.0.0.1:8000';
 
-const COLUMN_IDS = ['inbox', 'to-research', 'in-progress', 'answered'];
-const PRIORITIES = ['high', 'medium', 'low'];
+const COLUMN_IDS = ['inbox', 'in-progress', 'answered'];
+const TYPES = ['question', 'problem', 'task', 'idea', 'plan'];
+const CATEGORIES = ['work', 'love', 'family', 'health', 'mind', 'music', 'travel', 'home', 'money'];
 const iuVal = (v) => (v === 'high' || v === 'low' ? v : '');
+// Effort & control always hold a value (the scale's midpoint until someone —
+// or later the brain — sets them); the *_src columns record who set it.
+const effortVal = (v) => (v === 'low' || v === 'high' ? v : 'medium');
+const controlVal = (v) => (v === 'act' || v === 'none' ? v : 'influence');
+const srcVal = (v) => (v === 'user' || v === 'ai' ? v : 'default');
 
 // --------------------------------------------------------------------------
 // Database
@@ -46,6 +52,8 @@ db.exec(`
     title      TEXT    NOT NULL,
     notes      TEXT    NOT NULL DEFAULT '',
     priority   TEXT    NOT NULL DEFAULT 'medium',
+    type       TEXT    NOT NULL DEFAULT 'question',
+    category   TEXT    NOT NULL DEFAULT '',
     importance TEXT    NOT NULL DEFAULT '',
     urgency    TEXT    NOT NULL DEFAULT '',
     num        INTEGER NOT NULL DEFAULT 0,
@@ -53,7 +61,11 @@ db.exec(`
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     position   INTEGER NOT NULL DEFAULT 0,
-    deleted_at INTEGER
+    deleted_at INTEGER,
+    effort      TEXT NOT NULL DEFAULT 'medium',
+    control     TEXT NOT NULL DEFAULT 'influence',
+    effort_src  TEXT NOT NULL DEFAULT 'default',
+    control_src TEXT NOT NULL DEFAULT 'default'
   );
 `);
 
@@ -64,15 +76,26 @@ const columnNames = new Set(db.prepare('PRAGMA table_info(cards)').all().map((c)
 if (!columnNames.has('importance')) db.exec("ALTER TABLE cards ADD COLUMN importance TEXT NOT NULL DEFAULT ''");
 if (!columnNames.has('urgency')) db.exec("ALTER TABLE cards ADD COLUMN urgency TEXT NOT NULL DEFAULT ''");
 if (!columnNames.has('deleted_at')) db.exec('ALTER TABLE cards ADD COLUMN deleted_at INTEGER');
+if (!columnNames.has('type')) db.exec("ALTER TABLE cards ADD COLUMN type TEXT NOT NULL DEFAULT 'question'");
+if (!columnNames.has('category')) db.exec("ALTER TABLE cards ADD COLUMN category TEXT NOT NULL DEFAULT ''");
+if (!columnNames.has('effort')) db.exec("ALTER TABLE cards ADD COLUMN effort TEXT NOT NULL DEFAULT 'medium'");
+if (!columnNames.has('control')) db.exec("ALTER TABLE cards ADD COLUMN control TEXT NOT NULL DEFAULT 'influence'");
+if (!columnNames.has('effort_src')) db.exec("ALTER TABLE cards ADD COLUMN effort_src TEXT NOT NULL DEFAULT 'default'");
+if (!columnNames.has('control_src')) db.exec("ALTER TABLE cards ADD COLUMN control_src TEXT NOT NULL DEFAULT 'default'");
 
 const rowToCard = (r) => ({
   id: r.id,
   columnId: r.column_id,
   title: r.title,
   notes: r.notes,
-  priority: r.priority,
+  type: TYPES.includes(r.type) ? r.type : 'question',
+  category: CATEGORIES.includes(r.category) ? r.category : '',
   importance: r.importance || '',
   urgency: r.urgency || '',
+  effort: effortVal(r.effort),
+  control: controlVal(r.control),
+  effortSrc: srcVal(r.effort_src),
+  controlSrc: srcVal(r.control_src),
   num: r.num,
   tags: safeTags(r.tags),
   createdAt: r.created_at,
@@ -111,9 +134,14 @@ function cleanCard(raw, now) {
     columnId: COLUMN_IDS.includes(raw.columnId) ? raw.columnId : 'inbox',
     title: raw.title.trim(),
     notes: typeof raw.notes === 'string' ? raw.notes : '',
-    priority: PRIORITIES.includes(raw.priority) ? raw.priority : 'medium',
+    type: TYPES.includes(raw.type) ? raw.type : 'question',
+    category: CATEGORIES.includes(raw.category) ? raw.category : '',
     importance: iuVal(raw.importance),
     urgency: iuVal(raw.urgency),
+    effort: effortVal(raw.effort),
+    control: controlVal(raw.control),
+    effortSrc: srcVal(raw.effortSrc),
+    controlSrc: srcVal(raw.controlSrc),
     num: Number.isInteger(raw.num) && raw.num > 0 ? raw.num : 0,
     tags: Array.isArray(raw.tags) ? raw.tags.map((t) => String(t).trim().toLowerCase()).filter(Boolean) : [],
     createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : now,
@@ -138,11 +166,16 @@ function writeBoard(cards) {
 
   const softDelete = db.prepare('UPDATE cards SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL');
   const upsert = db.prepare(`
-    INSERT INTO cards (id, column_id, title, notes, priority, importance, urgency, num, tags, created_at, updated_at, position, deleted_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+    INSERT INTO cards (id, column_id, title, notes, type, category, importance, urgency,
+                       effort, control, effort_src, control_src,
+                       num, tags, created_at, updated_at, position, deleted_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
     ON CONFLICT(id) DO UPDATE SET
       column_id = excluded.column_id, title = excluded.title, notes = excluded.notes,
-      priority = excluded.priority, importance = excluded.importance, urgency = excluded.urgency,
+      type = excluded.type, category = excluded.category,
+      importance = excluded.importance, urgency = excluded.urgency,
+      effort = excluded.effort, control = excluded.control,
+      effort_src = excluded.effort_src, control_src = excluded.control_src,
       num = excluded.num, tags = excluded.tags,
       created_at = excluded.created_at, updated_at = excluded.updated_at, position = excluded.position,
       deleted_at = NULL
@@ -154,7 +187,9 @@ function writeBoard(cards) {
       if (!keep.has(id)) softDelete.run(now, id);
     }
     clean.forEach((c, i) =>
-      upsert.run(c.id, c.columnId, c.title, c.notes, c.priority, c.importance, c.urgency, c.num, JSON.stringify(c.tags), c.createdAt, c.updatedAt, i));
+      upsert.run(c.id, c.columnId, c.title, c.notes, c.type, c.category, c.importance, c.urgency,
+        c.effort, c.control, c.effortSrc, c.controlSrc,
+        c.num, JSON.stringify(c.tags), c.createdAt, c.updatedAt, i));
     db.exec('COMMIT');
   } catch (err) {
     db.exec('ROLLBACK');

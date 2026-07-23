@@ -10,8 +10,8 @@ BOARD = 'http://board.test'
 
 def card(id, title, column='inbox', **extra):
     base = {'id': id, 'columnId': column, 'title': title, 'notes': '',
-            'priority': 'medium', 'importance': '', 'urgency': '', 'num': 1,
-            'tags': [], 'createdAt': 1, 'updatedAt': 1}
+            'type': 'question', 'category': '', 'importance': '', 'urgency': '',
+            'num': 1, 'tags': [], 'createdAt': 1, 'updatedAt': 1}
     return {**base, **extra}
 
 
@@ -56,9 +56,10 @@ def test_update_question_changes_only_named_fields():
         'version': 1, 'cards': existing}))
     tools = tools_by_name(BoardClient(BOARD))
     updated = tools['update_question'].run({'id': 'a', 'column_id': 'in-progress',
-                                            'priority': 'high'})
+                                            'type': 'task', 'category': 'work'})
     assert updated['columnId'] == 'in-progress'
-    assert updated['priority'] == 'high'
+    assert updated['type'] == 'task'
+    assert updated['category'] == 'work'
     assert updated['notes'] == 'keep me'
     sent = json.loads(put.calls.last.request.content)
     assert {c['id'] for c in sent['cards']} == {'a', 'b'}
@@ -69,7 +70,7 @@ def test_update_unknown_id_errors_without_writing():
     respx.get(f'{BOARD}/api/state').mock(return_value=httpx.Response(200, json={
         'version': 1, 'cards': []}))
     tools = tools_by_name(BoardClient(BOARD))
-    assert 'error' in tools['update_question'].run({'id': 'nope', 'priority': 'high'})
+    assert 'error' in tools['update_question'].run({'id': 'nope', 'type': 'task'})
 
 
 def test_tool_specs_are_openai_shaped():

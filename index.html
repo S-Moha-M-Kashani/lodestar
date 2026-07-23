@@ -25,17 +25,24 @@
         <button type="button" data-view="assistant" aria-pressed="false">Assistant</button>
       </div>
       <div class="toolbar">
-        <input id="search" type="search" placeholder="Search questions…" aria-label="Search questions">
-        <select id="priority-filter" aria-label="Filter by priority">
-          <option value="">All priorities</option>
-          <option value="high">High</option>
-          <option value="medium">Medium</option>
-          <option value="low">Low</option>
+        <input id="search" type="search" placeholder="Search the board…" aria-label="Search the board">
+        <select id="type-filter" aria-label="Filter by type">
+          <option value="">All types</option>
+          <option value="question">? Questions</option>
+          <option value="problem">! Problems</option>
+          <option value="task">✓ Tasks</option>
+          <option value="idea">✦ Ideas</option>
+          <option value="plan">→ Plans</option>
         </select>
-        <button id="undo-btn" class="btn ghost" title="Undo the last change">Undo</button>
-        <button id="history-btn" class="btn ghost" title="Board history — jump back to any state">History</button>
-        <button id="export-btn" class="btn ghost" title="Download the board as a JSON file">Export JSON</button>
-        <button id="import-btn" class="btn ghost" title="Restore the board from a JSON file">Import JSON</button>
+        <div class="toolbar-menu">
+          <button id="menu-btn" class="btn ghost" aria-haspopup="true" aria-expanded="false" title="Undo, history, export and import">Menu ▾</button>
+          <div id="menu-panel" class="menu-panel" hidden>
+            <button id="undo-btn" class="menu-item" title="Undo the last change">↶ Undo</button>
+            <button id="history-btn" class="menu-item" title="Board history — jump back to any state">History</button>
+            <button id="export-btn" class="menu-item" title="Download the board as a JSON file">Export JSON</button>
+            <button id="import-btn" class="menu-item" title="Restore the board from a JSON file">Import JSON</button>
+          </div>
+        </div>
         <input id="import-input" type="file" accept="application/json,.json" hidden>
         <select id="theme-select" aria-label="Color theme" title="Color theme">
           <option value="light">Morning</option>
@@ -45,6 +52,7 @@
         </select>
       </div>
     </div>
+    <div id="cat-rail" class="cat-rail" role="group" aria-label="Filter by category" hidden></div>
     <div id="tag-bar" class="tag-bar" role="group" aria-label="Filter by tag" hidden></div>
   </header>
 
@@ -52,18 +60,20 @@
 
   <dialog id="card-dialog">
     <form id="card-form">
-      <h2 id="dialog-title">Edit question</h2>
-      <label class="field">Question
+      <h2 id="dialog-title">Edit card</h2>
+      <label class="field">Card
         <textarea id="card-title" rows="2" required></textarea>
       </label>
       <label class="field">Notes / answer
         <textarea id="card-notes" rows="5" placeholder="Research notes, links, the answer…"></textarea>
       </label>
-      <fieldset class="priority-picker">
-        <legend>Priority</legend>
-        <label><input type="radio" name="priority" value="high"><span class="badge high">High</span></label>
-        <label><input type="radio" name="priority" value="medium"><span class="badge medium">Medium</span></label>
-        <label><input type="radio" name="priority" value="low"><span class="badge low">Low</span></label>
+      <fieldset class="type-picker">
+        <legend>Type</legend>
+        <div id="type-picker-options" class="picker-options"></div>
+      </fieldset>
+      <fieldset class="category-picker">
+        <legend>Category</legend>
+        <div id="category-picker-options" class="picker-options"></div>
       </fieldset>
       <div class="field-row">
         <label class="field">Importance
@@ -81,13 +91,30 @@
           </select>
         </label>
       </div>
-      <p class="field-hint">Set both to place this question on the <strong>Matrix</strong>.</p>
+      <p class="field-hint">Set both to place this card on the <strong>Matrix</strong>.</p>
+      <div class="field-row">
+        <label class="field">Effort
+          <select id="card-effort">
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+          </select>
+        </label>
+        <label class="field">Control
+          <select id="card-control">
+            <option value="act">I can act</option>
+            <option value="influence">I can influence</option>
+            <option value="none">Out of my hands</option>
+          </select>
+        </label>
+      </div>
+      <p class="field-hint">Rough calls are fine — both start at the midpoint until you (or the assistant) judge them.</p>
       <label class="field">Tags <span class="hint">(comma separated)</span>
         <input id="card-tags" type="text" placeholder="planning, ideas, follow-up">
       </label>
       <p id="card-meta" class="card-meta-line"></p>
       <div class="dialog-actions">
-        <button type="button" id="delete-card" class="btn danger">Delete question</button>
+        <button type="button" id="delete-card" class="btn danger">Delete card</button>
         <span class="spacer"></span>
         <button type="button" id="cancel-dialog" class="btn ghost">Cancel</button>
         <button type="submit" class="btn primary">Save changes</button>
@@ -97,8 +124,8 @@
 
   <dialog id="export-dialog">
     <div class="dialog-body">
-      <h2>Export questions</h2>
-      <p class="import-copy">Save the whole board as <code>questions.json</code>. If your browser blocks the download (some embedded viewers do), copy the JSON below and paste it into a file instead.</p>
+      <h2>Export board</h2>
+      <p class="import-copy">Save the whole board as <code>lodestar.json</code>. If your browser blocks the download (some embedded viewers do), copy the JSON below and paste it into a file instead.</p>
       <textarea id="export-json" class="export-json" readonly rows="9" aria-label="The board as JSON" spellcheck="false"></textarea>
       <div class="dialog-actions">
         <button type="button" id="copy-export" class="btn ghost">Copy JSON</button>
@@ -111,11 +138,11 @@
 
   <dialog id="import-dialog">
     <div class="dialog-body">
-      <h2>Import questions</h2>
-      <p class="import-copy">Choose a Lodestar JSON file. You'll then decide whether to <strong>add</strong> its questions to the board or <strong>substitute</strong> the whole board.</p>
+      <h2>Import cards</h2>
+      <p class="import-copy">Choose a Lodestar JSON file. You'll then decide whether to <strong>add</strong> its cards to the board or <strong>substitute</strong> the whole board.</p>
       <p class="import-copy">Writing the file yourself, or asking an AI to generate one? It must match this shape:</p>
       <pre id="import-schema" class="import-schema" tabindex="0" aria-label="Expected JSON file format"></pre>
-      <p class="import-hint">Only "title" is required per question — everything else gets a default: questions land in the Inbox at medium priority, "num" (the permanent Q-012 ledger number) is assigned automatically, timestamps are Unix milliseconds.</p>
+      <p class="import-hint">Only "title" is required per card — everything else gets a default: cards land in the Inbox as questions, "num" (the permanent Q-012 ledger number) is assigned automatically, timestamps are Unix milliseconds.</p>
       <div class="dialog-actions">
         <button type="button" id="copy-schema" class="btn ghost">Copy schema</button>
         <span class="spacer"></span>
@@ -145,8 +172,8 @@
       <div id="history-list" class="history-list"></div>
 
       <section id="trash-section" class="trash-section" hidden>
-        <h3 class="trash-head">Deleted questions</h3>
-        <p class="import-copy">Deleted questions are kept in the database and stay recoverable here. <strong>Delete permanently</strong> is the only thing that truly erases one — nothing else, not even clearing this browser, can lose it.</p>
+        <h3 class="trash-head">Deleted cards</h3>
+        <p class="import-copy">Deleted cards are kept in the database and stay recoverable here. <strong>Delete permanently</strong> is the only thing that truly erases one — nothing else, not even clearing this browser, can lose it.</p>
         <div id="trash-list" class="history-list"></div>
       </section>
 

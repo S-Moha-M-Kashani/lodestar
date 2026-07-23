@@ -9,17 +9,58 @@
 
   const COLUMNS = [
     { id: 'inbox', title: 'Inbox' },
-    { id: 'to-research', title: 'To Research' },
     { id: 'in-progress', title: 'In Progress' },
     { id: 'answered', title: 'Answered' },
   ];
 
-  const PRIORITIES = ['high', 'medium', 'low'];
-  const PRIORITY_RANK = { high: 0, medium: 1, low: 2 };
+  // What kind of thing a card is — stamped on the card like the old priority
+  // stamp, but neutral ink: colour on this board always means category.
+  const TYPES = ['question', 'problem', 'task', 'idea', 'plan'];
+  const TYPE_META = {
+    question: { glyph: '?', label: 'question' },
+    problem:  { glyph: '!', label: 'problem' },
+    task:     { glyph: '✓', label: 'task' },
+    idea:     { glyph: '✦', label: 'idea' },
+    plan:     { glyph: '→', label: 'plan' },
+  };
+  const TYPE_RANK = Object.fromEntries(TYPES.map((t, i) => [t, i]));
+
+  // Life areas — the coloured celluloid tabs of the ledger. Each category is an
+  // oklch hue; every theme sets --cat-l/--cat-c once, so all eight inks stay
+  // legible on Morning/Day/Dusk/Night without per-theme colour tables.
+  const CATEGORIES = [
+    { id: 'work',   label: 'Work',   h: 255 },
+    { id: 'love',   label: 'Love',   h: 15 },
+    { id: 'family', label: 'Family', h: 60 },
+    { id: 'health', label: 'Health', h: 150 },
+    { id: 'mind',   label: 'Mind',   h: 295 },
+    { id: 'music',  label: 'Music',  h: 340 },
+    { id: 'travel', label: 'Travel', h: 200 },
+    { id: 'home',   label: 'Home',   h: 90 },
+    { id: 'money',  label: 'Money',  h: 40 },
+  ];
+  const CATEGORY_IDS = CATEGORIES.map((c) => c.id);
+  const CAT_HUE = Object.fromEntries(CATEGORIES.map((c) => [c.id, c.h]));
+  const catColor = (id) =>
+    id in CAT_HUE ? `oklch(var(--cat-l) var(--cat-c) ${CAT_HUE[id]})` : 'var(--ink-soft)';
+  const catLabel = (id) => (CATEGORIES.find((c) => c.id === id) || { label: '' }).label;
+
+  const typeVal = (t) => (TYPES.includes(t) ? t : 'question');
+  const catVal = (c) => (CATEGORY_IDS.includes(c) ? c : '');
 
   // Importance & urgency are each High, Low, or unset ('') — a question needs
   // both to be placed on the Eisenhower matrix.
   const iuVal = (v) => (v === 'high' || v === 'low' ? v : '');
+
+  // Effort ("how much work is this?") and control ("can I even act on it?")
+  // always hold a value: the scale's midpoint stands in until a person — or,
+  // one day, the brain — judges it. The *Src fields record who set the value
+  // (default | user | ai) so an estimator never overwrites a human's call.
+  const effortVal = (v) => (v === 'low' || v === 'high' ? v : 'medium');
+  const controlVal = (v) => (v === 'act' || v === 'none' ? v : 'influence');
+  const srcVal = (v) => (v === 'user' || v === 'ai' ? v : 'default');
+  const EFFORT_LABEL = { low: 'Low', medium: 'Medium', high: 'High' };
+  const CONTROL_LABEL = { act: 'I can act', influence: 'I can influence', none: 'Out of my hands' };
 
   // --------------------------------------------------------------------------
   // State & persistence
@@ -30,14 +71,19 @@
 
   function seedCards() {
     const now = Date.now();
-    const mk = (title, columnId, priority, tags, importance = '', urgency = '', notes = '') =>
-      ({ id: uid(), columnId, title, notes, priority, importance, urgency, tags, createdAt: now, updatedAt: now });
-    // Seeds span all four matrix quadrants so the Matrix view has something to show.
+    const mk = (title, columnId, type, category, tags, importance = '', urgency = '', notes = '') =>
+      ({ id: uid(), columnId, title, notes, type, category, importance, urgency,
+         effort: 'medium', control: 'influence', effortSrc: 'default', controlSrc: 'default',
+         tags, createdAt: now, updatedAt: now });
+    // Seeds span categories, types and all four matrix quadrants, so every view
+    // has something to show on a fresh board.
     return [
-      mk('What should we build next quarter?', 'inbox', 'high', ['planning', 'product'], 'high', 'low'),
-      mk('How do we make our weekly reviews shorter?', 'inbox', 'medium', ['process'], 'low', 'low'),
-      mk('Which tool should we adopt for shared notes?', 'to-research', 'medium', ['tools', 'planning'], 'low', 'high'),
-      mk('How much runway do we have at the current burn rate?', 'to-research', 'low', ['finance'], 'high', 'high'),
+      mk('What should I build next quarter?', 'inbox', 'question', 'work', ['planning'], 'high', 'low'),
+      mk('How do we keep weekday evenings free together?', 'inbox', 'problem', 'love', ['us'], 'high', 'high'),
+      mk('Which Stoic should I read after Meditations?', 'inbox', 'question', 'mind', ['reading'], 'low', 'low'),
+      mk('Plan a long weekend in the mountains', 'in-progress', 'plan', 'travel', ['autumn'], 'low', 'high'),
+      mk('Learn the intro to “Blackbird”', 'in-progress', 'plan', 'music', ['guitar']),
+      mk('Book the dentist check-up', 'answered', 'task', 'health', [], '', '', 'Done — appointment on the 12th.'),
     ].map((c, i) => ({ ...c, num: i + 1 }));
   }
 
@@ -60,9 +106,14 @@
       columnId: COLUMNS.some((c) => c.id === raw.columnId) ? raw.columnId : 'inbox',
       title: raw.title.trim(),
       notes: typeof raw.notes === 'string' ? raw.notes : '',
-      priority: PRIORITIES.includes(raw.priority) ? raw.priority : 'medium',
+      type: typeVal(raw.type),
+      category: catVal(raw.category),
       importance: iuVal(raw.importance),
       urgency: iuVal(raw.urgency),
+      effort: effortVal(raw.effort),
+      control: controlVal(raw.control),
+      effortSrc: srcVal(raw.effortSrc),
+      controlSrc: srcVal(raw.controlSrc),
       num: Number.isInteger(raw.num) && raw.num > 0 ? raw.num : 0,
       tags: Array.isArray(raw.tags) ? raw.tags.map((t) => String(t).trim().toLowerCase()).filter(Boolean) : [],
       createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : Date.now(),
@@ -97,7 +148,7 @@
   }
 
   let state = loadState();
-  const filters = { search: '', priority: '', tags: new Set() };
+  const filters = { search: '', type: '', category: '', tags: new Set() };
   let focusCardId = null; // restore focus after re-render (keyboard moves)
   let draggedId = null;
   let dealCards = true; // deal-in animation runs on first render only
@@ -165,7 +216,9 @@
 
   // Order-sensitive fingerprint, to skip redundant work when nothing changed.
   const boardFingerprint = (cards) =>
-    cards.map((c) => [c.id, c.columnId, c.title, c.notes, c.priority, c.importance || '', c.urgency || '', c.num, (c.tags || []).join('|')].join('␟')).join('␞');
+    cards.map((c) => [c.id, c.columnId, c.title, c.notes, c.type, c.category || '', c.importance || '', c.urgency || '',
+      c.effort || '', c.control || '', c.effortSrc || '', c.controlSrc || '',
+      c.num, (c.tags || []).join('|')].join('␟')).join('␞');
 
   function pushToServer() {
     if (!serverAvailable) return;
@@ -220,7 +273,7 @@
     // Fresh browser, and the database has a board — adopt it as the source of truth.
     state = { version: 1, columns: COLUMNS, cards: incoming };
     saveState();
-    timeline.entries.push({ ts: Date.now(), action: `Loaded ${incoming.length} question(s) from the server`, cards: snapshot(incoming) });
+    timeline.entries.push({ ts: Date.now(), action: `Loaded ${incoming.length} card(s) from the server`, cards: snapshot(incoming) });
     if (timeline.entries.length > HISTORY_LIMIT) timeline.entries.splice(0, timeline.entries.length - HISTORY_LIMIT);
     timeline.index = timeline.entries.length - 1;
     saveTimeline();
@@ -328,7 +381,8 @@
   const columnTitle = (columnId) => COLUMNS[columnIndex(columnId)].title;
 
   function matchesFilters(card) {
-    if (filters.priority && card.priority !== filters.priority) return false;
+    if (filters.type && card.type !== filters.type) return false;
+    if (filters.category && card.category !== filters.category) return false;
     if (filters.tags.size && ![...filters.tags].every((t) => card.tags.includes(t))) return false;
     if (filters.search) {
       const haystack = (card.title + ' ' + card.notes + ' ' + card.tags.join(' ')).toLowerCase();
@@ -337,7 +391,7 @@
     return true;
   }
 
-  const filtersActive = () => Boolean(filters.search || filters.priority || filters.tags.size);
+  const filtersActive = () => Boolean(filters.search || filters.type || filters.category || filters.tags.size);
 
   function announce(message) {
     $('#live-region').textContent = message;
@@ -413,6 +467,7 @@
     } else {
       for (const col of COLUMNS) board.appendChild(renderColumn(col));
     }
+    renderCatRail();
     renderTagBar();
     $('#undo-btn').disabled = timeline.index <= 0;
 
@@ -456,8 +511,8 @@
       const sortBtn = document.createElement('button');
       sortBtn.className = 'sort-btn';
       sortBtn.textContent = 'Sort ⇅';
-      sortBtn.title = 'Sort this column by priority';
-      sortBtn.addEventListener('click', () => sortColumnByPriority(col.id));
+      sortBtn.title = 'Group this column by type';
+      sortBtn.addEventListener('click', () => sortColumnByType(col.id));
       header.append(sortBtn);
     }
 
@@ -471,14 +526,13 @@
 
     if (visible.length === 0) {
       const emptyCopy = {
-        'inbox': 'Write down your first question above',
-        'to-research': 'File questions here when they’re worth digging into',
-        'in-progress': 'Drag a question here when you start on it',
-        'answered': 'Answered questions land here',
+        'inbox': 'Capture anything above — a question, a task, an idea',
+        'in-progress': 'Drag a card here when you start on it',
+        'answered': 'Finished and answered cards land here',
       };
       const hint = document.createElement('div');
       hint.className = 'empty-hint';
-      hint.textContent = filtersActive() ? 'No questions match' : emptyCopy[col.id];
+      hint.textContent = filtersActive() ? 'No cards match' : emptyCopy[col.id];
       cardsEl.append(hint);
     } else {
       for (const card of visible) cardsEl.append(renderCard(card));
@@ -495,13 +549,13 @@
 
     const input = document.createElement('input');
     input.type = 'text';
-    input.placeholder = 'Write down a question…';
-    input.setAttribute('aria-label', 'Add a question to the Inbox');
+    input.placeholder = 'Write down anything on your mind…';
+    input.setAttribute('aria-label', 'Add a card to the Inbox');
 
     const btn = document.createElement('button');
     btn.type = 'submit';
     btn.textContent = '+';
-    btn.setAttribute('aria-label', 'Add question');
+    btn.setAttribute('aria-label', 'Add card');
 
     form.append(input, btn);
     form.addEventListener('submit', (e) => {
@@ -509,7 +563,7 @@
       const title = input.value.trim();
       if (!title) return;
       const now = Date.now();
-      const card = { id: uid(), columnId: 'inbox', title, notes: '', priority: 'medium', importance: '', urgency: '', num: nextNum(), tags: [], createdAt: now, updatedAt: now };
+      const card = { id: uid(), columnId: 'inbox', title, notes: '', type: 'question', category: '', importance: '', urgency: '', num: nextNum(), tags: [], createdAt: now, updatedAt: now };
       // New captures go to the top of the Inbox
       const firstInbox = state.cards.findIndex((c) => c.columnId === 'inbox');
       state.cards.splice(firstInbox === -1 ? state.cards.length : firstInbox, 0, card);
@@ -521,13 +575,28 @@
     return form;
   }
 
+  // Rubber-stamp badge for a card's type — always neutral ink.
+  function typeBadge(card) {
+    const badge = document.createElement('span');
+    badge.className = `badge type-${card.type}`;
+    badge.textContent = `${TYPE_META[card.type].glyph} ${TYPE_META[card.type].label}`;
+    return badge;
+  }
+
+  function cardAria(card) {
+    const cat = card.category ? `, ${catLabel(card.category)}` : '';
+    return `${qLabel(card)}: ${card.title} — ${TYPE_META[card.type].label}${cat}, in ${columnTitle(card.columnId)}`;
+  }
+
   function renderCard(card) {
     const el = document.createElement('article');
     el.className = 'card';
     el.dataset.id = card.id;
     el.draggable = true;
     el.tabIndex = 0;
-    el.setAttribute('aria-label', `${qLabel(card)}: ${card.title} — ${card.priority} priority, in ${columnTitle(card.columnId)}`);
+    el.style.setProperty('--cat', catColor(card.category));
+    if (card.category) el.classList.add('categorized');
+    el.setAttribute('aria-label', cardAria(card));
 
     const top = document.createElement('div');
     top.className = 'card-top';
@@ -545,10 +614,7 @@
       top.append(dot);
     }
 
-    const badge = document.createElement('span');
-    badge.className = `badge ${card.priority}`;
-    badge.textContent = card.priority;
-    top.append(badge);
+    top.append(typeBadge(card));
 
     const title = document.createElement('p');
     title.className = 'card-title';
@@ -556,9 +622,15 @@
 
     el.append(top, title);
 
-    if (card.tags.length) {
+    if (card.category || card.tags.length) {
       const tags = document.createElement('div');
       tags.className = 'card-tags';
+      if (card.category) {
+        const cat = document.createElement('span');
+        cat.className = 'card-cat';
+        cat.textContent = catLabel(card.category);
+        tags.append(cat);
+      }
       for (const t of card.tags) {
         const chip = document.createElement('span');
         chip.className = 'card-tag';
@@ -585,6 +657,42 @@
     });
 
     return el;
+  }
+
+  // The category rail — coloured index-tabs, one per life area in use.
+  // Clicking a tab filters the whole board to that drawer; clicking it again
+  // slides the drawer shut.
+  function renderCatRail() {
+    const rail = $('#cat-rail');
+    const counts = new Map();
+    for (const c of state.cards) if (c.category) counts.set(c.category, (counts.get(c.category) || 0) + 1);
+    if (filters.category && !counts.has(filters.category)) filters.category = '';
+
+    const inUse = CATEGORIES.filter((c) => counts.has(c.id));
+    rail.hidden = inUse.length === 0;
+    rail.innerHTML = '';
+    if (!inUse.length) return;
+
+    for (const cat of inUse) {
+      const tab = document.createElement('button');
+      tab.className = 'cat-tab';
+      tab.dataset.cat = cat.id;
+      tab.style.setProperty('--cat', catColor(cat.id));
+      tab.setAttribute('aria-pressed', String(filters.category === cat.id));
+
+      const name = document.createElement('span');
+      name.textContent = cat.label;
+      const n = document.createElement('span');
+      n.className = 'cat-tab-count';
+      n.textContent = counts.get(cat.id);
+      tab.append(name, n);
+
+      tab.addEventListener('click', () => {
+        filters.category = filters.category === cat.id ? '' : cat.id;
+        render();
+      });
+      rail.append(tab);
+    }
   }
 
   function renderTagBar() {
@@ -634,16 +742,16 @@
 
     const count = document.createElement('span');
     count.className = 'backlog-count';
-    count.textContent = `${visible.length} ${visible.length === 1 ? 'question' : 'questions'}`;
+    count.textContent = `${visible.length} ${visible.length === 1 ? 'card' : 'cards'}`;
 
     head.append(title, count);
 
     if (visible.length > 1) {
       const sortBtn = document.createElement('button');
       sortBtn.className = 'sort-btn';
-      sortBtn.textContent = 'Sort by priority ⇅';
-      sortBtn.title = 'Sort the backlog by priority';
-      sortBtn.addEventListener('click', () => sortColumnByPriority('inbox'));
+      sortBtn.textContent = 'Sort by type ⇅';
+      sortBtn.title = 'Group the backlog by type';
+      sortBtn.addEventListener('click', () => sortColumnByType('inbox'));
       head.append(sortBtn);
     }
 
@@ -655,7 +763,7 @@
     if (visible.length === 0) {
       const hint = document.createElement('div');
       hint.className = 'empty-hint';
-      hint.textContent = filtersActive() ? 'No questions match' : 'Write down your first question above';
+      hint.textContent = filtersActive() ? 'No cards match' : 'Write down your first card above';
       list.append(hint);
     } else {
       for (const card of visible) list.append(renderBacklogRow(card));
@@ -670,15 +778,15 @@
     row.className = 'backlog-row';
     row.dataset.id = card.id;
     row.tabIndex = 0;
-    row.setAttribute('aria-label', `${qLabel(card)}: ${card.title} — ${card.priority} priority`);
+    row.style.setProperty('--cat', catColor(card.category));
+    if (card.category) row.classList.add('categorized');
+    row.setAttribute('aria-label', cardAria(card));
 
     const num = document.createElement('span');
     num.className = 'row-num';
     num.textContent = qLabel(card);
 
-    const badge = document.createElement('span');
-    badge.className = `badge ${card.priority}`;
-    badge.textContent = card.priority;
+    const badge = typeBadge(card);
 
     const main = document.createElement('div');
     main.className = 'row-main';
@@ -688,9 +796,15 @@
     title.textContent = card.title;
     main.append(title);
 
-    if (card.tags.length) {
+    if (card.category || card.tags.length) {
       const tags = document.createElement('div');
       tags.className = 'card-tags';
+      if (card.category) {
+        const cat = document.createElement('span');
+        cat.className = 'card-cat';
+        cat.textContent = catLabel(card.category);
+        tags.append(cat);
+      }
       for (const t of card.tags) {
         const chip = document.createElement('span');
         chip.className = 'card-tag';
@@ -715,22 +829,15 @@
 
   // --------------------------------------------------------------------------
   // Plotted views — shared "stamped question dots" on the engineering grid.
-  // Overview (a semantic map) and the Matrix both place questions as dots that
+  // Overview (a semantic map) and the Matrix both place cards as dots that
   // reveal an index-card tooltip on hover and open the full editor on click.
-  // Each dot is inked in its column's accent, so colour reads as lifecycle stage.
+  // Each dot is inked in its category's colour, so the map reads by life area.
   // --------------------------------------------------------------------------
-
-  const COLUMN_ACCENT = {
-    'inbox': 'var(--ink-blue)',
-    'to-research': 'var(--ink-violet)',
-    'in-progress': 'var(--ink-amber)',
-    'answered': 'var(--ink-green)',
-  };
 
   const IU_LABEL = { high: 'High', low: 'Low', '': 'not set' };
 
   function dotAriaLabel(card) {
-    let s = `${qLabel(card)}: ${card.title} — ${card.priority} priority, in ${columnTitle(card.columnId)}`;
+    let s = cardAria(card);
     if (card.importance || card.urgency) {
       s += `, importance ${IU_LABEL[iuVal(card.importance)]}, urgency ${IU_LABEL[iuVal(card.urgency)]}`;
     }
@@ -757,10 +864,7 @@
     const num = document.createElement('span');
     num.className = 'card-num';
     num.textContent = qLabel(card);
-    const badge = document.createElement('span');
-    badge.className = `badge ${card.priority}`;
-    badge.textContent = card.priority;
-    head.append(num, badge);
+    head.append(num, typeBadge(card));
 
     const title = document.createElement('p');
     title.className = 'plot-tip-title';
@@ -769,6 +873,7 @@
     const meta = document.createElement('p');
     meta.className = 'plot-tip-meta';
     meta.textContent = `in ${columnTitle(card.columnId)}`;
+    if (card.category) meta.textContent += ` · ${catLabel(card.category)}`;
     if (card.importance || card.urgency) {
       meta.textContent += ` · importance ${IU_LABEL[iuVal(card.importance)]} · urgency ${IU_LABEL[iuVal(card.urgency)]}`;
     }
@@ -821,7 +926,7 @@
     // and lets the dots flow inside their quadrant (positioned via CSS).
     if (leftPct != null) dot.style.left = `${leftPct}%`;
     if (topPct != null) dot.style.top = `${topPct}%`;
-    dot.style.setProperty('--dot', COLUMN_ACCENT[card.columnId] || 'var(--ink-blue)');
+    dot.style.setProperty('--dot', catColor(card.category));
     dot.setAttribute('aria-label', dotAriaLabel(card));
 
     const n = document.createElement('span');
@@ -840,11 +945,14 @@
   function renderPlotLegend() {
     const legend = document.createElement('div');
     legend.className = 'plot-legend';
-    for (const col of COLUMNS) {
+    const inUse = new Set(state.cards.map((c) => c.category));
+    const entries = CATEGORIES.filter((c) => inUse.has(c.id)).map((c) => [c.id, c.label]);
+    if (inUse.has('')) entries.push(['', 'Uncategorized']);
+    for (const [id, label] of entries) {
       const item = document.createElement('span');
       item.className = 'plot-legend-item';
-      item.style.setProperty('--dot', COLUMN_ACCENT[col.id]);
-      item.textContent = col.title;
+      item.style.setProperty('--dot', catColor(id));
+      item.textContent = label;
       legend.append(item);
     }
     return legend;
@@ -1063,7 +1171,7 @@
     title.textContent = 'Overview';
     const caption = document.createElement('p');
     caption.className = 'plot-caption';
-    caption.textContent = 'Every question mapped by meaning — the closer two dots sit, the more alike they read.';
+    caption.textContent = 'Everything on your mind, mapped by meaning — the closer two dots sit, the more alike they read.';
     const status = document.createElement('p');
     status.className = 'plot-status';
     status.textContent = overviewStatusText();
@@ -1076,7 +1184,7 @@
 
     const all = state.cards;
     if (all.length === 0) {
-      field.append(plotEmptyHint('Add a question and it will appear on the map'));
+      field.append(plotEmptyHint('Add a card and it will appear on the map'));
       sheet.append(field);
       return sheet;
     }
@@ -1087,7 +1195,7 @@
       const c = coords.get(card.id);
       if (c) field.append(renderPlotDot(card, c.x * 100, c.y * 100));
     }
-    if (visible.length === 0) field.append(plotEmptyHint('No questions match'));
+    if (visible.length === 0) field.append(plotEmptyHint('No cards match'));
 
     sheet.append(field);
     // Run after this sheet is attached to #board so status/position updates land.
@@ -1126,7 +1234,7 @@
     title.textContent = 'Matrix';
     const caption = document.createElement('p');
     caption.className = 'plot-caption';
-    caption.textContent = 'The Eisenhower matrix — importance against urgency. Set both on a question to place it here.';
+    caption.textContent = 'The Eisenhower matrix — importance against urgency. Set both on a card to place it here.';
     const status = document.createElement('p');
     status.className = 'plot-status';
     const placed = state.cards.filter((c) => c.importance && c.urgency && matchesFilters(c));
@@ -1195,7 +1303,7 @@
     if (!assistantState.messages.length) {
       const hint = document.createElement('p');
       hint.className = 'chat-status';
-      hint.textContent = 'Ask about your questions — research one, triage the inbox, or find connections.';
+      hint.textContent = 'Ask about your board — research a question, triage the inbox, or find connections.';
       log.appendChild(hint);
     }
     for (const msg of assistantState.messages) {
@@ -1410,9 +1518,9 @@
     const card = getCard(cardId);
     if (!card) return;
     const sure = await ask({
-      title: 'Delete this question?',
+      title: 'Delete this card?',
       message: `${qLabel(card)} “${card.title}” will be moved off the board. It stays recoverable — bring it back with Undo, or from the History panel — until you delete it permanently there.`,
-      okLabel: 'Delete question',
+      okLabel: 'Delete card',
       danger: true,
     });
     if (!sure) return;
@@ -1421,11 +1529,11 @@
     announce(`Deleted “${card.title}”`);
   }
 
-  function sortColumnByPriority(columnId) {
-    const sorted = columnCards(columnId).sort((a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority]);
+  function sortColumnByType(columnId) {
+    const sorted = columnCards(columnId).sort((a, b) => TYPE_RANK[a.type] - TYPE_RANK[b.type]);
     state.cards = [...state.cards.filter((c) => c.columnId !== columnId), ...sorted];
-    commit(`Sorted ${columnTitle(columnId)} by priority`);
-    announce(`Sorted ${columnTitle(columnId)} by priority`);
+    commit(`Sorted ${columnTitle(columnId)} by type`);
+    announce(`Sorted ${columnTitle(columnId)} by type`);
   }
 
   // --------------------------------------------------------------------------
@@ -1436,6 +1544,41 @@
   const form = $('#card-form');
   let editingId = null;
 
+  // Build the type and category pickers once from the registries, so the
+  // dialog can never drift from what the board understands.
+  (() => {
+    const typeWrap = $('#type-picker-options');
+    for (const t of TYPES) {
+      const label = document.createElement('label');
+      const input = document.createElement('input');
+      input.type = 'radio';
+      input.name = 'type';
+      input.value = t;
+      const span = document.createElement('span');
+      span.className = `badge type-${t}`;
+      span.textContent = `${TYPE_META[t].glyph} ${TYPE_META[t].label}`;
+      label.append(input, span);
+      typeWrap.append(label);
+    }
+
+    const catWrap = $('#category-picker-options');
+    const mkCat = (value, text, color) => {
+      const label = document.createElement('label');
+      const input = document.createElement('input');
+      input.type = 'radio';
+      input.name = 'category';
+      input.value = value;
+      const span = document.createElement('span');
+      span.className = 'cat-swatch';
+      span.style.setProperty('--cat', color);
+      span.textContent = text;
+      label.append(input, span);
+      return label;
+    };
+    catWrap.append(mkCat('', 'None', 'var(--ink-soft)'));
+    for (const c of CATEGORIES) catWrap.append(mkCat(c.id, c.label, catColor(c.id)));
+  })();
+
   function openDialog(cardId) {
     const card = getCard(cardId);
     if (!card) return;
@@ -1445,7 +1588,10 @@
     $('#card-tags').value = card.tags.join(', ');
     $('#card-importance').value = iuVal(card.importance);
     $('#card-urgency').value = iuVal(card.urgency);
-    for (const radio of form.elements.priority) radio.checked = radio.value === card.priority;
+    $('#card-effort').value = effortVal(card.effort);
+    $('#card-control').value = controlVal(card.control);
+    for (const radio of form.elements.type) radio.checked = radio.value === card.type;
+    for (const radio of form.elements.category) radio.checked = radio.value === (card.category || '');
     const fmt = (ts) => new Date(ts).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
     $('#card-meta').textContent =
       `${qLabel(card)} · in ${columnTitle(card.columnId)} · added ${fmt(card.createdAt)} · updated ${fmt(card.updatedAt)}`;
@@ -1459,9 +1605,16 @@
     if (card) {
       card.title = $('#card-title').value.trim() || card.title;
       card.notes = $('#card-notes').value;
-      card.priority = form.elements.priority.value || card.priority;
+      card.type = typeVal(form.elements.type.value);
+      card.category = catVal(form.elements.category.value);
       card.importance = iuVal($('#card-importance').value);
       card.urgency = iuVal($('#card-urgency').value);
+      // A changed effort/control is a human judgment — record the provenance so
+      // the brain's future estimator knows never to overwrite it.
+      const effort = effortVal($('#card-effort').value);
+      if (effort !== effortVal(card.effort)) { card.effort = effort; card.effortSrc = 'user'; }
+      const control = controlVal($('#card-control').value);
+      if (control !== controlVal(card.control)) { card.control = control; card.controlSrc = 'user'; }
       card.tags = $('#card-tags').value
         .split(',')
         .map((t) => t.trim().toLowerCase())
@@ -1483,7 +1636,7 @@
   dialog.addEventListener('close', () => { editingId = null; });
 
   // --------------------------------------------------------------------------
-  // Toolbar: search, priority filter, export/import, theme
+  // Toolbar: search, type filter, the actions menu, theme
   // --------------------------------------------------------------------------
 
   $('#search').addEventListener('input', (e) => {
@@ -1491,9 +1644,33 @@
     render();
   });
 
-  $('#priority-filter').addEventListener('change', (e) => {
-    filters.priority = e.target.value;
+  $('#type-filter').addEventListener('change', (e) => {
+    filters.type = e.target.value;
     render();
+  });
+
+  // One Menu button holds Undo / History / Export / Import. The panel closes on
+  // outside click, Escape, or after any action inside it is chosen.
+  const menuBtn = $('#menu-btn');
+  const menuPanel = $('#menu-panel');
+
+  function setMenuOpen(open) {
+    menuPanel.hidden = !open;
+    menuBtn.setAttribute('aria-expanded', String(open));
+  }
+
+  menuBtn.addEventListener('click', () => setMenuOpen(menuPanel.hidden));
+  menuPanel.addEventListener('click', (e) => {
+    if (e.target.closest('button')) setMenuOpen(false);
+  });
+  document.addEventListener('click', (e) => {
+    if (!menuPanel.hidden && !e.target.closest('.toolbar-menu')) setMenuOpen(false);
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !menuPanel.hidden) {
+      setMenuOpen(false);
+      menuBtn.focus();
+    }
   });
 
   const exportDialog = $('#export-dialog');
@@ -1510,7 +1687,7 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'questions.json';
+    a.download = 'lodestar.json';
     a.rel = 'noopener';
     document.body.append(a);
     a.click();
@@ -1518,7 +1695,7 @@
     // download before the browser has started it (notably Firefox/Safari).
     setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 1000);
     exportDialog.close();
-    announce('Exported board as questions.json');
+    announce('Exported board as lodestar.json');
   });
 
   $('#copy-export').addEventListener('click', async () => {
@@ -1553,11 +1730,14 @@
   "version": 1,
   "cards": [
     {
-      "title": "The question, as plain text (required)",
-      "columnId": "inbox | to-research | in-progress | answered",
-      "priority": "high | medium | low",
+      "title": "The card's text (required)",
+      "columnId": "inbox | in-progress | answered",
+      "type": "question | problem | task | idea | plan",
+      "category": "work | love | family | health | mind | music | travel | home | money  (optional)",
       "importance": "high | low  (optional — for the Matrix)",
       "urgency": "high | low  (optional — for the Matrix)",
+      "effort": "low | medium | high  (optional — defaults to medium)",
+      "control": "act | influence | none  (optional — defaults to influence)",
       "notes": "Optional free-form notes or the answer",
       "tags": ["optional", "lowercase", "tags"],
       "num": 12,
@@ -1605,7 +1785,7 @@
       pendingImport = parseState(await file.text());
       const n = pendingImport.cards.length;
       $('#import-mode-copy').textContent =
-        `The file contains ${n} question${n === 1 ? '' : 's'}. Add ${n === 1 ? 'it' : 'them'} to the current board, ` +
+        `The file contains ${n} card${n === 1 ? '' : 's'}. Add ${n === 1 ? 'it' : 'them'} to the current board, ` +
         `or substitute the whole board with the file's contents?`;
       importModeDialog.showModal();
     } catch (err) {
@@ -1631,8 +1811,8 @@
     pendingImport = null;
     importModeDialog.close();
     dealCards = true;
-    commit(`Imported ${added.length} question(s), added to the board`);
-    announce(`Added ${added.length} imported question(s) to the board`);
+    commit(`Imported ${added.length} card(s), added to the board`);
+    announce(`Added ${added.length} imported card(s) to the board`);
   });
 
   $('#import-replace').addEventListener('click', async () => {
@@ -1640,7 +1820,7 @@
     const n = pendingImport.cards.length;
     const sure = await ask({
       title: 'Are you sure?',
-      message: `This substitutes the whole board — your current ${state.cards.length} question(s) ` +
+      message: `This substitutes the whole board — your current ${state.cards.length} card(s) ` +
         `will be replaced by the ${n} from the file. You can still roll back from History.`,
       okLabel: 'Substitute board',
       danger: true,
@@ -1650,8 +1830,8 @@
     pendingImport = null;
     importModeDialog.close();
     dealCards = true; // deal the imported cards in like a fresh sheet
-    commit(`Imported ${n} question(s), substituted the board`);
-    announce('Board substituted with the imported questions');
+    commit(`Imported ${n} card(s), substituted the board`);
+    announce('Board substituted with the imported cards');
   });
 
   // --------------------------------------------------------------------------
@@ -1697,7 +1877,7 @@
 
       const meta = document.createElement('span');
       meta.className = 'history-meta';
-      meta.textContent = `${entry.cards.length} question${entry.cards.length === 1 ? '' : 's'}`;
+      meta.textContent = `${entry.cards.length} card${entry.cards.length === 1 ? '' : 's'}`;
 
       main.append(action, meta);
       row.append(time, main);

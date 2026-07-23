@@ -8,7 +8,7 @@ from lodestar_brain.tools.board import BoardClient
 
 def card(id, title, notes='', tags=None):
     return {'id': id, 'columnId': 'inbox', 'title': title, 'notes': notes,
-            'priority': 'medium', 'importance': '', 'urgency': '', 'num': 1,
+            'type': 'question', 'category': '', 'importance': '', 'urgency': '', 'num': 1,
             'tags': tags or [], 'createdAt': 1, 'updatedAt': 1}
 
 

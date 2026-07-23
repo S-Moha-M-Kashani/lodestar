@@ -131,14 +131,46 @@ try:
         native_dialogs = []
         page.on("dialog", lambda d: (native_dialogs.append(d.message), d.dismiss()))
 
+        # Undo, History, Export and Import live inside the collapsed Menu button.
+        def menu_click(action_sel):
+            page.click("#menu-btn")
+            page.click(action_sel)
+
         page.goto(URL)
         page.wait_for_selector(".card")
 
         # ---- Seed + first save to the database ------------------------------
-        check("seed: 4 cards on first run", page.locator(".card").count() == 4)
+        check("seed: 6 cards on first run", page.locator(".card").count() == 6)
         page.wait_for_timeout(600)  # let the initial push reach the server
         check("server: seed board auto-saved to the database",
-              len(api_state().get("cards", [])) == 4)
+              len(api_state().get("cards", [])) == 6)
+
+        # ---- Actions menu ----------------------------------------------------
+        check("menu: panel starts closed", page.locator("#menu-panel").is_hidden())
+        page.click("#menu-btn")
+        check("menu: click opens the panel with all four actions",
+              page.locator("#menu-panel").is_visible()
+              and all(page.locator(f"#menu-panel #{i}").count() == 1
+                      for i in ("undo-btn", "history-btn", "export-btn", "import-btn")))
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(50)
+        check("menu: Escape closes the panel", page.locator("#menu-panel").is_hidden())
+
+        # ---- Category rail ---------------------------------------------------
+        check("categories: rail shows one tab per category in use",
+              page.locator(".cat-tab").count() == 6)
+        check("categories: cards carry their category spine",
+              page.locator(".card.categorized").count() == 6)
+        page.locator('.cat-tab[data-cat="love"]').click()
+        page.wait_for_timeout(100)
+        check("categories: clicking a tab filters the board to that life area",
+              page.locator(".card").count() == 1
+              and page.get_attribute('.cat-tab[data-cat="love"]', "aria-pressed") == "true")
+        page.locator('.cat-tab[data-cat="love"]').click()
+        page.wait_for_timeout(100)
+        check("categories: clicking the open tab again clears the filter",
+              page.locator(".card").count() == 6)
+        page.screenshot(path=shot("board-categories.png"))
 
         # ---- Quick add ------------------------------------------------------
         page.fill(".quick-add input", "What is speculative decoding?")
@@ -151,11 +183,15 @@ try:
         page.locator('[data-col="inbox"] .card').first.click()
         page.wait_for_selector("#card-dialog[open]")
         page.fill("#card-notes", "Draft tokens from a small model, verify with the big one.")
-        page.locator('.priority-picker label:has(input[value="high"])').click()
+        page.locator('.type-picker label:has(input[value="problem"])').click()
+        page.locator('.category-picker label:has(input[value="work"])').click()
         page.fill("#card-tags", "inference, decoding")
         page.click('#card-form button[type="submit"]')
         card = page.locator('[data-col="inbox"] .card').first
-        check("modal: priority badge updated to high", card.locator(".badge.high").count() == 1)
+        check("modal: type stamp updated to problem", card.locator(".badge.type-problem").count() == 1)
+        check("modal: category rendered on the card",
+              card.locator(".card-cat").inner_text() == "Work"
+              and card.evaluate("el => el.classList.contains('categorized')"))
         check("modal: tags rendered", card.locator(".card-tag").count() == 2)
         check("modal: notes indicator shown", card.locator(".notes-dot").count() == 1)
 
@@ -172,14 +208,14 @@ try:
         card.focus()
         page.keyboard.press("]")
         page.wait_for_timeout(100)
-        moved = page.locator('[data-col="to-research"] .card', has_text="speculative decoding")
-        check("keyboard: ] moved card to To Research", moved.count() == 1)
+        moved = page.locator('[data-col="in-progress"] .card', has_text="speculative decoding")
+        check("keyboard: ] moved card to In Progress", moved.count() == 1)
         check("keyboard: focus restored after move",
               page.evaluate("document.activeElement?.classList.contains('card')"))
 
         page.keyboard.press("Alt+ArrowUp")
         page.wait_for_timeout(100)
-        titles = page.locator('[data-col="to-research"] .card-title').all_inner_texts()
+        titles = page.locator('[data-col="in-progress"] .card-title').all_inner_texts()
         check("keyboard: Alt+Up reordered within column",
               len(titles) == 3 and "speculative decoding" in titles[1])
 
@@ -191,29 +227,29 @@ try:
         # ---- Sort -----------------------------------------------------------
         page.locator('[data-col="inbox"] .card', has_text="speculative decoding").first.press("]")
         page.wait_for_timeout(100)
-        page.locator('[data-col="to-research"] .sort-btn').click()
+        page.locator('[data-col="in-progress"] .sort-btn').click()
         page.wait_for_timeout(100)
-        first_badge = page.locator('[data-col="to-research"] .card .badge').first
-        check("sort: high-priority card first after sort", first_badge.inner_text().lower() == "high")
+        first_badge = page.locator('[data-col="in-progress"] .card .badge').first
+        check("sort: problem card sorts ahead of plans", "problem" in first_badge.inner_text().lower())
 
         # ---- Filters --------------------------------------------------------
-        page.fill("#search", "runway")
+        page.fill("#search", "stoic")
         page.wait_for_timeout(100)
         check("filter: search narrows to 1 card", page.locator(".card").count() == 1)
         page.fill("#search", "")
         page.wait_for_timeout(50)
-        check("filter: clearing search restores the board", page.locator(".card").count() == 5)
+        check("filter: clearing search restores the board", page.locator(".card").count() == 7)
 
-        page.select_option("#priority-filter", "high")
+        page.select_option("#type-filter", "problem")
         page.wait_for_timeout(100)
-        check("filter: priority=high shows only high badges",
-              page.locator(".card").count() == page.locator(".card .badge.high").count()
+        check("filter: type=problem shows only problem stamps",
+              page.locator(".card").count() == page.locator(".card .badge.type-problem").count()
               and page.locator(".card").count() == 2)
-        page.select_option("#priority-filter", "")
+        page.select_option("#type-filter", "")
 
         page.locator('.tag-chip:has-text("planning")').first.click()
         page.wait_for_timeout(100)
-        check("filter: tag chip 'planning' shows 2 cards", page.locator(".card").count() == 2)
+        check("filter: tag chip 'planning' shows 1 card", page.locator(".card").count() == 1)
         page.locator('.tag-chip:has-text("planning")').first.click()
 
         # ---- Drag & drop ----------------------------------------------------
@@ -232,7 +268,7 @@ try:
         check("persistence: board intact after reload", page.locator(".card").count() == count_before)
 
         # ---- Export ---------------------------------------------------------
-        page.click("#export-btn")
+        menu_click("#export-btn")
         page.wait_for_selector("#export-dialog[open]")
         ta = page.locator("#export-json").input_value()
         check("export: dialog shows the whole board as JSON",
@@ -243,7 +279,7 @@ try:
         check("export: download is valid JSON with all cards",
               data.get("version") == 1 and len(data.get("cards", [])) == count_before)
         check("export: dialog closes after download", page.locator("#export-dialog[open]").count() == 0)
-        page.click("#export-btn")
+        menu_click("#export-btn")
         page.wait_for_selector("#export-dialog[open]")
         page.click("#copy-export")
         copied = page.evaluate("navigator.clipboard.readText()")
@@ -287,7 +323,7 @@ try:
         page.click("#confirm-cancel")
         page.wait_for_timeout(100)
         check("delete: Cancel keeps the card",
-              page.locator('[data-col="answered"] .card').count() == 1)
+              page.locator('[data-col="answered"] .card').count() == 2)
 
         page.locator('[data-col="answered"] .card').first.click()
         page.wait_for_selector("#card-dialog[open]")
@@ -296,15 +332,15 @@ try:
         page.click("#confirm-ok")
         page.wait_for_timeout(150)
         check("delete: confirming removes the card",
-              page.locator('[data-col="answered"] .card').count() == 0)
-
-        page.click("#undo-btn")
-        page.wait_for_timeout(150)
-        check("undo: deleted card restored to Answered",
               page.locator('[data-col="answered"] .card').count() == 1)
 
+        menu_click("#undo-btn")
+        page.wait_for_timeout(150)
+        check("undo: deleted card restored to Answered",
+              page.locator('[data-col="answered"] .card').count() == 2)
+
         # ---- History --------------------------------------------------------
-        page.click("#history-btn")
+        menu_click("#history-btn")
         page.wait_for_selector("#history-dialog[open]")
         # Scope to #history-list: the Trash panel reuses .history-row inside #trash-list.
         check("history: log records many actions", page.locator("#history-list .history-row").count() >= 10)
@@ -317,8 +353,8 @@ try:
         page.screenshot(path=shot("history-dialog.png"))
         page.locator("#history-list .history-row .history-restore").last.click()
         page.wait_for_timeout(150)
-        check("history: restored the opening state (4 seeds)",
-              page.locator(".card").count() == 4
+        check("history: restored the opening state (6 seeds)",
+              page.locator(".card").count() == 6
               and page.locator(".card", has_text="speculative decoding").count() == 0)
         page.locator("#history-list .history-row .history-restore").first.click()
         page.wait_for_timeout(150)
@@ -356,7 +392,7 @@ try:
         n_all = page.locator(".card").count()
         page.locator('.view-switch button[data-view="overview"]').click()
         page.wait_for_selector("#board.overview .plot-dot")
-        check("overview: one dot per question", page.locator(".plot-dot").count() == n_all)
+        check("overview: one dot per card", page.locator(".plot-dot").count() == n_all)
         check("overview: view button marked pressed",
               page.get_attribute('.view-switch button[data-view="overview"]', "aria-pressed") == "true")
         check("overview: layout falls back to keyword overlap when the model is offline",
@@ -426,12 +462,13 @@ try:
         page.wait_for_selector("#board.board")
 
         # ---- Import: schema dialog -----------------------------------------
-        page.click("#import-btn")
+        menu_click("#import-btn")
         page.wait_for_selector("#import-dialog[open]")
         schema_text = page.locator("#import-schema").inner_text()
         check("import: dialog shows the JSON schema",
               '"version": 1' in schema_text and '"cards"' in schema_text
-              and "inbox | to-research | in-progress | answered" in schema_text
+              and "inbox | in-progress | answered" in schema_text
+              and '"type"' in schema_text and '"category"' in schema_text
               and '"importance"' in schema_text and '"urgency"' in schema_text)
         page.screenshot(path=shot("import-dialog.png"))
         page.click("#copy-schema")
@@ -442,8 +479,8 @@ try:
         import_file = shot("generated-import.json")
         with open(import_file, "w") as f:
             json.dump({"version": 1, "cards": [
-                {"title": "Imported: which venue for the offsite?", "columnId": "to-research",
-                 "priority": "high", "tags": ["planning"]},
+                {"title": "Imported: which venue for the offsite?", "columnId": "in-progress",
+                 "type": "task", "category": "work", "tags": ["planning"]},
                 {"title": "Imported: who owns the onboarding doc?"},
             ]}, f)
         count_before_import = page.locator(".card").count()
@@ -464,7 +501,7 @@ try:
         check("import: questions added on top of the existing board",
               page.locator(".card").count() == count_before_import + 2)
         check("import: added card kept its column, defaults fill the gaps",
-              page.locator('[data-col="to-research"] .card', has_text="offsite").count() == 1
+              page.locator('[data-col="in-progress"] .card', has_text="offsite").count() == 1
               and page.locator('[data-col="inbox"] .card', has_text="onboarding doc").count() == 1)
         nums = page.locator("#board .card-num").all_inner_texts()
         check("import: ledger numbers stay unique after adding",
@@ -492,7 +529,7 @@ try:
         check("import: confirming substitute replaces the whole board",
               page.locator(".card").count() == 2)
 
-        page.click("#undo-btn")
+        menu_click("#undo-btn")
         page.wait_for_timeout(150)
         check("undo: substitution rolled back",
               page.locator(".card").count() == count_before_import + 2)
@@ -540,7 +577,7 @@ try:
 
         # Second step of the two-step delete: permanently erase it from the Trash
         # panel in the History dialog — the ONLY action that truly destroys data.
-        page.click("#history-btn")
+        menu_click("#history-btn")
         page.wait_for_selector("#history-dialog[open]")
         page.wait_for_selector("#trash-section:not([hidden])")
         trash_rows = page.locator("#trash-list .history-row", has_text="PERSIST-MARKER-alpha")
