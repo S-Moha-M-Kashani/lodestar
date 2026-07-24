@@ -208,6 +208,34 @@ try:
         check("categories: the new registry is saved to the database",
               any(c.get("id") == "reading" for c in api_state().get("categories", [])))
         page.screenshot(path=shot("cats-dialog.png"))
+
+        # Duplicate category name is rejected with an in-app alert.
+        page.fill("#cat-add-name", "Reading")
+        page.click("#cat-add-btn")
+        page.wait_for_selector("#confirm-dialog[open]")
+        check("categories: adding a duplicate name shows the 'already on the rail' alert",
+              page.locator("#confirm-title").text_content().lower() == "already on the rail"
+              and "already exists" in page.locator("#confirm-copy").text_content()
+              and page.locator("#confirm-cancel").is_hidden())
+        page.click("#confirm-ok")
+        page.wait_for_timeout(100)
+        check("categories: the duplicate was not added (still one 'reading' tab)",
+              page.locator('.cat-tab[data-cat="reading"]').count() == 1)
+
+        # Hue picker: pick a specific hue and confirm it lands on the created category.
+        page.fill("#cat-add-name", "Fitness")
+        page.check('#cat-hue-options input[value="120"]', force=True)
+        page.click("#cat-add-btn")
+        page.wait_for_timeout(650)  # debounced push
+        fitness = next((c for c in api_state().get("categories", []) if c.get("id") == "fitness"), None)
+        check("categories: the picked hue (120) is saved on the new category",
+              fitness is not None and fitness.get("h") == 120)
+        # Clean up Fitness so downstream count-based checks are unaffected.
+        page.locator('#cats-list .cats-row:has-text("Fitness") .cats-remove').click()
+        page.wait_for_selector("#confirm-dialog[open]")
+        page.click("#confirm-ok")
+        page.wait_for_timeout(150)
+
         page.locator('#cats-list .cats-row:has-text("Reading") .cats-remove').click()
         page.wait_for_selector("#confirm-dialog[open]")
         page.click("#confirm-ok")
@@ -431,6 +459,24 @@ try:
         check("backlog: row opens the edit dialog", page.locator("#card-dialog[open]").count() == 1)
         page.click("#cancel-dialog")
         page.screenshot(path=shot("board-backlog.png"))
+
+        # Backlog sort-by-type reorders the inbox rows by TYPE_RANK.
+        # Row type stamps render as `.badge.type-<type>` (see renderBacklogRow/typeBadge
+        # in app.js), not `.card-type` — the sort button itself only renders when
+        # more than one row is visible (renderBacklog in app.js).
+        if page.locator(".backlog-sheet .sort-btn").count() == 1:
+            page.click(".backlog-sheet .sort-btn")
+            page.wait_for_timeout(150)
+            types_in_order = page.eval_on_selector_all(
+                ".backlog-row .badge",
+                "els => els.map(e => e.className.match(/type-(\\w+)/)[1])")
+            rank = {"question": 0, "problem": 1, "task": 2, "idea": 3, "plan": 4}
+            ranks = [rank.get(t, 99) for t in types_in_order]
+            check("backlog: sort-by-type orders rows question→problem→task→idea→plan",
+                  ranks == sorted(ranks))
+        else:
+            check("backlog: sort-by-type control present when >1 row", False)
+
         page.locator('.view-switch button[data-view="board"]').click()
         page.wait_for_selector("#board.board")
         check("backlog: switching back restores the board",
