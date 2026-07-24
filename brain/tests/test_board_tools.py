@@ -10,8 +10,8 @@ BOARD = 'http://board.test'
 
 def card(id, title, column='inbox', **extra):
     base = {'id': id, 'columnId': column, 'title': title, 'notes': '',
-            'priority': 'medium', 'importance': '', 'urgency': '', 'num': 1,
-            'tags': [], 'createdAt': 1, 'updatedAt': 1}
+            'type': 'question', 'category': '', 'importance': '', 'urgency': '',
+            'num': 1, 'tags': [], 'createdAt': 1, 'updatedAt': 1}
     return {**base, **extra}
 
 
@@ -56,12 +56,34 @@ def test_update_question_changes_only_named_fields():
         'version': 1, 'cards': existing}))
     tools = tools_by_name(BoardClient(BOARD))
     updated = tools['update_question'].run({'id': 'a', 'column_id': 'in-progress',
-                                            'priority': 'high'})
+                                            'type': 'task', 'category': 'work'})
     assert updated['columnId'] == 'in-progress'
-    assert updated['priority'] == 'high'
+    assert updated['type'] == 'task'
+    assert updated['category'] == 'work'
     assert updated['notes'] == 'keep me'
     sent = json.loads(put.calls.last.request.content)
     assert {c['id'] for c in sent['cards']} == {'a', 'b'}
+
+
+@respx.mock
+def test_update_round_trips_effort_and_control_untouched():
+    # The agent doesn't set effort/control (LLM estimation is out of scope for
+    # now) — but its full-list saves must carry the fields through verbatim.
+    existing = [card('a', 'Old', effort='high', control='none',
+                     effortSrc='user', controlSrc='user'),
+                card('b', 'Other', effort='low', control='act',
+                     effortSrc='default', controlSrc='default')]
+    respx.get(f'{BOARD}/api/state').mock(return_value=httpx.Response(200, json={
+        'version': 1, 'cards': existing}))
+    put = respx.put(f'{BOARD}/api/state').mock(return_value=httpx.Response(200, json={
+        'version': 1, 'cards': existing}))
+    tools = tools_by_name(BoardClient(BOARD))
+    tools['update_question'].run({'id': 'a', 'column_id': 'in-progress'})
+    sent = {c['id']: c for c in json.loads(put.calls.last.request.content)['cards']}
+    assert sent['a']['effort'] == 'high' and sent['a']['control'] == 'none'
+    assert sent['a']['effortSrc'] == 'user' and sent['a']['controlSrc'] == 'user'
+    assert sent['b']['effort'] == 'low' and sent['b']['control'] == 'act'
+    assert sent['a']['columnId'] == 'in-progress'
 
 
 @respx.mock
@@ -69,7 +91,7 @@ def test_update_unknown_id_errors_without_writing():
     respx.get(f'{BOARD}/api/state').mock(return_value=httpx.Response(200, json={
         'version': 1, 'cards': []}))
     tools = tools_by_name(BoardClient(BOARD))
-    assert 'error' in tools['update_question'].run({'id': 'nope', 'priority': 'high'})
+    assert 'error' in tools['update_question'].run({'id': 'nope', 'type': 'task'})
 
 
 def test_tool_specs_are_openai_shaped():

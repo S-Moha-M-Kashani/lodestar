@@ -131,14 +131,83 @@ try:
         native_dialogs = []
         page.on("dialog", lambda d: (native_dialogs.append(d.message), d.dismiss()))
 
+        # Undo, History, Export and Import live inside the collapsed Menu button.
+        def menu_click(action_sel):
+            page.click("#menu-btn")
+            page.click(action_sel)
+
         page.goto(URL)
         page.wait_for_selector(".card")
 
         # ---- Seed + first save to the database ------------------------------
-        check("seed: 4 cards on first run", page.locator(".card").count() == 4)
+        check("seed: 6 cards on first run", page.locator(".card").count() == 6)
         page.wait_for_timeout(600)  # let the initial push reach the server
         check("server: seed board auto-saved to the database",
-              len(api_state().get("cards", [])) == 4)
+              len(api_state().get("cards", [])) == 6)
+
+        # ---- Actions menu ----------------------------------------------------
+        check("menu: panel starts closed", page.locator("#menu-panel").is_hidden())
+        page.click("#menu-btn")
+        check("menu: click opens the panel with all four actions",
+              page.locator("#menu-panel").is_visible()
+              and all(page.locator(f"#menu-panel #{i}").count() == 1
+                      for i in ("undo-btn", "history-btn", "export-btn", "import-btn")))
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(50)
+        check("menu: Escape closes the panel", page.locator("#menu-panel").is_hidden())
+
+        # ---- Category rail ---------------------------------------------------
+        # The rail always shows: All + every defined category + the ✎ Edit tab.
+        check("categories: rail shows All + all 9 defined areas + Edit",
+              page.locator(".cat-tab").count() == 11
+              and page.locator(".cat-tab-all").count() == 1
+              and page.locator("#edit-cats-btn").count() == 1)
+        check("categories: tabs carry no count badge",
+              page.locator(".cat-tab-count").count() == 0)
+        check("categories: 'All' is pressed when nothing is filtered",
+              page.get_attribute(".cat-tab-all", "aria-pressed") == "true")
+        check("categories: cards carry their category spine",
+              page.locator(".card.categorized").count() == 6)
+        page.locator('.cat-tab[data-cat="love"]').click()
+        page.wait_for_timeout(100)
+        check("categories: clicking a tab filters the board to that life area",
+              page.locator(".card").count() == 1
+              and page.get_attribute('.cat-tab[data-cat="love"]', "aria-pressed") == "true"
+              and page.get_attribute(".cat-tab-all", "aria-pressed") == "false")
+        page.locator(".cat-tab-all").click()
+        page.wait_for_timeout(100)
+        check("categories: 'All' clears the filter — the whole life on one board",
+              page.locator(".card").count() == 6
+              and page.get_attribute(".cat-tab-all", "aria-pressed") == "true")
+        page.screenshot(path=shot("board-categories.png"))
+
+        # ---- Category management (the ✎ Edit tab) -----------------------------
+        page.click("#edit-cats-btn")
+        page.wait_for_selector("#cats-dialog[open]")
+        check("categories: editor lists all 9 areas, each removable",
+              page.locator("#cats-list .cats-row").count() == 9
+              and page.locator("#cats-list .cats-remove").count() == 9)
+        page.fill("#cat-add-name", "Reading")
+        page.click("#cat-add-btn")
+        page.wait_for_timeout(150)
+        check("categories: adding 'Reading' puts it in the editor and on the rail",
+              page.locator("#cats-list .cats-row").count() == 10
+              and page.locator('.cat-tab[data-cat="reading"]').count() == 1)
+        page.wait_for_timeout(600)  # debounced push
+        check("categories: the new registry is saved to the database",
+              any(c.get("id") == "reading" for c in api_state().get("categories", [])))
+        page.screenshot(path=shot("cats-dialog.png"))
+        page.locator('#cats-list .cats-row:has-text("Reading") .cats-remove').click()
+        page.wait_for_selector("#confirm-dialog[open]")
+        page.click("#confirm-ok")
+        page.wait_for_timeout(150)
+        check("categories: removing 'Reading' takes it off the rail again",
+              page.locator("#cats-list .cats-row").count() == 9
+              and page.locator('.cat-tab[data-cat="reading"]').count() == 0)
+        page.click("#close-cats")
+        page.wait_for_timeout(600)
+        check("categories: the removal is saved to the database",
+              not any(c.get("id") == "reading" for c in api_state().get("categories", [])))
 
         # ---- Quick add ------------------------------------------------------
         page.fill(".quick-add input", "What is speculative decoding?")
@@ -151,11 +220,15 @@ try:
         page.locator('[data-col="inbox"] .card').first.click()
         page.wait_for_selector("#card-dialog[open]")
         page.fill("#card-notes", "Draft tokens from a small model, verify with the big one.")
-        page.locator('.priority-picker label:has(input[value="high"])').click()
+        page.locator('.type-picker label:has(input[value="problem"])').click()
+        page.locator('.category-picker label:has(input[value="work"])').click()
         page.fill("#card-tags", "inference, decoding")
         page.click('#card-form button[type="submit"]')
         card = page.locator('[data-col="inbox"] .card').first
-        check("modal: priority badge updated to high", card.locator(".badge.high").count() == 1)
+        check("modal: type stamp updated to problem", card.locator(".badge.type-problem").count() == 1)
+        check("modal: category rendered on the card",
+              card.locator(".card-cat").inner_text() == "Work"
+              and card.evaluate("el => el.classList.contains('categorized')"))
         check("modal: tags rendered", card.locator(".card-tag").count() == 2)
         check("modal: notes indicator shown", card.locator(".notes-dot").count() == 1)
 
@@ -172,14 +245,14 @@ try:
         card.focus()
         page.keyboard.press("]")
         page.wait_for_timeout(100)
-        moved = page.locator('[data-col="to-research"] .card', has_text="speculative decoding")
-        check("keyboard: ] moved card to To Research", moved.count() == 1)
+        moved = page.locator('[data-col="in-progress"] .card', has_text="speculative decoding")
+        check("keyboard: ] moved card to In Progress", moved.count() == 1)
         check("keyboard: focus restored after move",
               page.evaluate("document.activeElement?.classList.contains('card')"))
 
         page.keyboard.press("Alt+ArrowUp")
         page.wait_for_timeout(100)
-        titles = page.locator('[data-col="to-research"] .card-title').all_inner_texts()
+        titles = page.locator('[data-col="in-progress"] .card-title').all_inner_texts()
         check("keyboard: Alt+Up reordered within column",
               len(titles) == 3 and "speculative decoding" in titles[1])
 
@@ -191,29 +264,29 @@ try:
         # ---- Sort -----------------------------------------------------------
         page.locator('[data-col="inbox"] .card', has_text="speculative decoding").first.press("]")
         page.wait_for_timeout(100)
-        page.locator('[data-col="to-research"] .sort-btn').click()
+        page.locator('[data-col="in-progress"] .sort-btn').click()
         page.wait_for_timeout(100)
-        first_badge = page.locator('[data-col="to-research"] .card .badge').first
-        check("sort: high-priority card first after sort", first_badge.inner_text().lower() == "high")
+        first_badge = page.locator('[data-col="in-progress"] .card .badge').first
+        check("sort: problem card sorts ahead of plans", "problem" in first_badge.inner_text().lower())
 
         # ---- Filters --------------------------------------------------------
-        page.fill("#search", "runway")
+        page.fill("#search", "stoic")
         page.wait_for_timeout(100)
         check("filter: search narrows to 1 card", page.locator(".card").count() == 1)
         page.fill("#search", "")
         page.wait_for_timeout(50)
-        check("filter: clearing search restores the board", page.locator(".card").count() == 5)
+        check("filter: clearing search restores the board", page.locator(".card").count() == 7)
 
-        page.select_option("#priority-filter", "high")
+        page.select_option("#type-filter", "problem")
         page.wait_for_timeout(100)
-        check("filter: priority=high shows only high badges",
-              page.locator(".card").count() == page.locator(".card .badge.high").count()
+        check("filter: type=problem shows only problem stamps",
+              page.locator(".card").count() == page.locator(".card .badge.type-problem").count()
               and page.locator(".card").count() == 2)
-        page.select_option("#priority-filter", "")
+        page.select_option("#type-filter", "")
 
         page.locator('.tag-chip:has-text("planning")').first.click()
         page.wait_for_timeout(100)
-        check("filter: tag chip 'planning' shows 2 cards", page.locator(".card").count() == 2)
+        check("filter: tag chip 'planning' shows 1 card", page.locator(".card").count() == 1)
         page.locator('.tag-chip:has-text("planning")').first.click()
 
         # ---- Drag & drop ----------------------------------------------------
@@ -232,7 +305,7 @@ try:
         check("persistence: board intact after reload", page.locator(".card").count() == count_before)
 
         # ---- Export ---------------------------------------------------------
-        page.click("#export-btn")
+        menu_click("#export-btn")
         page.wait_for_selector("#export-dialog[open]")
         ta = page.locator("#export-json").input_value()
         check("export: dialog shows the whole board as JSON",
@@ -243,7 +316,7 @@ try:
         check("export: download is valid JSON with all cards",
               data.get("version") == 1 and len(data.get("cards", [])) == count_before)
         check("export: dialog closes after download", page.locator("#export-dialog[open]").count() == 0)
-        page.click("#export-btn")
+        menu_click("#export-btn")
         page.wait_for_selector("#export-dialog[open]")
         page.click("#copy-export")
         copied = page.evaluate("navigator.clipboard.readText()")
@@ -287,7 +360,7 @@ try:
         page.click("#confirm-cancel")
         page.wait_for_timeout(100)
         check("delete: Cancel keeps the card",
-              page.locator('[data-col="answered"] .card').count() == 1)
+              page.locator('[data-col="answered"] .card').count() == 2)
 
         page.locator('[data-col="answered"] .card').first.click()
         page.wait_for_selector("#card-dialog[open]")
@@ -296,15 +369,15 @@ try:
         page.click("#confirm-ok")
         page.wait_for_timeout(150)
         check("delete: confirming removes the card",
-              page.locator('[data-col="answered"] .card').count() == 0)
-
-        page.click("#undo-btn")
-        page.wait_for_timeout(150)
-        check("undo: deleted card restored to Answered",
               page.locator('[data-col="answered"] .card').count() == 1)
 
+        menu_click("#undo-btn")
+        page.wait_for_timeout(150)
+        check("undo: deleted card restored to Answered",
+              page.locator('[data-col="answered"] .card').count() == 2)
+
         # ---- History --------------------------------------------------------
-        page.click("#history-btn")
+        menu_click("#history-btn")
         page.wait_for_selector("#history-dialog[open]")
         # Scope to #history-list: the Trash panel reuses .history-row inside #trash-list.
         check("history: log records many actions", page.locator("#history-list .history-row").count() >= 10)
@@ -317,8 +390,8 @@ try:
         page.screenshot(path=shot("history-dialog.png"))
         page.locator("#history-list .history-row .history-restore").last.click()
         page.wait_for_timeout(150)
-        check("history: restored the opening state (4 seeds)",
-              page.locator(".card").count() == 4
+        check("history: restored the opening state (6 seeds)",
+              page.locator(".card").count() == 6
               and page.locator(".card", has_text="speculative decoding").count() == 0)
         page.locator("#history-list .history-row .history-restore").first.click()
         page.wait_for_timeout(150)
@@ -356,7 +429,7 @@ try:
         n_all = page.locator(".card").count()
         page.locator('.view-switch button[data-view="overview"]').click()
         page.wait_for_selector("#board.overview .plot-dot")
-        check("overview: one dot per question", page.locator(".plot-dot").count() == n_all)
+        check("overview: one dot per card", page.locator(".plot-dot").count() == n_all)
         check("overview: view button marked pressed",
               page.get_attribute('.view-switch button[data-view="overview"]', "aria-pressed") == "true")
         check("overview: layout falls back to keyword overlap when the model is offline",
@@ -426,13 +499,15 @@ try:
         page.wait_for_selector("#board.board")
 
         # ---- Import: schema dialog -----------------------------------------
-        page.click("#import-btn")
+        menu_click("#import-btn")
         page.wait_for_selector("#import-dialog[open]")
         schema_text = page.locator("#import-schema").inner_text()
         check("import: dialog shows the JSON schema",
               '"version": 1' in schema_text and '"cards"' in schema_text
-              and "inbox | to-research | in-progress | answered" in schema_text
-              and '"importance"' in schema_text and '"urgency"' in schema_text)
+              and "inbox | in-progress | answered" in schema_text
+              and '"type"' in schema_text and '"category"' in schema_text
+              and '"importance"' in schema_text and '"urgency"' in schema_text
+              and '"categories"' in schema_text)
         page.screenshot(path=shot("import-dialog.png"))
         page.click("#copy-schema")
         check("import: 'Copy schema' puts the schema on the clipboard",
@@ -442,8 +517,8 @@ try:
         import_file = shot("generated-import.json")
         with open(import_file, "w") as f:
             json.dump({"version": 1, "cards": [
-                {"title": "Imported: which venue for the offsite?", "columnId": "to-research",
-                 "priority": "high", "tags": ["planning"]},
+                {"title": "Imported: which venue for the offsite?", "columnId": "in-progress",
+                 "type": "task", "category": "work", "tags": ["planning"]},
                 {"title": "Imported: who owns the onboarding doc?"},
             ]}, f)
         count_before_import = page.locator(".card").count()
@@ -464,7 +539,7 @@ try:
         check("import: questions added on top of the existing board",
               page.locator(".card").count() == count_before_import + 2)
         check("import: added card kept its column, defaults fill the gaps",
-              page.locator('[data-col="to-research"] .card', has_text="offsite").count() == 1
+              page.locator('[data-col="in-progress"] .card', has_text="offsite").count() == 1
               and page.locator('[data-col="inbox"] .card', has_text="onboarding doc").count() == 1)
         nums = page.locator("#board .card-num").all_inner_texts()
         check("import: ledger numbers stay unique after adding",
@@ -492,7 +567,7 @@ try:
         check("import: confirming substitute replaces the whole board",
               page.locator(".card").count() == 2)
 
-        page.click("#undo-btn")
+        menu_click("#undo-btn")
         page.wait_for_timeout(150)
         check("undo: substitution rolled back",
               page.locator(".card").count() == count_before_import + 2)
@@ -508,6 +583,31 @@ try:
         page.click("#confirm-ok")
 
         check("regression: no native browser dialogs were used", not native_dialogs)
+
+        # ---- Quick-add: empty input and adding inside an open drawer ---------
+        count_now = page.locator(".card").count()
+        page.press(".quick-add input", "Enter")
+        page.wait_for_timeout(80)
+        check("quick-add: empty input adds nothing and keeps focus in the input",
+              page.locator(".card").count() == count_now
+              and page.evaluate(
+                  "document.activeElement === document.querySelector('.quick-add input')"))
+
+        # A capture written inside an open category drawer belongs to that
+        # drawer — it inherits the category and must never vanish behind the filter.
+        page.locator('.cat-tab[data-cat="love"]').click()
+        page.wait_for_timeout(100)
+        love_before = page.locator(".card").count()
+        page.fill(".quick-add input", "Plan a surprise picnic FILTER-MARKER")
+        page.press(".quick-add input", "Enter")
+        page.wait_for_timeout(100)
+        marker = page.locator(".card", has_text="FILTER-MARKER")
+        check("quick-add: a card added inside an open drawer stays visible",
+              page.locator(".card").count() == love_before + 1 and marker.count() == 1)
+        check("quick-add: it inherits the drawer's category",
+              marker.first.locator(".card-cat").inner_text() == "Love")
+        page.locator(".cat-tab-all").click()
+        page.wait_for_timeout(100)
 
         # ---- Database persistence (the whole point of the server) -----------
         page.fill(".quick-add input", "PERSIST-MARKER-alpha")
@@ -540,7 +640,7 @@ try:
 
         # Second step of the two-step delete: permanently erase it from the Trash
         # panel in the History dialog — the ONLY action that truly destroys data.
-        page.click("#history-btn")
+        menu_click("#history-btn")
         page.wait_for_selector("#history-dialog[open]")
         page.wait_for_selector("#trash-section:not([hidden])")
         trash_rows = page.locator("#trash-list .history-row", has_text="PERSIST-MARKER-alpha")
@@ -610,6 +710,174 @@ try:
         page.locator('.view-switch button[data-view="board"]').click()
         check("assistant: created card visible on the board",
               page.locator(".card-title", has_text="What is Leiden clustering?").count() >= 1)
+
+        # ---- Import the grown life sample (substitute) -----------------------
+        sample_path = os.path.join(ROOT, "sample-overview.json")
+        sample = json.load(open(sample_path))
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector("#board.board")
+        page.set_input_files("#import-input", sample_path)
+        page.wait_for_selector("#import-mode-dialog[open]")
+        page.click("#import-replace")
+        page.wait_for_selector("#confirm-dialog[open]")
+        page.click("#confirm-ok")
+        page.wait_for_timeout(300)
+        check("sample: the grown sample file imports, count matches",
+              page.locator(".card").count() == len(sample["cards"]))
+        page.wait_for_timeout(600)  # let the substitute reach the database
+        srv_cards = api_state()["cards"]
+        c10k = next((c for c in srv_cards if c["title"] == "Couch to 10k by October"), None)
+        visa = next((c for c in srv_cards if "visa paperwork" in c["title"]), None)
+        check("sample: effort/control and their provenance survive the save",
+              c10k is not None and c10k.get("effort") == "high" and c10k.get("effortSrc") == "user"
+              and visa is not None and visa.get("control") == "none" and visa.get("controlSrc") == "user")
+        page.reload()
+        page.wait_for_selector(".card")
+        check("sample: board intact after reload", page.locator(".card").count() == len(sample["cards"]))
+
+        # ---- Editor: effort & control --------------------------------------
+        page.fill(".quick-add input", "EFFORT-CONTROL-probe")
+        page.press(".quick-add input", "Enter")
+        page.locator('[data-col="inbox"] .card', has_text="EFFORT-CONTROL-probe").first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        check("editor: effort & control default to the middle of the scale",
+              page.input_value("#card-effort") == "medium"
+              and page.input_value("#card-control") == "influence")
+        page.select_option("#card-effort", "low")
+        page.select_option("#card-control", "act")
+        page.click('#card-form button[type="submit"]')
+        page.wait_for_timeout(600)
+        probe = next((c for c in api_state()["cards"] if c["title"] == "EFFORT-CONTROL-probe"), None)
+        check("editor: edited effort/control persist to the database as user-set",
+              probe is not None and probe.get("effort") == "low" and probe.get("control") == "act"
+              and probe.get("effortSrc") == "user" and probe.get("controlSrc") == "user")
+        page.reload()
+        page.wait_for_selector(".card")
+        page.locator('[data-col="inbox"] .card', has_text="EFFORT-CONTROL-probe").first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        check("editor: effort/control survive a reload round-trip",
+              page.input_value("#card-effort") == "low"
+              and page.input_value("#card-control") == "act")
+        page.click("#cancel-dialog")
+
+        # ---- Overview: PCA ⇄ t-SNE toggle -----------------------------------
+        page.locator('.view-switch button[data-view="overview"]').click()
+        page.wait_for_selector("#board.overview .plot-dot")
+        n_dots = page.locator(".plot-dot").count()
+        check("tsne: projection toggle renders with PCA pressed by default",
+              page.locator(".plot-proj-toggle button").count() == 2
+              and page.get_attribute('.plot-proj-toggle button[data-proj="pca"]', "aria-pressed") == "true"
+              and "PC-1" in page.locator(".plot-axis-x").inner_text())
+        pca_pos = page.eval_on_selector_all(
+            ".plot-dot", "els => els.map(e => e.dataset.id + '@' + e.style.left + ',' + e.style.top)")
+        page.click('.plot-proj-toggle button[data-proj="tsne"]')
+        page.wait_for_selector('.plot-proj-toggle button[data-proj="tsne"][aria-pressed="true"]')
+        check("tsne: axis labels switch to t-SNE-1/2",
+              "t-SNE-1" in page.locator(".plot-axis-x").inner_text())
+        page.wait_for_function(
+            "document.querySelector('.plot-status').textContent.includes('t-SNE layout')",
+            timeout=30000)
+        check("tsne: one dot per question, unchanged by the projection",
+              page.locator(".plot-dot").count() == n_dots)
+        tsne_pos = page.eval_on_selector_all(
+            ".plot-dot", "els => els.map(e => e.dataset.id + '@' + e.style.left + ',' + e.style.top)")
+        check("tsne: layout actually moves the dots (differs from PCA)", tsne_pos != pca_pos)
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector("#board.board")
+        page.locator('.view-switch button[data-view="overview"]').click()
+        page.wait_for_selector("#board.overview .plot-dot")
+        check("tsne: preference survives leaving and re-entering the view",
+              page.get_attribute('.plot-proj-toggle button[data-proj="tsne"]', "aria-pressed") == "true")
+        page.click('.plot-proj-toggle button[data-proj="pca"]')
+        page.wait_for_selector('.plot-proj-toggle button[data-proj="pca"][aria-pressed="true"]')
+        check("tsne: toggling back restores the PCA layout",
+              "PC-1" in page.locator(".plot-axis-x").inner_text())
+
+        # ---- Matrix: the four-lens picker -----------------------------------
+        page.locator('.view-switch button[data-view="matrix"]').click()
+        page.wait_for_selector("#board.matrix .matrix-grid")
+        check("matrices: picker offers the four lenses",
+              page.locator(".matrix-switch button").count() == 4
+              and page.get_attribute('.matrix-switch button[data-matrix="eisenhower"]',
+                                     "aria-pressed") == "true")
+        check("matrices: Eisenhower 'Answer now' sits top-LEFT (urgent first)",
+              page.eval_on_selector('.matrix-quad[data-imp="high"][data-urg="high"]',
+                                    "el => getComputedStyle(el).gridColumnStart") == "2"
+              and "answer now" in page.locator(
+                  '.matrix-quad[data-imp="high"][data-urg="high"] .matrix-quad-verb')
+                  .inner_text().lower())
+        srv_cards = api_state()["cards"]
+        n_importance = sum(1 for c in srv_cards if c.get("importance"))
+        for lens in ("leverage", "serenity"):
+            page.click(f'.matrix-switch button[data-matrix="{lens}"]')
+            page.wait_for_selector(f'.matrix-switch button[data-matrix="{lens}"][aria-pressed="true"]')
+            check(f"matrices: {lens} shows 6 cells and places every importance-set card",
+                  page.locator(".matrix-quad").count() == 6
+                  and page.locator(".matrix-quad-dots .plot-dot").count() == n_importance)
+        page.click('.matrix-switch button[data-matrix="followthrough"]')
+        page.wait_for_selector('.matrix-switch button[data-matrix="followthrough"][aria-pressed="true"]')
+        n_ft = sum(1 for c in srv_cards
+                   if c.get("importance") and c.get("columnId") != "answered")
+        cols_with_dots = page.evaluate(
+            """() => new Set([...document.querySelectorAll('.matrix-quad')]
+                 .filter(q => q.querySelector('.plot-dot')).map(q => q.dataset.x)).size""")
+        check("matrices: follow-through buckets open cards by age",
+              page.locator(".matrix-quad-dots .plot-dot").count() == n_ft
+              and cols_with_dots >= 2)
+        page.click('.matrix-switch button[data-matrix="eisenhower"]')
+
+        # ---- Areas view ------------------------------------------------------
+        page.locator('.view-switch button[data-view="areas"]').click()
+        page.wait_for_selector("#board.areas .area-tile")
+        in_use = len({c["category"] for c in api_state()["cards"] if c.get("category")})
+        check("areas: one tile per life area in use, wheel drawn",
+              page.locator(".area-tile").count() == in_use
+              and page.locator("svg.wheel").count() == 1)
+        page.click('.area-tile[data-cat="money"]')
+        page.wait_for_selector(".area-detail")
+        check("areas: money detail shows the purchase cooling-off panel",
+              page.locator(".cooloff-row").count() >= 3
+              and "decide now" in page.eval_on_selector_all(
+                  ".cooloff-days", "els => els.map(e => e.textContent).join('|')"))
+        check("areas: money problems grouped on the serenity strip",
+              page.locator(".serenity-strip .area-row").count() >= 1)
+        page.click('.area-tile[data-cat="mind"]')
+        page.wait_for_selector(".area-learning")
+        check("areas: mind detail shows learning progress and a burn-up chart",
+              page.locator(".learn-row").count() >= 2
+              and page.locator(".learn-burnup polyline").count() == 2)
+        page.click('.area-tile[data-cat="mind"]')  # clear the focus + category filter
+        page.wait_for_timeout(100)
+        check("areas: clicking the open tile again closes the detail",
+              page.locator(".area-detail").count() == 0)
+        page.screenshot(path=shot("areas.png"))
+
+        # ---- Review view -----------------------------------------------------
+        page.locator('.view-switch button[data-view="review"]').click()
+        page.wait_for_selector("#board.review .review-tiles")
+        check("review: the four stat tiles render",
+              page.locator(".review-tile").count() == 4
+              and all(page.locator(f'.review-tile[data-stat="{k}"]').count() == 1
+                      for k in ("inbox", "answered-week", "new-week", "open")))
+        check("review: resurfacing offers exactly 3 cards",
+              page.locator(".resurface-card").count() == 3)
+        target_id = page.get_attribute(".resurface-card", "data-id")
+        page.click(f'.resurface-card[data-id="{target_id}"] .resurface-actions button:first-child')
+        page.wait_for_selector(f'.resurface-card[data-id="{target_id}"][data-kept="true"]')
+        page.wait_for_timeout(600)
+        bumped = next((c for c in api_state()["cards"] if c["id"] == target_id), None)
+        check("review: 'Still matters' bumps the card's updated stamp",
+              bumped is not None
+              and time.time() * 1000 - bumped["updatedAt"] < 60_000)
+        page.click("#review-stamp")
+        page.wait_for_selector(".review-stamped")
+        page.reload()
+        page.wait_for_selector("#board.review .review-tiles")
+        check("review: the Reviewed stamp persists in localStorage",
+              page.locator(".review-stamped").count() == 1)
+        page.screenshot(path=shot("review.png"))
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector("#board.board")
 
         check("console: no JS errors during entire run", not errors)
         if errors:

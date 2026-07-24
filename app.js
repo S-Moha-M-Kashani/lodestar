@@ -9,17 +9,88 @@
 
   const COLUMNS = [
     { id: 'inbox', title: 'Inbox' },
-    { id: 'to-research', title: 'To Research' },
     { id: 'in-progress', title: 'In Progress' },
     { id: 'answered', title: 'Answered' },
   ];
 
-  const PRIORITIES = ['high', 'medium', 'low'];
-  const PRIORITY_RANK = { high: 0, medium: 1, low: 2 };
+  // What kind of thing a card is — stamped on the card like the old priority
+  // stamp, but neutral ink: colour on this board always means category.
+  const TYPES = ['question', 'problem', 'task', 'idea', 'plan'];
+  const TYPE_META = {
+    question: { glyph: '?', label: 'question' },
+    problem:  { glyph: '!', label: 'problem' },
+    task:     { glyph: '✓', label: 'task' },
+    idea:     { glyph: '✦', label: 'idea' },
+    plan:     { glyph: '→', label: 'plan' },
+  };
+  const TYPE_RANK = Object.fromEntries(TYPES.map((t, i) => [t, i]));
+
+  // Life areas — the coloured celluloid tabs of the ledger. Each category is an
+  // oklch hue; every theme sets --cat-l/--cat-c once, so every ink stays
+  // legible on Morning/Day/Dusk/Night without per-theme colour tables.
+  // The set is the user's own: categories can be added and removed (✎ on the
+  // rail), and the registry is saved with the board and synced to the server.
+  const DEFAULT_CATEGORIES = [
+    { id: 'work',   label: 'Work',   h: 255 },
+    { id: 'love',   label: 'Love',   h: 15 },
+    { id: 'family', label: 'Family', h: 60 },
+    { id: 'health', label: 'Health', h: 150 },
+    { id: 'mind',   label: 'Mind',   h: 295 },
+    { id: 'music',  label: 'Music',  h: 340 },
+    { id: 'travel', label: 'Travel', h: 200 },
+    { id: 'home',   label: 'Home',   h: 90 },
+    { id: 'money',  label: 'Money',  h: 40 },
+  ];
+  const CAT_LIMIT = 24;
+  // Hues a new category can be inked in, spread around the oklch wheel.
+  const HUE_CHOICES = [15, 40, 60, 90, 120, 150, 180, 200, 230, 255, 285, 310, 340];
+
+  let categories = DEFAULT_CATEGORIES.map((c) => ({ ...c }));
+
+  const catSlug = (s) =>
+    String(s).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24);
+  const catById = (id) => categories.find((c) => c.id === id);
+  const catColor = (id) => {
+    const c = catById(id);
+    return c ? `oklch(var(--cat-l) var(--cat-c) ${c.h})` : 'var(--ink-soft)';
+  };
+  const catLabel = (id) => (catById(id) || { label: '' }).label;
+
+  function sanitizeCategories(raw) {
+    if (!Array.isArray(raw)) return null;
+    const seen = new Set();
+    const out = [];
+    for (const c of raw) {
+      if (!c || typeof c !== 'object') continue;
+      const id = typeof c.id === 'string' ? catSlug(c.id) : '';
+      const label = typeof c.label === 'string' && c.label.trim() ? c.label.trim().slice(0, 24) : '';
+      const h = Number.isFinite(c.h) ? ((Math.round(c.h) % 360) + 360) % 360 : null;
+      if (!id || !label || h === null || seen.has(id)) continue;
+      seen.add(id);
+      out.push({ id, label, h });
+      if (out.length >= CAT_LIMIT) break;
+    }
+    return out.length ? out : null;
+  }
+
+  const typeVal = (t) => (TYPES.includes(t) ? t : 'question');
+  // Validate against the live registry by default; imports pass the file's own
+  // registry so custom categories survive the round trip.
+  const catVal = (c, reg = categories) => (reg.some((x) => x.id === c) ? c : '');
 
   // Importance & urgency are each High, Low, or unset ('') — a question needs
   // both to be placed on the Eisenhower matrix.
   const iuVal = (v) => (v === 'high' || v === 'low' ? v : '');
+
+  // Effort ("how much work is this?") and control ("can I even act on it?")
+  // always hold a value: the scale's midpoint stands in until a person — or,
+  // one day, the brain — judges it. The *Src fields record who set the value
+  // (default | user | ai) so an estimator never overwrites a human's call.
+  const effortVal = (v) => (v === 'low' || v === 'high' ? v : 'medium');
+  const controlVal = (v) => (v === 'act' || v === 'none' ? v : 'influence');
+  const srcVal = (v) => (v === 'user' || v === 'ai' ? v : 'default');
+  const EFFORT_LABEL = { low: 'Low', medium: 'Medium', high: 'High' };
+  const CONTROL_LABEL = { act: 'I can act', influence: 'I can influence', none: 'Out of my hands' };
 
   // --------------------------------------------------------------------------
   // State & persistence
@@ -30,14 +101,19 @@
 
   function seedCards() {
     const now = Date.now();
-    const mk = (title, columnId, priority, tags, importance = '', urgency = '', notes = '') =>
-      ({ id: uid(), columnId, title, notes, priority, importance, urgency, tags, createdAt: now, updatedAt: now });
-    // Seeds span all four matrix quadrants so the Matrix view has something to show.
+    const mk = (title, columnId, type, category, tags, importance = '', urgency = '', notes = '') =>
+      ({ id: uid(), columnId, title, notes, type, category, importance, urgency,
+         effort: 'medium', control: 'influence', effortSrc: 'default', controlSrc: 'default',
+         tags, createdAt: now, updatedAt: now });
+    // Seeds span categories, types and all four matrix quadrants, so every view
+    // has something to show on a fresh board.
     return [
-      mk('What should we build next quarter?', 'inbox', 'high', ['planning', 'product'], 'high', 'low'),
-      mk('How do we make our weekly reviews shorter?', 'inbox', 'medium', ['process'], 'low', 'low'),
-      mk('Which tool should we adopt for shared notes?', 'to-research', 'medium', ['tools', 'planning'], 'low', 'high'),
-      mk('How much runway do we have at the current burn rate?', 'to-research', 'low', ['finance'], 'high', 'high'),
+      mk('What should I build next quarter?', 'inbox', 'question', 'work', ['planning'], 'high', 'low'),
+      mk('How do we keep weekday evenings free together?', 'inbox', 'problem', 'love', ['us'], 'high', 'high'),
+      mk('Which Stoic should I read after Meditations?', 'inbox', 'question', 'mind', ['reading'], 'low', 'low'),
+      mk('Plan a long weekend in the mountains', 'in-progress', 'plan', 'travel', ['autumn'], 'low', 'high'),
+      mk('Learn the intro to “Blackbird”', 'in-progress', 'plan', 'music', ['guitar']),
+      mk('Book the dentist check-up', 'answered', 'task', 'health', [], '', '', 'Done — appointment on the 12th.'),
     ].map((c, i) => ({ ...c, num: i + 1 }));
   }
 
@@ -53,16 +129,21 @@
 
   const qLabel = (card) => 'Q-' + String(card.num).padStart(3, '0');
 
-  function sanitizeCard(raw) {
+  function sanitizeCard(raw, reg = categories) {
     if (!raw || typeof raw !== 'object' || typeof raw.title !== 'string' || !raw.title.trim()) return null;
     return {
       id: typeof raw.id === 'string' && raw.id ? raw.id : uid(),
       columnId: COLUMNS.some((c) => c.id === raw.columnId) ? raw.columnId : 'inbox',
       title: raw.title.trim(),
       notes: typeof raw.notes === 'string' ? raw.notes : '',
-      priority: PRIORITIES.includes(raw.priority) ? raw.priority : 'medium',
+      type: typeVal(raw.type),
+      category: catVal(raw.category, reg),
       importance: iuVal(raw.importance),
       urgency: iuVal(raw.urgency),
+      effort: effortVal(raw.effort),
+      control: controlVal(raw.control),
+      effortSrc: srcVal(raw.effortSrc),
+      controlSrc: srcVal(raw.controlSrc),
       num: Number.isInteger(raw.num) && raw.num > 0 ? raw.num : 0,
       tags: Array.isArray(raw.tags) ? raw.tags.map((t) => String(t).trim().toLowerCase()).filter(Boolean) : [],
       createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : Date.now(),
@@ -73,10 +154,14 @@
   function parseState(json) {
     const data = JSON.parse(json);
     if (!data || data.version !== 1 || !Array.isArray(data.cards)) throw new Error('Unrecognized data format');
+    // Files/saves that predate custom categories have no registry — cats stays
+    // null and the caller keeps whatever registry it already has.
+    const cats = sanitizeCategories(data.categories);
     return {
       version: 1,
       columns: COLUMNS,
-      cards: ensureNums(data.cards.map(sanitizeCard).filter(Boolean)),
+      categories: cats,
+      cards: ensureNums(data.cards.map((c) => sanitizeCard(c, cats || categories)).filter(Boolean)),
     };
   }
 
@@ -87,6 +172,7 @@
       const json = localStorage.getItem(STORAGE_KEY);
       if (json) {
         const saved = parseState(json);
+        if (saved.categories) categories = saved.categories;
         loadedFromStorage = true;
         return saved;
       }
@@ -97,13 +183,13 @@
   }
 
   let state = loadState();
-  const filters = { search: '', priority: '', tags: new Set() };
+  const filters = { search: '', type: '', category: '', tags: new Set() };
   let focusCardId = null; // restore focus after re-render (keyboard moves)
   let draggedId = null;
   let dealCards = true; // deal-in animation runs on first render only
 
-  const VIEWS = ['board', 'backlog', 'overview', 'matrix', 'assistant'];
-  const VIEW_LABELS = { board: 'Board', backlog: 'Backlog', overview: 'Overview', matrix: 'Matrix', assistant: 'Assistant' };
+  const VIEWS = ['board', 'backlog', 'overview', 'matrix', 'areas', 'review', 'assistant'];
+  const VIEW_LABELS = { board: 'Board', backlog: 'Backlog', overview: 'Overview', matrix: 'Matrix', areas: 'Areas', review: 'Review', assistant: 'Assistant' };
   let view = 'board';
   try {
     const v = localStorage.getItem(VIEW_KEY);
@@ -144,7 +230,7 @@
 
   function saveState() {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...state, categories }));
     } catch (err) {
       console.warn('Could not save board.', err);
     }
@@ -165,7 +251,9 @@
 
   // Order-sensitive fingerprint, to skip redundant work when nothing changed.
   const boardFingerprint = (cards) =>
-    cards.map((c) => [c.id, c.columnId, c.title, c.notes, c.priority, c.importance || '', c.urgency || '', c.num, (c.tags || []).join('|')].join('␟')).join('␞');
+    cards.map((c) => [c.id, c.columnId, c.title, c.notes, c.type, c.category || '', c.importance || '', c.urgency || '',
+      c.effort || '', c.control || '', c.effortSrc || '', c.controlSrc || '',
+      c.num, (c.tags || []).join('|')].join('␟')).join('␞');
 
   function pushToServer() {
     if (!serverAvailable) return;
@@ -175,7 +263,7 @@
         const res = await fetch(API, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ version: 1, cards: state.cards }),
+          body: JSON.stringify({ version: 1, cards: state.cards, categories }),
         });
         if (!res.ok) throw new Error('HTTP ' + res.status);
         if (serverOffline) { serverOffline = false; announce('Reconnected — changes saved to the server'); }
@@ -200,6 +288,7 @@
     }
     if (!board || !Array.isArray(board.cards)) return;
     serverAvailable = true;
+    const serverCats = sanitizeCategories(board.categories);
 
     // A browser that already has its own board wins on load — this guarantees
     // unsynced local edits are never clobbered — and we converge the server to
@@ -209,18 +298,20 @@
       return;
     }
 
+    if (serverCats) categories = serverCats; // fresh browser — the DB's registry wins
+
     if (board.cards.length === 0) {
       if (state.cards.length > 0) pushToServer(); // fresh DB — save our seed board
       return;
     }
 
-    const incoming = ensureNums(board.cards.map(sanitizeCard).filter(Boolean));
+    const incoming = ensureNums(board.cards.map((c) => sanitizeCard(c)).filter(Boolean));
     if (boardFingerprint(incoming) === boardFingerprint(state.cards)) return; // already in sync
 
     // Fresh browser, and the database has a board — adopt it as the source of truth.
     state = { version: 1, columns: COLUMNS, cards: incoming };
     saveState();
-    timeline.entries.push({ ts: Date.now(), action: `Loaded ${incoming.length} question(s) from the server`, cards: snapshot(incoming) });
+    timeline.entries.push({ ts: Date.now(), action: `Loaded ${incoming.length} card(s) from the server`, cards: snapshot(incoming) });
     if (timeline.entries.length > HISTORY_LIMIT) timeline.entries.splice(0, timeline.entries.length - HISTORY_LIMIT);
     timeline.index = timeline.entries.length - 1;
     saveTimeline();
@@ -268,7 +359,7 @@
       const res = await fetch(TRASH_API, { headers: { Accept: 'application/json' } });
       if (!res.ok) return [];
       const data = await res.json();
-      return Array.isArray(data.cards) ? data.cards.map(sanitizeCard).filter(Boolean) : [];
+      return Array.isArray(data.cards) ? data.cards.map((c) => sanitizeCard(c)).filter(Boolean) : [];
     } catch (_) {
       return [];
     }
@@ -328,7 +419,8 @@
   const columnTitle = (columnId) => COLUMNS[columnIndex(columnId)].title;
 
   function matchesFilters(card) {
-    if (filters.priority && card.priority !== filters.priority) return false;
+    if (filters.type && card.type !== filters.type) return false;
+    if (filters.category && card.category !== filters.category) return false;
     if (filters.tags.size && ![...filters.tags].every((t) => card.tags.includes(t))) return false;
     if (filters.search) {
       const haystack = (card.title + ' ' + card.notes + ' ' + card.tags.join(' ')).toLowerCase();
@@ -337,7 +429,7 @@
     return true;
   }
 
-  const filtersActive = () => Boolean(filters.search || filters.priority || filters.tags.size);
+  const filtersActive = () => Boolean(filters.search || filters.type || filters.category || filters.tags.size);
 
   function announce(message) {
     $('#live-region').textContent = message;
@@ -408,11 +500,16 @@
       board.appendChild(renderOverview());
     } else if (view === 'matrix') {
       board.appendChild(renderMatrix());
+    } else if (view === 'areas') {
+      board.appendChild(renderAreas());
+    } else if (view === 'review') {
+      board.appendChild(renderReview());
     } else if (view === 'assistant') {
       board.appendChild(renderAssistant());
     } else {
       for (const col of COLUMNS) board.appendChild(renderColumn(col));
     }
+    renderCatRail();
     renderTagBar();
     $('#undo-btn').disabled = timeline.index <= 0;
 
@@ -456,8 +553,8 @@
       const sortBtn = document.createElement('button');
       sortBtn.className = 'sort-btn';
       sortBtn.textContent = 'Sort ⇅';
-      sortBtn.title = 'Sort this column by priority';
-      sortBtn.addEventListener('click', () => sortColumnByPriority(col.id));
+      sortBtn.title = 'Group this column by type';
+      sortBtn.addEventListener('click', () => sortColumnByType(col.id));
       header.append(sortBtn);
     }
 
@@ -471,14 +568,13 @@
 
     if (visible.length === 0) {
       const emptyCopy = {
-        'inbox': 'Write down your first question above',
-        'to-research': 'File questions here when they’re worth digging into',
-        'in-progress': 'Drag a question here when you start on it',
-        'answered': 'Answered questions land here',
+        'inbox': 'Capture anything above — a question, a task, an idea',
+        'in-progress': 'Drag a card here when you start on it',
+        'answered': 'Finished and answered cards land here',
       };
       const hint = document.createElement('div');
       hint.className = 'empty-hint';
-      hint.textContent = filtersActive() ? 'No questions match' : emptyCopy[col.id];
+      hint.textContent = filtersActive() ? 'No cards match' : emptyCopy[col.id];
       cardsEl.append(hint);
     } else {
       for (const card of visible) cardsEl.append(renderCard(card));
@@ -495,24 +591,37 @@
 
     const input = document.createElement('input');
     input.type = 'text';
-    input.placeholder = 'Write down a question…';
-    input.setAttribute('aria-label', 'Add a question to the Inbox');
+    input.placeholder = 'Write down anything on your mind…';
+    input.setAttribute('aria-label', 'Add a card to the Inbox');
 
     const btn = document.createElement('button');
     btn.type = 'submit';
     btn.textContent = '+';
-    btn.setAttribute('aria-label', 'Add question');
+    btn.setAttribute('aria-label', 'Add card');
 
     form.append(input, btn);
     form.addEventListener('submit', (e) => {
       e.preventDefault();
       const title = input.value.trim();
-      if (!title) return;
+      if (!title) { input.focus(); return; } // nothing to add — put the cursor back
       const now = Date.now();
-      const card = { id: uid(), columnId: 'inbox', title, notes: '', priority: 'medium', importance: '', urgency: '', num: nextNum(), tags: [], createdAt: now, updatedAt: now };
+      // A capture inherits the drawer it was written in: with a category tab or
+      // type filter active, the new card belongs there — and stays visible.
+      const card = { id: uid(), columnId: 'inbox', title, notes: '',
+        type: filters.type || 'question', category: filters.category,
+        importance: '', urgency: '',
+        effort: 'medium', control: 'influence', effortSrc: 'default', controlSrc: 'default',
+        num: nextNum(), tags: [], createdAt: now, updatedAt: now };
       // New captures go to the top of the Inbox
       const firstInbox = state.cards.findIndex((c) => c.columnId === 'inbox');
       state.cards.splice(firstInbox === -1 ? state.cards.length : firstInbox, 0, card);
+      // A search or tag filter could still hide the fresh card — clear those so
+      // the capture never vanishes silently.
+      if (!matchesFilters(card)) {
+        filters.search = '';
+        filters.tags.clear();
+        $('#search').value = '';
+      }
       commit(`Added ${qLabel(card)} “${short(title)}”`);
       announce(`Added “${title}” to Inbox`);
       const fresh = $('#board .quick-add input');
@@ -521,13 +630,28 @@
     return form;
   }
 
+  // Rubber-stamp badge for a card's type — always neutral ink.
+  function typeBadge(card) {
+    const badge = document.createElement('span');
+    badge.className = `badge type-${card.type}`;
+    badge.textContent = `${TYPE_META[card.type].glyph} ${TYPE_META[card.type].label}`;
+    return badge;
+  }
+
+  function cardAria(card) {
+    const cat = card.category ? `, ${catLabel(card.category)}` : '';
+    return `${qLabel(card)}: ${card.title} — ${TYPE_META[card.type].label}${cat}, in ${columnTitle(card.columnId)}`;
+  }
+
   function renderCard(card) {
     const el = document.createElement('article');
     el.className = 'card';
     el.dataset.id = card.id;
     el.draggable = true;
     el.tabIndex = 0;
-    el.setAttribute('aria-label', `${qLabel(card)}: ${card.title} — ${card.priority} priority, in ${columnTitle(card.columnId)}`);
+    el.style.setProperty('--cat', catColor(card.category));
+    if (card.category) el.classList.add('categorized');
+    el.setAttribute('aria-label', cardAria(card));
 
     const top = document.createElement('div');
     top.className = 'card-top';
@@ -545,10 +669,7 @@
       top.append(dot);
     }
 
-    const badge = document.createElement('span');
-    badge.className = `badge ${card.priority}`;
-    badge.textContent = card.priority;
-    top.append(badge);
+    top.append(typeBadge(card));
 
     const title = document.createElement('p');
     title.className = 'card-title';
@@ -556,9 +677,15 @@
 
     el.append(top, title);
 
-    if (card.tags.length) {
+    if (card.category || card.tags.length) {
       const tags = document.createElement('div');
       tags.className = 'card-tags';
+      if (card.category) {
+        const cat = document.createElement('span');
+        cat.className = 'card-cat';
+        cat.textContent = catLabel(card.category);
+        tags.append(cat);
+      }
       for (const t of card.tags) {
         const chip = document.createElement('span');
         chip.className = 'card-tag';
@@ -585,6 +712,41 @@
     });
 
     return el;
+  }
+
+  // The category rail — coloured index-tabs, one per life area. "All" opens
+  // every drawer at once (the whole-life visualization); clicking a category
+  // filters the board to that drawer; ✎ Edit manages the registry itself.
+  function renderCatRail() {
+    const rail = $('#cat-rail');
+    if (filters.category && !catById(filters.category)) filters.category = '';
+    rail.hidden = false;
+    rail.innerHTML = '';
+
+    const mkTab = (id, label, color, extraClass = '') => {
+      const tab = document.createElement('button');
+      tab.className = ('cat-tab ' + extraClass).trim();
+      tab.dataset.cat = id;
+      tab.style.setProperty('--cat', color);
+      tab.setAttribute('aria-pressed', String(filters.category === id));
+      tab.textContent = label;
+      tab.addEventListener('click', () => {
+        filters.category = filters.category === id ? '' : id;
+        render();
+      });
+      return tab;
+    };
+
+    rail.append(mkTab('', 'All', 'var(--ink)', 'cat-tab-all'));
+    for (const cat of categories) rail.append(mkTab(cat.id, cat.label, catColor(cat.id)));
+
+    const edit = document.createElement('button');
+    edit.id = 'edit-cats-btn';
+    edit.className = 'cat-tab cat-tab-edit';
+    edit.title = 'Add or remove categories';
+    edit.textContent = '✎ Edit';
+    edit.addEventListener('click', openCatsDialog);
+    rail.append(edit);
   }
 
   function renderTagBar() {
@@ -634,16 +796,16 @@
 
     const count = document.createElement('span');
     count.className = 'backlog-count';
-    count.textContent = `${visible.length} ${visible.length === 1 ? 'question' : 'questions'}`;
+    count.textContent = `${visible.length} ${visible.length === 1 ? 'card' : 'cards'}`;
 
     head.append(title, count);
 
     if (visible.length > 1) {
       const sortBtn = document.createElement('button');
       sortBtn.className = 'sort-btn';
-      sortBtn.textContent = 'Sort by priority ⇅';
-      sortBtn.title = 'Sort the backlog by priority';
-      sortBtn.addEventListener('click', () => sortColumnByPriority('inbox'));
+      sortBtn.textContent = 'Sort by type ⇅';
+      sortBtn.title = 'Group the backlog by type';
+      sortBtn.addEventListener('click', () => sortColumnByType('inbox'));
       head.append(sortBtn);
     }
 
@@ -655,7 +817,7 @@
     if (visible.length === 0) {
       const hint = document.createElement('div');
       hint.className = 'empty-hint';
-      hint.textContent = filtersActive() ? 'No questions match' : 'Write down your first question above';
+      hint.textContent = filtersActive() ? 'No cards match' : 'Write down your first card above';
       list.append(hint);
     } else {
       for (const card of visible) list.append(renderBacklogRow(card));
@@ -670,15 +832,15 @@
     row.className = 'backlog-row';
     row.dataset.id = card.id;
     row.tabIndex = 0;
-    row.setAttribute('aria-label', `${qLabel(card)}: ${card.title} — ${card.priority} priority`);
+    row.style.setProperty('--cat', catColor(card.category));
+    if (card.category) row.classList.add('categorized');
+    row.setAttribute('aria-label', cardAria(card));
 
     const num = document.createElement('span');
     num.className = 'row-num';
     num.textContent = qLabel(card);
 
-    const badge = document.createElement('span');
-    badge.className = `badge ${card.priority}`;
-    badge.textContent = card.priority;
+    const badge = typeBadge(card);
 
     const main = document.createElement('div');
     main.className = 'row-main';
@@ -688,9 +850,15 @@
     title.textContent = card.title;
     main.append(title);
 
-    if (card.tags.length) {
+    if (card.category || card.tags.length) {
       const tags = document.createElement('div');
       tags.className = 'card-tags';
+      if (card.category) {
+        const cat = document.createElement('span');
+        cat.className = 'card-cat';
+        cat.textContent = catLabel(card.category);
+        tags.append(cat);
+      }
       for (const t of card.tags) {
         const chip = document.createElement('span');
         chip.className = 'card-tag';
@@ -715,22 +883,15 @@
 
   // --------------------------------------------------------------------------
   // Plotted views — shared "stamped question dots" on the engineering grid.
-  // Overview (a semantic map) and the Matrix both place questions as dots that
+  // Overview (a semantic map) and the Matrix both place cards as dots that
   // reveal an index-card tooltip on hover and open the full editor on click.
-  // Each dot is inked in its column's accent, so colour reads as lifecycle stage.
+  // Each dot is inked in its category's colour, so the map reads by life area.
   // --------------------------------------------------------------------------
-
-  const COLUMN_ACCENT = {
-    'inbox': 'var(--ink-blue)',
-    'to-research': 'var(--ink-violet)',
-    'in-progress': 'var(--ink-amber)',
-    'answered': 'var(--ink-green)',
-  };
 
   const IU_LABEL = { high: 'High', low: 'Low', '': 'not set' };
 
   function dotAriaLabel(card) {
-    let s = `${qLabel(card)}: ${card.title} — ${card.priority} priority, in ${columnTitle(card.columnId)}`;
+    let s = cardAria(card);
     if (card.importance || card.urgency) {
       s += `, importance ${IU_LABEL[iuVal(card.importance)]}, urgency ${IU_LABEL[iuVal(card.urgency)]}`;
     }
@@ -757,10 +918,7 @@
     const num = document.createElement('span');
     num.className = 'card-num';
     num.textContent = qLabel(card);
-    const badge = document.createElement('span');
-    badge.className = `badge ${card.priority}`;
-    badge.textContent = card.priority;
-    head.append(num, badge);
+    head.append(num, typeBadge(card));
 
     const title = document.createElement('p');
     title.className = 'plot-tip-title';
@@ -769,6 +927,7 @@
     const meta = document.createElement('p');
     meta.className = 'plot-tip-meta';
     meta.textContent = `in ${columnTitle(card.columnId)}`;
+    if (card.category) meta.textContent += ` · ${catLabel(card.category)}`;
     if (card.importance || card.urgency) {
       meta.textContent += ` · importance ${IU_LABEL[iuVal(card.importance)]} · urgency ${IU_LABEL[iuVal(card.urgency)]}`;
     }
@@ -821,7 +980,7 @@
     // and lets the dots flow inside their quadrant (positioned via CSS).
     if (leftPct != null) dot.style.left = `${leftPct}%`;
     if (topPct != null) dot.style.top = `${topPct}%`;
-    dot.style.setProperty('--dot', COLUMN_ACCENT[card.columnId] || 'var(--ink-blue)');
+    dot.style.setProperty('--dot', catColor(card.category));
     dot.setAttribute('aria-label', dotAriaLabel(card));
 
     const n = document.createElement('span');
@@ -840,11 +999,14 @@
   function renderPlotLegend() {
     const legend = document.createElement('div');
     legend.className = 'plot-legend';
-    for (const col of COLUMNS) {
+    const inUse = new Set(state.cards.map((c) => c.category));
+    const entries = categories.filter((c) => inUse.has(c.id)).map((c) => [c.id, c.label]);
+    if (inUse.has('')) entries.push(['', 'Uncategorized']);
+    for (const [id, label] of entries) {
       const item = document.createElement('span');
       item.className = 'plot-legend-item';
-      item.style.setProperty('--dot', COLUMN_ACCENT[col.id]);
-      item.textContent = col.title;
+      item.style.setProperty('--dot', catColor(id));
+      item.textContent = label;
       legend.append(item);
     }
     return legend;
@@ -957,13 +1119,154 @@
   const semanticCache = new Map(); // textHash -> Float32Array
   let extractorPromise = null;
 
-  function overviewStatusText() {
-    switch (semanticState) {
-      case 'ready': return 'positioned by meaning · MiniLM sentence embeddings';
-      case 'loading': return 'positioned by keyword overlap — reading the questions…';
-      case 'unavailable': return 'positioned by keyword overlap — language model offline';
-      default: return 'positioned by keyword overlap';
+  // --- Projection toggle: PCA (fast, global axes) or t-SNE (local
+  // neighbourhoods — clusters of related thoughts pull together). t-SNE is
+  // computed from the same vectors, seeded so the same cards always land in
+  // the same spots, and cached per exact set of vectors.
+  const PROJ_KEY = 'question-board:proj';
+  const PROJ_LABEL = { pca: 'PCA', tsne: 't-SNE' };
+  let projection = 'pca';
+  try { const p = localStorage.getItem(PROJ_KEY); if (Object.hasOwn(PROJ_LABEL, p)) projection = p; } catch { /* private mode */ }
+
+  function mulberry32(seed) {
+    let a = seed | 0;
+    return () => {
+      a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  let tsneRun = 0; // bumping this aborts any in-flight gradient loop
+  let tsneBusyKey = null;
+  const tsneCache = new Map(); // vector-set hash -> Map(cardId -> [x, y])
+
+  const tsneKey = (cards, useSemantic) =>
+    textHash(cards.map((c) => textHash(cardText(c))).join('|')) + (useSemantic ? ':s' : ':k');
+
+  const tsneReady = (cards, key) => {
+    const cached = tsneCache.get(key);
+    return Boolean(cached) && cards.every((c) => cached.has(c.id));
+  };
+
+  // Exact t-SNE — O(n²) per iteration is fine at personal-board sizes. Runs in
+  // chunks (yields to the browser every 40 iterations) so the tab never
+  // freezes; when it converges the dots slide over via updateOverviewPlot.
+  async function computeTsne(cards, vecs, initPts, key) {
+    if (tsneBusyKey === key) return;
+    tsneBusyKey = key;
+    const runId = ++tsneRun;
+    try {
+      const n = vecs.length;
+      const perplexity = Math.max(1, Math.min(15, Math.floor((n - 1) / 3)));
+      const D = new Float64Array(n * n);
+      for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+        const a = vecs[i], b = vecs[j];
+        let s = 0;
+        for (let k = 0; k < a.length; k++) { const d = a[k] - b[k]; s += d * d; }
+        D[i * n + j] = s; D[j * n + i] = s;
+      }
+      // Per-point gaussian bandwidth matched to the target perplexity.
+      const P = new Float64Array(n * n);
+      const logU = Math.log(perplexity);
+      const row = new Float64Array(n);
+      for (let i = 0; i < n; i++) {
+        let beta = 1, betaMin = -Infinity, betaMax = Infinity;
+        for (let t = 0; t < 50; t++) {
+          let sum = 0;
+          for (let j = 0; j < n; j++) { row[j] = j === i ? 0 : Math.exp(-D[i * n + j] * beta); sum += row[j]; }
+          if (sum <= 0) sum = 1e-12;
+          let H = 0;
+          for (let j = 0; j < n; j++) if (row[j] > 0) { const p = row[j] / sum; H -= p * Math.log(p); }
+          const diff = H - logU;
+          if (Math.abs(diff) < 1e-5) break;
+          if (diff > 0) { betaMin = beta; beta = betaMax === Infinity ? beta * 2 : (beta + betaMax) / 2; }
+          else { betaMax = beta; beta = betaMin === -Infinity ? beta / 2 : (beta + betaMin) / 2; }
+        }
+        let sum = 0;
+        for (let j = 0; j < n; j++) sum += row[j];
+        if (sum <= 0) sum = 1e-12;
+        for (let j = 0; j < n; j++) P[i * n + j] = row[j] / sum;
+      }
+      for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+        const p = Math.max((P[i * n + j] + P[j * n + i]) / (2 * n), 1e-12);
+        P[i * n + j] = p; P[j * n + i] = p;
+      }
+      // Init from the PCA layout (scaled down, seeded whisper of noise to
+      // break ties) so t-SNE refines the map instead of reshuffling it.
+      const rand = mulberry32(0x10de57a2 ^ n);
+      let spread = 0;
+      for (const [x, y] of initPts) spread = Math.max(spread, Math.abs(x), Math.abs(y));
+      const scale = spread > 0 ? 1e-2 / spread : 1e-2;
+      const Y = new Float64Array(n * 2);
+      const dY = new Float64Array(n * 2);
+      const gains = new Float64Array(n * 2).fill(1);
+      for (let i = 0; i < n; i++) {
+        Y[i * 2] = initPts[i][0] * scale + (rand() - 0.5) * 1e-4;
+        Y[i * 2 + 1] = initPts[i][1] * scale + (rand() - 0.5) * 1e-4;
+      }
+      const ITER = 350, EXAG_UNTIL = 100, ETA = 150;
+      const Qnum = new Float64Array(n * n);
+      for (let it = 0; it < ITER; it++) {
+        if (runId !== tsneRun) return; // superseded by a newer vector set
+        const exag = it < EXAG_UNTIL ? 12 : 1;
+        const momentum = it < EXAG_UNTIL ? 0.5 : 0.8;
+        let qsum = 0;
+        for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+          const dx = Y[i * 2] - Y[j * 2], dy = Y[i * 2 + 1] - Y[j * 2 + 1];
+          const q = 1 / (1 + dx * dx + dy * dy);
+          Qnum[i * n + j] = q; Qnum[j * n + i] = q; qsum += 2 * q;
+        }
+        for (let i = 0; i < n; i++) {
+          let gx = 0, gy = 0;
+          for (let j = 0; j < n; j++) {
+            if (i === j) continue;
+            const q = Qnum[i * n + j];
+            const mult = (exag * P[i * n + j] - Math.max(q / qsum, 1e-12)) * q;
+            gx += 4 * mult * (Y[i * 2] - Y[j * 2]);
+            gy += 4 * mult * (Y[i * 2 + 1] - Y[j * 2 + 1]);
+          }
+          const k = i * 2;
+          gains[k] = Math.max(0.01, (gx > 0) === (dY[k] > 0) ? gains[k] * 0.8 : gains[k] + 0.2);
+          gains[k + 1] = Math.max(0.01, (gy > 0) === (dY[k + 1] > 0) ? gains[k + 1] * 0.8 : gains[k + 1] + 0.2);
+          dY[k] = momentum * dY[k] - ETA * gains[k] * gx;
+          dY[k + 1] = momentum * dY[k + 1] - ETA * gains[k + 1] * gy;
+        }
+        let cx = 0, cy = 0;
+        for (let i = 0; i < n; i++) { Y[i * 2] += dY[i * 2]; Y[i * 2 + 1] += dY[i * 2 + 1]; cx += Y[i * 2]; cy += Y[i * 2 + 1]; }
+        cx /= n; cy /= n;
+        for (let i = 0; i < n; i++) { Y[i * 2] -= cx; Y[i * 2 + 1] -= cy; }
+        if (it % 40 === 39) await new Promise((r) => setTimeout(r, 0));
+      }
+      if (runId !== tsneRun) return;
+      const pts = new Map();
+      cards.forEach((c, i) => pts.set(c.id, [Y[i * 2], Y[i * 2 + 1]]));
+      tsneCache.set(key, pts);
+      if (tsneCache.size > 8) tsneCache.delete(tsneCache.keys().next().value);
+      updateOverviewPlot(); // dots transition to their t-SNE spots
+    } finally {
+      if (tsneBusyKey === key) tsneBusyKey = null;
     }
+  }
+
+  function projectionSuffix() {
+    if (projection !== 'tsne') return '';
+    const cards = state.cards;
+    if (cards.length <= 3) return ' · too few cards for t-SNE — PCA layout';
+    const useSemantic = semanticState === 'ready' && haveSemanticFor(cards);
+    return tsneReady(cards, tsneKey(cards, useSemantic)) ? ' · t-SNE layout' : ' · t-SNE settling…';
+  }
+
+  function overviewStatusText() {
+    let base;
+    switch (semanticState) {
+      case 'ready': base = 'positioned by meaning · MiniLM sentence embeddings'; break;
+      case 'loading': base = 'positioned by keyword overlap — reading the questions…'; break;
+      case 'unavailable': base = 'positioned by keyword overlap — language model offline'; break;
+      default: base = 'positioned by keyword overlap';
+    }
+    return base + projectionSuffix();
   }
 
   const haveSemanticFor = (cards) =>
@@ -978,7 +1281,16 @@
     const vecs = useSemantic
       ? cards.map((c) => semanticCache.get(textHash(cardText(c))))
       : cards.map((c) => localEmbed(cardText(c)));
-    return normalizePoints(cards, pca2(vecs));
+    const pcaPts = pca2(vecs);
+    if (projection === 'tsne' && cards.length > 3) { // 2-3 dots: t-SNE degenerates, PCA stands in
+      const key = tsneKey(cards, useSemantic);
+      if (tsneReady(cards, key)) {
+        const cached = tsneCache.get(key);
+        return normalizePoints(cards, cards.map((c) => cached.get(c.id)));
+      }
+      Promise.resolve().then(() => computeTsne(cards, vecs, pcaPts, key));
+    }
+    return normalizePoints(cards, pcaPts);
   }
 
   function getExtractor() {
@@ -1063,20 +1375,41 @@
     title.textContent = 'Overview';
     const caption = document.createElement('p');
     caption.className = 'plot-caption';
-    caption.textContent = 'Every question mapped by meaning — the closer two dots sit, the more alike they read.';
+    caption.textContent = 'Everything on your mind, mapped by meaning — the closer two dots sit, the more alike they read.';
     const status = document.createElement('p');
     status.className = 'plot-status';
     status.textContent = overviewStatusText();
-    head.append(title, caption, status);
+
+    const projToggle = document.createElement('div');
+    projToggle.className = 'plot-proj-toggle';
+    projToggle.setAttribute('role', 'group');
+    projToggle.setAttribute('aria-label', 'Map projection');
+    for (const p of Object.keys(PROJ_LABEL)) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.dataset.proj = p;
+      b.textContent = PROJ_LABEL[p];
+      b.setAttribute('aria-pressed', String(projection === p));
+      b.addEventListener('click', () => {
+        if (projection === p) return;
+        projection = p;
+        try { localStorage.setItem(PROJ_KEY, p); } catch { /* private mode */ }
+        render();
+        announce(`Overview projection: ${PROJ_LABEL[p]}`);
+      });
+      projToggle.append(b);
+    }
+    head.append(title, caption, status, projToggle);
     sheet.append(head, renderPlotLegend());
 
     const field = document.createElement('div');
     field.className = 'plot-field';
-    field.append(buildCrosshair('PC-1', 'PC-2'));
+    const tsneAxes = projection === 'tsne' && state.cards.length > 3;
+    field.append(tsneAxes ? buildCrosshair('t-SNE-1', 't-SNE-2') : buildCrosshair('PC-1', 'PC-2'));
 
     const all = state.cards;
     if (all.length === 0) {
-      field.append(plotEmptyHint('Add a question and it will appear on the map'));
+      field.append(plotEmptyHint('Add a card and it will appear on the map'));
       sheet.append(field);
       return sheet;
     }
@@ -1087,7 +1420,7 @@
       const c = coords.get(card.id);
       if (c) field.append(renderPlotDot(card, c.x * 100, c.y * 100));
     }
-    if (visible.length === 0) field.append(plotEmptyHint('No questions match'));
+    if (visible.length === 0) field.append(plotEmptyHint('No cards match'));
 
     sheet.append(field);
     // Run after this sheet is attached to #board so status/position updates land.
@@ -1096,17 +1429,99 @@
   }
 
   // --------------------------------------------------------------------------
-  // Matrix view — the Eisenhower matrix: importance × urgency. A question is
-  // placed only once both are set; its dot flows into the matching quadrant.
+  // Matrix view — four lenses on the same cards. Importance is always the
+  // vertical axis; the picker swaps what it is crossed with: urgency
+  // (Eisenhower), effort (Leverage), control (Serenity) or age since last
+  // touch (Follow-through). One quadrant grid serves them all.
   // --------------------------------------------------------------------------
 
-  // Ordered so colour tracks how pressing the recommended action is.
-  const QUADRANTS = [
-    { imp: 'high', urg: 'low', verb: 'Schedule', sub: 'important · not urgent', accent: 'var(--ink-blue)' },
-    { imp: 'high', urg: 'high', verb: 'Answer now', sub: 'important · urgent', accent: 'var(--high)' },
-    { imp: 'low', urg: 'low', verb: 'Drop', sub: 'not important · not urgent', accent: 'var(--ink-soft)' },
-    { imp: 'low', urg: 'high', verb: 'Delegate', sub: 'not important · urgent', accent: 'var(--ink-amber)' },
-  ];
+  const DAY = 86400000;
+  const ageBucket = (card) => {
+    const age = Date.now() - (card.updatedAt || card.createdAt || Date.now());
+    return age < 14 * DAY ? 'fresh' : age < 45 * DAY ? 'aging' : 'stale';
+  };
+
+  // Urgent sits on the LEFT (the classic Eisenhower orientation): the eye
+  // lands on "Answer now" first. Cell keys are `${importance}|${column}`.
+  const MATRICES = {
+    eisenhower: {
+      label: 'Eisenhower',
+      caption: 'The Eisenhower matrix — importance against urgency, urgent on the left. Set both on a card to place it here.',
+      axisX: '← URGENCY',
+      cols: ['high', 'low'],
+      colOf: (c) => c.urgency,
+      placed: (c) => Boolean(c.importance && c.urgency),
+      pending: (cards) => cards.filter((c) => !(c.importance && c.urgency)).length,
+      awaiting: 'importance & urgency',
+      cells: {
+        'high|high': { verb: 'Answer now', sub: 'important · urgent', accent: 'var(--high)' },
+        'high|low':  { verb: 'Schedule', sub: 'important · not urgent', accent: 'var(--ink-blue)' },
+        'low|high':  { verb: 'Delegate', sub: 'not important · urgent', accent: 'var(--ink-amber)' },
+        'low|low':   { verb: 'Drop', sub: 'not important · not urgent', accent: 'var(--ink-soft)' },
+      },
+    },
+    leverage: {
+      label: 'Leverage',
+      caption: 'Importance against effort — where a little work moves a lot, and which chores quietly eat a week.',
+      axisX: 'EFFORT →',
+      cols: ['low', 'medium', 'high'],
+      colOf: (c) => effortVal(c.effort),
+      placed: (c) => Boolean(c.importance),
+      pending: (cards) => cards.filter((c) => !c.importance).length,
+      awaiting: 'importance',
+      cells: {
+        'high|low':    { verb: 'Quick win', sub: 'important · low effort', accent: 'var(--high)' },
+        'high|medium': { verb: 'Solid bet', sub: 'important · medium effort', accent: 'var(--ink-blue)' },
+        'high|high':   { verb: 'Big bet', sub: 'important · high effort', accent: 'var(--ink-amber)' },
+        'low|low':     { verb: 'Fill-in', sub: 'minor · low effort', accent: 'var(--ink-soft)' },
+        'low|medium':  { verb: 'Meh', sub: 'minor · medium effort', accent: 'var(--ink-soft)' },
+        'low|high':    { verb: 'Time sink', sub: 'minor · high effort', accent: 'var(--ink-amber)' },
+      },
+    },
+    serenity: {
+      label: 'Serenity',
+      caption: 'Importance against control — what deserves action, and what you are allowed to put down.',
+      axisX: 'CONTROL →',
+      cols: ['act', 'influence', 'none'],
+      colOf: (c) => controlVal(c.control),
+      placed: (c) => Boolean(c.importance),
+      pending: (cards) => cards.filter((c) => !c.importance).length,
+      awaiting: 'importance',
+      cells: {
+        'high|act':       { verb: 'Act now', sub: 'important · in your hands', accent: 'var(--high)' },
+        'high|influence': { verb: 'Nudge', sub: 'important · can influence', accent: 'var(--ink-blue)' },
+        'high|none':      { verb: 'Accept & plan', sub: 'important · out of your hands', accent: 'var(--ink-amber)' },
+        'low|act':        { verb: 'Easy win', sub: 'minor · in your hands', accent: 'var(--ink-blue)' },
+        'low|influence':  { verb: 'Mention it', sub: 'minor · can influence', accent: 'var(--ink-soft)' },
+        'low|none':       { verb: 'Let go', sub: 'minor · out of your hands', accent: 'var(--ink-soft)' },
+      },
+    },
+    followthrough: {
+      label: 'Follow-through',
+      caption: 'Importance against time since a card was last touched. Answered cards rest; everything else ages.',
+      axisX: 'AGE →',
+      cols: ['fresh', 'aging', 'stale'],
+      colOf: ageBucket,
+      placed: (c) => Boolean(c.importance) && c.columnId !== 'answered',
+      pending: (cards) => cards.filter((c) => c.columnId !== 'answered' && !c.importance).length,
+      awaiting: 'importance',
+      cells: {
+        'high|fresh': { verb: 'On it', sub: 'important · touched < 2 weeks', accent: 'var(--ink-blue)' },
+        'high|aging': { verb: 'Watch', sub: 'important · 2–6 weeks old', accent: 'var(--ink-amber)' },
+        'high|stale': { verb: 'Rescue', sub: 'important · > 6 weeks untouched', accent: 'var(--high)' },
+        'low|fresh':  { verb: 'Fine', sub: 'minor · recently touched', accent: 'var(--ink-soft)' },
+        'low|aging':  { verb: 'Fine', sub: 'minor · 2–6 weeks old', accent: 'var(--ink-soft)' },
+        'low|stale':  { verb: 'Let go?', sub: 'minor · > 6 weeks untouched', accent: 'var(--ink-amber)' },
+      },
+    },
+  };
+
+  const MATRIX_KEY = 'question-board:matrix';
+  let matrixLens = 'eisenhower';
+  try {
+    const m = localStorage.getItem(MATRIX_KEY);
+    if (Object.hasOwn(MATRICES, m)) matrixLens = m;
+  } catch (_) { /* private mode */ }
 
   function matrixAxis(className, text) {
     const el = document.createElement('span');
@@ -1116,6 +1531,7 @@
   }
 
   function renderMatrix() {
+    const lens = MATRICES[matrixLens];
     const sheet = document.createElement('div');
     sheet.className = 'plot-sheet matrix-plate';
 
@@ -1124,55 +1540,748 @@
     const title = document.createElement('h2');
     title.className = 'plot-title';
     title.textContent = 'Matrix';
+
+    const pick = document.createElement('div');
+    pick.className = 'matrix-switch';
+    pick.setAttribute('role', 'group');
+    pick.setAttribute('aria-label', 'Choose a matrix');
+    for (const [id, m] of Object.entries(MATRICES)) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.dataset.matrix = id;
+      b.textContent = m.label;
+      b.setAttribute('aria-pressed', String(id === matrixLens));
+      b.addEventListener('click', () => {
+        if (matrixLens === id) return;
+        matrixLens = id;
+        try { localStorage.setItem(MATRIX_KEY, id); } catch (_) { /* private mode */ }
+        render();
+        announce(`${m.label} matrix`);
+      });
+      pick.append(b);
+    }
+
     const caption = document.createElement('p');
     caption.className = 'plot-caption';
-    caption.textContent = 'The Eisenhower matrix — importance against urgency. Set both on a question to place it here.';
+    caption.textContent = lens.caption;
     const status = document.createElement('p');
     status.className = 'plot-status';
-    const placed = state.cards.filter((c) => c.importance && c.urgency && matchesFilters(c));
-    const awaiting = state.cards.filter((c) => !(c.importance && c.urgency)).length;
+    const placed = state.cards.filter((c) => lens.placed(c) && matchesFilters(c));
+    const awaiting = lens.pending(state.cards);
     status.textContent = `${placed.length} placed`
-      + (awaiting ? ` · ${awaiting} awaiting importance & urgency` : '');
-    head.append(title, caption, status);
+      + (awaiting ? ` · ${awaiting} awaiting ${lens.awaiting}` : '');
+    head.append(title, pick, caption, status);
     sheet.append(head, renderPlotLegend());
 
     const grid = document.createElement('div');
     grid.className = 'matrix-grid';
-    grid.append(matrixAxis('matrix-axis-imp', 'IMPORTANCE ↑'), matrixAxis('matrix-axis-urg', 'URGENCY →'));
+    grid.style.gridTemplateColumns = `24px repeat(${lens.cols.length}, 1fr)`;
+    grid.append(matrixAxis('matrix-axis-imp', 'IMPORTANCE ↑'));
+    const axisX = matrixAxis('matrix-axis-urg', lens.axisX);
+    axisX.style.gridColumn = `2 / span ${lens.cols.length}`;
+    axisX.style.gridRow = '3';
+    grid.append(axisX);
 
-    for (const q of QUADRANTS) {
-      const cell = document.createElement('section');
-      cell.className = 'matrix-quad';
-      cell.dataset.imp = q.imp;
-      cell.dataset.urg = q.urg;
-      cell.style.setProperty('--quad', q.accent);
-      cell.setAttribute('aria-label', `${q.verb} — ${q.sub}`);
+    for (const imp of ['high', 'low']) {
+      lens.cols.forEach((col, x) => {
+        const q = lens.cells[`${imp}|${col}`];
+        const cell = document.createElement('section');
+        cell.className = 'matrix-quad';
+        cell.dataset.imp = imp;
+        cell.dataset.x = col;
+        if (matrixLens === 'eisenhower') cell.dataset.urg = col; // test-stable selector
+        cell.style.gridColumn = String(2 + x);
+        cell.style.gridRow = imp === 'high' ? '1' : '2';
+        cell.style.setProperty('--quad', q.accent);
+        cell.setAttribute('aria-label', `${q.verb} — ${q.sub}`);
 
-      const qhead = document.createElement('div');
-      qhead.className = 'matrix-quad-head';
-      const verb = document.createElement('span');
-      verb.className = 'matrix-quad-verb';
-      verb.textContent = q.verb;
-      const sub = document.createElement('span');
-      sub.className = 'matrix-quad-sub';
-      sub.textContent = q.sub;
-      qhead.append(verb, sub);
+        const qhead = document.createElement('div');
+        qhead.className = 'matrix-quad-head';
+        const verb = document.createElement('span');
+        verb.className = 'matrix-quad-verb';
+        verb.textContent = q.verb;
+        const sub = document.createElement('span');
+        sub.className = 'matrix-quad-sub';
+        sub.textContent = q.sub;
+        qhead.append(verb, sub);
 
-      const cards = placed.filter((c) => c.importance === q.imp && c.urgency === q.urg);
-      const count = document.createElement('span');
-      count.className = 'matrix-quad-count';
-      count.textContent = cards.length;
-      qhead.append(count);
-      cell.append(qhead);
+        const cards = placed.filter((c) => c.importance === imp && lens.colOf(c) === col);
+        const count = document.createElement('span');
+        count.className = 'matrix-quad-count';
+        count.textContent = cards.length;
+        qhead.append(count);
+        cell.append(qhead);
 
-      const dots = document.createElement('div');
-      dots.className = 'matrix-quad-dots';
-      for (const card of cards) dots.append(renderPlotDot(card));
-      cell.append(dots);
-      grid.append(cell);
+        const dots = document.createElement('div');
+        dots.className = 'matrix-quad-dots';
+        for (const card of cards) dots.append(renderPlotDot(card));
+        cell.append(dots);
+        grid.append(cell);
+      });
     }
 
     sheet.append(grid);
+    return sheet;
+  }
+
+  // --------------------------------------------------------------------------
+  // Areas view — one small-multiples tile per life area plus an attention
+  // wheel, answering "which part of my life is starved?" at a glance. A tile
+  // click focuses the area: the category filter follows and a category-aware
+  // detail panel (cooling-off, learning, serenity, staleness) opens below.
+  // --------------------------------------------------------------------------
+
+  const SVGNS = 'http://www.w3.org/2000/svg';
+  const WEEK = 7 * DAY;
+  const isOpen = (c) => c.columnId !== 'answered';
+
+  function humanAge(ms) {
+    const d = Math.floor(ms / DAY);
+    if (d < 1) return 'today';
+    if (d < 14) return `${d} day${d === 1 ? '' : 's'}`;
+    if (d < 61) return `${Math.round(d / 7)} weeks`;
+    if (d < 365) return `${Math.round(d / 30.4)} months`;
+    return `${+(d / 365).toFixed(1)} years`;
+  }
+
+  function areaStats(catId) {
+    const cards = state.cards.filter((c) => c.category === catId);
+    const open = cards.filter(isOpen);
+    const oldest = open.reduce((m, c) => Math.min(m, c.createdAt), Infinity);
+    const top = open.slice().sort((a, b) =>
+      (b.importance === 'high') - (a.importance === 'high') || a.createdAt - b.createdAt)[0];
+    return { cards, open, oldestAge: open.length ? Date.now() - oldest : 0, top };
+  }
+
+  // Attention wheel — spoke length is open-question mass (high importance
+  // counts double). Purely derived from the board: no scoring ritual to keep up.
+  function renderWheel(cats) {
+    const SIZE = 260, CX = SIZE / 2, CY = SIZE / 2, R = 88;
+    const svg = document.createElementNS(SVGNS, 'svg');
+    svg.setAttribute('class', 'wheel');
+    svg.setAttribute('viewBox', `0 0 ${SIZE} ${SIZE}`);
+    svg.setAttribute('width', SIZE);
+    svg.setAttribute('height', SIZE);
+    svg.setAttribute('role', 'img');
+    svg.setAttribute('aria-label', 'Attention wheel — open questions per life area');
+
+    for (const f of [0.5, 1]) {
+      const ring = document.createElementNS(SVGNS, 'circle');
+      ring.setAttribute('cx', CX); ring.setAttribute('cy', CY); ring.setAttribute('r', R * f);
+      ring.setAttribute('class', 'wheel-ring');
+      svg.append(ring);
+    }
+
+    const masses = cats.map(({ stats }) =>
+      stats.open.reduce((s, c) => s + (c.importance === 'high' ? 2 : 1), 0));
+    const maxMass = Math.max(1, ...masses);
+    const pts = [];
+    cats.forEach(({ cat, stats }, i) => {
+      const a = -Math.PI / 2 + (i / cats.length) * Math.PI * 2;
+      const frac = 0.1 + 0.9 * (masses[i] / maxMass);
+      const x = CX + Math.cos(a) * R * frac, y = CY + Math.sin(a) * R * frac;
+      pts.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+
+      const spoke = document.createElementNS(SVGNS, 'line');
+      spoke.setAttribute('x1', CX); spoke.setAttribute('y1', CY);
+      spoke.setAttribute('x2', CX + Math.cos(a) * R); spoke.setAttribute('y2', CY + Math.sin(a) * R);
+      spoke.setAttribute('class', 'wheel-spoke');
+      svg.append(spoke);
+
+      const dot = document.createElementNS(SVGNS, 'circle');
+      dot.setAttribute('cx', x.toFixed(1)); dot.setAttribute('cy', y.toFixed(1)); dot.setAttribute('r', 3);
+      dot.style.fill = catColor(cat.id);
+      svg.append(dot);
+
+      const lx = CX + Math.cos(a) * (R + 18), ly = CY + Math.sin(a) * (R + 18);
+      const label = document.createElementNS(SVGNS, 'text');
+      label.setAttribute('x', lx.toFixed(1)); label.setAttribute('y', ly.toFixed(1));
+      label.setAttribute('text-anchor', Math.abs(Math.cos(a)) < 0.3 ? 'middle' : Math.cos(a) > 0 ? 'start' : 'end');
+      label.setAttribute('dominant-baseline', 'middle');
+      label.style.fill = catColor(cat.id);
+      label.textContent = `${cat.label} ${stats.open.length}`;
+      svg.append(label);
+    });
+
+    if (cats.length > 1) {
+      const poly = document.createElementNS(SVGNS, 'polygon');
+      poly.setAttribute('points', pts.join(' '));
+      poly.setAttribute('class', 'wheel-shape');
+      // insert under the dots/labels so it never obscures them
+      svg.insertBefore(poly, svg.children[2]);
+    }
+    return svg;
+  }
+
+  // 12-week activity sparkline: cards created or touched per week.
+  function renderSparkline(cards) {
+    const W = 120, H = 26, BINS = 12;
+    const now = Date.now();
+    const bins = new Array(BINS).fill(0);
+    for (const c of cards) {
+      const wc = Math.floor((now - c.createdAt) / WEEK);
+      if (wc >= 0 && wc < BINS) bins[BINS - 1 - wc]++;
+      const wu = Math.floor((now - c.updatedAt) / WEEK);
+      if (wu >= 0 && wu < BINS && wu !== wc) bins[BINS - 1 - wu]++;
+    }
+    const max = Math.max(1, ...bins);
+    const svg = document.createElementNS(SVGNS, 'svg');
+    svg.setAttribute('class', 'area-spark');
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svg.setAttribute('width', W);
+    svg.setAttribute('height', H);
+    svg.setAttribute('aria-hidden', 'true');
+    const line = document.createElementNS(SVGNS, 'polyline');
+    line.setAttribute('points', bins.map((v, i) =>
+      `${(i * W / (BINS - 1)).toFixed(1)},${(H - 3 - (v / max) * (H - 6)).toFixed(1)}`).join(' '));
+    svg.append(line);
+    return svg;
+  }
+
+  function renderAreas() {
+    const sheet = document.createElement('div');
+    sheet.className = 'plot-sheet areas-sheet';
+
+    const inUse = categories
+      .map((cat) => ({ cat, stats: areaStats(cat.id) }))
+      .filter(({ stats }) => stats.cards.length > 0);
+    const openTotal = inUse.reduce((s, { stats }) => s + stats.open.length, 0);
+
+    const head = document.createElement('div');
+    head.className = 'plot-head';
+    const title = document.createElement('h2');
+    title.className = 'plot-title';
+    title.textContent = 'Areas';
+    const caption = document.createElement('p');
+    caption.className = 'plot-caption';
+    caption.textContent = 'Every life area side by side — a lopsided wheel means a starved corner. Click an area for a closer look.';
+    const status = document.createElement('p');
+    status.className = 'plot-status';
+    status.textContent = `${openTotal} open across ${inUse.length} area${inUse.length === 1 ? '' : 's'}`;
+    head.append(title, caption, status);
+    sheet.append(head);
+
+    if (inUse.length === 0) {
+      sheet.append(plotEmptyHint('Give a card a category and its life area appears here'));
+      return sheet;
+    }
+
+    const wheelWrap = document.createElement('div');
+    wheelWrap.className = 'wheel-wrap';
+    wheelWrap.append(renderWheel(inUse));
+    sheet.append(wheelWrap);
+
+    const grid = document.createElement('div');
+    grid.className = 'areas-grid';
+    for (const { cat, stats } of inUse) {
+      const tile = document.createElement('button');
+      tile.type = 'button';
+      tile.className = 'area-tile';
+      tile.dataset.cat = cat.id;
+      tile.style.setProperty('--cat', catColor(cat.id));
+      // ink-fade staleness tint: fully saturated at 6 months of carrying
+      tile.style.setProperty('--stale', Math.min(1, stats.oldestAge / (180 * DAY)).toFixed(2));
+      tile.setAttribute('aria-pressed', String(filters.category === cat.id));
+
+      const th = document.createElement('span');
+      th.className = 'area-tile-head';
+      const name = document.createElement('span');
+      name.className = 'area-tile-name';
+      name.textContent = cat.label;
+      const count = document.createElement('span');
+      count.className = 'area-tile-count';
+      count.textContent = `${stats.open.length} open`;
+      th.append(name, count);
+
+      const age = document.createElement('span');
+      age.className = 'area-tile-age';
+      age.textContent = stats.open.length
+        ? (stats.oldestAge < DAY ? 'all fresh today' : `carrying ${humanAge(stats.oldestAge)}`)
+        : 'all answered';
+
+      tile.append(th, age);
+      if (stats.top) {
+        const top = document.createElement('span');
+        top.className = 'area-tile-top';
+        top.textContent = stats.top.title;
+        tile.append(top);
+      }
+      tile.append(renderSparkline(stats.cards));
+
+      tile.addEventListener('click', () => {
+        filters.category = filters.category === cat.id ? '' : cat.id;
+        render();
+        announce(filters.category ? `${cat.label} in focus` : 'Area focus cleared');
+      });
+      grid.append(tile);
+    }
+    sheet.append(grid);
+
+    if (filters.category && inUse.some(({ cat }) => cat.id === filters.category)) {
+      sheet.append(renderAreaDetail(filters.category));
+    }
+    return sheet;
+  }
+
+  function detailPanel(heading, hint) {
+    const panel = document.createElement('section');
+    panel.className = 'area-panel';
+    const h = document.createElement('h4');
+    h.textContent = heading;
+    panel.append(h);
+    if (hint) {
+      const p = document.createElement('p');
+      p.className = 'panel-hint';
+      p.textContent = hint;
+      panel.append(p);
+    }
+    return panel;
+  }
+
+  function areaRow(card) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'area-row';
+    b.dataset.id = card.id;
+    const num = document.createElement('span');
+    num.className = 'card-num';
+    num.textContent = qLabel(card);
+    const t = document.createElement('span');
+    t.className = 'area-row-title';
+    t.textContent = card.title;
+    b.append(num, t);
+    b.addEventListener('click', () => openDialog(card.id));
+    return b;
+  }
+
+  function renderAreaDetail(catId) {
+    const wrap = document.createElement('section');
+    wrap.className = 'area-detail';
+    wrap.style.setProperty('--cat', catColor(catId));
+    const h = document.createElement('h3');
+    h.textContent = `${catLabel(catId)} — a closer look`;
+    wrap.append(h);
+
+    const cards = state.cards.filter((c) => c.category === catId);
+    const open = cards.filter(isOpen);
+
+    const purchases = open.filter((c) => c.tags.includes('purchase'));
+    if (purchases.length) wrap.append(renderCooloffPanel(catId, purchases));
+    if (catId === 'mind' && cards.some((c) => c.tags.length)) wrap.append(renderLearningPanel(cards));
+    const problems = open.filter((c) => c.type === 'problem');
+    if (problems.length) wrap.append(renderSerenityStrip(problems));
+    wrap.append(renderStalenessPanel(open));
+    return wrap;
+  }
+
+  // 30-day rule: a wanted thing waits a month; still wanted when the window
+  // matures ("decide now") is a real want, everything let go in Trash counts
+  // as money left unspent.
+  function renderCooloffPanel(catId, purchases) {
+    const panel = detailPanel('Cooling-off', 'The 30-day rule — want it just as much a month later? Then decide.');
+    panel.classList.add('area-cooloff');
+    const list = document.createElement('div');
+    list.className = 'cooloff-list';
+    for (const c of purchases.slice().sort((a, b) => a.createdAt - b.createdAt)) {
+      const row = areaRow(c);
+      row.classList.add('cooloff-row');
+      const left = 30 - Math.floor((Date.now() - c.createdAt) / DAY);
+      const days = document.createElement('span');
+      days.className = 'cooloff-days';
+      if (left > 0) days.textContent = `${left} d left`;
+      else { days.textContent = 'decide now'; days.dataset.due = 'true'; }
+      row.append(days);
+      list.append(row);
+    }
+    panel.append(list);
+
+    const resisted = document.createElement('p');
+    resisted.className = 'cooloff-resisted';
+    resisted.hidden = true;
+    panel.append(resisted);
+    fetchTrash().then((trash) => {
+      const n = trash.filter((c) => c.category === catId && c.tags.includes('purchase')).length;
+      if (n > 0) {
+        resisted.textContent = `${n} resisted — sent to Trash unbought.`;
+        resisted.hidden = false;
+      }
+    });
+    return panel;
+  }
+
+  // Learning progress — per co-tag answered-vs-open bars plus a burn-up of
+  // questions asked vs answered over time.
+  function renderLearningPanel(cards) {
+    const panel = detailPanel('Learning progress', 'Per topic: answered vs still open.');
+    panel.classList.add('area-learning');
+
+    const byTag = new Map();
+    for (const c of cards) for (const t of c.tags) {
+      const e = byTag.get(t) || { open: 0, done: 0 };
+      if (isOpen(c)) e.open++; else e.done++;
+      byTag.set(t, e);
+    }
+    const bars = document.createElement('div');
+    bars.className = 'learn-bars';
+    const ranked = [...byTag].sort((a, b) => (b[1].open + b[1].done) - (a[1].open + a[1].done));
+    for (const [tag, e] of ranked) {
+      const total = e.open + e.done;
+      const row = document.createElement('div');
+      row.className = 'learn-row';
+      const name = document.createElement('span');
+      name.className = 'learn-tag';
+      name.textContent = tag;
+      const bar = document.createElement('div');
+      bar.className = 'learn-bar';
+      const done = document.createElement('span');
+      done.className = 'learn-done';
+      done.style.width = `${(e.done / total) * 100}%`;
+      const openSeg = document.createElement('span');
+      openSeg.className = 'learn-open';
+      openSeg.style.width = `${(e.open / total) * 100}%`;
+      bar.append(done, openSeg);
+      const n = document.createElement('span');
+      n.className = 'learn-count';
+      n.textContent = `${e.done}/${total}`;
+      row.append(name, bar, n);
+      bars.append(row);
+    }
+    panel.append(bars, renderBurnup(cards));
+    return panel;
+  }
+
+  // Burn-up: cumulative asked (soft ink) vs cumulative answered (category ink).
+  function renderBurnup(cards) {
+    const W = 260, H = 60, PAD = 4;
+    const svg = document.createElementNS(SVGNS, 'svg');
+    svg.setAttribute('class', 'learn-burnup');
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svg.setAttribute('width', W);
+    svg.setAttribute('height', H);
+    svg.setAttribute('aria-hidden', 'true');
+    const t0 = Math.min(...cards.map((c) => c.createdAt));
+    const span = Math.max(1, Date.now() - t0);
+    const created = cards.map((c) => c.createdAt).sort((a, b) => a - b);
+    const answered = cards.filter((c) => !isOpen(c)).map((c) => c.updatedAt).sort((a, b) => a - b);
+    const total = created.length;
+    const lineFor = (events, cls) => {
+      const line = document.createElementNS(SVGNS, 'polyline');
+      line.setAttribute('class', cls);
+      const pts = [];
+      const STEPS = 24;
+      for (let s = 0; s <= STEPS; s++) {
+        const t = t0 + (span * s) / STEPS;
+        let n = 0;
+        while (n < events.length && events[n] <= t) n++;
+        pts.push(`${(PAD + ((W - 2 * PAD) * s) / STEPS).toFixed(1)},${(H - PAD - ((H - 2 * PAD) * n) / total).toFixed(1)}`);
+      }
+      line.setAttribute('points', pts.join(' '));
+      return line;
+    };
+    svg.append(lineFor(created, 'burnup-asked'), lineFor(answered, 'burnup-answered'));
+    return svg;
+  }
+
+  // CBT worry triage: what you can act on, what you can only nudge, and what
+  // is out of your hands — the last pile is for the weekly worry window.
+  function renderSerenityStrip(problems) {
+    const panel = detailPanel('Serenity check',
+      'Problems sorted by what you can do about them. Visit the “out of my hands” pile once, in a weekly worry window — on schedule, not on loop.');
+    panel.classList.add('serenity-strip');
+    const groups = document.createElement('div');
+    groups.className = 'serenity-groups';
+    for (const ctl of ['act', 'influence', 'none']) {
+      const group = document.createElement('div');
+      group.className = 'serenity-group';
+      group.dataset.control = ctl;
+      const gh = document.createElement('h5');
+      gh.textContent = CONTROL_LABEL[ctl];
+      group.append(gh);
+      for (const c of problems.filter((p) => controlVal(p.control) === ctl)) {
+        group.append(areaRow(c));
+      }
+      groups.append(group);
+    }
+    panel.append(groups);
+    return panel;
+  }
+
+  // Personal-CRM "last touched": the open cards this area is silently dropping.
+  function renderStalenessPanel(open) {
+    const panel = detailPanel('Last touched', 'Oldest first — what this area might be silently dropping.');
+    panel.classList.add('area-stale');
+    if (!open.length) {
+      const p = document.createElement('p');
+      p.className = 'panel-hint';
+      p.textContent = 'Nothing open here — clean desk.';
+      panel.append(p);
+      return panel;
+    }
+    const list = document.createElement('div');
+    list.className = 'stale-list';
+    for (const c of open.slice().sort((a, b) => a.updatedAt - b.updatedAt)) {
+      const row = areaRow(c);
+      row.classList.add('stale-row');
+      const age = document.createElement('span');
+      age.className = 'stale-age';
+      const ms = Date.now() - c.updatedAt;
+      age.textContent = ms < DAY ? 'today' : `${humanAge(ms)} ago`;
+      row.append(age);
+      list.append(row);
+    }
+    panel.append(list);
+    return panel;
+  }
+
+  // --------------------------------------------------------------------------
+  // Review view — GTD's weekly review as a screen: the ritual that keeps every
+  // other view trustworthy. Stat tiles, week-over-week drift per area, the
+  // neglect list, and three resurfaced old thoughts (deterministic per day, so
+  // the same ritual shows the same cards all day).
+  // --------------------------------------------------------------------------
+
+  const REVIEW_KEY = 'question-board:reviewed';
+  const RESURFACE_KEY = 'question-board:resurface';
+  let resurfacePicks = { date: '', ids: [] };
+  try {
+    const saved = JSON.parse(localStorage.getItem(RESURFACE_KEY) || 'null');
+    if (saved && typeof saved.date === 'string' && Array.isArray(saved.ids)) resurfacePicks = saved;
+  } catch (_) { /* private mode */ }
+
+  const startOfToday = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); };
+  const dateSeed = (key) => {
+    let seed = 0;
+    for (const ch of key) seed = (Math.imul(seed, 31) + ch.charCodeAt(0)) | 0;
+    return seed;
+  };
+
+  // Weighted sample of 3 open cards, biased stale × important, seeded on the
+  // date — a Readwise-style daily re-encounter. Picks are pinned for the day
+  // so acting on one ("Still matters") doesn't reshuffle the other two.
+  function resurfaceToday() {
+    const open = state.cards.filter(isOpen);
+    const d = new Date();
+    const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    // Today's picks are pinned (and stored) — acting on one, or even trashing
+    // it, never reshuffles the others until tomorrow.
+    if (resurfacePicks.date === dateKey && resurfacePicks.ids.length) {
+      return resurfacePicks.ids.map((id) => open.find((c) => c.id === id)).filter(Boolean);
+    }
+    const rand = mulberry32(dateSeed(dateKey));
+    const pool = open.map((c) => ({
+      c,
+      w: Math.max(1, (Date.now() - c.updatedAt) / DAY) * (c.importance === 'high' ? 3 : 1),
+    }));
+    const picks = [];
+    while (picks.length < 3 && pool.length) {
+      let r = rand() * pool.reduce((s, e) => s + e.w, 0);
+      let idx = 0;
+      for (; idx < pool.length - 1; idx++) { r -= pool[idx].w; if (r <= 0) break; }
+      picks.push(pool[idx].c);
+      pool.splice(idx, 1);
+    }
+    resurfacePicks = { date: dateKey, ids: picks.map((c) => c.id) };
+    try { localStorage.setItem(RESURFACE_KEY, JSON.stringify(resurfacePicks)); } catch (_) { /* private mode */ }
+    return picks;
+  }
+
+  function renderResurfaceCard(card) {
+    const el = document.createElement('div');
+    el.className = 'resurface-card';
+    el.dataset.id = card.id;
+    el.style.setProperty('--cat', catColor(card.category));
+    const keptToday = card.updatedAt >= startOfToday();
+    if (keptToday) el.dataset.kept = 'true';
+
+    const head = document.createElement('div');
+    head.className = 'resurface-head';
+    const num = document.createElement('span');
+    num.className = 'card-num';
+    num.textContent = qLabel(card);
+    head.append(num, typeBadge(card));
+    const age = document.createElement('span');
+    age.className = 'resurface-age';
+    const ms = Date.now() - card.updatedAt;
+    age.textContent = ms < DAY ? 'touched today' : `${humanAge(ms)} untouched`;
+    head.append(age);
+
+    const title = document.createElement('p');
+    title.className = 'resurface-title';
+    title.textContent = card.title;
+
+    const actions = document.createElement('div');
+    actions.className = 'resurface-actions';
+    const keep = document.createElement('button');
+    keep.type = 'button';
+    keep.className = 'btn ghost';
+    if (keptToday) { keep.textContent = '✓ kept'; keep.disabled = true; }
+    else {
+      keep.textContent = 'Still matters';
+      keep.addEventListener('click', () => {
+        const c = getCard(card.id);
+        if (!c) return;
+        c.updatedAt = Date.now();
+        commit(`Reviewed ${qLabel(c)} — still matters`);
+        announce(`Kept “${c.title}” — freshness stamped`);
+      });
+    }
+    const openBtn = document.createElement('button');
+    openBtn.type = 'button';
+    openBtn.className = 'btn ghost';
+    openBtn.textContent = 'Open';
+    openBtn.addEventListener('click', () => openDialog(card.id));
+    const trash = document.createElement('button');
+    trash.type = 'button';
+    trash.className = 'btn ghost';
+    trash.textContent = 'To Trash';
+    trash.addEventListener('click', () => deleteCard(card.id)); // existing soft-delete path — durability promise intact
+    actions.append(keep, openBtn, trash);
+
+    el.append(head, title, actions);
+    return el;
+  }
+
+  function renderReview() {
+    const sheet = document.createElement('div');
+    sheet.className = 'plot-sheet review-sheet';
+    const now = Date.now();
+    const open = state.cards.filter(isOpen);
+    const wk1 = now - 7 * DAY, wk2 = now - 14 * DAY;
+    const answeredIn = (from, to) => state.cards.filter((c) => !isOpen(c) && c.updatedAt >= from && c.updatedAt < to);
+    const createdIn = (from, to) => state.cards.filter((c) => c.createdAt >= from && c.createdAt < to);
+
+    let lastReviewedAt = 0;
+    try { lastReviewedAt = Number(localStorage.getItem(REVIEW_KEY)) || 0; } catch (_) { /* private mode */ }
+
+    const head = document.createElement('div');
+    head.className = 'plot-head';
+    const title = document.createElement('h2');
+    title.className = 'plot-title';
+    title.textContent = 'Review';
+    const caption = document.createElement('p');
+    caption.className = 'plot-caption';
+    caption.textContent = 'The weekly sweep that keeps every other view honest — clear the inbox, notice the drift, re-meet three old thoughts, stamp it done.';
+    const status = document.createElement('p');
+    status.className = 'plot-status';
+    status.textContent = lastReviewedAt
+      ? (now - lastReviewedAt < DAY ? 'last reviewed today' : `last reviewed ${humanAge(now - lastReviewedAt)} ago`)
+      : 'never stamped — make this the first review';
+    head.append(title, caption, status);
+    sheet.append(head);
+
+    const tiles = document.createElement('div');
+    tiles.className = 'review-tiles';
+    const stat = (key, value, label) => {
+      const t = document.createElement('div');
+      t.className = 'review-tile';
+      t.dataset.stat = key;
+      const n = document.createElement('span');
+      n.className = 'review-num';
+      n.textContent = String(value);
+      const l = document.createElement('span');
+      l.className = 'review-label';
+      l.textContent = label;
+      t.append(n, l);
+      return t;
+    };
+    tiles.append(
+      stat('inbox', columnCards('inbox').length, 'in the inbox'),
+      stat('answered-week', answeredIn(wk1, Infinity).length, 'answered this week'),
+      stat('new-week', createdIn(wk1, Infinity).length, 'new this week'),
+      stat('open', open.length, 'open in total'),
+    );
+    sheet.append(tiles);
+
+    // Week-over-week drift per life area.
+    const inUse = categories.filter((c) => state.cards.some((k) => k.category === c.id));
+    if (inUse.length) {
+      const deltas = detailPanel('Week over week', 'New and answered per area — this week against last.');
+      deltas.classList.add('review-deltas');
+      const arrow = (a, b) => (a > b ? '▲' : a < b ? '▼' : '·');
+      for (const cat of inUse) {
+        const of = (list) => list.filter((c) => c.category === cat.id).length;
+        const cThis = of(createdIn(wk1, Infinity)), cLast = of(createdIn(wk2, wk1));
+        const aThis = of(answeredIn(wk1, Infinity)), aLast = of(answeredIn(wk2, wk1));
+        const row = document.createElement('div');
+        row.className = 'review-delta-row';
+        row.dataset.cat = cat.id;
+        row.style.setProperty('--cat', catColor(cat.id));
+        const name = document.createElement('span');
+        name.className = 'review-delta-cat';
+        name.textContent = cat.label;
+        const newer = document.createElement('span');
+        newer.className = 'review-delta-stat';
+        newer.innerHTML = `new <b>${cThis}</b> ${arrow(cThis, cLast)}`;
+        const answered = document.createElement('span');
+        answered.className = 'review-delta-stat';
+        answered.innerHTML = `answered <b>${aThis}</b> ${arrow(aThis, aLast)}`;
+        row.append(name, newer, answered);
+        deltas.append(row);
+      }
+      sheet.append(deltas);
+    }
+
+    // Neglect list — important and untouched for a month.
+    const neglect = detailPanel('Neglected', 'High-importance cards untouched for more than 30 days.');
+    neglect.classList.add('review-neglect');
+    const neglected = open
+      .filter((c) => c.importance === 'high' && now - c.updatedAt > 30 * DAY)
+      .sort((a, b) => a.updatedAt - b.updatedAt);
+    if (neglected.length) {
+      const list = document.createElement('div');
+      list.className = 'stale-list';
+      for (const c of neglected) {
+        const row = areaRow(c);
+        row.classList.add('stale-row');
+        const age = document.createElement('span');
+        age.className = 'stale-age';
+        age.textContent = `${humanAge(now - c.updatedAt)} ago`;
+        row.append(age);
+        list.append(row);
+      }
+      neglect.append(list);
+    } else {
+      const p = document.createElement('p');
+      p.className = 'panel-hint';
+      p.textContent = 'Nothing important is gathering dust.';
+      neglect.append(p);
+    }
+    sheet.append(neglect);
+
+    // Resurfacing — three old thoughts, same three all day.
+    const resurface = detailPanel("Today's resurfacing", 'Three old thoughts, re-met on purpose. Keep, open, or let go.');
+    resurface.classList.add('review-resurface');
+    const picks = resurfaceToday();
+    if (picks.length) for (const c of picks) resurface.append(renderResurfaceCard(c));
+    else {
+      const p = document.createElement('p');
+      p.className = 'panel-hint';
+      p.textContent = 'Nothing open to resurface — the board is at rest.';
+      resurface.append(p);
+    }
+    sheet.append(resurface);
+
+    // The stamp — done is recorded on this device only, like a desk habit.
+    const stampRow = document.createElement('div');
+    stampRow.className = 'review-stamp-row';
+    const stampBtn = document.createElement('button');
+    stampBtn.type = 'button';
+    stampBtn.id = 'review-stamp';
+    stampBtn.className = 'btn primary';
+    stampBtn.textContent = 'Stamp the review done';
+    stampBtn.addEventListener('click', () => {
+      try { localStorage.setItem(REVIEW_KEY, String(Date.now())); } catch (_) { /* private mode */ }
+      render();
+      announce('Review stamped');
+    });
+    stampRow.append(stampBtn);
+    if (lastReviewedAt >= startOfToday()) {
+      const stamped = document.createElement('span');
+      stamped.className = 'review-stamped';
+      stamped.textContent = 'Reviewed';
+      stampRow.append(stamped);
+    }
+    sheet.append(stampRow);
     return sheet;
   }
 
@@ -1195,7 +2304,7 @@
     if (!assistantState.messages.length) {
       const hint = document.createElement('p');
       hint.className = 'chat-status';
-      hint.textContent = 'Ask about your questions — research one, triage the inbox, or find connections.';
+      hint.textContent = 'Ask about your board — research a question, triage the inbox, or find connections.';
       log.appendChild(hint);
     }
     for (const msg of assistantState.messages) {
@@ -1297,6 +2406,8 @@
       if (!res.ok) return;
       const data = await res.json();
       if (data && Array.isArray(data.cards)) {
+        const cats = sanitizeCategories(data.categories);
+        if (cats) categories = cats;
         state.cards = data.cards;
         saveState();
       }
@@ -1410,9 +2521,9 @@
     const card = getCard(cardId);
     if (!card) return;
     const sure = await ask({
-      title: 'Delete this question?',
+      title: 'Delete this card?',
       message: `${qLabel(card)} “${card.title}” will be moved off the board. It stays recoverable — bring it back with Undo, or from the History panel — until you delete it permanently there.`,
-      okLabel: 'Delete question',
+      okLabel: 'Delete card',
       danger: true,
     });
     if (!sure) return;
@@ -1421,11 +2532,11 @@
     announce(`Deleted “${card.title}”`);
   }
 
-  function sortColumnByPriority(columnId) {
-    const sorted = columnCards(columnId).sort((a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority]);
+  function sortColumnByType(columnId) {
+    const sorted = columnCards(columnId).sort((a, b) => TYPE_RANK[a.type] - TYPE_RANK[b.type]);
     state.cards = [...state.cards.filter((c) => c.columnId !== columnId), ...sorted];
-    commit(`Sorted ${columnTitle(columnId)} by priority`);
-    announce(`Sorted ${columnTitle(columnId)} by priority`);
+    commit(`Sorted ${columnTitle(columnId)} by type`);
+    announce(`Sorted ${columnTitle(columnId)} by type`);
   }
 
   // --------------------------------------------------------------------------
@@ -1436,16 +2547,91 @@
   const form = $('#card-form');
   let editingId = null;
 
+  // The type picker is built once (types are fixed); the category picker is
+  // rebuilt on every open, because the registry is the user's to change.
+  (() => {
+    const typeWrap = $('#type-picker-options');
+    for (const t of TYPES) {
+      const label = document.createElement('label');
+      const input = document.createElement('input');
+      input.type = 'radio';
+      input.name = 'type';
+      input.value = t;
+      const span = document.createElement('span');
+      span.className = `badge type-${t}`;
+      span.textContent = `${TYPE_META[t].glyph} ${TYPE_META[t].label}`;
+      label.append(input, span);
+      typeWrap.append(label);
+    }
+  })();
+
+  function rebuildCategoryPicker() {
+    const catWrap = $('#category-picker-options');
+    catWrap.innerHTML = '';
+    const mkCat = (value, text, color) => {
+      const label = document.createElement('label');
+      const input = document.createElement('input');
+      input.type = 'radio';
+      input.name = 'category';
+      input.value = value;
+      const span = document.createElement('span');
+      span.className = 'cat-swatch';
+      span.style.setProperty('--cat', color);
+      span.textContent = text;
+      label.append(input, span);
+      return label;
+    };
+    catWrap.append(mkCat('', 'None', 'var(--ink-soft)'));
+    for (const c of categories) catWrap.append(mkCat(c.id, c.label, catColor(c.id)));
+  }
+
+  // Decisional balance — on a card tagged "decision", notes lines beginning
+  // with + / − (or -) read back as a live two-column pro/con sheet under the
+  // notes box. Pure rendering: the notes text stays the single source.
+  function updateBalancePreview() {
+    const preview = $('#balance-preview');
+    const tags = $('#card-tags').value.split(',').map((t) => t.trim().toLowerCase());
+    const pros = [], cons = [];
+    if (tags.includes('decision')) {
+      for (const line of $('#card-notes').value.split('\n')) {
+        const t = line.trim();
+        if (t.startsWith('+')) pros.push(t.slice(1).trim());
+        else if (t.startsWith('-') || t.startsWith('−')) cons.push(t.slice(1).trim());
+      }
+    }
+    const show = pros.length > 0 || cons.length > 0;
+    preview.hidden = !show;
+    if (!show) return;
+    const fill = (colSel, items) => {
+      const ul = $(`${colSel} ul`, preview);
+      ul.innerHTML = '';
+      for (const text of items) {
+        const li = document.createElement('li');
+        li.textContent = text;
+        ul.append(li);
+      }
+    };
+    fill('.balance-pro', pros);
+    fill('.balance-con', cons);
+  }
+  $('#card-notes').addEventListener('input', updateBalancePreview);
+  $('#card-tags').addEventListener('input', updateBalancePreview);
+
   function openDialog(cardId) {
     const card = getCard(cardId);
     if (!card) return;
     editingId = cardId;
+    rebuildCategoryPicker();
     $('#card-title').value = card.title;
     $('#card-notes').value = card.notes;
     $('#card-tags').value = card.tags.join(', ');
+    updateBalancePreview();
     $('#card-importance').value = iuVal(card.importance);
     $('#card-urgency').value = iuVal(card.urgency);
-    for (const radio of form.elements.priority) radio.checked = radio.value === card.priority;
+    $('#card-effort').value = effortVal(card.effort);
+    $('#card-control').value = controlVal(card.control);
+    for (const radio of form.elements.type) radio.checked = radio.value === card.type;
+    for (const radio of form.elements.category) radio.checked = radio.value === (card.category || '');
     const fmt = (ts) => new Date(ts).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
     $('#card-meta').textContent =
       `${qLabel(card)} · in ${columnTitle(card.columnId)} · added ${fmt(card.createdAt)} · updated ${fmt(card.updatedAt)}`;
@@ -1459,9 +2645,16 @@
     if (card) {
       card.title = $('#card-title').value.trim() || card.title;
       card.notes = $('#card-notes').value;
-      card.priority = form.elements.priority.value || card.priority;
+      card.type = typeVal(form.elements.type.value);
+      card.category = catVal(form.elements.category.value);
       card.importance = iuVal($('#card-importance').value);
       card.urgency = iuVal($('#card-urgency').value);
+      // A changed effort/control is a human judgment — record the provenance so
+      // the brain's future estimator knows never to overwrite it.
+      const effort = effortVal($('#card-effort').value);
+      if (effort !== effortVal(card.effort)) { card.effort = effort; card.effortSrc = 'user'; }
+      const control = controlVal($('#card-control').value);
+      if (control !== controlVal(card.control)) { card.control = control; card.controlSrc = 'user'; }
       card.tags = $('#card-tags').value
         .split(',')
         .map((t) => t.trim().toLowerCase())
@@ -1483,7 +2676,126 @@
   dialog.addEventListener('close', () => { editingId = null; });
 
   // --------------------------------------------------------------------------
-  // Toolbar: search, priority filter, export/import, theme
+  // Categories editor — the ✎ tab on the rail. Add a life area (name + hue) or
+  // remove one; removing never touches cards, they just become uncategorized.
+  // --------------------------------------------------------------------------
+
+  const catsDialog = $('#cats-dialog');
+
+  function openCatsDialog() {
+    renderCatsList();
+    renderHuePicker();
+    $('#cat-add-name').value = '';
+    catsDialog.showModal();
+    $('#cat-add-name').focus();
+  }
+
+  function renderCatsList() {
+    const list = $('#cats-list');
+    list.innerHTML = '';
+    const counts = new Map();
+    for (const c of state.cards) if (c.category) counts.set(c.category, (counts.get(c.category) || 0) + 1);
+
+    for (const cat of categories) {
+      const row = document.createElement('div');
+      row.className = 'cats-row';
+
+      const swatch = document.createElement('span');
+      swatch.className = 'cat-swatch';
+      swatch.style.setProperty('--cat', catColor(cat.id));
+      swatch.textContent = cat.label;
+
+      const n = counts.get(cat.id) || 0;
+      const meta = document.createElement('span');
+      meta.className = 'cats-row-count';
+      meta.textContent = n ? `${n} card${n === 1 ? '' : 's'}` : 'no cards';
+
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'btn ghost cats-remove';
+      remove.textContent = 'Remove';
+      remove.setAttribute('aria-label', `Remove category ${cat.label}`);
+      remove.addEventListener('click', () => removeCategory(cat.id));
+
+      row.append(swatch, meta, remove);
+      list.append(row);
+    }
+  }
+
+  function renderHuePicker() {
+    const wrap = $('#cat-hue-options');
+    wrap.innerHTML = '';
+    const used = new Set(categories.map((c) => c.h));
+    const preferred = HUE_CHOICES.find((h) => !used.has(h)) ?? HUE_CHOICES[0];
+    for (const h of HUE_CHOICES) {
+      const label = document.createElement('label');
+      label.className = 'cat-hue';
+      const input = document.createElement('input');
+      input.type = 'radio';
+      input.name = 'cat-hue';
+      input.value = String(h);
+      input.checked = h === preferred;
+      input.setAttribute('aria-label', `Hue ${h}`);
+      const dot = document.createElement('span');
+      dot.className = 'cat-hue-dot';
+      dot.style.setProperty('--cat', `oklch(var(--cat-l) var(--cat-c) ${h})`);
+      label.append(input, dot);
+      wrap.append(label);
+    }
+  }
+
+  $('#cat-add-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const nameInput = $('#cat-add-name');
+    const label = nameInput.value.trim().slice(0, 24);
+    const id = catSlug(label);
+    if (!label || !id) { nameInput.focus(); return; }
+    if (catById(id)) {
+      ask({ title: 'Already on the rail', message: `A category called “${catLabel(id)}” already exists.`, cancelLabel: null });
+      return;
+    }
+    if (categories.length >= CAT_LIMIT) {
+      ask({ title: 'The rail is full', message: `Up to ${CAT_LIMIT} categories fit — remove one to make room.`, cancelLabel: null });
+      return;
+    }
+    const checked = $('#cat-hue-options input:checked');
+    const h = checked ? Number(checked.value) : HUE_CHOICES[0];
+    categories.push({ id, label, h });
+    commit(`Added category “${label}”`);
+    announce(`Added category “${label}”`);
+    renderCatsList();
+    renderHuePicker();
+    nameInput.value = '';
+    nameInput.focus();
+  });
+
+  async function removeCategory(id) {
+    const cat = catById(id);
+    if (!cat) return;
+    const affected = state.cards.filter((c) => c.category === id).length;
+    const sure = await ask({
+      title: `Remove “${cat.label}”?`,
+      message: affected
+        ? `${affected} card${affected === 1 ? '' : 's'} carry this label — they stay on the board and become uncategorized. You can add the category back any time.`
+        : 'No cards use it. You can add it back any time.',
+      okLabel: 'Remove category',
+      danger: true,
+    });
+    if (!sure) return;
+    categories = categories.filter((c) => c.id !== id);
+    if (filters.category === id) filters.category = '';
+    const now = Date.now();
+    for (const c of state.cards) if (c.category === id) { c.category = ''; c.updatedAt = now; }
+    commit(`Removed category “${cat.label}”`);
+    announce(`Removed category “${cat.label}”`);
+    renderCatsList();
+    renderHuePicker();
+  }
+
+  $('#close-cats').addEventListener('click', () => catsDialog.close());
+
+  // --------------------------------------------------------------------------
+  // Toolbar: search, type filter, the actions menu, theme
   // --------------------------------------------------------------------------
 
   $('#search').addEventListener('input', (e) => {
@@ -1491,13 +2803,37 @@
     render();
   });
 
-  $('#priority-filter').addEventListener('change', (e) => {
-    filters.priority = e.target.value;
+  $('#type-filter').addEventListener('change', (e) => {
+    filters.type = e.target.value;
     render();
   });
 
+  // One Menu button holds Undo / History / Export / Import. The panel closes on
+  // outside click, Escape, or after any action inside it is chosen.
+  const menuBtn = $('#menu-btn');
+  const menuPanel = $('#menu-panel');
+
+  function setMenuOpen(open) {
+    menuPanel.hidden = !open;
+    menuBtn.setAttribute('aria-expanded', String(open));
+  }
+
+  menuBtn.addEventListener('click', () => setMenuOpen(menuPanel.hidden));
+  menuPanel.addEventListener('click', (e) => {
+    if (e.target.closest('button')) setMenuOpen(false);
+  });
+  document.addEventListener('click', (e) => {
+    if (!menuPanel.hidden && !e.target.closest('.toolbar-menu')) setMenuOpen(false);
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !menuPanel.hidden) {
+      setMenuOpen(false);
+      menuBtn.focus();
+    }
+  });
+
   const exportDialog = $('#export-dialog');
-  const exportJson = () => JSON.stringify(state, null, 2);
+  const exportJson = () => JSON.stringify({ ...state, categories }, null, 2);
 
   $('#export-btn').addEventListener('click', () => {
     $('#export-json').value = exportJson();
@@ -1510,7 +2846,7 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'questions.json';
+    a.download = 'lodestar.json';
     a.rel = 'noopener';
     document.body.append(a);
     a.click();
@@ -1518,7 +2854,7 @@
     // download before the browser has started it (notably Firefox/Safari).
     setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 1000);
     exportDialog.close();
-    announce('Exported board as questions.json');
+    announce('Exported board as lodestar.json');
   });
 
   $('#copy-export').addEventListener('click', async () => {
@@ -1553,17 +2889,23 @@
   "version": 1,
   "cards": [
     {
-      "title": "The question, as plain text (required)",
-      "columnId": "inbox | to-research | in-progress | answered",
-      "priority": "high | medium | low",
+      "title": "The card's text (required)",
+      "columnId": "inbox | in-progress | answered",
+      "type": "question | problem | task | idea | plan",
+      "category": "one of your category ids — work, love, family, health, mind, music, travel, home, money by default  (optional)",
       "importance": "high | low  (optional — for the Matrix)",
       "urgency": "high | low  (optional — for the Matrix)",
+      "effort": "low | medium | high  (optional — defaults to medium)",
+      "control": "act | influence | none  (optional — defaults to influence)",
       "notes": "Optional free-form notes or the answer",
       "tags": ["optional", "lowercase", "tags"],
       "num": 12,
       "createdAt": 1721606400000,
       "updatedAt": 1721606400000
     }
+  ],
+  "categories": [
+    { "id": "work", "label": "Work", "h": 255 }
   ]
 }`;
 
@@ -1605,7 +2947,7 @@
       pendingImport = parseState(await file.text());
       const n = pendingImport.cards.length;
       $('#import-mode-copy').textContent =
-        `The file contains ${n} question${n === 1 ? '' : 's'}. Add ${n === 1 ? 'it' : 'them'} to the current board, ` +
+        `The file contains ${n} card${n === 1 ? '' : 's'}. Add ${n === 1 ? 'it' : 'them'} to the current board, ` +
         `or substitute the whole board with the file's contents?`;
       importModeDialog.showModal();
     } catch (err) {
@@ -1625,14 +2967,19 @@
 
   $('#import-add').addEventListener('click', () => {
     if (!pendingImport) return;
+    // Categories the file defines but this board doesn't yet: adopt them, so
+    // the imported cards keep their labels and colours.
+    for (const cat of pendingImport.categories || []) {
+      if (!catById(cat.id) && categories.length < CAT_LIMIT) categories.push({ ...cat });
+    }
     // Fresh ids and ledger numbers so the same file can be imported twice safely
     const added = pendingImport.cards.map((c) => ({ ...c, id: uid(), num: 0 }));
     state.cards = ensureNums([...state.cards, ...added]);
     pendingImport = null;
     importModeDialog.close();
     dealCards = true;
-    commit(`Imported ${added.length} question(s), added to the board`);
-    announce(`Added ${added.length} imported question(s) to the board`);
+    commit(`Imported ${added.length} card(s), added to the board`);
+    announce(`Added ${added.length} imported card(s) to the board`);
   });
 
   $('#import-replace').addEventListener('click', async () => {
@@ -1640,18 +2987,19 @@
     const n = pendingImport.cards.length;
     const sure = await ask({
       title: 'Are you sure?',
-      message: `This substitutes the whole board — your current ${state.cards.length} question(s) ` +
+      message: `This substitutes the whole board — your current ${state.cards.length} card(s) ` +
         `will be replaced by the ${n} from the file. You can still roll back from History.`,
       okLabel: 'Substitute board',
       danger: true,
     });
     if (!sure || !pendingImport) return;
-    state = pendingImport;
+    if (pendingImport.categories) categories = pendingImport.categories.map((c) => ({ ...c }));
+    state = { version: 1, columns: COLUMNS, cards: pendingImport.cards };
     pendingImport = null;
     importModeDialog.close();
     dealCards = true; // deal the imported cards in like a fresh sheet
-    commit(`Imported ${n} question(s), substituted the board`);
-    announce('Board substituted with the imported questions');
+    commit(`Imported ${n} card(s), substituted the board`);
+    announce('Board substituted with the imported cards');
   });
 
   // --------------------------------------------------------------------------
@@ -1697,7 +3045,7 @@
 
       const meta = document.createElement('span');
       meta.className = 'history-meta';
-      meta.textContent = `${entry.cards.length} question${entry.cards.length === 1 ? '' : 's'}`;
+      meta.textContent = `${entry.cards.length} card${entry.cards.length === 1 ? '' : 's'}`;
 
       main.append(action, meta);
       row.append(time, main);

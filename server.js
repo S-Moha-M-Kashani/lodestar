@@ -26,9 +26,49 @@ const PORT = Number(process.env.PORT) || 3000;
 const DB_PATH = process.env.BOARD_DB || join(ROOT, 'board.db');
 const AGENT_URL = process.env.AGENT_URL || 'http://127.0.0.1:8000';
 
-const COLUMN_IDS = ['inbox', 'to-research', 'in-progress', 'answered'];
-const PRIORITIES = ['high', 'medium', 'low'];
+const COLUMN_IDS = ['inbox', 'in-progress', 'answered'];
+const TYPES = ['question', 'problem', 'task', 'idea', 'plan'];
+
+// Categories are the user's own registry (id + label + oklch hue), stored in
+// their own table and editable from the app. These defaults seed an empty DB.
+const DEFAULT_CATEGORIES = [
+  { id: 'work', label: 'Work', h: 255 },
+  { id: 'love', label: 'Love', h: 15 },
+  { id: 'family', label: 'Family', h: 60 },
+  { id: 'health', label: 'Health', h: 150 },
+  { id: 'mind', label: 'Mind', h: 295 },
+  { id: 'music', label: 'Music', h: 340 },
+  { id: 'travel', label: 'Travel', h: 200 },
+  { id: 'home', label: 'Home', h: 90 },
+  { id: 'money', label: 'Money', h: 40 },
+];
+const CAT_LIMIT = 24;
+const catSlug = (s) =>
+  String(s).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24);
+
+/** Same shape/rules as the client: [{id, label, h}] or null when unusable. */
+function sanitizeCategories(raw) {
+  if (!Array.isArray(raw)) return null;
+  const seen = new Set();
+  const out = [];
+  for (const c of raw) {
+    if (!c || typeof c !== 'object') continue;
+    const id = typeof c.id === 'string' ? catSlug(c.id) : '';
+    const label = typeof c.label === 'string' && c.label.trim() ? c.label.trim().slice(0, 24) : '';
+    const h = Number.isFinite(c.h) ? ((Math.round(c.h) % 360) + 360) % 360 : null;
+    if (!id || !label || h === null || seen.has(id)) continue;
+    seen.add(id);
+    out.push({ id, label, h });
+    if (out.length >= CAT_LIMIT) break;
+  }
+  return out.length ? out : null;
+}
 const iuVal = (v) => (v === 'high' || v === 'low' ? v : '');
+// Effort & control always hold a value (the scale's midpoint until someone —
+// or later the brain — sets them); the *_src columns record who set it.
+const effortVal = (v) => (v === 'low' || v === 'high' ? v : 'medium');
+const controlVal = (v) => (v === 'act' || v === 'none' ? v : 'influence');
+const srcVal = (v) => (v === 'user' || v === 'ai' ? v : 'default');
 
 // --------------------------------------------------------------------------
 // Database
@@ -46,6 +86,8 @@ db.exec(`
     title      TEXT    NOT NULL,
     notes      TEXT    NOT NULL DEFAULT '',
     priority   TEXT    NOT NULL DEFAULT 'medium',
+    type       TEXT    NOT NULL DEFAULT 'question',
+    category   TEXT    NOT NULL DEFAULT '',
     importance TEXT    NOT NULL DEFAULT '',
     urgency    TEXT    NOT NULL DEFAULT '',
     num        INTEGER NOT NULL DEFAULT 0,
@@ -53,7 +95,11 @@ db.exec(`
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     position   INTEGER NOT NULL DEFAULT 0,
-    deleted_at INTEGER
+    deleted_at INTEGER,
+    effort      TEXT NOT NULL DEFAULT 'medium',
+    control     TEXT NOT NULL DEFAULT 'influence',
+    effort_src  TEXT NOT NULL DEFAULT 'default',
+    control_src TEXT NOT NULL DEFAULT 'default'
   );
 `);
 
@@ -64,15 +110,63 @@ const columnNames = new Set(db.prepare('PRAGMA table_info(cards)').all().map((c)
 if (!columnNames.has('importance')) db.exec("ALTER TABLE cards ADD COLUMN importance TEXT NOT NULL DEFAULT ''");
 if (!columnNames.has('urgency')) db.exec("ALTER TABLE cards ADD COLUMN urgency TEXT NOT NULL DEFAULT ''");
 if (!columnNames.has('deleted_at')) db.exec('ALTER TABLE cards ADD COLUMN deleted_at INTEGER');
+if (!columnNames.has('type')) db.exec("ALTER TABLE cards ADD COLUMN type TEXT NOT NULL DEFAULT 'question'");
+if (!columnNames.has('category')) db.exec("ALTER TABLE cards ADD COLUMN category TEXT NOT NULL DEFAULT ''");
+if (!columnNames.has('effort')) db.exec("ALTER TABLE cards ADD COLUMN effort TEXT NOT NULL DEFAULT 'medium'");
+if (!columnNames.has('control')) db.exec("ALTER TABLE cards ADD COLUMN control TEXT NOT NULL DEFAULT 'influence'");
+if (!columnNames.has('effort_src')) db.exec("ALTER TABLE cards ADD COLUMN effort_src TEXT NOT NULL DEFAULT 'default'");
+if (!columnNames.has('control_src')) db.exec("ALTER TABLE cards ADD COLUMN control_src TEXT NOT NULL DEFAULT 'default'");
 
-const rowToCard = (r) => ({
+// The user's category registry. Seeded with the default life areas the first
+// time; from then on the client's edits (add/remove/import) are the truth.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS categories (
+    id       TEXT    PRIMARY KEY,
+    label    TEXT    NOT NULL,
+    h        INTEGER NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0
+  );
+`);
+if (db.prepare('SELECT COUNT(*) AS n FROM categories').get().n === 0) {
+  const seed = db.prepare('INSERT INTO categories (id, label, h, position) VALUES (?, ?, ?, ?)');
+  DEFAULT_CATEGORIES.forEach((c, i) => seed.run(c.id, c.label, c.h, i));
+}
+
+function readCategories() {
+  return db.prepare('SELECT id, label, h FROM categories ORDER BY position ASC').all()
+    .map((r) => ({ id: r.id, label: r.label, h: r.h }));
+}
+
+/** Replace the whole registry — it's config, not card data, so unlike cards
+ *  it has no soft-delete: removing a category never touches any card row. */
+function writeCategories(cats) {
+  db.exec('BEGIN');
+  try {
+    db.exec('DELETE FROM categories');
+    const insert = db.prepare('INSERT INTO categories (id, label, h, position) VALUES (?, ?, ?, ?)');
+    cats.forEach((c, i) => insert.run(c.id, c.label, c.h, i));
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
+const categoryIds = () => new Set(db.prepare('SELECT id FROM categories').all().map((r) => r.id));
+
+const rowToCard = (r, catIds) => ({
   id: r.id,
   columnId: r.column_id,
   title: r.title,
   notes: r.notes,
-  priority: r.priority,
+  type: TYPES.includes(r.type) ? r.type : 'question',
+  category: catIds.has(r.category) ? r.category : '',
   importance: r.importance || '',
   urgency: r.urgency || '',
+  effort: effortVal(r.effort),
+  control: controlVal(r.control),
+  effortSrc: srcVal(r.effort_src),
+  controlSrc: srcVal(r.control_src),
   num: r.num,
   tags: safeTags(r.tags),
   createdAt: r.created_at,
@@ -90,19 +184,21 @@ function safeTags(json) {
 
 // The live board is only the questions that have not been soft-deleted.
 function readBoard() {
+  const catIds = categoryIds();
   const rows = db.prepare('SELECT * FROM cards WHERE deleted_at IS NULL ORDER BY position ASC').all();
-  return { version: 1, cards: rows.map(rowToCard) };
+  return { version: 1, cards: rows.map((r) => rowToCard(r, catIds)), categories: readCategories() };
 }
 
 // The Trash is the soft-deleted questions, newest deletion first. They are still
 // in the database and can be restored (re-added by the client) until purged.
 function readTrash() {
+  const catIds = categoryIds();
   const rows = db.prepare('SELECT * FROM cards WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC').all();
-  return { version: 1, cards: rows.map(rowToCard) };
+  return { version: 1, cards: rows.map((r) => rowToCard(r, catIds)) };
 }
 
 /** Validate and coerce one incoming card; returns null if it has no title. */
-function cleanCard(raw, now) {
+function cleanCard(raw, now, catIds) {
   if (!raw || typeof raw !== 'object' || typeof raw.title !== 'string' || !raw.title.trim()) {
     return null;
   }
@@ -111,9 +207,14 @@ function cleanCard(raw, now) {
     columnId: COLUMN_IDS.includes(raw.columnId) ? raw.columnId : 'inbox',
     title: raw.title.trim(),
     notes: typeof raw.notes === 'string' ? raw.notes : '',
-    priority: PRIORITIES.includes(raw.priority) ? raw.priority : 'medium',
+    type: TYPES.includes(raw.type) ? raw.type : 'question',
+    category: catIds.has(raw.category) ? raw.category : '',
     importance: iuVal(raw.importance),
     urgency: iuVal(raw.urgency),
+    effort: effortVal(raw.effort),
+    control: controlVal(raw.control),
+    effortSrc: srcVal(raw.effortSrc),
+    controlSrc: srcVal(raw.controlSrc),
     num: Number.isInteger(raw.num) && raw.num > 0 ? raw.num : 0,
     tags: Array.isArray(raw.tags) ? raw.tags.map((t) => String(t).trim().toLowerCase()).filter(Boolean) : [],
     createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : now,
@@ -133,16 +234,22 @@ const cryptoId = () => 'id-' + Math.random().toString(36).slice(2) + Date.now().
  */
 function writeBoard(cards) {
   const now = Date.now();
-  const clean = cards.map((c) => cleanCard(c, now)).filter(Boolean);
+  const catIds = categoryIds();
+  const clean = cards.map((c) => cleanCard(c, now, catIds)).filter(Boolean);
   const keep = new Set(clean.map((c) => c.id));
 
   const softDelete = db.prepare('UPDATE cards SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL');
   const upsert = db.prepare(`
-    INSERT INTO cards (id, column_id, title, notes, priority, importance, urgency, num, tags, created_at, updated_at, position, deleted_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+    INSERT INTO cards (id, column_id, title, notes, type, category, importance, urgency,
+                       effort, control, effort_src, control_src,
+                       num, tags, created_at, updated_at, position, deleted_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
     ON CONFLICT(id) DO UPDATE SET
       column_id = excluded.column_id, title = excluded.title, notes = excluded.notes,
-      priority = excluded.priority, importance = excluded.importance, urgency = excluded.urgency,
+      type = excluded.type, category = excluded.category,
+      importance = excluded.importance, urgency = excluded.urgency,
+      effort = excluded.effort, control = excluded.control,
+      effort_src = excluded.effort_src, control_src = excluded.control_src,
       num = excluded.num, tags = excluded.tags,
       created_at = excluded.created_at, updated_at = excluded.updated_at, position = excluded.position,
       deleted_at = NULL
@@ -154,7 +261,9 @@ function writeBoard(cards) {
       if (!keep.has(id)) softDelete.run(now, id);
     }
     clean.forEach((c, i) =>
-      upsert.run(c.id, c.columnId, c.title, c.notes, c.priority, c.importance, c.urgency, c.num, JSON.stringify(c.tags), c.createdAt, c.updatedAt, i));
+      upsert.run(c.id, c.columnId, c.title, c.notes, c.type, c.category, c.importance, c.urgency,
+        c.effort, c.control, c.effortSrc, c.controlSrc,
+        c.num, JSON.stringify(c.tags), c.createdAt, c.updatedAt, i));
     db.exec('COMMIT');
   } catch (err) {
     db.exec('ROLLBACK');
@@ -181,7 +290,6 @@ const STATIC = {
   '/index.html': ['index.html', 'text/html; charset=utf-8'],
   '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
   '/styles.css': ['styles.css', 'text/css; charset=utf-8'],
-  '/sample-import.json': ['sample-import.json', 'application/json; charset=utf-8'],
 };
 
 function sendJson(res, status, body) {
@@ -217,6 +325,10 @@ const server = createServer(async (req, res) => {
         if (!parsed || !Array.isArray(parsed.cards)) {
           return sendJson(res, 400, { error: 'Body must be { version, cards: [...] }' });
         }
+        // Registry first, then cards — so cards referencing a just-added
+        // category validate against the fresh registry.
+        const cats = sanitizeCategories(parsed.categories);
+        if (cats) writeCategories(cats);
         return sendJson(res, 200, writeBoard(parsed.cards));
       } catch (err) {
         return sendJson(res, 400, { error: 'Invalid JSON: ' + err.message });
