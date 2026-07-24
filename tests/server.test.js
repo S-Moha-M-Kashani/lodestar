@@ -136,6 +136,7 @@ test('card with no id gets one auto-generated', async () => {
       method: 'PUT', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ version: 1, cards: [{ columnId: 'inbox', title: 'No id here' }] }),
     });
+    assert.equal(res.status, 200);
     const body = await res.json();
     assert.equal(body.cards.length, 1);
     assert.ok(typeof body.cards[0].id === 'string' && body.cards[0].id.length > 0);

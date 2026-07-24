@@ -665,7 +665,7 @@ try:
         page.dispatch_event("#card-notes", "input")
         page.wait_for_timeout(100)
         check("balance: pro/con preview shows when tagged 'decision' with +/- notes",
-              not page.locator("#balance-preview").get_attribute("hidden")
+              page.locator("#balance-preview").is_visible()
               and page.locator(".balance-pro ul li").count() == 2
               and page.locator(".balance-con ul li").count() == 2)
         # Close the dialog without saving via the dialog's own Cancel control.
@@ -802,6 +802,7 @@ try:
         # ---- Assistant error path: a 503 renders the friendly unavailable message.
         page.locator('.view-switch button[data-view="assistant"]').click()
         page.wait_for_selector("#chat-input")
+        n_before = len(errors)
         page.route("**/api/agent/chat", lambda route: route.fulfill(
             status=503, content_type="application/json", body='{"error":"assistant unavailable"}'))
         page.fill("#chat-input", "This should fail")
@@ -812,7 +813,12 @@ try:
         page.unroute("**/api/agent/chat")
         # The 503 we deliberately provoked surfaces as a browser console error;
         # it's expected here, not a real bug, so it shouldn't fail the console check.
-        errors[:] = [e for e in errors if "503" not in e]
+        # Scrub only the entries provoked by this block (by count), so an unrelated
+        # future error that happens to contain "503" isn't silently masked.
+        provoked = [e for e in errors[n_before:] if "503" in e]
+        check("assistant error surfaced a console error to scrub", len(provoked) >= 1)
+        for e in provoked:
+            errors.remove(e)
         page.locator('.view-switch button[data-view="board"]').click()
 
         # ---- Import the grown life sample (substitute) -----------------------
@@ -991,6 +997,7 @@ try:
                 route.continue_()
 
         # Force the next debounced PUT /api/state to fail.
+        n_before = len(errors)
         page.route("**/api/state", block_state_put)
         page.fill(".quick-add input", "Trigger an offline push")
         page.press(".quick-add input", "Enter")
@@ -1006,7 +1013,12 @@ try:
               "Reconnected" in page.locator("#live-region").inner_text())
         # The aborted PUT we deliberately provoked surfaces as a browser console
         # error; it's expected here, not a real bug, so it shouldn't fail the check.
-        errors[:] = [e for e in errors if "ERR_FAILED" not in e]
+        # Scrub only the entries provoked by this block (by count), so an unrelated
+        # future error that happens to contain "ERR_FAILED" isn't silently masked.
+        provoked = [e for e in errors[n_before:] if "ERR_FAILED" in e]
+        check("offline route-abort surfaced a console error to scrub", len(provoked) >= 1)
+        for e in provoked:
+            errors.remove(e)
 
         check("console: no JS errors during entire run", not errors)
         if errors:
