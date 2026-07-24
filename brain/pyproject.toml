@@ -25,3 +25,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lodestar_brain"]
+
+[tool.pytest.ini_options]
+markers = [
+    "eval: behavioral/quality evals (deterministic, offline)",
+    "live: evals that call the real LLM; require OPENROUTER_API_KEY and BRAIN_EVAL_LIVE=1",
+]
