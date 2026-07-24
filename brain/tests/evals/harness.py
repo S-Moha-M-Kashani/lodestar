@@ -37,7 +37,7 @@ class InMemoryBoard:
         saved = []
         for c in cards:
             c = dict(c)
-            if 'id' not in c:
+            if not c.get('id'):
                 c['id'] = f'new-{next(_id_counter)}'
             saved.append(c)
         self._cards = saved
