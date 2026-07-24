@@ -641,6 +641,37 @@ try:
 
         check("regression: no native browser dialogs were used", not native_dialogs)
 
+        # ---- Import: ADD adopts categories the board doesn't have yet -------
+        cat_import = shot("generated-cat-import.json")
+        with open(cat_import, "w") as f:
+            json.dump({"version": 1,
+                       "categories": [{"id": "garden", "label": "Garden", "h": 120}],
+                       "cards": [{"title": "Imported: plant tomatoes", "category": "garden"}]}, f)
+        page.set_input_files("#import-input", cat_import)
+        page.wait_for_selector("#import-mode-dialog[open]")
+        page.click("#import-add")
+        page.wait_for_timeout(200)
+        check("import: add mode adopts a new category from the file onto the rail",
+              page.locator('.cat-tab[data-cat="garden"]').count() == 1)
+
+        # ---- Decisional-balance preview ---------------------------------------
+        page.fill(".quick-add input", "Should we adopt the new framework?")
+        page.press(".quick-add input", "Enter")
+        page.wait_for_timeout(150)
+        page.locator('[data-col="inbox"] .card', has_text="new framework").first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        page.fill("#card-tags", "decision")
+        page.fill("#card-notes", "+ faster builds\n+ better types\n- migration cost\n- team ramp-up")
+        page.dispatch_event("#card-notes", "input")
+        page.wait_for_timeout(100)
+        check("balance: pro/con preview shows when tagged 'decision' with +/- notes",
+              not page.locator("#balance-preview").get_attribute("hidden")
+              and page.locator(".balance-pro ul li").count() == 2
+              and page.locator(".balance-con ul li").count() == 2)
+        # Close the dialog without saving via the dialog's own Cancel control.
+        page.click("#cancel-dialog")
+        page.wait_for_timeout(100)
+
         # ---- Quick-add: empty input and adding inside an open drawer ---------
         count_now = page.locator(".card").count()
         page.press(".quick-add input", "Enter")
@@ -767,6 +798,22 @@ try:
         page.locator('.view-switch button[data-view="board"]').click()
         check("assistant: created card visible on the board",
               page.locator(".card-title", has_text="What is Leiden clustering?").count() >= 1)
+
+        # ---- Assistant error path: a 503 renders the friendly unavailable message.
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector("#chat-input")
+        page.route("**/api/agent/chat", lambda route: route.fulfill(
+            status=503, content_type="application/json", body='{"error":"assistant unavailable"}'))
+        page.fill("#chat-input", "This should fail")
+        page.click("#chat-send")
+        page.wait_for_selector(".chat-msg.assistant.error")
+        check("assistant: a failed request shows the unavailable message",
+              "assistant is unavailable" in page.locator(".chat-msg.assistant.error").last.inner_text())
+        page.unroute("**/api/agent/chat")
+        # The 503 we deliberately provoked surfaces as a browser console error;
+        # it's expected here, not a real bug, so it shouldn't fail the console check.
+        errors[:] = [e for e in errors if "503" not in e]
+        page.locator('.view-switch button[data-view="board"]').click()
 
         # ---- Import the grown life sample (substitute) -----------------------
         sample_path = os.path.join(ROOT, "sample-overview.json")
@@ -935,6 +982,31 @@ try:
         page.screenshot(path=shot("review.png"))
         page.locator('.view-switch button[data-view="board"]').click()
         page.wait_for_selector("#board.board")
+
+        # ---- Server-offline banner + recovery -------------------------------
+        def block_state_put(route):
+            if route.request.method == "PUT":
+                route.abort()
+            else:
+                route.continue_()
+
+        # Force the next debounced PUT /api/state to fail.
+        page.route("**/api/state", block_state_put)
+        page.fill(".quick-add input", "Trigger an offline push")
+        page.press(".quick-add input", "Enter")
+        page.wait_for_timeout(400)  # debounce is 150ms + failure
+        check("offline: PUT failure announces the local-save message",
+              "saved locally" in page.locator("#live-region").inner_text())
+        # Recovery: stop aborting, trigger another push, expect the reconnect message.
+        page.unroute("**/api/state", block_state_put)
+        page.fill(".quick-add input", "Trigger a reconnect push")
+        page.press(".quick-add input", "Enter")
+        page.wait_for_timeout(400)
+        check("offline: a later successful push announces reconnection",
+              "Reconnected" in page.locator("#live-region").inner_text())
+        # The aborted PUT we deliberately provoked surfaces as a browser console
+        # error; it's expected here, not a real bug, so it shouldn't fail the check.
+        errors[:] = [e for e in errors if "ERR_FAILED" not in e]
 
         check("console: no JS errors during entire run", not errors)
         if errors:
