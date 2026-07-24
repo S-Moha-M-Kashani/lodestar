@@ -5,7 +5,10 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "test-board": "PORT=3001 BOARD_DB=board-3001.db node server.js"
+    "test-board": "PORT=3001 BOARD_DB=board-3001.db node server.js",
+    "backup": "node scripts/backup-db.mjs",
+    "test:server": "node scripts/backup-db.mjs && node --test tests/*.test.js",
+    "test:all": "node scripts/backup-db.mjs && node --test tests/*.test.js && uv run --project brain pytest brain/tests -v && uv run --with playwright python tests/e2e_test.py"
   },
   "engines": {
     "node": ">=23.4.0"

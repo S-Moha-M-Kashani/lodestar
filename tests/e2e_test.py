@@ -108,6 +108,17 @@ def launch_browser(p):
         return p.chromium.launch(headless=True)
 
 
+# Back up the real board.db (local + Google Drive via rclone) before tests run.
+# Never blocks the suite: the backup script always exits 0.
+def backup_db():
+    try:
+        subprocess.run(["node", "scripts/backup-db.mjs"], cwd=ROOT, check=False,
+                       timeout=180)
+    except Exception as exc:  # pragma: no cover - defensive
+        print("backup step skipped:", exc)
+
+
+backup_db()
 server = start_server()
 brain = start_brain()
 browser = None
