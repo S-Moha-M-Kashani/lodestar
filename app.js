@@ -82,6 +82,25 @@
   // both to be placed on the Eisenhower matrix.
   const iuVal = (v) => (v === 'high' || v === 'low' ? v : '');
 
+  // A deadline is an ISO calendar date ('YYYY-MM-DD') or unset (''). The
+  // toISOString round-trip rejects shape-valid impossibilities (2026-13-45).
+  const deadlineVal = (v) => {
+    if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return '';
+    const d = new Date(v + 'T00:00:00Z');
+    return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v ? v : '';
+  };
+
+  // Automatic priority, derived from the same two judgements the Matrix uses —
+  // never stored. 1 urgent+important · 2 urgent only · 3 important only ·
+  // 4 neither; 0 (no label) until both judgements are set.
+  const priorityOf = (c) => {
+    if (!c.importance || !c.urgency) return 0;
+    if (c.urgency === 'high') return c.importance === 'high' ? 1 : 2;
+    return c.importance === 'high' ? 3 : 4;
+  };
+  const PRIO_TITLE = ['', 'Urgent & important — answer now', 'Urgent, not important',
+    'Important, not urgent', 'Neither urgent nor important'];
+
   // Effort ("how much work is this?") and control ("can I even act on it?")
   // always hold a value: the scale's midpoint stands in until a person — or,
   // one day, the brain — judges it. The *Src fields record who set the value
@@ -104,7 +123,7 @@
     const mk = (title, columnId, type, category, tags, importance = '', urgency = '', notes = '') =>
       ({ id: uid(), columnId, title, notes, type, category, importance, urgency,
          effort: 'medium', control: 'influence', effortSrc: 'default', controlSrc: 'default',
-         tags, createdAt: now, updatedAt: now });
+         deadline: '', tags, createdAt: now, updatedAt: now });
     // Seeds span categories, types and all four matrix quadrants, so every view
     // has something to show on a fresh board.
     return [
@@ -144,6 +163,7 @@
       control: controlVal(raw.control),
       effortSrc: srcVal(raw.effortSrc),
       controlSrc: srcVal(raw.controlSrc),
+      deadline: deadlineVal(raw.deadline),
       num: Number.isInteger(raw.num) && raw.num > 0 ? raw.num : 0,
       tags: Array.isArray(raw.tags) ? raw.tags.map((t) => String(t).trim().toLowerCase()).filter(Boolean) : [],
       createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : Date.now(),
@@ -183,7 +203,7 @@
   }
 
   let state = loadState();
-  const filters = { search: '', type: '', category: '', tags: new Set() };
+  const filters = { search: '', type: '', category: '', prio: '', tags: new Set() };
   let focusCardId = null; // restore focus after re-render (keyboard moves)
   let draggedId = null;
   let dealCards = true; // deal-in animation runs on first render only
@@ -252,7 +272,7 @@
   // Order-sensitive fingerprint, to skip redundant work when nothing changed.
   const boardFingerprint = (cards) =>
     cards.map((c) => [c.id, c.columnId, c.title, c.notes, c.type, c.category || '', c.importance || '', c.urgency || '',
-      c.effort || '', c.control || '', c.effortSrc || '', c.controlSrc || '',
+      c.effort || '', c.control || '', c.effortSrc || '', c.controlSrc || '', c.deadline || '',
       c.num, (c.tags || []).join('|')].join('␟')).join('␞');
 
   function pushToServer() {
@@ -421,6 +441,10 @@
   function matchesFilters(card) {
     if (filters.type && card.type !== filters.type) return false;
     if (filters.category && card.category !== filters.category) return false;
+    if (filters.prio) {
+      const p = priorityOf(card); // 0 = unlabelled (either judgement missing)
+      if (filters.prio === 'none' ? p !== 0 : String(p) !== filters.prio) return false;
+    }
     if (filters.tags.size && ![...filters.tags].every((t) => card.tags.includes(t))) return false;
     if (filters.search) {
       const haystack = (card.title + ' ' + card.notes + ' ' + card.tags.join(' ')).toLowerCase();
@@ -429,7 +453,7 @@
     return true;
   }
 
-  const filtersActive = () => Boolean(filters.search || filters.type || filters.category || filters.tags.size);
+  const filtersActive = () => Boolean(filters.search || filters.type || filters.category || filters.prio || filters.tags.size);
 
   function announce(message) {
     $('#live-region').textContent = message;
@@ -549,14 +573,7 @@
 
     header.append(title, count);
 
-    if (visible.length > 1) {
-      const sortBtn = document.createElement('button');
-      sortBtn.className = 'sort-btn';
-      sortBtn.textContent = 'Sort ⇅';
-      sortBtn.title = 'Group this column by type';
-      sortBtn.addEventListener('click', () => sortColumnByType(col.id));
-      header.append(sortBtn);
-    }
+    if (visible.length > 1) header.append(sortMenu(col.id));
 
     section.append(header);
 
@@ -609,18 +626,20 @@
       // type filter active, the new card belongs there — and stays visible.
       const card = { id: uid(), columnId: 'inbox', title, notes: '',
         type: filters.type || 'question', category: filters.category,
-        importance: '', urgency: '',
+        importance: '', urgency: '', deadline: '',
         effort: 'medium', control: 'influence', effortSrc: 'default', controlSrc: 'default',
         num: nextNum(), tags: [], createdAt: now, updatedAt: now };
       // New captures go to the top of the Inbox
       const firstInbox = state.cards.findIndex((c) => c.columnId === 'inbox');
       state.cards.splice(firstInbox === -1 ? state.cards.length : firstInbox, 0, card);
-      // A search or tag filter could still hide the fresh card — clear those so
-      // the capture never vanishes silently.
+      // A search, tag or priority filter could still hide the fresh card —
+      // clear those so the capture never vanishes silently.
       if (!matchesFilters(card)) {
         filters.search = '';
         filters.tags.clear();
+        filters.prio = '';
         $('#search').value = '';
+        $('#prio-filter').value = '';
       }
       commit(`Added ${qLabel(card)} “${short(title)}”`);
       announce(`Added “${title}” to Inbox`);
@@ -636,6 +655,31 @@
     badge.className = `badge type-${card.type}`;
     badge.textContent = `${TYPE_META[card.type].glyph} ${TYPE_META[card.type].label}`;
     return badge;
+  }
+
+  // Priority stamp (P1–P4), derived on the fly from importance × urgency.
+  // Null when either judgement is unset — an unjudged card wears no label.
+  function prioBadge(card) {
+    const p = priorityOf(card);
+    if (!p) return null;
+    const badge = document.createElement('span');
+    badge.className = 'prio-badge';
+    badge.dataset.prio = String(p);
+    badge.textContent = `P${p}`;
+    badge.title = PRIO_TITLE[p];
+    return badge;
+  }
+
+  // Deadline chip — flagged overdue once the date is behind today.
+  function deadlineChip(card) {
+    const chip = document.createElement('span');
+    chip.className = 'card-deadline';
+    chip.textContent = card.deadline;
+    if (card.deadline < new Date().toISOString().slice(0, 10)) {
+      chip.dataset.overdue = 'true';
+      chip.title = 'Deadline passed';
+    }
+    return chip;
   }
 
   function cardAria(card) {
@@ -670,6 +714,8 @@
     }
 
     top.append(typeBadge(card));
+    const prio = prioBadge(card);
+    if (prio) top.append(prio);
 
     const title = document.createElement('p');
     title.className = 'card-title';
@@ -677,9 +723,10 @@
 
     el.append(top, title);
 
-    if (card.category || card.tags.length) {
+    if (card.category || card.tags.length || card.deadline) {
       const tags = document.createElement('div');
       tags.className = 'card-tags';
+      if (card.deadline) tags.append(deadlineChip(card));
       if (card.category) {
         const cat = document.createElement('span');
         cat.className = 'card-cat';
@@ -800,14 +847,7 @@
 
     head.append(title, count);
 
-    if (visible.length > 1) {
-      const sortBtn = document.createElement('button');
-      sortBtn.className = 'sort-btn';
-      sortBtn.textContent = 'Sort by type ⇅';
-      sortBtn.title = 'Group the backlog by type';
-      sortBtn.addEventListener('click', () => sortColumnByType('inbox'));
-      head.append(sortBtn);
-    }
+    if (visible.length > 1) head.append(sortMenu('inbox'));
 
     sheet.append(head, renderQuickAdd());
 
@@ -2532,11 +2572,50 @@
     announce(`Deleted “${card.title}”`);
   }
 
-  function sortColumnByType(columnId) {
-    const sorted = columnCards(columnId).sort((a, b) => TYPE_RANK[a.type] - TYPE_RANK[b.type]);
+  // The sort menu's orders. Deadline: earliest first, undated at the back
+  // (ISO dates compare correctly as strings; '' would sort first, so undated
+  // cards get a sentinel past every real date). Priority: P1 → P4, unlabelled
+  // last. Array.sort is stable, so ties keep their existing order.
+  const SORTERS = {
+    deadline: { label: 'By deadline', cmp: (a, b) => (a.deadline || '9999-12-31').localeCompare(b.deadline || '9999-12-31') },
+    priority: { label: 'By priority', cmp: (a, b) => (priorityOf(a) || 5) - (priorityOf(b) || 5) },
+    type:     { label: 'By type',     cmp: (a, b) => TYPE_RANK[a.type] - TYPE_RANK[b.type] },
+    newest:   { label: 'Newest first', cmp: (a, b) => b.createdAt - a.createdAt },
+    oldest:   { label: 'Oldest first', cmp: (a, b) => a.createdAt - b.createdAt },
+  };
+
+  function sortColumn(columnId, key) {
+    const sorter = SORTERS[key];
+    if (!sorter) return;
+    const sorted = columnCards(columnId).sort(sorter.cmp);
     state.cards = [...state.cards.filter((c) => c.columnId !== columnId), ...sorted];
-    commit(`Sorted ${columnTitle(columnId)} by type`);
-    announce(`Sorted ${columnTitle(columnId)} by type`);
+    commit(`Sorted ${columnTitle(columnId)} ${sorter.label.toLowerCase()}`);
+    announce(`Sorted ${columnTitle(columnId)} ${sorter.label.toLowerCase()}`);
+  }
+
+  // A command-select: picking an order applies it once and the control snaps
+  // back to its placeholder — it reads as a menu of actions, not a setting.
+  function sortMenu(columnId) {
+    const sel = document.createElement('select');
+    sel.className = 'sort-select';
+    sel.setAttribute('aria-label', `Sort ${columnTitle(columnId)}`);
+    sel.title = 'Sort these cards';
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = 'Sort ⇅';
+    sel.append(placeholder);
+    for (const [key, sorter] of Object.entries(SORTERS)) {
+      const opt = document.createElement('option');
+      opt.value = key;
+      opt.textContent = sorter.label;
+      sel.append(opt);
+    }
+    sel.addEventListener('change', () => {
+      const key = sel.value;
+      sel.value = '';
+      sortColumn(columnId, key);
+    });
+    return sel;
   }
 
   // --------------------------------------------------------------------------
@@ -2628,6 +2707,7 @@
     updateBalancePreview();
     $('#card-importance').value = iuVal(card.importance);
     $('#card-urgency').value = iuVal(card.urgency);
+    $('#card-deadline').value = deadlineVal(card.deadline);
     $('#card-effort').value = effortVal(card.effort);
     $('#card-control').value = controlVal(card.control);
     for (const radio of form.elements.type) radio.checked = radio.value === card.type;
@@ -2649,6 +2729,7 @@
       card.category = catVal(form.elements.category.value);
       card.importance = iuVal($('#card-importance').value);
       card.urgency = iuVal($('#card-urgency').value);
+      card.deadline = deadlineVal($('#card-deadline').value);
       // A changed effort/control is a human judgment — record the provenance so
       // the brain's future estimator knows never to overwrite it.
       const effort = effortVal($('#card-effort').value);
@@ -2808,6 +2889,11 @@
     render();
   });
 
+  $('#prio-filter').addEventListener('change', (e) => {
+    filters.prio = e.target.value;
+    render();
+  });
+
   // One Menu button holds Undo / History / Export / Import. The panel closes on
   // outside click, Escape, or after any action inside it is chosen.
   const menuBtn = $('#menu-btn');
@@ -2897,6 +2983,7 @@
       "urgency": "high | low  (optional — for the Matrix)",
       "effort": "low | medium | high  (optional — defaults to medium)",
       "control": "act | influence | none  (optional — defaults to influence)",
+      "deadline": "YYYY-MM-DD  (optional)",
       "notes": "Optional free-form notes or the answer",
       "tags": ["optional", "lowercase", "tags"],
       "num": 12,

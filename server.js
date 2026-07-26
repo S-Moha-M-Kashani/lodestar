@@ -70,6 +70,15 @@ const effortVal = (v) => (v === 'low' || v === 'high' ? v : 'medium');
 const controlVal = (v) => (v === 'act' || v === 'none' ? v : 'influence');
 const srcVal = (v) => (v === 'user' || v === 'ai' ? v : 'default');
 
+// A deadline is an ISO calendar date ('YYYY-MM-DD') or unset (''). The
+// round-trip through toISOString rejects shape-valid impossibilities
+// like 2026-13-45 that a regex alone would let through.
+const deadlineVal = (v) => {
+  if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return '';
+  const d = new Date(v + 'T00:00:00Z');
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v ? v : '';
+};
+
 // --------------------------------------------------------------------------
 // Database
 // --------------------------------------------------------------------------
@@ -99,7 +108,8 @@ db.exec(`
     effort      TEXT NOT NULL DEFAULT 'medium',
     control     TEXT NOT NULL DEFAULT 'influence',
     effort_src  TEXT NOT NULL DEFAULT 'default',
-    control_src TEXT NOT NULL DEFAULT 'default'
+    control_src TEXT NOT NULL DEFAULT 'default',
+    deadline    TEXT NOT NULL DEFAULT ''
   );
 `);
 
@@ -116,6 +126,7 @@ if (!columnNames.has('effort')) db.exec("ALTER TABLE cards ADD COLUMN effort TEX
 if (!columnNames.has('control')) db.exec("ALTER TABLE cards ADD COLUMN control TEXT NOT NULL DEFAULT 'influence'");
 if (!columnNames.has('effort_src')) db.exec("ALTER TABLE cards ADD COLUMN effort_src TEXT NOT NULL DEFAULT 'default'");
 if (!columnNames.has('control_src')) db.exec("ALTER TABLE cards ADD COLUMN control_src TEXT NOT NULL DEFAULT 'default'");
+if (!columnNames.has('deadline')) db.exec("ALTER TABLE cards ADD COLUMN deadline TEXT NOT NULL DEFAULT ''");
 
 // The user's category registry. Seeded with the default life areas the first
 // time; from then on the client's edits (add/remove/import) are the truth.
@@ -167,6 +178,7 @@ const rowToCard = (r, catIds) => ({
   control: controlVal(r.control),
   effortSrc: srcVal(r.effort_src),
   controlSrc: srcVal(r.control_src),
+  deadline: deadlineVal(r.deadline),
   num: r.num,
   tags: safeTags(r.tags),
   createdAt: r.created_at,
@@ -215,6 +227,7 @@ function cleanCard(raw, now, catIds) {
     control: controlVal(raw.control),
     effortSrc: srcVal(raw.effortSrc),
     controlSrc: srcVal(raw.controlSrc),
+    deadline: deadlineVal(raw.deadline),
     num: Number.isInteger(raw.num) && raw.num > 0 ? raw.num : 0,
     tags: Array.isArray(raw.tags) ? raw.tags.map((t) => String(t).trim().toLowerCase()).filter(Boolean) : [],
     createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : now,
@@ -241,15 +254,16 @@ function writeBoard(cards) {
   const softDelete = db.prepare('UPDATE cards SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL');
   const upsert = db.prepare(`
     INSERT INTO cards (id, column_id, title, notes, type, category, importance, urgency,
-                       effort, control, effort_src, control_src,
+                       effort, control, effort_src, control_src, deadline,
                        num, tags, created_at, updated_at, position, deleted_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
     ON CONFLICT(id) DO UPDATE SET
       column_id = excluded.column_id, title = excluded.title, notes = excluded.notes,
       type = excluded.type, category = excluded.category,
       importance = excluded.importance, urgency = excluded.urgency,
       effort = excluded.effort, control = excluded.control,
       effort_src = excluded.effort_src, control_src = excluded.control_src,
+      deadline = excluded.deadline,
       num = excluded.num, tags = excluded.tags,
       created_at = excluded.created_at, updated_at = excluded.updated_at, position = excluded.position,
       deleted_at = NULL
@@ -262,7 +276,7 @@ function writeBoard(cards) {
     }
     clean.forEach((c, i) =>
       upsert.run(c.id, c.columnId, c.title, c.notes, c.type, c.category, c.importance, c.urgency,
-        c.effort, c.control, c.effortSrc, c.controlSrc,
+        c.effort, c.control, c.effortSrc, c.controlSrc, c.deadline,
         c.num, JSON.stringify(c.tags), c.createdAt, c.updatedAt, i));
     db.exec('COMMIT');
   } catch (err) {

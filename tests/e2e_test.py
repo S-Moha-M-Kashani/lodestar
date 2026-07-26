@@ -150,6 +150,9 @@ try:
         page.goto(URL)
         page.wait_for_selector(".card")
 
+        check("header: tagline reads 'Your compass for life!'",
+              page.locator("header .tagline").inner_text() == "Your compass for life!")
+
         # ---- Seed + first save to the database ------------------------------
         check("seed: 6 cards on first run", page.locator(".card").count() == 6)
         page.wait_for_timeout(600)  # let the initial push reach the server
@@ -301,12 +304,20 @@ try:
               page.locator('[data-col="inbox"] .card', has_text="speculative decoding").count() == 1)
 
         # ---- Sort -----------------------------------------------------------
+        # One sort menu per column header: a command-select that applies the
+        # chosen order, then snaps back to its "Sort ⇅" placeholder.
         page.locator('[data-col="inbox"] .card', has_text="speculative decoding").first.press("]")
         page.wait_for_timeout(100)
-        page.locator('[data-col="in-progress"] .sort-btn').click()
+        sort_values = page.locator('[data-col="in-progress"] .sort-select option').evaluate_all(
+            "opts => opts.map(o => o.value)")
+        check("sort: menu offers deadline, priority, type and age orders",
+              {"deadline", "priority", "type", "newest", "oldest"} <= set(sort_values))
+        page.select_option('[data-col="in-progress"] .sort-select', 'type')
         page.wait_for_timeout(100)
         first_badge = page.locator('[data-col="in-progress"] .card .badge').first
         check("sort: problem card sorts ahead of plans", "problem" in first_badge.inner_text().lower())
+        check("sort: menu snaps back to its placeholder after sorting",
+              page.input_value('[data-col="in-progress"] .sort-select') == "")
 
         # ---- Filters --------------------------------------------------------
         page.fill("#search", "stoic")
@@ -462,10 +473,10 @@ try:
 
         # Backlog sort-by-type reorders the inbox rows by TYPE_RANK.
         # Row type stamps render as `.badge.type-<type>` (see renderBacklogRow/typeBadge
-        # in app.js), not `.card-type` — the sort button itself only renders when
+        # in app.js), not `.card-type` — the sort menu itself only renders when
         # more than one row is visible (renderBacklog in app.js).
-        if page.locator(".backlog-sheet .sort-btn").count() == 1:
-            page.click(".backlog-sheet .sort-btn")
+        if page.locator(".backlog-sheet .sort-select").count() == 1:
+            page.select_option(".backlog-sheet .sort-select", "type")
             page.wait_for_timeout(150)
             types_in_order = page.eval_on_selector_all(
                 ".backlog-row .badge",
@@ -554,6 +565,114 @@ try:
 
         page.locator('.view-switch button[data-view="board"]').click()
         page.wait_for_selector("#board.board")
+
+        # ---- Automatic priority label ---------------------------------------
+        # Priority is derived, never stored: 1 = urgent+important (red),
+        # 2 = urgent+unimportant (orange), 3 = not-urgent+important (green),
+        # 4 = neither (gray). Cards missing either judgement wear no label.
+        # The matrix step above set "speculative decoding" to important + not
+        # urgent, so it must already wear the P3 badge.
+        spec_card = page.locator('.card', has_text="speculative decoding").first
+        check("priority: important + not urgent card wears the P3 badge",
+              spec_card.locator('.prio-badge[data-prio="3"]').count() == 1)
+
+        # Exactly the cards with both judgements set wear a badge — no more.
+        both_set = sum(1 for c in api_state()["cards"]
+                       if c.get("importance") and c.get("urgency"))
+        check("priority: badge appears exactly on cards with importance & urgency",
+              page.locator(".card .prio-badge").count() == both_set)
+
+        def set_judgements(title, importance, urgency, deadline=None):
+            page.locator('.card', has_text=title).first.click()
+            page.wait_for_selector("#card-dialog[open]")
+            page.select_option("#card-importance", importance)
+            page.select_option("#card-urgency", urgency)
+            if deadline is not None:
+                page.fill("#card-deadline", deadline)
+            page.click('#card-form button[type="submit"]')
+            page.wait_for_timeout(150)
+
+        inbox_titles = page.locator('[data-col="inbox"] .card-title').all_inner_texts()
+        probe_a, probe_b = inbox_titles[0], inbox_titles[1]
+
+        # P1: flip the spec card to urgent + important.
+        set_judgements("speculative decoding", "high", "high")
+        check("priority: urgent + important card wears the P1 badge",
+              page.locator('.card', has_text="speculative decoding")
+                  .first.locator('.prio-badge[data-prio="1"]').count() == 1)
+
+        # P2: urgent but unimportant; P4: neither urgent nor important.
+        set_judgements(probe_a, "low", "high", deadline="2026-12-31")
+        set_judgements(probe_b, "low", "low", deadline="2026-08-15")
+        check("priority: urgent + unimportant card wears the P2 badge",
+              page.locator('.card', has_text=probe_a)
+                  .first.locator('.prio-badge[data-prio="2"]').count() == 1)
+        check("priority: unimportant + not urgent card wears the P4 badge",
+              page.locator('.card', has_text=probe_b)
+                  .first.locator('.prio-badge[data-prio="4"]').count() == 1)
+
+        # ---- Deadline field --------------------------------------------------
+        page.locator('.card', has_text=probe_a).first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        check("deadline: editor offers a date input",
+              page.locator('#card-deadline[type="date"]').count() == 1)
+        check("deadline: editor shows the saved date",
+              page.input_value("#card-deadline") == "2026-12-31")
+        page.click("#cancel-dialog")
+
+        check("deadline: card shows its deadline chip",
+              "2026-12-31" in page.locator('.card', has_text=probe_a)
+                                 .first.locator(".card-deadline").inner_text())
+        page.wait_for_timeout(450)
+        srv = next((c for c in api_state()["cards"] if c["title"] == probe_a), None)
+        check("deadline: persists to the database",
+              srv is not None and srv.get("deadline") == "2026-12-31")
+
+        # ---- Sort by deadline ------------------------------------------------
+        # Earliest deadline first; undated cards keep to the back of the column.
+        check("sort: inbox header offers the sort menu",
+              page.locator('[data-col="inbox"] .sort-select').count() == 1)
+        page.select_option('[data-col="inbox"] .sort-select', 'deadline')
+        page.wait_for_timeout(100)
+        sorted_titles = page.locator('[data-col="inbox"] .card-title').all_inner_texts()
+        check("sort: by deadline puts the earlier-dated card first",
+              sorted_titles[0] == probe_b and sorted_titles[1] == probe_a)
+        check("sort: by deadline keeps undated cards at the back",
+              len(sorted_titles) == len(inbox_titles)
+              and all(t in sorted_titles for t in inbox_titles))
+
+        # ---- Sort by priority ------------------------------------------------
+        # P1 first, unlabelled cards last; ranks must come out non-decreasing.
+        def prio_rank(c):
+            if not c.get("importance") or not c.get("urgency"):
+                return 5
+            return {("high", "high"): 1, ("low", "high"): 2,
+                    ("high", "low"): 3, ("low", "low"): 4}[(c["importance"], c["urgency"])]
+
+        page.select_option('[data-col="inbox"] .sort-select', 'priority')
+        page.wait_for_timeout(450)
+        all_cards = api_state()["cards"]
+        by_title = {c["title"]: c for c in all_cards}
+        ranks = [prio_rank(by_title[t])
+                 for t in page.locator('[data-col="inbox"] .card-title').all_inner_texts()]
+        check("sort: by priority orders P1 → P4 with unlabelled last",
+              ranks == sorted(ranks) and len(ranks) == len(inbox_titles))
+
+        # ---- Priority filter --------------------------------------------------
+        # Lives in the toolbar right beside the type filter; narrows every view.
+        check("filter: priority select sits beside the type filter",
+              page.evaluate("document.querySelector('#prio-filter')"
+                            "?.previousElementSibling?.id === 'type-filter'"))
+        p2_expected = sum(1 for c in all_cards if prio_rank(c) == 2)
+        page.select_option("#prio-filter", "2")
+        page.wait_for_timeout(100)
+        check("filter: P2 narrows the board to urgent+unimportant cards",
+              page.locator(".card").count() == p2_expected
+              and page.locator(".card", has_text=probe_a).count() == 1)
+        page.select_option("#prio-filter", "")
+        page.wait_for_timeout(100)
+        check("filter: clearing the priority filter restores the board",
+              page.locator(".card").count() == len(all_cards))
 
         # ---- Import: schema dialog -----------------------------------------
         menu_click("#import-btn")

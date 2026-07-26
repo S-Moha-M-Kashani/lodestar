@@ -250,5 +250,56 @@ test('boot migrates a legacy cards table missing newer columns', async () => {
     assert.equal(card.effort, 'medium');   // added column default
     assert.equal(card.control, 'influence'); // added column default
     assert.equal(card.type, 'question');
+    assert.equal(card.deadline, '');       // added column default
+  } finally { await s.stop(); }
+});
+
+test('PUT /api/state round-trips a card deadline', async () => {
+  const s = await startServer();
+  try {
+    const put = await fetch(s.base + '/api/state', {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ version: 1, cards: [
+        { id: 'd1', columnId: 'inbox', title: 'With deadline', deadline: '2026-08-01' },
+        { id: 'd2', columnId: 'inbox', title: 'Without deadline' },
+      ] }),
+    });
+    assert.equal(put.status, 200);
+    const body = await put.json();
+    assert.equal(body.cards.find((c) => c.id === 'd1').deadline, '2026-08-01');
+    assert.equal(body.cards.find((c) => c.id === 'd2').deadline, '');
+    // Survives a fresh read, not just the PUT echo.
+    const state = await (await fetch(s.base + '/api/state')).json();
+    assert.equal(state.cards.find((c) => c.id === 'd1').deadline, '2026-08-01');
+  } finally { await s.stop(); }
+});
+
+test('malformed deadlines are sanitized to empty string', async () => {
+  const s = await startServer();
+  try {
+    const bads = ['not-a-date', '2026-13-45', '01-08-2026', 12345, null, {}];
+    const cards = bads.map((deadline, i) =>
+      ({ id: `bad${i}`, columnId: 'inbox', title: `Bad ${i}`, deadline }));
+    const put = await fetch(s.base + '/api/state', {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ version: 1, cards }),
+    });
+    assert.equal(put.status, 200);
+    const body = await put.json();
+    for (const c of body.cards) assert.equal(c.deadline, '', `deadline of ${c.id} not scrubbed`);
+  } finally { await s.stop(); }
+});
+
+test('deadline survives soft-delete and restore', async () => {
+  const s = await startServer();
+  try {
+    const put = (cards) => fetch(s.base + '/api/state', {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ version: 1, cards }),
+    });
+    await put([{ id: 'dl', columnId: 'inbox', title: 'Dated', deadline: '2026-09-15' }]);
+    await put([]); // soft-delete
+    const trash = await (await fetch(s.base + '/api/trash')).json();
+    assert.equal(trash.cards.find((c) => c.id === 'dl').deadline, '2026-09-15');
   } finally { await s.stop(); }
 });
