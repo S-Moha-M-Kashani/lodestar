@@ -555,6 +555,81 @@ try:
         page.locator('.view-switch button[data-view="board"]').click()
         page.wait_for_selector("#board.board")
 
+        # ---- Automatic priority label ---------------------------------------
+        # Priority is derived, never stored: 1 = urgent+important (red),
+        # 2 = urgent+unimportant (orange), 3 = not-urgent+important (green),
+        # 4 = neither (gray). Cards missing either judgement wear no label.
+        # The matrix step above set "speculative decoding" to important + not
+        # urgent, so it must already wear the P3 badge.
+        spec_card = page.locator('.card', has_text="speculative decoding").first
+        check("priority: important + not urgent card wears the P3 badge",
+              spec_card.locator('.prio-badge[data-prio="3"]').count() == 1)
+
+        # Exactly the cards with both judgements set wear a badge — no more.
+        both_set = sum(1 for c in api_state()["cards"]
+                       if c.get("importance") and c.get("urgency"))
+        check("priority: badge appears exactly on cards with importance & urgency",
+              page.locator(".card .prio-badge").count() == both_set)
+
+        def set_judgements(title, importance, urgency, deadline=None):
+            page.locator('.card', has_text=title).first.click()
+            page.wait_for_selector("#card-dialog[open]")
+            page.select_option("#card-importance", importance)
+            page.select_option("#card-urgency", urgency)
+            if deadline is not None:
+                page.fill("#card-deadline", deadline)
+            page.click('#card-form button[type="submit"]')
+            page.wait_for_timeout(150)
+
+        inbox_titles = page.locator('[data-col="inbox"] .card-title').all_inner_texts()
+        probe_a, probe_b = inbox_titles[0], inbox_titles[1]
+
+        # P1: flip the spec card to urgent + important.
+        set_judgements("speculative decoding", "high", "high")
+        check("priority: urgent + important card wears the P1 badge",
+              page.locator('.card', has_text="speculative decoding")
+                  .first.locator('.prio-badge[data-prio="1"]').count() == 1)
+
+        # P2: urgent but unimportant; P4: neither urgent nor important.
+        set_judgements(probe_a, "low", "high", deadline="2026-12-31")
+        set_judgements(probe_b, "low", "low", deadline="2026-08-15")
+        check("priority: urgent + unimportant card wears the P2 badge",
+              page.locator('.card', has_text=probe_a)
+                  .first.locator('.prio-badge[data-prio="2"]').count() == 1)
+        check("priority: unimportant + not urgent card wears the P4 badge",
+              page.locator('.card', has_text=probe_b)
+                  .first.locator('.prio-badge[data-prio="4"]').count() == 1)
+
+        # ---- Deadline field --------------------------------------------------
+        page.locator('.card', has_text=probe_a).first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        check("deadline: editor offers a date input",
+              page.locator('#card-deadline[type="date"]').count() == 1)
+        check("deadline: editor shows the saved date",
+              page.input_value("#card-deadline") == "2026-12-31")
+        page.click("#cancel-dialog")
+
+        check("deadline: card shows its deadline chip",
+              "2026-12-31" in page.locator('.card', has_text=probe_a)
+                                 .first.locator(".card-deadline").inner_text())
+        page.wait_for_timeout(450)
+        srv = next((c for c in api_state()["cards"] if c["title"] == probe_a), None)
+        check("deadline: persists to the database",
+              srv is not None and srv.get("deadline") == "2026-12-31")
+
+        # ---- Sort by deadline ------------------------------------------------
+        # Earliest deadline first; undated cards keep to the back of the column.
+        check("sort: inbox header offers a sort-by-deadline control",
+              page.locator('[data-col="inbox"] .sort-deadline-btn').count() == 1)
+        page.locator('[data-col="inbox"] .sort-deadline-btn').click()
+        page.wait_for_timeout(100)
+        sorted_titles = page.locator('[data-col="inbox"] .card-title').all_inner_texts()
+        check("sort: by deadline puts the earlier-dated card first",
+              sorted_titles[0] == probe_b and sorted_titles[1] == probe_a)
+        check("sort: by deadline keeps undated cards at the back",
+              len(sorted_titles) == len(inbox_titles)
+              and all(t in sorted_titles for t in inbox_titles))
+
         # ---- Import: schema dialog -----------------------------------------
         menu_click("#import-btn")
         page.wait_for_selector("#import-dialog[open]")
