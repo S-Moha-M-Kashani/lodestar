@@ -203,7 +203,7 @@
   }
 
   let state = loadState();
-  const filters = { search: '', type: '', category: '', tags: new Set() };
+  const filters = { search: '', type: '', category: '', prio: '', tags: new Set() };
   let focusCardId = null; // restore focus after re-render (keyboard moves)
   let draggedId = null;
   let dealCards = true; // deal-in animation runs on first render only
@@ -441,6 +441,10 @@
   function matchesFilters(card) {
     if (filters.type && card.type !== filters.type) return false;
     if (filters.category && card.category !== filters.category) return false;
+    if (filters.prio) {
+      const p = priorityOf(card); // 0 = unlabelled (either judgement missing)
+      if (filters.prio === 'none' ? p !== 0 : String(p) !== filters.prio) return false;
+    }
     if (filters.tags.size && ![...filters.tags].every((t) => card.tags.includes(t))) return false;
     if (filters.search) {
       const haystack = (card.title + ' ' + card.notes + ' ' + card.tags.join(' ')).toLowerCase();
@@ -449,7 +453,7 @@
     return true;
   }
 
-  const filtersActive = () => Boolean(filters.search || filters.type || filters.category || filters.tags.size);
+  const filtersActive = () => Boolean(filters.search || filters.type || filters.category || filters.prio || filters.tags.size);
 
   function announce(message) {
     $('#live-region').textContent = message;
@@ -569,19 +573,7 @@
 
     header.append(title, count);
 
-    if (visible.length > 1) {
-      const sortBtn = document.createElement('button');
-      sortBtn.className = 'sort-btn';
-      sortBtn.textContent = 'Sort ⇅';
-      sortBtn.title = 'Group this column by type';
-      sortBtn.addEventListener('click', () => sortColumnByType(col.id));
-      const dlBtn = document.createElement('button');
-      dlBtn.className = 'sort-deadline-btn';
-      dlBtn.textContent = 'Deadline ⇅';
-      dlBtn.title = 'Sort this column by deadline, earliest first';
-      dlBtn.addEventListener('click', () => sortColumnByDeadline(col.id));
-      header.append(sortBtn, dlBtn);
-    }
+    if (visible.length > 1) header.append(sortMenu(col.id));
 
     section.append(header);
 
@@ -640,12 +632,14 @@
       // New captures go to the top of the Inbox
       const firstInbox = state.cards.findIndex((c) => c.columnId === 'inbox');
       state.cards.splice(firstInbox === -1 ? state.cards.length : firstInbox, 0, card);
-      // A search or tag filter could still hide the fresh card — clear those so
-      // the capture never vanishes silently.
+      // A search, tag or priority filter could still hide the fresh card —
+      // clear those so the capture never vanishes silently.
       if (!matchesFilters(card)) {
         filters.search = '';
         filters.tags.clear();
+        filters.prio = '';
         $('#search').value = '';
+        $('#prio-filter').value = '';
       }
       commit(`Added ${qLabel(card)} “${short(title)}”`);
       announce(`Added “${title}” to Inbox`);
@@ -853,14 +847,7 @@
 
     head.append(title, count);
 
-    if (visible.length > 1) {
-      const sortBtn = document.createElement('button');
-      sortBtn.className = 'sort-btn';
-      sortBtn.textContent = 'Sort by type ⇅';
-      sortBtn.title = 'Group the backlog by type';
-      sortBtn.addEventListener('click', () => sortColumnByType('inbox'));
-      head.append(sortBtn);
-    }
+    if (visible.length > 1) head.append(sortMenu('inbox'));
 
     sheet.append(head, renderQuickAdd());
 
@@ -2585,22 +2572,50 @@
     announce(`Deleted “${card.title}”`);
   }
 
-  function sortColumnByType(columnId) {
-    const sorted = columnCards(columnId).sort((a, b) => TYPE_RANK[a.type] - TYPE_RANK[b.type]);
+  // The sort menu's orders. Deadline: earliest first, undated at the back
+  // (ISO dates compare correctly as strings; '' would sort first, so undated
+  // cards get a sentinel past every real date). Priority: P1 → P4, unlabelled
+  // last. Array.sort is stable, so ties keep their existing order.
+  const SORTERS = {
+    deadline: { label: 'By deadline', cmp: (a, b) => (a.deadline || '9999-12-31').localeCompare(b.deadline || '9999-12-31') },
+    priority: { label: 'By priority', cmp: (a, b) => (priorityOf(a) || 5) - (priorityOf(b) || 5) },
+    type:     { label: 'By type',     cmp: (a, b) => TYPE_RANK[a.type] - TYPE_RANK[b.type] },
+    newest:   { label: 'Newest first', cmp: (a, b) => b.createdAt - a.createdAt },
+    oldest:   { label: 'Oldest first', cmp: (a, b) => a.createdAt - b.createdAt },
+  };
+
+  function sortColumn(columnId, key) {
+    const sorter = SORTERS[key];
+    if (!sorter) return;
+    const sorted = columnCards(columnId).sort(sorter.cmp);
     state.cards = [...state.cards.filter((c) => c.columnId !== columnId), ...sorted];
-    commit(`Sorted ${columnTitle(columnId)} by type`);
-    announce(`Sorted ${columnTitle(columnId)} by type`);
+    commit(`Sorted ${columnTitle(columnId)} ${sorter.label.toLowerCase()}`);
+    announce(`Sorted ${columnTitle(columnId)} ${sorter.label.toLowerCase()}`);
   }
 
-  // Earliest deadline first; undated cards keep their order at the back
-  // (ISO dates compare correctly as strings, and '' would sort first — so
-  // undated cards get a sentinel past every real date).
-  function sortColumnByDeadline(columnId) {
-    const key = (c) => c.deadline || '9999-12-31';
-    const sorted = columnCards(columnId).sort((a, b) => key(a).localeCompare(key(b)));
-    state.cards = [...state.cards.filter((c) => c.columnId !== columnId), ...sorted];
-    commit(`Sorted ${columnTitle(columnId)} by deadline`);
-    announce(`Sorted ${columnTitle(columnId)} by deadline`);
+  // A command-select: picking an order applies it once and the control snaps
+  // back to its placeholder — it reads as a menu of actions, not a setting.
+  function sortMenu(columnId) {
+    const sel = document.createElement('select');
+    sel.className = 'sort-select';
+    sel.setAttribute('aria-label', `Sort ${columnTitle(columnId)}`);
+    sel.title = 'Sort these cards';
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = 'Sort ⇅';
+    sel.append(placeholder);
+    for (const [key, sorter] of Object.entries(SORTERS)) {
+      const opt = document.createElement('option');
+      opt.value = key;
+      opt.textContent = sorter.label;
+      sel.append(opt);
+    }
+    sel.addEventListener('change', () => {
+      const key = sel.value;
+      sel.value = '';
+      sortColumn(columnId, key);
+    });
+    return sel;
   }
 
   // --------------------------------------------------------------------------
@@ -2871,6 +2886,11 @@
 
   $('#type-filter').addEventListener('change', (e) => {
     filters.type = e.target.value;
+    render();
+  });
+
+  $('#prio-filter').addEventListener('change', (e) => {
+    filters.prio = e.target.value;
     render();
   });
 

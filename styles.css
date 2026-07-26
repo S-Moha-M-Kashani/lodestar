@@ -563,19 +563,18 @@ input, select, textarea { font: inherit; color: inherit; }
 .column-count::before { content: "("; }
 .column-count::after { content: ")"; }
 
-.sort-btn,
-.sort-deadline-btn {
-  border: none;
+/* The sort menu — a command-select that reads as quiet header furniture */
+.sort-select {
+  margin-left: auto;
+  border: 1px solid transparent;
   background: transparent;
   font-family: var(--mono);
   font-size: 11px;
   color: var(--ink-soft);
-  padding: 3px 6px;
+  padding: 2px 4px;
   border-radius: 3px;
 }
-.sort-btn { margin-left: auto; }
-.sort-btn:hover,
-.sort-deadline-btn:hover { color: var(--ink); background: var(--card); }
+.sort-select:hover { color: var(--ink); background: var(--card); border-color: var(--line); }
 
 .quick-add {
   display: flex;
@@ -827,7 +826,7 @@ input, select, textarea { font: inherit; color: inherit; }
   color: var(--ink-soft);
 }
 
-.backlog-head .sort-btn { margin-left: auto; }
+.backlog-head .sort-select { margin-left: auto; }
 
 .backlog-list { display: flex; flex-direction: column; }
 
