@@ -3,7 +3,7 @@ module (LLM provider, search provider, embedder) is chosen here from Settings.""
 from fastapi import FastAPI
 from pydantic import BaseModel
 
-from .agent.loop import Agent
+from .agent.registry import build_agent
 from .config import Settings, load_settings
 from .llm.fake import FakeProvider
 from .llm.openrouter import OpenRouterProvider
@@ -34,7 +34,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     tools = [*make_board_tools(board),
              make_search_tool(DdgsSearch()),
              make_retrieve_tool(index, board)]
-    agent = Agent(llm, tools, max_steps=settings.max_agent_steps)
+    agent = build_agent("default", llm=llm, tools=tools, max_steps=settings.max_agent_steps)
 
     app = FastAPI(title='lodestar-brain')
 
