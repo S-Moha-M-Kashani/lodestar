@@ -1,0 +1,53 @@
+import os
+
+import pytest
+from fastapi.testclient import TestClient
+
+from lodestar_brain.config import Settings
+from lodestar_brain.server import create_app
+
+from .harness import all_scenarios, load_scenario, run_scenario
+
+SCENARIOS = all_scenarios()
+
+
+@pytest.mark.eval
+@pytest.mark.parametrize("path", SCENARIOS, ids=[p.stem for p in SCENARIOS])
+def test_scenario_tool_calls_and_effect(path):
+    scenario = load_scenario(path)
+    result, board = run_scenario(scenario)
+    expect = scenario["expect"]
+
+    called = [step.tool for step in result.steps]
+    assert called == expect["tools_called"], f"{path.name}: tools {called}"
+
+    if "reply_contains" in expect:
+        assert expect["reply_contains"] in result.reply
+
+    cards = board.list_cards()
+    if "board_size" in expect:
+        assert len(cards) == expect["board_size"]
+    if "board_titles_contain" in expect:
+        assert any(expect["board_titles_contain"] in c["title"] for c in cards)
+    if "answered_id" in expect:
+        moved = next(c for c in cards if c["id"] == expect["answered_id"])
+        assert moved["columnId"] == "answered"
+
+
+@pytest.mark.eval
+def test_at_least_one_scenario_exists():
+    assert SCENARIOS, "no eval scenarios found"
+
+
+@pytest.mark.live
+@pytest.mark.skipif(
+    os.environ.get("BRAIN_EVAL_LIVE") != "1" or not os.environ.get("OPENROUTER_API_KEY"),
+    reason="live eval: set BRAIN_EVAL_LIVE=1 and OPENROUTER_API_KEY to run")
+def test_live_agent_answers_a_trivial_prompt():
+    # Uses real LLM but a fake board URL is fine — we only assert it replies.
+    app = create_app(Settings(embedder="hash"))  # llm_provider defaults to openrouter
+    client = TestClient(app)
+    res = client.post("/agent/chat", json={"messages": [
+        {"role": "user", "content": "Say the word ready and nothing else."}]})
+    assert res.status_code == 200
+    assert isinstance(res.json()["reply"], str) and res.json()["reply"]

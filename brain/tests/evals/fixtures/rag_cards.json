@@ -1,0 +1,19 @@
+{
+  "clusters": {
+    "infra": [
+      { "id": "i1", "columnId": "inbox", "title": "Kubernetes pod autoscaling thresholds", "notes": "cluster nodes cpu memory scaling", "tags": ["infra"] },
+      { "id": "i2", "columnId": "inbox", "title": "Ingress controller TLS renewal", "notes": "kubernetes cluster certificate ingress", "tags": ["infra"] },
+      { "id": "i3", "columnId": "inbox", "title": "Node pool cost optimization", "notes": "cluster node cpu memory cost", "tags": ["infra"] }
+    ],
+    "hiring": [
+      { "id": "h1", "columnId": "inbox", "title": "Interview loop for staff engineer", "notes": "candidate interview feedback panel", "tags": ["hiring"] },
+      { "id": "h2", "columnId": "inbox", "title": "Take-home assignment rubric", "notes": "candidate assignment rubric scoring", "tags": ["hiring"] },
+      { "id": "h3", "columnId": "inbox", "title": "Offer letter approval flow", "notes": "candidate offer approval recruiter", "tags": ["hiring"] }
+    ]
+  },
+  "queries": [
+    { "text": "kubernetes cluster node scaling", "expected_cluster": "infra", "k": 3 },
+    { "text": "candidate interview feedback", "expected_cluster": "hiring", "k": 3 }
+  ],
+  "thresholds": { "precision_at_k": 0.66 }
+}
