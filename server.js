@@ -370,10 +370,18 @@ const server = createServer(async (req, res) => {
   // Assistant/RAG proxy — the brain service holds the LLM key; the browser never sees it.
   if (path.startsWith('/api/agent/') || path.startsWith('/api/rag/')) {
     const target = AGENT_URL + path.slice('/api'.length) + url.search;
+    let body;
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      try {
+        body = await readBody(req);
+      } catch {
+        // Almost always an over-long voice recording. Reporting this as
+        // "assistant unavailable" would send the user debugging a brain that
+        // is running perfectly well, so name the real problem.
+        return sendJson(res, 413, { error: 'Payload too large' });
+      }
+    }
     try {
-      const body = req.method === 'GET' || req.method === 'HEAD'
-        ? undefined
-        : await readBody(req);
       const upstream = await fetch(target, {
         method: req.method,
         headers: { 'content-type': req.headers['content-type'] || 'application/json' },

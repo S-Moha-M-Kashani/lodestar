@@ -8,6 +8,8 @@ def test_defaults():
     assert s.embedder == 'auto'
     assert s.board_api_url == 'http://127.0.0.1:3000'
     assert s.max_agent_steps == 8
+    assert s.transcriber == 'auto'
+    assert s.omni_model == 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free'
 
 
 def test_env_overrides():
@@ -18,6 +20,8 @@ def test_env_overrides():
         'BRAIN_EMBEDDER': 'hash',
         'BOARD_API_URL': 'http://board.test',
         'BRAIN_MAX_STEPS': '3',
+        'BRAIN_TRANSCRIBER': 'fake',
+        'BRAIN_OMNI_MODEL': 'google/gemini-2.5-flash',
     })
     assert s.openrouter_api_key == 'sk-test'
     assert s.model == 'anthropic/claude-sonnet-4.5'
@@ -25,6 +29,8 @@ def test_env_overrides():
     assert s.embedder == 'hash'
     assert s.board_api_url == 'http://board.test'
     assert s.max_agent_steps == 3
+    assert s.transcriber == 'fake'
+    assert s.omni_model == 'google/gemini-2.5-flash'
 
 
 # ---- chat memory dir pairs with the board ---------------------------------

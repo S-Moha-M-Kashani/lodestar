@@ -1,9 +1,13 @@
+import base64
+import json
+
 import httpx
 import respx
 from fastapi.testclient import TestClient
 
 from lodestar_brain.config import Settings
 from lodestar_brain.server import create_app
+from lodestar_brain.voice.fake import FAKE_TRANSCRIPT
 
 
 def test_health():
@@ -15,6 +19,7 @@ def test_health():
 
 def fake_app():
     return create_app(Settings(llm_provider='fake', embedder='hash',
+                               transcriber='fake',
                                board_api_url='http://board.test'))
 
 
@@ -55,10 +60,93 @@ def test_chat_add_creates_card_and_flags_mutation():
     assert 'created' in body['reply']
 
 
+# ---- POST /agent/transcribe ----------------------------------------------
+
+WAV = b'RIFF....WAVEfake-pcm-bytes'
+
+
+def b64(raw):
+    return base64.b64encode(raw).decode()
+
+
+def test_transcribe_returns_text():
+    client = TestClient(fake_app())
+    res = client.post('/agent/transcribe', json={'audio': b64(WAV), 'format': 'wav'})
+    assert res.status_code == 200
+    assert res.json() == {'text': FAKE_TRANSCRIPT}
+
+
+def test_transcribe_defaults_to_wav():
+    client = TestClient(fake_app())
+    res = client.post('/agent/transcribe', json={'audio': b64(WAV)})
+    assert res.status_code == 200
+    assert res.json()['text'] == FAKE_TRANSCRIPT
+
+
+def test_transcribe_rejects_malformed_base64():
+    client = TestClient(fake_app())
+    res = client.post('/agent/transcribe', json={'audio': 'not!valid!base64!'})
+    assert res.status_code == 400
+
+
+def test_transcribe_rejects_unsupported_format():
+    client = TestClient(fake_app())
+    res = client.post('/agent/transcribe',
+                      json={'audio': b64(WAV), 'format': 'webm'})
+    assert res.status_code == 400
+
+
+def test_transcribe_rejects_empty_audio():
+    client = TestClient(fake_app())
+    res = client.post('/agent/transcribe', json={'audio': ''})
+    assert res.status_code == 400
+
+
+def test_transcribe_requires_an_audio_field():
+    client = TestClient(fake_app())
+    assert client.post('/agent/transcribe', json={}).status_code == 422
+
+
+def test_transcribe_never_touches_the_board():
+    # Transcription is stateless: no board read, no board write. respx with no
+    # routes registered means any outbound call at all raises.
+    with respx.mock:
+        client = TestClient(fake_app())
+        res = client.post('/agent/transcribe', json={'audio': b64(WAV)})
+    assert res.status_code == 200
+
+
+@respx.mock
+def test_transcribe_forwards_the_picked_omni_model():
+    route = respx.post('https://openrouter.ai/api/v1/chat/completions').mock(
+        return_value=httpx.Response(200, json={
+            'choices': [{'message': {'content': 'spoken words'}}]}))
+    client = TestClient(create_app(Settings(
+        llm_provider='fake', embedder='hash', transcriber='openrouter',
+        openrouter_api_key='sk-test', board_api_url='http://board.test')))
+    res = client.post('/agent/transcribe', json={
+        'audio': b64(WAV), 'format': 'wav', 'model': 'google/gemini-2.5-flash'})
+    assert res.status_code == 200
+    assert res.json() == {'text': 'spoken words'}
+    assert json.loads(route.calls.last.request.content)['model'] == 'google/gemini-2.5-flash'
+
+
+@respx.mock
+def test_transcribe_maps_upstream_failure_to_502():
+    respx.post('https://openrouter.ai/api/v1/chat/completions').mock(
+        return_value=httpx.Response(500, json={'error': 'nope'}))
+    client = TestClient(create_app(Settings(
+        llm_provider='fake', embedder='hash', transcriber='openrouter',
+        openrouter_api_key='sk-test', board_api_url='http://board.test')))
+    res = client.post('/agent/transcribe', json={'audio': b64(WAV)})
+    assert res.status_code == 502
+
+
 # ---- Chat memory: chunks from assistant chat land in a per-board Chroma ---
 
 def memory_app(chat_dir):
     return create_app(Settings(llm_provider='fake', embedder='hash',
+                               transcriber='fake',
                                board_api_url='http://board.test',
                                chat_memory_dir=str(chat_dir)))
 

@@ -1941,6 +1941,59 @@ kbd {
   background: var(--paper);
   color: var(--ink);
 }
+.composer-actions { display: flex; gap: 6px; align-items: center; }
+.chat-mic {
+  font-size: 0.95rem;
+  line-height: 1;
+  padding: 8px 10px;
+  min-width: 38px;
+}
+.chat-mic[aria-pressed='true'] {
+  border-color: var(--rule-red);
+  color: var(--rule-red);
+}
+
+/* Recording bar — sits above the composer while a take is in progress. */
+.chat-recording {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  border: 1px solid var(--rule-red);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--rule-red) 6%, var(--paper));
+}
+.chat-rec-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--rule-red);
+  animation: rec-pulse 1.4s ease-in-out infinite;
+}
+@keyframes rec-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+.chat-rec-label {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--rule-red);
+}
+.chat-elapsed {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+  margin-right: auto;
+}
+.chat-voice-error {
+  margin: 0 0 6px;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--danger);
+}
+
 .chat-status {
   font-family: var(--mono);
   font-size: 0.75rem;

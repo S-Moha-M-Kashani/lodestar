@@ -2,6 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { startServer } from './helpers/server-harness.mjs';
+import { createServer } from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -302,6 +303,77 @@ test('deadline survives soft-delete and restore', async () => {
     const trash = await (await fetch(s.base + '/api/trash')).json();
     assert.equal(trash.cards.find((c) => c.id === 'dl').deadline, '2026-09-15');
   } finally { await s.stop(); }
+});
+
+// ---- Voice transcription proxy ------------------------------------------
+// The browser records audio and posts base64 WAV; the Node proxy must hand it
+// to the brain untouched (the OpenRouter key lives only there).
+
+// Minimal stand-in for the brain: echoes back what it was handed.
+function startStubBrain(handler) {
+  return new Promise((resolve) => {
+    const srv = createServer(async (req, res) => {
+      let body = '';
+      for await (const chunk of req) body += chunk;
+      handler({ method: req.method, path: req.url, contentType: req.headers['content-type'], body });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ text: 'transcribed words' }));
+    });
+    srv.listen(0, '127.0.0.1', () => resolve({
+      url: `http://127.0.0.1:${srv.address().port}`,
+      stop: () => new Promise((done) => srv.close(done)),
+    }));
+  });
+}
+
+test('POST /api/agent/transcribe reaches the brain with the body intact', async () => {
+  const seen = [];
+  const brain = await startStubBrain((req) => seen.push(req));
+  const s = await startServer({ env: { AGENT_URL: brain.url } });
+  try {
+    const payload = { audio: Buffer.from('fake-wav-bytes').toString('base64'), format: 'wav', model: 'my/omni' };
+    const res = await fetch(s.base + '/api/agent/transcribe', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { text: 'transcribed words' });
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].method, 'POST');
+    assert.equal(seen[0].path, '/agent/transcribe'); // /api stripped, nothing else
+    assert.match(seen[0].contentType, /application\/json/);
+    assert.deepEqual(JSON.parse(seen[0].body), payload); // byte-for-byte passthrough
+  } finally { await s.stop(); await brain.stop(); }
+});
+
+test('transcribe returns 503 when the brain is down', async () => {
+  const s = await startServer({ env: { AGENT_URL: 'http://127.0.0.1:59999' } });
+  try {
+    const res = await fetch(s.base + '/api/agent/transcribe', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ audio: 'AAAA', format: 'wav' }),
+    });
+    assert.equal(res.status, 503);
+    assert.deepEqual(await res.json(), { error: 'assistant unavailable' });
+  } finally { await s.stop(); }
+});
+
+test('oversized audio is rejected as too large, not blamed on the brain', async () => {
+  // Audio is the only payload that realistically hits the ~5MB body cap. The
+  // caller must be told the recording was too long — reporting "assistant
+  // unavailable" would send them hunting a service that is running fine.
+  const seen = [];
+  const brain = await startStubBrain((req) => seen.push(req));
+  const s = await startServer({ env: { AGENT_URL: brain.url } });
+  try {
+    const res = await fetch(s.base + '/api/agent/transcribe', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ audio: 'A'.repeat(5_000_001), format: 'wav' }),
+    });
+    assert.equal(res.status, 413);
+    assert.equal((await res.json()).error, 'Payload too large');
+    assert.equal(seen.length, 0); // never forwarded upstream
+  } finally { await s.stop(); await brain.stop(); }
 });
 
 // ---- Paired backends: every board gets its own brain ----------------------

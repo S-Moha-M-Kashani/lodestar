@@ -88,6 +88,8 @@ Every capability sits behind a small interface chosen by env vars, so each piece
 | `BRAIN_LLM` | `openrouter` | `fake` = deterministic offline provider (tests/CI) |
 | `BRAIN_EMBEDDER` | `auto` | `fastembed` (semantic), `hash` (offline), `auto` = fastembed with hash fallback |
 | `BRAIN_MAX_STEPS` | `8` | Tool-call budget per chat turn |
+| `BRAIN_TRANSCRIBER` | `auto` | Voice-to-text backend. `fake` = deterministic offline transcript (tests/CI); `auto`/`openrouter` = the omni model |
+| `BRAIN_OMNI_MODEL` | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free` | Default audio → text model; the Assistant view's omni picker overrides it per request |
 | `BOARD_API_URL` | `http://127.0.0.1:3000` | Where the brain finds the board API |
 | `AGENT_URL` | `http://127.0.0.1:8000` | Where the Node proxy finds the brain |
 

@@ -1,6 +1,9 @@
 """FastAPI wiring. create_app() is the composition root: every swappable
 module (LLM provider, search provider, embedder) is chosen here from Settings."""
-from fastapi import FastAPI
+import base64
+import binascii
+
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from .agent.registry import build_agent
@@ -12,12 +15,20 @@ from .rag.embedder import make_embedder
 from .rag.index import LeidenIndex, make_retrieve_tool
 from .tools.board import BoardClient, make_board_tools
 from .tools.websearch import DdgsSearch, make_search_tool
+from .voice import make_transcriber
+from .voice.base import TranscriptionError
 
 MUTATING_TOOLS = {'create_question', 'update_question'}
 
 
 class ChatBody(BaseModel):
     messages: list[dict]
+    model: str | None = None
+
+
+class TranscribeBody(BaseModel):
+    audio: str            # base64; the browser encodes 16 kHz mono WAV
+    format: str = 'wav'
     model: str | None = None
 
 
@@ -46,6 +57,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         memory = ChromaChatMemory(settings.chat_memory_dir, embedder)
         tools.append(make_recall_tool(memory))
     agent = build_agent("default", llm=llm, tools=tools, max_steps=settings.max_agent_steps)
+    transcriber = make_transcriber(settings)
 
     app = FastAPI(title='lodestar-brain')
 
@@ -65,6 +77,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 'mutated': any(s.tool in MUTATING_TOOLS for s in result.steps),
                 'steps': [{'tool': s.tool, 'arguments': s.arguments}
                           for s in result.steps]}
+
+    @app.post('/agent/transcribe')
+    def transcribe(body: TranscribeBody) -> dict:
+        """Speech → text. Stateless: the board is never read or written here."""
+        try:
+            audio = base64.b64decode(body.audio, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise HTTPException(400, f'audio is not valid base64: {exc}') from exc
+        try:
+            text = transcriber.transcribe(audio, body.format, model=body.model)
+        except ValueError as exc:          # caller's payload was unusable
+            raise HTTPException(400, str(exc)) from exc
+        except TranscriptionError as exc:  # the backend let us down
+            raise HTTPException(502, str(exc)) from exc
+        return {'text': text}
 
     @app.post('/rag/reindex')
     def reindex() -> dict:

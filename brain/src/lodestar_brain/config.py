@@ -17,6 +17,9 @@ class Settings:
     # tests/evals must not touch disk). load_settings pairs it with the board.
     chat_memory_dir: str = ''
     max_agent_steps: int = 8
+    transcriber: str = 'auto'          # 'auto' | 'openrouter' | 'fake'
+    # Audio/photo/video → text. Matches the Assistant view's omni picker default.
+    omni_model: str = 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free'
 
 
 def _chat_memory_dir_for(board_api_url: str) -> str:
@@ -37,4 +40,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         chat_memory_dir=env.get('BRAIN_CHAT_MEMORY_DIR')
                         or _chat_memory_dir_for(board_api_url),
         max_agent_steps=int(env.get('BRAIN_MAX_STEPS', '8')),
+        transcriber=env.get('BRAIN_TRANSCRIBER', 'auto'),
+        omni_model=env.get('BRAIN_OMNI_MODEL',
+                           'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free'),
     )
