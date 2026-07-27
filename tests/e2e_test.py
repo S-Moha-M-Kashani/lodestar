@@ -66,7 +66,9 @@ def start_brain():
          "lodestar_brain.server:app", "--port", str(BRAIN_PORT)],
         cwd=ROOT,
         env={**os.environ, "BRAIN_LLM": "fake", "BRAIN_EMBEDDER": "hash",
-             "BOARD_API_URL": f"http://127.0.0.1:{PORT}"},
+             "BOARD_API_URL": f"http://127.0.0.1:{PORT}",
+             # keep chat memory out of the repo's chroma/ dirs
+             "BRAIN_CHAT_MEMORY_DIR": os.path.join(os.path.dirname(DB_PATH), "chroma")},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
