@@ -2331,6 +2331,69 @@
 
   const assistantState = { messages: [], busy: false };
 
+  // Model choices for the brain, one per capability. Only the text pick has
+  // an effect today — it rides along on every /api/agent/chat request (the
+  // brain forwards it to OpenRouter). The omni and embedding picks are stored
+  // preferences for the media-ingestion and remote-embedder features to come.
+  const MODELS_KEY = 'question-board:models';
+  const DEFAULT_MODELS = {
+    text: 'moonshotai/kimi-k3',
+    omni: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
+    embed: 'nvidia/llama-nemotron-embed-vl-1b-v2:free',
+  };
+  const MODEL_PICKERS = [
+    { key: 'text', id: 'model-text', label: 'Text generation',
+      options: [DEFAULT_MODELS.text, 'openai/gpt-4o-mini', 'openrouter/auto'] },
+    { key: 'omni', id: 'model-omni', label: 'Audio / photo / video → text',
+      options: [DEFAULT_MODELS.omni, 'openrouter/auto'] },
+    { key: 'embed', id: 'model-embed', label: 'Embeddings',
+      options: [DEFAULT_MODELS.embed, 'openai/text-embedding-3-small'] },
+  ];
+  const assistantModels = { ...DEFAULT_MODELS };
+  try {
+    const saved = JSON.parse(localStorage.getItem(MODELS_KEY) || '{}');
+    for (const k of Object.keys(DEFAULT_MODELS)) {
+      if (typeof saved[k] === 'string' && saved[k]) assistantModels[k] = saved[k];
+    }
+  } catch { /* corrupted or private mode — keep defaults */ }
+
+  function renderChatSettings() {
+    const panel = document.createElement('fieldset');
+    panel.className = 'chat-settings';
+    const legend = document.createElement('legend');
+    legend.textContent = 'Models';
+    panel.appendChild(legend);
+    for (const picker of MODEL_PICKERS) {
+      const label = document.createElement('label');
+      label.className = 'field';
+      label.append(picker.label);
+      const sel = document.createElement('select');
+      sel.id = picker.id;
+      // A previously saved slug that left the preset list still deserves to
+      // show as selected, so it becomes an extra option instead of vanishing.
+      const opts = picker.options.includes(assistantModels[picker.key])
+        ? picker.options : [assistantModels[picker.key], ...picker.options];
+      for (const slug of opts) {
+        const opt = document.createElement('option');
+        opt.value = slug;
+        opt.textContent = slug;
+        sel.append(opt);
+      }
+      sel.value = assistantModels[picker.key];
+      sel.addEventListener('change', () => {
+        assistantModels[picker.key] = sel.value;
+        try { localStorage.setItem(MODELS_KEY, JSON.stringify(assistantModels)); } catch { /* private mode */ }
+      });
+      label.appendChild(sel);
+      panel.appendChild(label);
+    }
+    const hint = document.createElement('p');
+    hint.className = 'field-hint';
+    hint.textContent = 'Text generation applies to the chat now; the other two are saved for upcoming media and retrieval features.';
+    panel.appendChild(hint);
+    return panel;
+  }
+
   function renderAssistant() {
     const sheet = document.createElement('section');
     sheet.className = 'assistant-sheet';
@@ -2338,6 +2401,8 @@
     const heading = document.createElement('h2');
     heading.textContent = 'Assistant';
     sheet.appendChild(heading);
+
+    sheet.appendChild(renderChatSettings());
 
     const log = document.createElement('div');
     log.className = 'chat-log';
@@ -2413,7 +2478,7 @@
       const res = await fetch('/api/agent/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: history }),
+        body: JSON.stringify({ messages: history, model: assistantModels.text }),
       });
       if (!res.ok) throw new Error(`agent ${res.status}`);
       const data = await res.json();
