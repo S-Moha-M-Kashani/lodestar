@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { startServer } from './helpers/server-harness.mjs';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -302,4 +302,23 @@ test('deadline survives soft-delete and restore', async () => {
     const trash = await (await fetch(s.base + '/api/trash')).json();
     assert.equal(trash.cards.find((c) => c.id === 'dl').deadline, '2026-09-15');
   } finally { await s.stop(); }
+});
+
+// ---- Paired backends: every board gets its own brain ----------------------
+// The test board on :3001 (board-3001.db) must proxy the assistant to its own
+// brain on :8001, which in turn writes back to :3001 — never to board.db.
+
+test('package.json pairs the test board with its own brain', async () => {
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  const board = pkg.scripts['test-board'];
+  assert.match(board, /PORT=3001/);
+  assert.match(board, /BOARD_DB=board-3001\.db/);
+  // Without this, the :3001 board talks to the default brain, whose writes
+  // land in board.db — the bug this pairing exists to prevent.
+  assert.match(board, /AGENT_URL=http:\/\/127\.0\.0\.1:8001/);
+
+  const brain = pkg.scripts['test-brain'];
+  assert.ok(brain, 'a test-brain script must exist to pair with test-board');
+  assert.match(brain, /BOARD_API_URL=http:\/\/127\.0\.0\.1:3001/);
+  assert.match(brain, /--port 8001/);
 });
