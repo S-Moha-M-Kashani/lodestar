@@ -918,6 +918,44 @@ try:
         check("assistant: created card visible on the board",
               page.locator(".card-title", has_text="What is Leiden clustering?").count() >= 1)
 
+        # ---- Assistant model settings ----------------------------------------
+        # A "Models" panel with three pickers. Only the text-generation pick
+        # changes behaviour today (it rides along on every chat request); the
+        # omni and embedding picks are stored preferences for the brain's
+        # coming media/RAG features. All three persist in localStorage.
+        DEFAULT_TEXT = "moonshotai/kimi-k3"
+        DEFAULT_OMNI = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+        DEFAULT_EMBED = "nvidia/llama-nemotron-embed-vl-1b-v2:free"
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector("#chat-input")
+        check("assistant: settings panel offers the three model pickers",
+              page.locator(".chat-settings").count() == 1
+              and page.locator("#model-text").count() == 1
+              and page.locator("#model-omni").count() == 1
+              and page.locator("#model-embed").count() == 1)
+        check("assistant: pickers default to the chosen slugs",
+              page.input_value("#model-text") == DEFAULT_TEXT
+              and page.input_value("#model-omni") == DEFAULT_OMNI
+              and page.input_value("#model-embed") == DEFAULT_EMBED)
+
+        n_replies = page.locator(".chat-msg.assistant").count()
+        page.fill("#chat-input", "model ride-along probe")
+        with page.expect_request("**/api/agent/chat") as req_info:
+            page.click("#chat-send")
+        check("assistant: chat request carries the picked text model",
+              f'"{DEFAULT_TEXT}"' in (req_info.value.post_data or ""))
+        page.wait_for_function(
+            f"document.querySelectorAll('.chat-msg.assistant').length >= {n_replies + 1}")
+
+        page.select_option("#model-text", "openai/gpt-4o-mini")
+        page.reload()
+        page.wait_for_selector("#board")
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector("#model-text")
+        check("assistant: model choice survives a reload",
+              page.input_value("#model-text") == "openai/gpt-4o-mini")
+        page.select_option("#model-text", DEFAULT_TEXT)
+
         # ---- Assistant error path: a 503 renders the friendly unavailable message.
         page.locator('.view-switch button[data-view="assistant"]').click()
         page.wait_for_selector("#chat-input")
