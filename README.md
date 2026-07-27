@@ -7,15 +7,19 @@ The design is a "question ledger": quad-ruled engineering paper, cards as ruled 
 ## Features
 
 - **Three-column lifecycle**: Inbox → In Progress → Answered
-- **Four views**: **Board** (the columns), **Backlog** (the Inbox as a scannable ledger list), **Overview** (a semantic map — see below), and **Matrix** (the Eisenhower importance × urgency grid)
+- **Seven views**: **Board** (the columns), **Backlog** (the Inbox as a scannable ledger list), **Overview** (a semantic map — see below), **Matrix** (four decision lenses on one grid), **Areas** (which life area is starved), **Review** (the weekly sweep), and **Assistant** (chat with the brain — see below)
 - **Drag & drop** cards within and between columns, with drop-position indicator
-- **Card types**: question, problem, task, idea, plan — stamped on each card in neutral ink, with a per-column "sort by type" button
-- **Categories**: eight life areas (Work, Love, Family, Health, Mind, Music, Travel, Home), each with its own colour; cards carry a coloured spine, and a rail of coloured tabs under the header filters the board to one life area
-- **Importance & urgency**: set each to High or Low on a card to place it on the **Matrix** (Answer now / Schedule / Delegate / Drop)
-- **Overview map**: every question is plotted by meaning — its text is embedded and PCA reduces that to two axes (PC-1 / PC-2), so questions that read alike sit close together. Embeddings come from a HuggingFace model ([Transformers.js](https://huggingface.co/docs/transformers.js), `Xenova/all-MiniLM-L6-v2`) loaded on demand from a CDN — **no login or API key needed**; the ~30 MB model downloads once and is cached by the browser. When it's still loading or the browser is offline, the map falls back to a keyword-overlap layout, so it always renders with no network. Hover a dot for details, click to open the full editor, and the tag/type/category/search filters apply just like the board. Dots are inked in their category's colour, so the map reads by life area.
+- **Card types**: question, problem, task, idea, plan — stamped on each card in neutral ink, with a per-column sort menu (by deadline, priority, type, newest or oldest)
+- **Categories**: nine life areas to start (Work, Love, Family, Health, Mind, Music, Travel, Home, Money), each with its own colour — and the set is **yours**: add or remove areas from the ✎ tab on the rail, pick a hue for each, up to 24. Cards carry a coloured spine, and the rail of coloured tabs under the header filters the board to one life area
+- **Importance & urgency**: set each to High or Low on a card to place it on the **Matrix**
+- **Deadlines and automatic priority**: give a card an ISO date and it carries a deadline chip that turns red once overdue. Priority is **derived**, never stored — P1 urgent & important, P2 urgent, P3 important, P4 neither — so it can never disagree with the two judgements behind it; the toolbar filters by it
+- **Matrix — four lenses on the same cards**: importance is always the vertical axis, and the picker swaps what it is crossed with — **Eisenhower** (urgency; Answer now / Schedule / Delegate / Drop, urgent on the left), **Leverage** (effort — where a little work moves a lot), **Serenity** (control — what deserves action, and what you are allowed to put down), and **Follow-through** (time since a card was last touched)
+- **Overview map**: every question is plotted by meaning — its text is embedded and reduced to two axes, so questions that read alike sit close together. Toggle the projection between **PCA** (fast, stable global axes) and **t-SNE** (local neighbourhoods, so clusters of related thoughts pull together); t-SNE is seeded, so the same cards always land in the same spots. Embeddings come from a HuggingFace model ([Transformers.js](https://huggingface.co/docs/transformers.js), `Xenova/all-MiniLM-L6-v2`) loaded on demand from a CDN — **no login or API key needed**; the ~30 MB model downloads once and is cached by the browser. When it's still loading or the browser is offline, the map falls back to a keyword-overlap layout, so it always renders with no network. Hover a dot for details, click to open the full editor, and the tag/type/category/search filters apply just like the board. Dots are inked in their category's colour, so the map reads by life area.
+- **Areas view**: one small-multiples tile per life area plus an attention wheel whose spoke length is open-question mass, answering "which part of my life is starved?" at a glance. Click a tile to focus that area and open a category-aware detail panel — cooling-off (the 30-day rule), learning progress, serenity check, and what has been longest untouched
+- **Review view**: GTD's weekly review as a screen — stat tiles (inbox, answered this week, new this week, open in total), week-over-week drift per area, the neglect list (important cards untouched for over a month), and three old thoughts resurfaced on purpose. The picks are seeded on the date and pinned for the day, so acting on one never reshuffles the others
 - **Quick capture**: write anything into the Inbox and press Enter
-- **Edit modal**: notes, type, category, and tags per card
-- **Search & filters**: free-text search, type filter, category tabs, tag chips
+- **Edit modal**: notes, type, category, tags, importance and urgency, effort, control, and a deadline per card. Tag a card `decision` and notes lines starting with `+` or `−` read back as a two-column pro/con balance sheet
+- **Search & filters**: free-text search, type filter, priority filter, category tabs, tag chips
 - **Persistence**: runs on localStorage on its own; when the server is running it also saves to a SQLite database, so questions survive restarts and reopen on any browser. See **How your data is stored** below for the exact durability guarantee. Export/Import as JSON for backups
 - **Database sync rule**: a browser that already has its own board keeps it (and pushes it to the server), so unsynced local edits are never clobbered; a fresh browser loads the board from the database
 - **One Menu button**: Undo, History, Export and Import fold into a single expanding menu in the toolbar
@@ -68,7 +72,7 @@ Each machine keeps its own database — the board does not sync between laptops.
 
 ## The brain (assistant service)
 
-The **Assistant** view talks to a separate Python service — the *brain* — that runs one function-calling agent with four jobs: research a question (web search, cited urls), operate the board in plain language ("triage my inbox"), break fuzzy questions into concrete sub-questions, and surface connections between questions using **Leiden community detection** over a similarity graph of your board.
+The **Assistant** view talks to a separate Python service — the *brain* — that runs one function-calling agent with four jobs: research a question (web search, cited urls), operate the board in plain language ("triage my inbox"), break fuzzy questions into concrete sub-questions, and surface connections between questions using **Leiden community detection** over a similarity graph of your board. Each reply shows the tools the agent actually called, so its work is visible rather than magic, and the view has model pickers for text generation (live), plus media-to-text and embeddings (saved for the features they belong to).
 
 ```
 browser ── :3000 Node (board + SQLite + static) ──proxy /api/agent/*──▶ :8000 brain (FastAPI)
@@ -114,12 +118,31 @@ Swap points, each one file: the LLM provider (`brain/src/lodestar_brain/llm/`), 
 
 ## Tests
 
-End-to-end tests exercise every button and flow — including database persistence — in headless Chrome. The suite **starts the server itself** on a temporary database, so you don't need to run anything first (requires [uv](https://docs.astral.sh/uv/) and Node 23.4+):
+Lodestar is developed **test-first**: every feature or fix ships with tests in the same change, and the relevant suite passes before commit. There are four layers, and **all of them run fully offline** — the brain uses a deterministic fake LLM and a hash embedder, and the frontend's semantic map is forced to its keyword fallback, so there is no API key, no network, and no flakiness.
+
+| Layer | Where | What it covers |
+| --- | --- | --- |
+| Server unit | `tests/server.test.js`, `tests/backup.test.js` (`node:test`, zero deps) | Every API branch: soft-delete and restore, 400/404/405, the payload cap, the brain proxy's 503, static serving, legacy-schema migration |
+| Brain unit | `brain/tests/` (pytest) | Agent loop, tool errors and step limits, the board tools' full-list contract, provider parsing, RAG |
+| Brain evals | `brain/tests/evals/` | Agent *behaviour* against JSON scenario files, plus RAG retrieval-quality thresholds |
+| Frontend e2e | `tests/e2e_test.py` (Playwright) | 160 checks — one per user-facing action — in headless Chrome |
+
+The e2e suite **starts both services itself** on temporary ports and a temporary database, so nothing needs to be running first (requires [uv](https://docs.astral.sh/uv/) and Node 23.4+):
 
 ```sh
-uv run --with playwright python tests/e2e_test.py
+uv run --with playwright python tests/e2e_test.py   # full e2e
+npm run test:server                                 # server + backup unit suites
+npm run test:all                                    # server + brain unit + e2e
+uv run --project brain pytest brain/tests -v        # brain unit
+uv run --project brain pytest brain/tests/evals -v  # brain evals
 ```
 
-These same tests run in **CI on every push and pull request** (`.github/workflows/ci.yml`) — the workflow must pass before anything is deployed.
+**Backup guarantee:** every test entry point backs up `board.db` first — a timestamped copy under `backups/` (git-ignored, newest 30 kept) and, if [rclone](https://rclone.org/) is configured, a copy to `gdrive:lodestar-backups/`. Auth is one-time (`rclone config` and sign in to Google in the browser; rclone stores an OAuth token on the machine). **No Google password is ever stored in or read by this repo.** A missing or unconfigured rclone prints a warning and never blocks the tests.
 
-See `plan.md` for the design/implementation plan.
+A CI workflow (`.github/workflows/ci.yml`) runs the brain unit tests and the full e2e suite on every push and pull request. Note that the repository currently has **no git remote**, so CI has not actually run yet — the suites are run locally before each commit.
+
+## More
+
+- `details.md` — the full architecture deep dive: every module, the data flows, the invariants, and the design trade-offs.
+- `plan.md` — the original design/implementation plan.
+- `docs/superpowers/` — a design spec and an implementation plan per major feature.
