@@ -1228,7 +1228,52 @@ try:
         page.wait_for_timeout(100)
         check("areas: clicking the open tile again closes the detail",
               page.locator(".area-detail").count() == 0)
+
+        # The wheel's area names sit outside the ring, so the SVG viewport has to
+        # make room for them: any label whose ink crosses the viewBox edge gets
+        # sliced off ("COACHING 3" rendering as "NG 3"). Measured in user space,
+        # where getBBox() and viewBox share units.
+        clipped_labels = """() => {
+          const svg = document.querySelector('svg.wheel');
+          const vb = svg.viewBox.baseVal, EPS = 0.5;
+          return [...svg.querySelectorAll('text')].filter((t) => {
+            const b = t.getBBox();
+            return b.x < vb.x - EPS || b.x + b.width > vb.x + vb.width + EPS
+                || b.y < vb.y - EPS || b.y + b.height > vb.y + vb.height + EPS;
+          }).map((t) => t.textContent);
+        }"""
+        clipped = page.evaluate(clipped_labels)
+        check("areas: no wheel label is clipped by the SVG viewport",
+              clipped == [])
+        if clipped:
+            print("   clipped:", clipped)
         page.screenshot(path=shot("areas.png"))
+
+        # A long area name must not spill off the wheel either — the ring makes
+        # room for the widest label, not the other way round.
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector("#board.board")
+        page.click("#edit-cats-btn")
+        page.wait_for_selector("#cats-dialog[open]")
+        page.fill("#cat-add-name", "Photography")
+        page.click("#cat-add-btn")
+        page.wait_for_timeout(150)
+        page.click("#close-cats")
+        page.wait_for_timeout(100)
+        page.locator('[data-col="inbox"] .card').first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        page.locator('.category-picker label:has(input[value="photography"])').click()
+        page.click('#card-form button[type="submit"]')
+        page.wait_for_timeout(100)
+        page.locator('.view-switch button[data-view="areas"]').click()
+        page.wait_for_selector("#board.areas svg.wheel")
+        long_clipped = page.evaluate(clipped_labels)
+        check("areas: a long area name still fits inside the wheel viewport",
+              page.locator("svg.wheel text", has_text="Photography").count() == 1
+              and long_clipped == [])
+        if long_clipped:
+            print("   clipped:", long_clipped)
+        page.screenshot(path=shot("areas-long-label.png"))
 
         # ---- Review view -----------------------------------------------------
         page.locator('.view-switch button[data-view="review"]').click()

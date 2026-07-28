@@ -1693,15 +1693,33 @@
     return { cards, open, oldestAge: open.length ? Date.now() - oldest : 0, top };
   }
 
+  // Area names ring the wheel outside the plot, so the viewport has to reserve
+  // room for them or a long name gets sliced off at the viewBox edge. Widths come
+  // from an off-screen twin that inherits the same `.wheel text` type styles, so
+  // the reservation tracks the real font instead of guessing at glyph advances.
+  let wheelRuler = null;
+  function wheelLabelWidth(text) {
+    if (!wheelRuler) {
+      const svg = document.createElementNS(SVGNS, 'svg');
+      // Deliberately NOT class="wheel": that selector is test-stable API for the
+      // one real wheel. `.wheel-ruler text` copies the type styles instead.
+      svg.setAttribute('class', 'wheel-ruler');
+      svg.setAttribute('aria-hidden', 'true');
+      wheelRuler = document.createElementNS(SVGNS, 'text');
+      svg.append(wheelRuler);
+      document.body.append(svg);
+    }
+    wheelRuler.textContent = text;
+    // getComputedTextLength() needs a rendered node; fall back to a mono estimate.
+    return wheelRuler.getComputedTextLength() || text.length * 6;
+  }
+
   // Attention wheel — spoke length is open-question mass (high importance
   // counts double). Purely derived from the board: no scoring ritual to keep up.
   function renderWheel(cats) {
-    const SIZE = 260, CX = SIZE / 2, CY = SIZE / 2, R = 88;
+    const SIZE = 260, CX = SIZE / 2, CY = SIZE / 2, R = 88, COLLAR = 18, MARGIN = 2;
     const svg = document.createElementNS(SVGNS, 'svg');
     svg.setAttribute('class', 'wheel');
-    svg.setAttribute('viewBox', `0 0 ${SIZE} ${SIZE}`);
-    svg.setAttribute('width', SIZE);
-    svg.setAttribute('height', SIZE);
     svg.setAttribute('role', 'img');
     svg.setAttribute('aria-label', 'Attention wheel — open questions per life area');
 
@@ -1716,6 +1734,8 @@
       stats.open.reduce((s, c) => s + (c.importance === 'high' ? 2 : 1), 0));
     const maxMass = Math.max(1, ...masses);
     const pts = [];
+    // The plot box is fixed; the label ink pushes these bounds outward instead.
+    let minX = 0, maxX = SIZE;
     cats.forEach(({ cat, stats }, i) => {
       const a = -Math.PI / 2 + (i / cats.length) * Math.PI * 2;
       const frac = 0.1 + 0.9 * (masses[i] / maxMass);
@@ -1733,15 +1753,27 @@
       dot.style.fill = catColor(cat.id);
       svg.append(dot);
 
-      const lx = CX + Math.cos(a) * (R + 18), ly = CY + Math.sin(a) * (R + 18);
+      const lx = CX + Math.cos(a) * (R + COLLAR), ly = CY + Math.sin(a) * (R + COLLAR);
+      const anchor = Math.abs(Math.cos(a)) < 0.3 ? 'middle' : Math.cos(a) > 0 ? 'start' : 'end';
       const label = document.createElementNS(SVGNS, 'text');
       label.setAttribute('x', lx.toFixed(1)); label.setAttribute('y', ly.toFixed(1));
-      label.setAttribute('text-anchor', Math.abs(Math.cos(a)) < 0.3 ? 'middle' : Math.cos(a) > 0 ? 'start' : 'end');
+      label.setAttribute('text-anchor', anchor);
       label.setAttribute('dominant-baseline', 'middle');
       label.style.fill = catColor(cat.id);
       label.textContent = `${cat.label} ${stats.open.length}`;
       svg.append(label);
+
+      const w = wheelLabelWidth(label.textContent);
+      const left = anchor === 'start' ? lx : anchor === 'end' ? lx - w : lx - w / 2;
+      minX = Math.min(minX, left - MARGIN);
+      maxX = Math.max(maxX, left + w + MARGIN);
     });
+
+    // Widen the viewport around the untouched plot box, so the ring keeps its
+    // size and the names simply get the room they need on either side.
+    svg.setAttribute('viewBox', `${minX.toFixed(1)} 0 ${(maxX - minX).toFixed(1)} ${SIZE}`);
+    svg.setAttribute('width', Math.ceil(maxX - minX));
+    svg.setAttribute('height', SIZE);
 
     if (cats.length > 1) {
       const poly = document.createElementNS(SVGNS, 'polygon');
