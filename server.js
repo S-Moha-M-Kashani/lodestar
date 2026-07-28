@@ -17,6 +17,7 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { mkdirSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -25,6 +26,12 @@ const ROOT = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 3000;
 const DB_PATH = process.env.BOARD_DB || join(ROOT, 'board.db');
 const AGENT_URL = process.env.AGENT_URL || 'http://127.0.0.1:9000';
+
+// A new question on the board is worth a snapshot of the database. Off only
+// when explicitly disabled — the test suites set this to '0' so they never add
+// throwaway boards to the user's real backup history.
+const BACKUP_ON_WRITE = process.env.LODESTAR_BACKUP_ON_WRITE !== '0';
+const BACKUP_SCRIPT = join(ROOT, 'scripts', 'backup-db.mjs');
 
 const COLUMN_IDS = ['inbox', 'in-progress', 'answered'];
 const TYPES = ['question', 'problem', 'task', 'idea', 'plan'];
@@ -244,12 +251,21 @@ const cryptoId = () => 'id-' + Math.random().toString(36).slice(2) + Date.now().
  * a partial or accidental save can never destroy a question; it only moves to
  * the Trash, from where it can be restored. Upserting a card clears its
  * deleted_at, so re-adding or restoring a question brings it back to life.
+ *
+ * Returns { board, created } — `created` is how many of these cards the database
+ * had never seen, which is what triggers a backup.
  */
 function writeBoard(cards) {
   const now = Date.now();
   const catIds = categoryIds();
   const clean = cards.map((c) => cleanCard(c, now, catIds)).filter(Boolean);
   const keep = new Set(clean.map((c) => c.id));
+
+  // Deliberately every row, not just the live ones: a card restored from the
+  // Trash has an id the table already knows, and bringing back an old thought
+  // is not the same as capturing a new one.
+  const known = new Set(db.prepare('SELECT id FROM cards').all().map((r) => r.id));
+  const created = clean.reduce((n, c) => (known.has(c.id) ? n : n + 1), 0);
 
   const softDelete = db.prepare('UPDATE cards SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL');
   const upsert = db.prepare(`
@@ -283,7 +299,39 @@ function writeBoard(cards) {
     db.exec('ROLLBACK');
     throw err;
   }
-  return readBoard();
+  return { board: readBoard(), created };
+}
+
+// A backup child is running. Overlapping writes skip the spawn rather than
+// stacking up processes; the next new card takes the next snapshot.
+let backupInFlight = false;
+
+/**
+ * Snapshot the database because a new question was just captured.
+ *
+ * Runs in a DETACHED CHILD PROCESS, never inline: runBackup shells out to
+ * rclone with spawnSync, and this server is single-threaded, so an inline call
+ * would freeze every other request for the length of a Google Drive upload.
+ * Called after the response is sent and after the transaction commits, so the
+ * snapshot contains the card that triggered it.
+ */
+function backupAfterNewCards() {
+  if (!BACKUP_ON_WRITE || backupInFlight) return;
+  backupInFlight = true;
+  try {
+    const child = spawn(process.execPath, [BACKUP_SCRIPT], {
+      // BOARD_DB is explicit so the child snapshots the database THIS server
+      // opened — otherwise the :3001 test board would back up board.db.
+      env: { ...process.env, BOARD_DB: DB_PATH },
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.on('exit', () => { backupInFlight = false; });
+    child.on('error', () => { backupInFlight = false; });
+    child.unref();
+  } catch {
+    backupInFlight = false; // a failed backup must never break a save
+  }
 }
 
 /**
@@ -343,7 +391,12 @@ const server = createServer(async (req, res) => {
         // category validate against the fresh registry.
         const cats = sanitizeCategories(parsed.categories);
         if (cats) writeCategories(cats);
-        return sendJson(res, 200, writeBoard(parsed.cards));
+        const { board, created } = writeBoard(parsed.cards);
+        sendJson(res, 200, board);
+        // After the response: one snapshot per save that brought new questions,
+        // however many they were. Never before, or the backup would miss them.
+        if (created > 0) backupAfterNewCards();
+        return;
       } catch (err) {
         return sendJson(res, 400, { error: 'Invalid JSON: ' + err.message });
       }

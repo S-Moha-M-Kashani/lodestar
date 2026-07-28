@@ -21,6 +21,27 @@ BRAIN_PORT = int(os.environ.get("TEST_BRAIN_PORT", "8798"))
 URL = f"http://localhost:{PORT}"
 DB_PATH = os.path.join(tempfile.mkdtemp(prefix="qboard-test-"), "board.db")
 
+# Write-triggered backups are exercised against a throwaway directory, and with
+# rclone pointed at a path that does not exist. The suite must never add to the
+# real backups/ history (it would evict genuine snapshots under the retention
+# cap) and must never push a test board to Google Drive.
+BACKUP_DIR = tempfile.mkdtemp(prefix="qboard-backups-")
+NO_RCLONE = os.path.join(BACKUP_DIR, "no-such-rclone")
+
+
+def snapshots():
+    return [f for f in os.listdir(BACKUP_DIR)
+            if f.startswith("board-") and f.endswith(".db")]
+
+
+def wait_for_snapshots(n, timeout=8.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if len(snapshots()) >= n:
+            break
+        time.sleep(0.05)
+    return snapshots()
+
 ARTIFACTS = os.path.join(os.path.dirname(__file__), "artifacts")
 os.makedirs(ARTIFACTS, exist_ok=True)
 shot = lambda name: os.path.join(ARTIFACTS, name)
@@ -37,7 +58,9 @@ def start_server():
         ["node", "server.js"],
         cwd=ROOT,
         env={**os.environ, "PORT": str(PORT), "BOARD_DB": DB_PATH, "NODE_NO_WARNINGS": "1",
-             "AGENT_URL": f"http://127.0.0.1:{BRAIN_PORT}"},
+             "AGENT_URL": f"http://127.0.0.1:{BRAIN_PORT}",
+             "LODESTAR_BACKUP_ON_WRITE": "1", "LODESTAR_BACKUP_DIR": BACKUP_DIR,
+             "LODESTAR_RCLONE_BIN": NO_RCLONE},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -266,11 +289,17 @@ try:
               not any(c.get("id") == "reading" for c in api_state().get("categories", [])))
 
         # ---- Quick add ------------------------------------------------------
+        before_snapshots = len(snapshots())
         page.fill(".quick-add input", "What is speculative decoding?")
         page.press(".quick-add input", "Enter")
         first = page.locator('[data-col="inbox"] .card .card-title').first
         check("quick-add: new question at top of Inbox",
               first.inner_text() == "What is speculative decoding?")
+
+        # Capturing a thought in the UI snapshots the database — the whole point
+        # of the write-triggered backup.
+        check("backup: adding a card through the UI produces a snapshot",
+              len(wait_for_snapshots(before_snapshots + 1)) == before_snapshots + 1)
 
         # ---- Edit modal -----------------------------------------------------
         page.locator('[data-col="inbox"] .card').first.click()

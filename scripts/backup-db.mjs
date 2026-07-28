@@ -1,18 +1,47 @@
 // scripts/backup-db.mjs
 import { existsSync, mkdirSync, copyFileSync, readdirSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
+/**
+ * Snapshot the database to `destPath`.
+ *
+ * `VACUUM INTO` is preferred because backups are now triggered by live writes
+ * (see server.js), so a copy can land while the server is mid-transaction — and
+ * a plain file copy of a database being written to can capture a torn page.
+ * VACUUM INTO is atomic and always yields a consistent database.
+ *
+ * The byte-copy fallback covers anything SQLite refuses to open: a board file
+ * that is not a database, a destination that already exists, an older SQLite.
+ * Backing something up imperfectly always beats backing nothing up.
+ */
+function snapshot(dbPath, destPath) {
+  try {
+    // readOnly so the source can never be modified by its own backup.
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      db.prepare('VACUUM INTO ?').run(destPath);
+      return 'vacuum';
+    } finally {
+      db.close();
+    }
+  } catch {
+    copyFileSync(dbPath, destPath);
+    return 'copy';
+  }
+}
+
 export function runBackup({
   dbPath = process.env.BOARD_DB || join(ROOT, 'board.db'),
-  backupsDir = join(ROOT, 'backups'),
+  backupsDir = process.env.LODESTAR_BACKUP_DIR || join(ROOT, 'backups'),
   remote = process.env.LODESTAR_RCLONE_REMOTE || 'gdrive',
-  keep = Number(process.env.LODESTAR_BACKUP_KEEP) || 30,
+  keep = Number(process.env.LODESTAR_BACKUP_KEEP) || 100,
   now = new Date(),
-  rcloneBin = 'rclone',
+  rcloneBin = process.env.LODESTAR_RCLONE_BIN || 'rclone',
 } = {}) {
   if (!existsSync(dbPath)) {
     return { status: 'no-db', pushed: false, warning: `no DB at ${dbPath} — nothing to back up` };
@@ -20,7 +49,7 @@ export function runBackup({
   mkdirSync(backupsDir, { recursive: true });
   const stamp = now.toISOString().replace(/[:.]/g, '-');
   const localPath = join(backupsDir, `board-${stamp}.db`);
-  copyFileSync(dbPath, localPath);
+  snapshot(dbPath, localPath);
 
   // Prune: keep the newest `keep` board-*.db files.
   const backups = readdirSync(backupsDir)
