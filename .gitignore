@@ -18,9 +18,6 @@ node_modules/
 *.db-journal
 *.db-wal
 
-# Chroma chat-memory stores (one per board)
-chroma/
-
 .idea
 
 backups/

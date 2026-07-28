@@ -378,7 +378,9 @@ test('oversized audio is rejected as too large, not blamed on the brain', async 
 
 // ---- Paired backends: every board gets its own brain ----------------------
 // The test board on :3001 (board-3001.db) must proxy the assistant to its own
-// brain on :8001, which in turn writes back to :3001 — never to board.db.
+// brain on :9001, which in turn writes back to :3001 — never to board.db.
+// Brains live in the 9000 block; 8001/8002 belong to the Chroma stack that chat
+// memory now runs on. Port collisions are covered in tests/ports.test.js.
 
 test('package.json pairs the test board with its own brain', async () => {
   const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
@@ -387,10 +389,10 @@ test('package.json pairs the test board with its own brain', async () => {
   assert.match(board, /BOARD_DB=board-3001\.db/);
   // Without this, the :3001 board talks to the default brain, whose writes
   // land in board.db — the bug this pairing exists to prevent.
-  assert.match(board, /AGENT_URL=http:\/\/127\.0\.0\.1:8001/);
+  assert.match(board, /AGENT_URL=http:\/\/127\.0\.0\.1:9001/);
 
   const brain = pkg.scripts['test-brain'];
   assert.ok(brain, 'a test-brain script must exist to pair with test-board');
   assert.match(brain, /BOARD_API_URL=http:\/\/127\.0\.0\.1:3001/);
-  assert.match(brain, /--port 8001/);
+  assert.match(brain, /--port 9001/);
 });

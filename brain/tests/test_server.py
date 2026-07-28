@@ -143,17 +143,20 @@ def test_transcribe_maps_upstream_failure_to_502():
 
 
 # ---- Chat memory: chunks from assistant chat land in a per-board Chroma ---
+# Offline: chroma_url='memory' (in-process client), so these tests need no
+# Docker container. The HTTP path lives in test_chat_memory_server.py.
 
-def memory_app(chat_dir):
+def memory_app(collection):
     return create_app(Settings(llm_provider='fake', embedder='hash',
                                transcriber='fake',
                                board_api_url='http://board.test',
-                               chat_memory_dir=str(chat_dir)))
+                               chroma_url='memory',
+                               chat_collection=str(collection)))
 
 
 @respx.mock
-def test_chat_records_both_sides_and_recall_finds_them(tmp_path):
-    client = TestClient(memory_app(tmp_path))
+def test_chat_records_both_sides_and_recall_finds_them():
+    client = TestClient(memory_app('chat-both-sides'))
     client.post('/agent/chat', json={'messages': [
         {'role': 'user', 'content': 'the wifi password is hunter2'}]})
     res = client.post('/rag/recall', json={'text': 'wifi password', 'k': 4})
@@ -166,8 +169,8 @@ def test_chat_records_both_sides_and_recall_finds_them(tmp_path):
 
 
 @respx.mock
-def test_recall_orders_by_relevance(tmp_path):
-    client = TestClient(memory_app(tmp_path))
+def test_recall_orders_by_relevance():
+    client = TestClient(memory_app('chat-ordering'))
     for text in ['the wifi password is hunter2',
                  'dentist appointment moved to friday']:
         client.post('/agent/chat', json={'messages': [
@@ -177,11 +180,11 @@ def test_recall_orders_by_relevance(tmp_path):
 
 
 @respx.mock
-def test_paired_stores_are_isolated_per_board(tmp_path):
-    # Two brains, two persist dirs — the board.db brain must never see chat
+def test_paired_stores_are_isolated_per_board():
+    # Two brains, two collections — the board.db brain must never see chat
     # recorded by the board-3001.db brain, and vice versa.
-    main = TestClient(memory_app(tmp_path / 'board-3000'))
-    test = TestClient(memory_app(tmp_path / 'board-3001'))
+    main = TestClient(memory_app('chat-board-3000'))
+    test = TestClient(memory_app('chat-board-3001'))
     main.post('/agent/chat', json={'messages': [
         {'role': 'user', 'content': 'production secret rotation is tuesday'}]})
     res = test.post('/rag/recall', json={'text': 'secret rotation', 'k': 5})
@@ -189,8 +192,27 @@ def test_paired_stores_are_isolated_per_board(tmp_path):
 
 
 @respx.mock
+def test_unreachable_chroma_does_not_stop_the_brain_from_serving():
+    # If the Docker Chroma is down, the brain must still boot and answer chat —
+    # memory degrades to off rather than taking the whole service with it.
+    app = create_app(Settings(llm_provider='fake', embedder='hash',
+                              transcriber='fake',
+                              board_api_url='http://board.test',
+                              chroma_url='http://127.0.0.1:9',
+                              chat_collection='chat-down'))
+    client = TestClient(app)
+    assert client.get('/health').json()['ok'] is True
+    chat = client.post('/agent/chat', json={'messages': [
+        {'role': 'user', 'content': 'hello brain'}]})
+    assert chat.status_code == 200
+    res = client.post('/rag/recall', json={'text': 'hello', 'k': 3})
+    assert res.status_code == 200
+    assert res.json() == {'matches': []}
+
+
+@respx.mock
 def test_recall_with_memory_off_returns_no_matches():
-    # Default Settings leave chat_memory_dir empty: no disk writes, no matches.
+    # Default Settings leave chroma_url empty: no store at all, no matches.
     client = TestClient(fake_app())
     client.post('/agent/chat', json={'messages': [
         {'role': 'user', 'content': 'hello brain'}]})

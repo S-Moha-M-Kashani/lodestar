@@ -68,8 +68,10 @@ def start_brain():
         env={**os.environ, "BRAIN_LLM": "fake", "BRAIN_EMBEDDER": "hash",
              "BRAIN_TRANSCRIBER": "fake",
              "BOARD_API_URL": f"http://127.0.0.1:{PORT}",
-             # keep chat memory out of the repo's chroma/ dirs
-             "BRAIN_CHAT_MEMORY_DIR": os.path.join(os.path.dirname(DB_PATH), "chroma")},
+             # in-process Chroma: e2e must not depend on the Docker server,
+             # and must never write into the user's real chat memory
+             "BRAIN_CHROMA_URL": "memory",
+             "BRAIN_CHAT_COLLECTION": "chat-e2e"},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

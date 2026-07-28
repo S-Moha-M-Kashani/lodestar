@@ -71,7 +71,7 @@ Each machine keeps its own database — the board does not sync between laptops.
 The **Assistant** view talks to a separate Python service — the *brain* — that runs one function-calling agent with four jobs: research a question (web search, cited urls), operate the board in plain language ("triage my inbox"), break fuzzy questions into concrete sub-questions, and surface connections between questions using **Leiden community detection** over a similarity graph of your board.
 
 ```
-browser ── :3000 Node (board + SQLite + static) ──proxy /api/agent/*──▶ :8000 brain (FastAPI)
+browser ── :3000 Node (board + SQLite + static) ──proxy /api/agent/*──▶ :9000 brain (FastAPI)
                       ▲                                                     │
                       └────────── board reads/writes via /api/state ────────┘
 ```
@@ -91,13 +91,36 @@ Every capability sits behind a small interface chosen by env vars, so each piece
 | `BRAIN_TRANSCRIBER` | `auto` | Voice-to-text backend. `fake` = deterministic offline transcript (tests/CI); `auto`/`openrouter` = the omni model |
 | `BRAIN_OMNI_MODEL` | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free` | Default audio → text model; the Assistant view's omni picker overrides it per request |
 | `BOARD_API_URL` | `http://127.0.0.1:3000` | Where the brain finds the board API |
-| `AGENT_URL` | `http://127.0.0.1:8000` | Where the Node proxy finds the brain |
+| `AGENT_URL` | `http://127.0.0.1:9000` | Where the Node proxy finds the brain |
+| `BRAIN_CHROMA_URL` | `http://localhost:8001` | Chroma server holding chat memory. `memory` = in-process, nothing persisted (tests/CI); empty = chat memory off |
+| `BRAIN_CHROMA_DATABASE` | paired with the board | `lodestar` for the board on `:3000`, `lodestar-test` for every other board |
+| `BRAIN_CHAT_COLLECTION` | `chat-board-<port>` | One collection per board, so recall never leaks between boards |
+
+### Chat memory
+
+The assistant remembers your conversations. Each exchange is chunked, embedded and stored
+in **Chroma**, and the agent reaches it through a `recall_chat` tool — ask "what did we
+decide about the mortgage?" and it searches past chat rather than guessing.
+
+Chroma runs as a separate service, so it is a **prerequisite** for chat memory (everything
+else — the board, the agent, web search, Leiden RAG — works without it; if Chroma is
+unreachable the brain logs a warning, disables recall, and serves on). One record holds the
+chunk and its vector together; real and non-real data are separated by database:
+
+```
+database "lodestar"        └── chat-board-3000     ← the real board
+database "lodestar-test"   ├── chat-board-3001     ← the paired test board
+                           └── chat-test-<uuid>    ← pytest, dropped after each run
+```
+
+Tests never touch the server: they run with `BRAIN_CHROMA_URL=memory`, an in-process client
+that writes nothing to disk.
 
 Run it locally (requires uv; deps install on first run):
 
 ```sh
 export OPENROUTER_API_KEY=sk-or-...
-uv run --project brain uvicorn lodestar_brain.server:app --reload --port 8000
+uv run --project brain uvicorn lodestar_brain.server:app --reload --port 9000
 # in another terminal: npm start, then open http://localhost:3000 → Assistant
 ```
 

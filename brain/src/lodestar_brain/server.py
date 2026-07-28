@@ -2,6 +2,7 @@
 module (LLM provider, search provider, embedder) is chosen here from Settings."""
 import base64
 import binascii
+import logging
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -53,9 +54,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
              make_search_tool(DdgsSearch()),
              make_retrieve_tool(index, board)]
     memory = None
-    if settings.chat_memory_dir:
-        memory = ChromaChatMemory(settings.chat_memory_dir, embedder)
-        tools.append(make_recall_tool(memory))
+    if settings.chroma_url:
+        try:
+            memory = ChromaChatMemory(settings.chroma_url, embedder,
+                                      collection=settings.chat_collection,
+                                      database=settings.chroma_database)
+            tools.append(make_recall_tool(memory))
+        except Exception as exc:
+            # Chroma is optional infrastructure: the agent, board tools, web
+            # search and Leiden RAG all work without it. Taking the whole brain
+            # down because a container is stopped would be the worse failure —
+            # so log loudly and serve on with recall unavailable.
+            memory = None
+            logging.getLogger(__name__).warning(
+                'chat memory disabled: Chroma at %s is unreachable (%s)',
+                settings.chroma_url, exc)
     agent = build_agent("default", llm=llm, tools=tools, max_steps=settings.max_agent_steps)
     transcriber = make_transcriber(settings)
 

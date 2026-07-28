@@ -24,7 +24,7 @@ import { DatabaseSync } from 'node:sqlite';
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 3000;
 const DB_PATH = process.env.BOARD_DB || join(ROOT, 'board.db');
-const AGENT_URL = process.env.AGENT_URL || 'http://127.0.0.1:8000';
+const AGENT_URL = process.env.AGENT_URL || 'http://127.0.0.1:9000';
 
 const COLUMN_IDS = ['inbox', 'in-progress', 'answered'];
 const TYPES = ['question', 'problem', 'task', 'idea', 'plan'];

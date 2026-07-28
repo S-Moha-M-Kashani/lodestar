@@ -10,7 +10,7 @@ services:
       # across restarts, upgrades, and rebuilds. Removing the volume
       # (`docker volume rm`) is the only thing that erases them.
       BOARD_DB: /data/board.db
-      AGENT_URL: http://brain:8000
+      AGENT_URL: http://brain:9000
     volumes:
       - board-data:/data
     restart: unless-stopped
@@ -25,6 +25,12 @@ services:
       BRAIN_MODEL: ${BRAIN_MODEL:-openai/gpt-4o-mini}
       BRAIN_LLM: ${BRAIN_LLM:-openrouter}
       BOARD_API_URL: http://lodestar:3000
+      # Chat memory lives on the Chroma server running on the host, not in this
+      # stack — one store, so composed and local brains share the same memory.
+      # Set BRAIN_CHROMA_URL=memory to run without it (memory is then per-boot).
+      BRAIN_CHROMA_URL: ${BRAIN_CHROMA_URL:-http://host.docker.internal:8001}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
 volumes:
