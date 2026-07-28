@@ -2370,10 +2370,14 @@
   // brain forwards it to OpenRouter). The omni and embedding picks are stored
   // preferences for the media-ingestion and remote-embedder features to come.
   const MODELS_KEY = 'question-board:models';
-  // The omni default has to be a model that genuinely receives audio.
+  // Every omni option has to be a model that genuinely receives audio.
   // nemotron-3-nano-omni:free is listed as audio-capable but the provider
-  // serving it discards the audio and answers an apology, so it stays
-  // selectable (it is the only free one) without being the default.
+  // serving it discards the audio and answers an apology, and it was kept here
+  // only for being free. It is gone: OpenRouter lists exactly one free
+  // audio-input model and that was it, so "free" never meant "works". Free
+  // dictation is the local Parakeet backend's job instead (BRAIN_TRANSCRIBER
+  // defaults to it). voxtral-small is the replacement — a purpose-built speech
+  // model priced the same as the default, rather than a general omni one.
   const DEFAULT_MODELS = {
     text: 'openai/gpt-5-nano',
     omni: 'google/gemini-2.5-flash-lite',
@@ -2384,7 +2388,7 @@
       options: [DEFAULT_MODELS.text, 'openai/gpt-5-mini'] },
     { key: 'omni', id: 'model-omni', label: 'Audio / photo / video → text',
       options: [DEFAULT_MODELS.omni, 'openai/gpt-audio-mini',
-                'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free'] },
+                'mistralai/voxtral-small-24b-2507'] },
     { key: 'embed', id: 'model-embed', label: 'Embeddings',
       options: [DEFAULT_MODELS.embed, 'openai/text-embedding-3-small'] },
   ];
