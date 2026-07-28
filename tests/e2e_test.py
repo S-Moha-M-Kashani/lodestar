@@ -967,7 +967,12 @@ try:
         # omni and embedding picks are stored preferences for the brain's
         # coming media/RAG features. All three persist in localStorage.
         DEFAULT_TEXT = "moonshotai/kimi-k3"
-        DEFAULT_OMNI = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+        # The omni default must be a model that actually receives audio. The old
+        # nemotron:free default is advertised as audio-capable but its provider
+        # discards the input_audio part, so every dictation came back an invented
+        # apology. It stays selectable (below) but is no longer the default.
+        DEFAULT_OMNI = "google/gemini-2.5-flash-lite"
+        BROKEN_OMNI = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
         DEFAULT_EMBED = "nvidia/llama-nemotron-embed-vl-1b-v2:free"
         page.locator('.view-switch button[data-view="assistant"]').click()
         page.wait_for_selector("#chat-input")
@@ -980,6 +985,9 @@ try:
               page.input_value("#model-text") == DEFAULT_TEXT
               and page.input_value("#model-omni") == DEFAULT_OMNI
               and page.input_value("#model-embed") == DEFAULT_EMBED)
+        omni_options = page.locator("#model-omni option").all_inner_texts()
+        check("assistant: the free omni model stays selectable, just not default",
+              BROKEN_OMNI in omni_options and DEFAULT_OMNI in omni_options)
 
         n_replies = page.locator(".chat-msg.assistant").count()
         page.fill("#chat-input", "model ride-along probe")
@@ -1096,6 +1104,36 @@ try:
         page.unroute("**/api/agent/transcribe")
         provoked = [e for e in errors[n_before:] if "503" in e]
         check("voice error surfaced a console error to scrub", len(provoked) >= 1)
+        for e in provoked:
+            errors.remove(e)
+        page.fill("#chat-input", "")
+
+        # A model that silently drops the audio is the bug that broke dictation:
+        # the brain answers 502 with a detail naming the model. The composer must
+        # show that reason — blaming a brain that is running fine sent the user
+        # debugging the wrong service — and must never paste the model's invented
+        # apology in as if it were speech.
+        page.fill("#chat-input", "still mine")
+        n_before = len(errors)
+        page.route("**/api/agent/transcribe", lambda route: route.fulfill(
+            status=502, content_type="application/json",
+            body=json.dumps({"detail": "the model 'nvidia/nemotron-3-nano-omni-30b"
+                                       "-a3b-reasoning:free' did not receive the "
+                                       "audio; pick a different omni model"})))
+        page.click(".chat-mic")
+        page.wait_for_selector(".chat-recording")
+        page.wait_for_timeout(800)
+        page.click(".chat-stop")
+        page.wait_for_selector(".chat-voice-error")
+        voice_error = page.inner_text(".chat-voice-error")
+        check("voice: an audio-dropping model is named, not blamed on the brain",
+              "nemotron" in voice_error.lower()
+              and "brain service" not in voice_error.lower())
+        check("voice: a dropped-audio failure leaves the typed text alone",
+              page.input_value("#chat-input") == "still mine")
+        page.unroute("**/api/agent/transcribe")
+        provoked = [e for e in errors[n_before:] if "502" in e]
+        check("voice 502 surfaced a console error to scrub", len(provoked) >= 1)
         for e in provoked:
             errors.remove(e)
         page.fill("#chat-input", "")

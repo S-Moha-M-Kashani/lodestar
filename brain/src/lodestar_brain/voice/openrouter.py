@@ -8,7 +8,7 @@ import base64
 
 import httpx
 
-from .base import TranscriptionError, validate
+from .base import TranscriptionError, signals_no_audio, validate
 
 INSTRUCTION = (
     'Transcribe the audio verbatim. Reply with the transcript text only — '
@@ -28,8 +28,9 @@ class OpenRouterTranscriber:
     def transcribe(self, audio: bytes, fmt: str = 'wav',
                    model: str | None = None) -> str:
         validate(audio, fmt)
+        used = model or self.default_model
         payload = {
-            'model': model or self.default_model,
+            'model': used,
             'messages': [{'role': 'user', 'content': [
                 {'type': 'text', 'text': INSTRUCTION},
                 {'type': 'input_audio', 'input_audio': {
@@ -48,4 +49,14 @@ class OpenRouterTranscriber:
             raise TranscriptionError(f'transcription request failed: {exc}') from exc
         except (KeyError, IndexError, ValueError) as exc:
             raise TranscriptionError(f'malformed transcription response: {exc}') from exc
-        return (content or '').strip()
+        text = (content or '').strip()
+        # A model that answers *about* missing audio was never given the audio:
+        # its provider dropped the input_audio part. Returning that answer would
+        # file the model's invented apology as the user's own words.
+        if text and signals_no_audio(text):
+            raise TranscriptionError(
+                f'the model {used!r} did not receive the audio it was sent — it '
+                f'replied {text!r} instead of a transcript. Some models list '
+                'audio input but the provider serving them drops it; pick a '
+                'different model for "Audio / photo / video → text".')
+        return text

@@ -309,15 +309,16 @@ test('deadline survives soft-delete and restore', async () => {
 // The browser records audio and posts base64 WAV; the Node proxy must hand it
 // to the brain untouched (the OpenRouter key lives only there).
 
-// Minimal stand-in for the brain: echoes back what it was handed.
-function startStubBrain(handler) {
+// Minimal stand-in for the brain: echoes back what it was handed. `reply` lets a
+// test choose the upstream status/body so error passthrough can be asserted.
+function startStubBrain(handler, reply = { status: 200, body: { text: 'transcribed words' } }) {
   return new Promise((resolve) => {
     const srv = createServer(async (req, res) => {
       let body = '';
       for await (const chunk of req) body += chunk;
       handler({ method: req.method, path: req.url, contentType: req.headers['content-type'], body });
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ text: 'transcribed words' }));
+      res.writeHead(reply.status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(reply.body));
     });
     srv.listen(0, '127.0.0.1', () => resolve({
       url: `http://127.0.0.1:${srv.address().port}`,
@@ -356,6 +357,23 @@ test('transcribe returns 503 when the brain is down', async () => {
     assert.equal(res.status, 503);
     assert.deepEqual(await res.json(), { error: 'assistant unavailable' });
   } finally { await s.stop(); }
+});
+
+test('a transcription failure keeps the brain\'s reason instead of flattening it', async () => {
+  // When a model silently drops the audio the brain answers 502 with a detail
+  // naming the model. The proxy must pass that through verbatim so the browser
+  // can show the real cause rather than "check that the brain is running".
+  const detail = "the model 'nvidia/nemotron-...:free' did not receive the audio";
+  const brain = await startStubBrain(() => {}, { status: 502, body: { detail } });
+  const s = await startServer({ env: { AGENT_URL: brain.url } });
+  try {
+    const res = await fetch(s.base + '/api/agent/transcribe', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ audio: 'AAAA', format: 'wav' }),
+    });
+    assert.equal(res.status, 502);
+    assert.deepEqual(await res.json(), { detail });
+  } finally { await s.stop(); await brain.stop(); }
 });
 
 test('oversized audio is rejected as too large, not blamed on the brain', async () => {

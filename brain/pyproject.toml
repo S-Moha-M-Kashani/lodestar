@@ -16,6 +16,17 @@ dependencies = [
 
 [project.optional-dependencies]
 semantic = ["fastembed>=0.7"]
+# Local, offline dictation with NVIDIA Parakeet TDT. mlx is Apple-Silicon only,
+# so the marker keeps `uv sync --extra voice` harmless on Linux and in Docker —
+# the transcriber seam falls back to OpenRouter wherever this is absent.
+voice = [
+  "parakeet-mlx>=0.5.2; sys_platform == 'darwin' and platform_machine == 'arm64'",
+  # parakeet-mlx pulls librosa -> numba. Left to itself uv resolves numba 0.53,
+  # whose llvmlite 0.36 refuses to build on anything past Python 3.9, so the
+  # install fails outright. This floor keeps it on a numba with 3.13 wheels;
+  # that numba is also what pins numpy below 2.5 in this environment.
+  "numba>=0.62; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
 
 [dependency-groups]
 dev = ["pytest>=8.0", "respx>=0.22"]
