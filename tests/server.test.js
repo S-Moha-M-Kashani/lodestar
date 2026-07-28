@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { startServer } from './helpers/server-harness.mjs';
 import { createServer } from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -374,6 +374,115 @@ test('oversized audio is rejected as too large, not blamed on the brain', async 
     assert.equal((await res.json()).error, 'Payload too large');
     assert.equal(seen.length, 0); // never forwarded upstream
   } finally { await s.stop(); await brain.stop(); }
+});
+
+// ---- Backup on a new card -------------------------------------------------
+// A snapshot is taken when a card the database has never seen arrives, and at
+// no other time. The backup runs in a detached child process so the request is
+// never blocked, which is why these tests poll instead of asserting inline.
+//
+// Every test here points LODESTAR_BACKUP_DIR at a temp directory and
+// LODESTAR_RCLONE_BIN at a path that does not exist: the suite must never write
+// into the real backups/ history, and must never push to Google Drive.
+
+function backupSandbox() {
+  const dir = mkdtempSync(join(tmpdir(), 'lodestar-bk-'));
+  return {
+    dir,
+    env: {
+      LODESTAR_BACKUP_ON_WRITE: '1',
+      LODESTAR_BACKUP_DIR: dir,
+      LODESTAR_RCLONE_BIN: join(dir, 'no-such-rclone'),
+    },
+  };
+}
+
+const snapshots = (dir) =>
+  (existsSync(dir) ? readdirSync(dir) : []).filter((f) => f.startsWith('board-') && f.endsWith('.db'));
+
+// Wait until at least `n` snapshots exist, or the timeout expires.
+async function waitForSnapshots(dir, n, timeoutMs = 8000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (snapshots(dir).length >= n) break;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return snapshots(dir);
+}
+
+// Give a backup that should NOT happen enough time to prove it didn't.
+const settle = (ms = 1200) => new Promise((r) => setTimeout(r, ms));
+
+const putCards = (base, cards) =>
+  fetch(base + '/api/state', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ version: 1, cards }),
+  });
+
+test('PUT with a never-before-seen card triggers one backup', async () => {
+  const bk = backupSandbox();
+  const s = await startServer({ env: bk.env });
+  try {
+    await putCards(s.base, [{ id: 'n1', columnId: 'inbox', title: 'A new thought' }]);
+    const files = await waitForSnapshots(bk.dir, 1);
+    assert.equal(files.length, 1, 'a new card must produce exactly one snapshot');
+    // The snapshot is taken after the commit, so it contains the new card.
+    const snap = new DatabaseSync(join(bk.dir, files[0]), { readOnly: true });
+    const row = snap.prepare('SELECT title FROM cards WHERE id = ?').get('n1');
+    assert.equal(row.title, 'A new thought');
+  } finally { await s.stop(); }
+});
+
+test('PUT that only edits an existing card triggers no further backup', async () => {
+  const bk = backupSandbox();
+  const s = await startServer({ env: bk.env });
+  try {
+    await putCards(s.base, [{ id: 'e1', columnId: 'inbox', title: 'Original' }]);
+    await waitForSnapshots(bk.dir, 1);
+    // Edit the title, move it, and reorder — none of these is a new entry.
+    await putCards(s.base, [{ id: 'e1', columnId: 'in-progress', title: 'Edited', notes: 'more' }]);
+    await settle();
+    assert.equal(snapshots(bk.dir).length, 1, 'editing an existing card must not back up');
+  } finally { await s.stop(); }
+});
+
+test('PUT that restores a soft-deleted card triggers no further backup', async () => {
+  const bk = backupSandbox();
+  const s = await startServer({ env: bk.env });
+  try {
+    await putCards(s.base, [{ id: 'r1', columnId: 'inbox', title: 'Comes and goes' }]);
+    await waitForSnapshots(bk.dir, 1);
+    await putCards(s.base, []);            // soft-delete r1 into the trash
+    await settle();
+    assert.equal(snapshots(bk.dir).length, 1, 'a delete is not a new entry');
+    await putCards(s.base, [{ id: 'r1', columnId: 'inbox', title: 'Comes and goes' }]);
+    await settle();
+    // The id is already known, so restoring an old thought is not capturing a new one.
+    assert.equal(snapshots(bk.dir).length, 1, 'restoring a trashed card must not back up');
+  } finally { await s.stop(); }
+});
+
+test('one PUT carrying five new cards triggers exactly one backup', async () => {
+  const bk = backupSandbox();
+  const s = await startServer({ env: bk.env });
+  try {
+    await putCards(s.base, [1, 2, 3, 4, 5].map((n) => (
+      { id: `bulk${n}`, columnId: 'inbox', title: `Bulk ${n}` })));
+    await waitForSnapshots(bk.dir, 1);
+    await settle();
+    assert.equal(snapshots(bk.dir).length, 1, 'one payload means one snapshot, not one per card');
+  } finally { await s.stop(); }
+});
+
+test('LODESTAR_BACKUP_ON_WRITE=0 disables write-triggered backups', async () => {
+  const bk = backupSandbox();
+  const s = await startServer({ env: { ...bk.env, LODESTAR_BACKUP_ON_WRITE: '0' } });
+  try {
+    await putCards(s.base, [{ id: 'off1', columnId: 'inbox', title: 'No backup please' }]);
+    await settle();
+    assert.equal(snapshots(bk.dir).length, 0, 'the kill switch must suppress the backup');
+  } finally { await s.stop(); }
 });
 
 // ---- Paired backends: every board gets its own brain ----------------------

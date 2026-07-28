@@ -20,6 +20,9 @@ node_modules/
 
 .idea
 
+# macOS Finder metadata
+.DS_Store
+
 backups/
 
 .env
