@@ -1,6 +1,6 @@
 # Lodestar
 
-*Your compass for open questions.* Lodestar is a place to get every open question out of your head, see what actually matters, and never lose a thought — so you can follow through, privately and at work. A kanban-style board that is one dashboard for your whole life — work questions, plans with your partner, sports, music, reading, holidays — everything in one place. Vanilla HTML/CSS/JavaScript front end, with an optional tiny server that persists the board to a local **SQLite** database. No build step and no npm dependencies — the server uses Node's built-in `node:sqlite` and `http`.
+*Your compass for life!* Lodestar is a place to get every open question out of your head, see what actually matters, and never lose a thought — so you can follow through, privately and at work. A kanban-style board that is one dashboard for your whole life — work questions, plans with your partner, sports, music, reading, holidays — everything in one place. Vanilla HTML/CSS/JavaScript front end, with an optional tiny server that persists the board to a local **SQLite** database. No build step and no npm dependencies — the server uses Node's built-in `node:sqlite` and `http`.
 
 The design is a "question ledger": quad-ruled engineering paper, cards as ruled index cards with permanent ledger IDs (`Q-001`, `Q-002`, …), card types as ink stamps, and life-area categories as coloured index tabs — every category gets its own ink, in all four themes.
 
