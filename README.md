@@ -92,13 +92,38 @@ Every capability sits behind a small interface chosen by env vars, so each piece
 | `BRAIN_LLM` | `openrouter` | `fake` = deterministic offline provider (tests/CI) |
 | `BRAIN_EMBEDDER` | `auto` | `fastembed` (semantic), `hash` (offline), `auto` = fastembed with hash fallback |
 | `BRAIN_MAX_STEPS` | `8` | Tool-call budget per chat turn |
-| `BRAIN_TRANSCRIBER` | `auto` | Voice-to-text backend. `fake` = deterministic offline transcript (tests/CI); `auto`/`openrouter` = the omni model |
-| `BRAIN_OMNI_MODEL` | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free` | Default audio → text model; the Assistant view's omni picker overrides it per request |
+| `BRAIN_TRANSCRIBER` | `auto` | Voice-to-text backend. `parakeet` = local MLX model (free, offline); `openrouter` = the omni model; `fake` = deterministic offline transcript (tests/CI); `auto` = Parakeet when installed, else OpenRouter |
+| `BRAIN_OMNI_MODEL` | `google/gemini-2.5-flash-lite` | Audio → text model for the OpenRouter backend; the Assistant view's omni picker overrides it per request |
+| `BRAIN_PARAKEET_MODEL` | `mlx-community/parakeet-tdt-0.6b-v3` | Local checkpoint for the Parakeet backend (2.5 GB, fetched on first use) |
 | `BOARD_API_URL` | `http://127.0.0.1:3000` | Where the brain finds the board API |
 | `AGENT_URL` | `http://127.0.0.1:9000` | Where the Node proxy finds the brain |
 | `BRAIN_CHROMA_URL` | `http://localhost:8001` | Chroma server holding chat memory. `memory` = in-process, nothing persisted (tests/CI); empty = chat memory off |
 | `BRAIN_CHROMA_DATABASE` | paired with the board | `lodestar` for the board on `:3000`, `lodestar-test` for every other board |
 | `BRAIN_CHAT_COLLECTION` | `chat-board-<port>` | One collection per board, so recall never leaks between boards |
+
+### Voice input
+
+The mic beside Send dictates into the composer: the browser records, decodes to 16 kHz mono
+WAV and posts it to the brain, and the transcript lands in the textarea as **editable text
+that is never auto-sent** — a misheard word must be fixable before it reaches the agent.
+
+Two backends sit behind the same seam. **Local Parakeet** (`nvidia/parakeet-tdt-0.6b-v3` via
+MLX) is free, offline and private — no key and no audio leave the machine — and is what
+`auto` picks whenever it is installed:
+
+```sh
+uv sync --project brain --extra voice     # Apple Silicon only
+```
+
+The checkpoint is a 2.5 GB download on the first dictation (cached in
+`~/.cache/huggingface` afterwards, and held in memory for the life of the brain process).
+
+Everywhere else (Linux, Docker) `auto` falls back to **OpenRouter**, sending the audio as an
+`input_audio` part to `BRAIN_OMNI_MODEL`. Pick that model with care: several models advertise
+audio input but the provider serving them silently discards it and answers an invented
+apology instead of a transcript. The brain detects that shape and reports which model is at
+fault rather than filing its apology as your words. Verified working: `google/gemini-2.5-flash-lite`
+(the default), `openai/gpt-audio-mini`, `mistralai/voxtral-small-24b-2507`.
 
 ### Chat memory
 
