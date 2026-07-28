@@ -30,9 +30,16 @@ class Settings:
     chroma_database: str = PRODUCTION_DATABASE
     chat_collection: str = 'chat'
     max_agent_steps: int = 8
-    transcriber: str = 'auto'          # 'auto' | 'openrouter' | 'fake'
+    # 'auto' (local Parakeet if installed, else OpenRouter) | 'parakeet'
+    # | 'openrouter' | 'fake'
+    transcriber: str = 'auto'
     # Audio/photo/video → text. Matches the Assistant view's omni picker default.
-    omni_model: str = 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free'
+    # Must be a model that genuinely *receives* audio: nemotron-3-nano-omni:free
+    # advertises audio input but its provider discards the input_audio part, so
+    # every dictation came back an invented apology instead of a transcript.
+    omni_model: str = 'google/gemini-2.5-flash-lite'
+    # Local checkpoint for the Parakeet backend (Apple Silicon, MLX).
+    parakeet_model: str = 'mlx-community/parakeet-tdt-0.6b-v3'
 
 
 def _board_port(board_api_url: str) -> int | None:
@@ -67,6 +74,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
                         or _chat_collection_for(board_api_url),
         max_agent_steps=int(env.get('BRAIN_MAX_STEPS', '8')),
         transcriber=env.get('BRAIN_TRANSCRIBER', 'auto'),
-        omni_model=env.get('BRAIN_OMNI_MODEL',
-                           'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free'),
+        omni_model=env.get('BRAIN_OMNI_MODEL', 'google/gemini-2.5-flash-lite'),
+        parakeet_model=env.get('BRAIN_PARAKEET_MODEL',
+                               'mlx-community/parakeet-tdt-0.6b-v3'),
     )

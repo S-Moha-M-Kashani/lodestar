@@ -142,6 +142,26 @@ def test_transcribe_maps_upstream_failure_to_502():
     assert res.status_code == 502
 
 
+@respx.mock
+def test_a_model_that_drops_the_audio_is_reported_not_transcribed():
+    # The nemotron omni free model answers an apology instead of a transcript
+    # because its provider discards the audio. That apology must never be
+    # returned as if it were speech — the caller has to learn the model is at
+    # fault, and the detail has to say so.
+    respx.post('https://openrouter.ai/api/v1/chat/completions').mock(
+        return_value=httpx.Response(200, json={'choices': [{'message': {
+            'content': "I'm sorry, but I need the audio file to transcribe it."}}]}))
+    client = TestClient(create_app(Settings(
+        llm_provider='fake', embedder='hash', transcriber='openrouter',
+        openrouter_api_key='sk-test', board_api_url='http://board.test',
+        omni_model='nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free')))
+    res = client.post('/agent/transcribe', json={'audio': b64(WAV)})
+    assert res.status_code == 502
+    detail = res.json()['detail'].lower()
+    assert 'audio' in detail
+    assert 'nemotron' in detail, 'the detail must name the model at fault'
+
+
 # ---- Chat memory: chunks from assistant chat land in a per-board Chroma ---
 # Offline: chroma_url='memory' (in-process client), so these tests need no
 # Docker container. The HTTP path lives in test_chat_memory_server.py.

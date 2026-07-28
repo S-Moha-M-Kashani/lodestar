@@ -2370,16 +2370,22 @@
   // brain forwards it to OpenRouter). The omni and embedding picks are stored
   // preferences for the media-ingestion and remote-embedder features to come.
   const MODELS_KEY = 'question-board:models';
+  // The omni default has to be a model that genuinely receives audio.
+  // nemotron-3-nano-omni:free is listed as audio-capable but the provider
+  // serving it discards the audio and answers an apology, so it stays
+  // selectable (it is the only free one) without being the default.
   const DEFAULT_MODELS = {
     text: 'moonshotai/kimi-k3',
-    omni: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
+    omni: 'google/gemini-2.5-flash-lite',
     embed: 'nvidia/llama-nemotron-embed-vl-1b-v2:free',
   };
   const MODEL_PICKERS = [
     { key: 'text', id: 'model-text', label: 'Text generation',
       options: [DEFAULT_MODELS.text, 'openai/gpt-4o-mini', 'openrouter/auto'] },
     { key: 'omni', id: 'model-omni', label: 'Audio / photo / video → text',
-      options: [DEFAULT_MODELS.omni, 'openrouter/auto'] },
+      options: [DEFAULT_MODELS.omni, 'openai/gpt-audio-mini',
+                'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
+                'openrouter/auto'] },
     { key: 'embed', id: 'model-embed', label: 'Embeddings',
       options: [DEFAULT_MODELS.embed, 'openai/text-embedding-3-small'] },
   ];
@@ -2423,7 +2429,7 @@
     }
     const hint = document.createElement('p');
     hint.className = 'field-hint';
-    hint.textContent = 'Text generation applies to the chat and the omni model transcribes your voice; the embedding pick is saved for upcoming retrieval features.';
+    hint.textContent = 'Text generation applies to the chat; the omni model transcribes your voice, unless the brain is dictating locally with Parakeet — that ignores this pick. The embedding pick is saved for upcoming retrieval features.';
     panel.appendChild(hint);
     return panel;
   }
@@ -2545,14 +2551,27 @@
 
     try {
       const audio = await encodeWav(blob);
-      if (!audio) throw new Error('empty');
+      if (!audio) {
+        throw explained('Nothing was recorded — check that your microphone is picking up sound.');
+      }
       const res = await fetch('/api/agent/transcribe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ audio, format: 'wav', model: assistantModels.omni }),
       });
-      if (res.status === 413) throw new Error('too-long');
-      if (!res.ok) throw new Error(`transcribe ${res.status}`);
+      if (res.status === 413) {
+        throw explained('That recording was too long to transcribe — try a shorter one.');
+      }
+      if (!res.ok) {
+        // The brain names the real cause — an omni model whose provider dropped
+        // the audio, a payload it refused. Flattening every failure into "the
+        // brain is down" sent the user debugging a service that was running fine.
+        // A 503 comes from our own proxy and really does mean unreachable.
+        const detail = res.status === 503 ? '' : await failureDetail(res);
+        throw explained(detail
+          ? `Couldn’t transcribe that — ${detail}`
+          : 'Couldn’t transcribe that — check that the brain service is running.');
+      }
       const data = await res.json();
       const text = (data.text || '').trim();
       if (!text) {
@@ -2563,9 +2582,8 @@
         announce('Transcript added to the composer');
       }
     } catch (err) {
-      voiceState.error = err && err.message === 'too-long'
-        ? 'That recording was too long to transcribe — try a shorter one.'
-        : 'Couldn’t transcribe that — check that the brain service is running.';
+      voiceState.error = (err && err.userMessage)
+        || 'Couldn’t transcribe that — check that the brain service is running.';
       announce('Transcription failed');
     }
 
@@ -2575,6 +2593,25 @@
     if (input) {
       input.focus();
       input.selectionStart = input.selectionEnd = input.value.length;
+    }
+  }
+
+  // A failure we can already put in words, as opposed to an unexpected JS or
+  // network error, which falls back to the generic message.
+  function explained(message) {
+    const err = new Error(message);
+    err.userMessage = message;
+    return err;
+  }
+
+  // FastAPI reports `detail`, our own Node proxy reports `error`.
+  async function failureDetail(res) {
+    try {
+      const body = await res.json();
+      const detail = body && (body.detail || body.error);
+      return typeof detail === 'string' ? detail : '';
+    } catch {
+      return '';
     }
   }
 
