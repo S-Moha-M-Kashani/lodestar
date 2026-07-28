@@ -2384,8 +2384,7 @@
       options: [DEFAULT_MODELS.text, 'openai/gpt-5-mini'] },
     { key: 'omni', id: 'model-omni', label: 'Audio / photo / video → text',
       options: [DEFAULT_MODELS.omni, 'openai/gpt-audio-mini',
-                'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
-                'openrouter/auto'] },
+                'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free'] },
     { key: 'embed', id: 'model-embed', label: 'Embeddings',
       options: [DEFAULT_MODELS.embed, 'openai/text-embedding-3-small'] },
   ];

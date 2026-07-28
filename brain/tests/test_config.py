@@ -5,10 +5,16 @@ def test_defaults():
     s = load_settings(env={})
     assert s.openrouter_base_url == 'https://openrouter.ai/api/v1'
     assert s.llm_provider == 'openrouter'
-    assert s.embedder == 'auto'
+    # No 'auto' anywhere: a mode that silently degrades hides which backend is
+    # actually running. 'hash' is the honest default because fastembed is an
+    # optional extra — a machine without it must say so, not quietly downgrade.
+    # The composed brain pins BRAIN_EMBEDDER=fastembed (compose.test.js).
+    assert s.embedder == 'hash'
     assert s.board_api_url == 'http://127.0.0.1:3000'
     assert s.max_agent_steps == 8
-    assert s.transcriber == 'auto'
+    # Likewise explicit: the local, free, private backend is the default, and
+    # Docker pins BRAIN_TRANSCRIBER=openrouter because mlx cannot install there.
+    assert s.transcriber == 'parakeet'
     # The cheap tier is the default: a request that arrives without a model
     # (evals, direct API use) should not silently buy the expensive one.
     assert s.model == 'openai/gpt-5-nano'

@@ -1000,6 +1000,13 @@ try:
               text_options == [DEFAULT_TEXT, ALT_TEXT])
         check("assistant: the retired text models are gone from the picker",
               not any(slug in text_options for slug in RETIRED_TEXT))
+        # openrouter/auto is gone from every picker, not just the text one: it is
+        # deprecated, and the resolved model was never read back out of the
+        # response, so no picker should be able to hand the brain a router.
+        embed_options = page.locator("#model-embed option").all_inner_texts()
+        check("assistant: no picker offers the deprecated openrouter/auto router",
+              all("openrouter/auto" not in opts
+                  for opts in (text_options, omni_options, embed_options)))
 
         n_replies = page.locator(".chat-msg.assistant").count()
         page.fill("#chat-input", "model ride-along probe")

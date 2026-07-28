@@ -1,4 +1,5 @@
 import httpx
+import pytest
 import respx
 
 from lodestar_brain.rag.embedder import HashEmbedder, make_embedder
@@ -29,9 +30,14 @@ def test_hash_embedder_normalized_and_deterministic():
     assert float((v[0] * v[1]).sum()) > 0.999
 
 
-def test_make_embedder_hash_and_auto_fallback():
+def test_make_embedder_is_explicit_and_rejects_auto():
     assert isinstance(make_embedder('hash'), HashEmbedder)
-    assert make_embedder('auto') is not None  # fastembed or hash fallback — never raises
+    # 'auto' used to mean "fastembed, or HashEmbedder if the extra is missing",
+    # which meant a machine without fastembed ran the toy embedder for months
+    # without ever saying so. An unknown kind is now a boot-time error instead.
+    for kind in ('auto', 'nonsense'):
+        with pytest.raises(ValueError):
+            make_embedder(kind)
 
 
 def test_leiden_groups_topics_and_query_ranks():

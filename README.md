@@ -90,9 +90,9 @@ Every capability sits behind a small interface chosen by env vars, so each piece
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | Any OpenAI-compatible endpoint works (e.g. a local Ollama later) |
 | `BRAIN_MODEL` | `openai/gpt-5-nano` | Fallback when the browser sends no pick; any OpenRouter model id |
 | `BRAIN_LLM` | `openrouter` | `fake` = deterministic offline provider (tests/CI) |
-| `BRAIN_EMBEDDER` | `auto` | `fastembed` (semantic), `hash` (offline), `auto` = fastembed with hash fallback |
+| `BRAIN_EMBEDDER` | `hash` | `fastembed` (semantic, needs the `semantic` extra) or `hash` (offline token buckets). No fallback mode — a missing wheel is an error, not a silent downgrade |
 | `BRAIN_MAX_STEPS` | `8` | Tool-call budget per chat turn |
-| `BRAIN_TRANSCRIBER` | `auto` | Voice-to-text backend. `parakeet` = local MLX model (free, offline); `openrouter` = the omni model; `fake` = deterministic offline transcript (tests/CI); `auto` = Parakeet when installed, else OpenRouter |
+| `BRAIN_TRANSCRIBER` | `parakeet` | Voice-to-text backend. `parakeet` = local MLX model (free, offline, Apple Silicon only); `openrouter` = the omni model; `fake` = deterministic offline transcript (tests/CI). Compose pins `openrouter`, since the brain image cannot install mlx |
 | `BRAIN_OMNI_MODEL` | `google/gemini-2.5-flash-lite` | Audio → text model for the OpenRouter backend; the Assistant view's omni picker overrides it per request |
 | `BRAIN_PARAKEET_MODEL` | `mlx-community/parakeet-tdt-0.6b-v3` | Local checkpoint for the Parakeet backend (2.5 GB, fetched on first use) |
 | `BOARD_API_URL` | `http://127.0.0.1:3000` | Where the brain finds the board API |

@@ -31,6 +31,13 @@ services:
       OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
       BRAIN_MODEL: ${BRAIN_MODEL:-openai/gpt-5-nano}
       BRAIN_LLM: ${BRAIN_LLM:-openrouter}
+      # Both backends are named outright because there is no 'auto' mode to fall
+      # back on any more. The image installs the 'semantic' extra, so the real
+      # embedder is available here; it can never install the 'voice' extra, since
+      # parakeet-mlx is Apple-Silicon only — hence OpenRouter for dictation.
+      # tests/compose.test.js fails if either pin goes missing.
+      BRAIN_EMBEDDER: ${BRAIN_EMBEDDER:-fastembed}
+      BRAIN_TRANSCRIBER: ${BRAIN_TRANSCRIBER:-openrouter}
       BOARD_API_URL: http://lodestar:3000
       # Chat memory lives on the Chroma server running on the host, not in this
       # stack — one store, so composed and local brains share the same memory.

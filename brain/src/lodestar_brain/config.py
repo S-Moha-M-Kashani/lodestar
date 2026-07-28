@@ -20,7 +20,11 @@ class Settings:
     openrouter_base_url: str = 'https://openrouter.ai/api/v1'
     model: str = 'openai/gpt-5-nano'
     llm_provider: str = 'openrouter'   # 'openrouter' | 'fake'
-    embedder: str = 'auto'             # 'auto' | 'fastembed' | 'hash'
+    # 'fastembed' | 'hash'. No 'auto': probing for the optional fastembed wheel
+    # and taking HashEmbedder when it was missing meant a machine without the
+    # 'semantic' extra ran token-overlap hashing while believing it had
+    # embeddings. Docker pins 'fastembed' (its image installs the extra).
+    embedder: str = 'hash'
     board_api_url: str = 'http://127.0.0.1:3000'
     # Chroma server for chat memory. '' = off, so Settings built directly in
     # code (unit tests, evals) reach no store at all; 'memory' = in-process
@@ -30,9 +34,11 @@ class Settings:
     chroma_database: str = PRODUCTION_DATABASE
     chat_collection: str = 'chat'
     max_agent_steps: int = 8
-    # 'auto' (local Parakeet if installed, else OpenRouter) | 'parakeet'
-    # | 'openrouter' | 'fake'
-    transcriber: str = 'auto'
+    # 'parakeet' | 'openrouter' | 'fake'. No 'auto' either: it picked the local
+    # model on Apple Silicon and billed OpenRouter everywhere else from the same
+    # config. Default to the free, offline, private backend; Docker pins
+    # 'openrouter' because mlx cannot be installed there at all.
+    transcriber: str = 'parakeet'
     # Audio/photo/video → text. Matches the Assistant view's omni picker default.
     # Must be a model that genuinely *receives* audio: nemotron-3-nano-omni:free
     # advertises audio input but its provider discards the input_audio part, so
@@ -65,7 +71,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         openrouter_base_url=env.get('OPENROUTER_BASE_URL', 'https://openrouter.ai/api/v1'),
         model=env.get('BRAIN_MODEL', 'openai/gpt-5-nano'),
         llm_provider=env.get('BRAIN_LLM', 'openrouter'),
-        embedder=env.get('BRAIN_EMBEDDER', 'auto'),
+        embedder=env.get('BRAIN_EMBEDDER', 'hash'),
         board_api_url=board_api_url,
         chroma_url=env.get('BRAIN_CHROMA_URL', 'http://localhost:8001'),
         chroma_database=env.get('BRAIN_CHROMA_DATABASE')
@@ -73,7 +79,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         chat_collection=env.get('BRAIN_CHAT_COLLECTION')
                         or _chat_collection_for(board_api_url),
         max_agent_steps=int(env.get('BRAIN_MAX_STEPS', '8')),
-        transcriber=env.get('BRAIN_TRANSCRIBER', 'auto'),
+        transcriber=env.get('BRAIN_TRANSCRIBER', 'parakeet'),
         omni_model=env.get('BRAIN_OMNI_MODEL', 'google/gemini-2.5-flash-lite'),
         parakeet_model=env.get('BRAIN_PARAKEET_MODEL',
                                'mlx-community/parakeet-tdt-0.6b-v3'),

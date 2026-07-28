@@ -156,6 +156,38 @@ test('compose mounts the brain source over the image copy', () => {
   );
 });
 
+// The brain used to choose its embedder and transcriber with an 'auto' mode that
+// probed for an optional wheel and quietly took whatever it found. That made the
+// composed brain's behaviour depend on the image contents rather than on config:
+// brain/Dockerfile installs `--extra semantic` but never `--extra voice` (mlx is
+// Apple-Silicon only), so Docker got fastembed and OpenRouter dictation while a
+// Mac got hash and Parakeet — from identical settings. With 'auto' gone the image
+// has no fallback to hide behind, so compose has to name both backends outright.
+const brainEnvPin = (key) =>
+  serviceBlock('brain').match(new RegExp(`^\\s*${key}:\\s*(.+)$`, 'm'))?.[1].trim();
+
+test('compose pins the brain embedder to the one its image installs', () => {
+  const pinned = brainEnvPin('BRAIN_EMBEDDER');
+  assert.ok(
+    pinned && pinned.includes('fastembed'),
+    `the composed brain does not pin BRAIN_EMBEDDER to fastembed (got ` +
+      `${pinned ?? 'nothing'}). The Dockerfile installs the 'semantic' extra so ` +
+      `the real embedder is available; unpinned, the container would fall to the ` +
+      `hash embedder and Leiden RAG would silently run on token overlap.`,
+  );
+});
+
+test('compose pins the brain transcriber away from Parakeet', () => {
+  const pinned = brainEnvPin('BRAIN_TRANSCRIBER');
+  assert.ok(
+    pinned && pinned.includes('openrouter'),
+    `the composed brain does not pin BRAIN_TRANSCRIBER to openrouter (got ` +
+      `${pinned ?? 'nothing'}). parakeet-mlx is Apple-Silicon only and the brain ` +
+      `image never installs the 'voice' extra, so any other value leaves the ` +
+      `container unable to transcribe at all.`,
+  );
+});
+
 test('the brain source mount is read-only', () => {
   const mount = brainSourceMount();
   assert.ok(mount, 'the brain source is not mounted at all');
