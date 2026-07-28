@@ -24,7 +24,7 @@ import { DatabaseSync } from 'node:sqlite';
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 3000;
 const DB_PATH = process.env.BOARD_DB || join(ROOT, 'board.db');
-const AGENT_URL = process.env.AGENT_URL || 'http://127.0.0.1:8000';
+const AGENT_URL = process.env.AGENT_URL || 'http://127.0.0.1:9000';
 
 const COLUMN_IDS = ['inbox', 'in-progress', 'answered'];
 const TYPES = ['question', 'problem', 'task', 'idea', 'plan'];
@@ -370,10 +370,18 @@ const server = createServer(async (req, res) => {
   // Assistant/RAG proxy — the brain service holds the LLM key; the browser never sees it.
   if (path.startsWith('/api/agent/') || path.startsWith('/api/rag/')) {
     const target = AGENT_URL + path.slice('/api'.length) + url.search;
+    let body;
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      try {
+        body = await readBody(req);
+      } catch {
+        // Almost always an over-long voice recording. Reporting this as
+        // "assistant unavailable" would send the user debugging a brain that
+        // is running perfectly well, so name the real problem.
+        return sendJson(res, 413, { error: 'Payload too large' });
+      }
+    }
     try {
-      const body = req.method === 'GET' || req.method === 'HEAD'
-        ? undefined
-        : await readBody(req);
       const upstream = await fetch(target, {
         method: req.method,
         headers: { 'content-type': req.headers['content-type'] || 'application/json' },

@@ -66,7 +66,12 @@ def start_brain():
          "lodestar_brain.server:app", "--port", str(BRAIN_PORT)],
         cwd=ROOT,
         env={**os.environ, "BRAIN_LLM": "fake", "BRAIN_EMBEDDER": "hash",
-             "BOARD_API_URL": f"http://127.0.0.1:{PORT}"},
+             "BRAIN_TRANSCRIBER": "fake",
+             "BOARD_API_URL": f"http://127.0.0.1:{PORT}",
+             # in-process Chroma: e2e must not depend on the Docker server,
+             # and must never write into the user's real chat memory
+             "BRAIN_CHROMA_URL": "memory",
+             "BRAIN_CHAT_COLLECTION": "chat-e2e"},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -100,12 +105,20 @@ def api_put(cards):
         return json.loads(r.read())
 
 
+# Synthetic microphone: getUserMedia returns a generated tone instead of asking
+# for real hardware, so the voice-input flow runs unattended and headless.
+MEDIA_ARGS = [
+    "--use-fake-device-for-media-stream",
+    "--use-fake-ui-for-media-stream",
+]
+
+
 def launch_browser(p):
     # Prefer the system Chrome locally; fall back to bundled Chromium (CI).
     try:
-        return p.chromium.launch(channel="chrome", headless=True)
+        return p.chromium.launch(channel="chrome", headless=True, args=MEDIA_ARGS)
     except Exception:
-        return p.chromium.launch(headless=True)
+        return p.chromium.launch(headless=True, args=MEDIA_ARGS)
 
 
 # Back up the real board.db (local + Google Drive via rclone) before tests run.
@@ -128,7 +141,8 @@ try:
         context = browser.new_context(
             viewport={"width": 1440, "height": 900}, accept_downloads=True
         )
-        context.grant_permissions(["clipboard-read", "clipboard-write"], origin=URL)
+        context.grant_permissions(
+            ["clipboard-read", "clipboard-write", "microphone"], origin=URL)
         # Keep the run network-free and deterministic: force the Overview map onto
         # its offline keyword-overlap layout instead of downloading the HuggingFace
         # model. The semantic upgrade is a progressive enhancement exercised by hand.
@@ -978,6 +992,105 @@ try:
             errors.remove(e)
         page.locator('.view-switch button[data-view="board"]').click()
 
+        # ---- Assistant voice input -------------------------------------------
+        # Chrome feeds getUserMedia a synthetic tone (MEDIA_ARGS), the browser
+        # encodes it to WAV, and the brain's fake transcriber answers offline —
+        # so this is a real end-to-end dictation with no hardware and no network.
+        FAKE_TRANSCRIPT = "FAKE TRANSCRIPT: hello from the microphone"
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector("#chat-input")
+        check("voice: mic button sits in the composer",
+              page.locator(".chat-composer .chat-mic").count() == 1
+              and page.is_enabled(".chat-mic"))
+
+        page.click(".chat-mic")
+        page.wait_for_selector(".chat-recording")
+        check("voice: recording bar offers stop and cancel",
+              page.locator(".chat-recording .chat-stop").count() == 1
+              and page.locator(".chat-recording .chat-cancel").count() == 1)
+        check("voice: mic reads as pressed while recording",
+              page.get_attribute(".chat-mic", "aria-pressed") == "true")
+
+        # Escape discards the take: no request fired, nothing typed.
+        page.wait_for_timeout(600)
+        page.keyboard.press("Escape")
+        page.wait_for_selector(".chat-recording", state="detached")
+        check("voice: Escape cancels the recording and types nothing",
+              page.input_value("#chat-input") == "")
+
+        n_user_msgs = page.locator(".chat-msg.user").count()
+        page.click(".chat-mic")
+        page.wait_for_selector(".chat-recording")
+        page.wait_for_timeout(1200)
+        with page.expect_request("**/api/agent/transcribe") as req_info:
+            page.click(".chat-stop")
+        req_body = json.loads(req_info.value.post_data or "{}")
+        check("voice: request carries base64 wav audio and the picked omni model",
+              req_body.get("format") == "wav"
+              and len(req_body.get("audio") or "") > 1000
+              and req_body.get("model") == DEFAULT_OMNI)
+        page.wait_for_function(
+            "document.querySelector('#chat-input').value.includes('FAKE TRANSCRIPT')")
+        check("voice: transcript lands in the composer",
+              FAKE_TRANSCRIPT in page.input_value("#chat-input"))
+        check("voice: transcript is not auto-sent",
+              page.locator(".chat-msg.user").count() == n_user_msgs)
+        page.screenshot(path=shot("voice-transcript.png"))
+
+        # Never lose a thought: dictation appends to what is already typed.
+        page.fill("#chat-input", "note: ")
+        page.click(".chat-mic")
+        page.wait_for_selector(".chat-recording")
+        page.wait_for_timeout(1200)
+        page.click(".chat-stop")
+        page.wait_for_function(
+            "document.querySelector('#chat-input').value.includes('FAKE TRANSCRIPT')")
+        check("voice: a new transcript appends instead of replacing",
+              page.input_value("#chat-input").startswith("note: ")
+              and FAKE_TRANSCRIPT in page.input_value("#chat-input"))
+
+        # Error path: a failed transcription says so and keeps the typed text.
+        page.fill("#chat-input", "keep me")
+        n_before = len(errors)
+        page.route("**/api/agent/transcribe", lambda route: route.fulfill(
+            status=503, content_type="application/json",
+            body='{"error":"assistant unavailable"}'))
+        page.click(".chat-mic")
+        page.wait_for_selector(".chat-recording")
+        page.wait_for_timeout(800)
+        page.click(".chat-stop")
+        page.wait_for_selector(".chat-voice-error")
+        check("voice: a failed transcription is reported, not silent",
+              "transcribe" in page.inner_text(".chat-voice-error").lower())
+        check("voice: a failed transcription leaves the typed text alone",
+              page.input_value("#chat-input") == "keep me")
+        page.unroute("**/api/agent/transcribe")
+        provoked = [e for e in errors[n_before:] if "503" in e]
+        check("voice error surfaced a console error to scrub", len(provoked) >= 1)
+        for e in provoked:
+            errors.remove(e)
+        page.fill("#chat-input", "")
+
+        # A thinking assistant takes the mic out of service. The delay has to
+        # live in the browser, not in a route handler: blocking inside a sync-API
+        # handler stalls Playwright's dispatcher too, so wait_for_timeout below
+        # would not return until the reply had already landed.
+        page.evaluate("""() => {
+          window.__origFetch = window.fetch;
+          window.fetch = (url, opts) => String(url).includes('/api/agent/chat')
+            ? new Promise((r) => setTimeout(() => r(window.__origFetch(url, opts)), 1500))
+            : window.__origFetch(url, opts);
+        }""")
+        page.fill("#chat-input", "make the assistant busy")
+        page.click("#chat-send")
+        page.wait_for_timeout(300)
+        check("voice: mic is disabled while the assistant is thinking",
+              page.locator(".chat-mic").is_disabled())
+        page.evaluate("() => { window.fetch = window.__origFetch; }")
+        # Reply lands ~1.2s later; the mic comes back with it.
+        page.wait_for_function("!document.querySelector('.chat-mic').disabled")
+        page.locator('.view-switch button[data-view="board"]').click()
+
         # ---- Import the grown life sample (substitute) -----------------------
         sample_path = os.path.join(ROOT, "sample-overview.json")
         sample = json.load(open(sample_path))
@@ -1117,7 +1230,52 @@ try:
         page.wait_for_timeout(100)
         check("areas: clicking the open tile again closes the detail",
               page.locator(".area-detail").count() == 0)
+
+        # The wheel's area names sit outside the ring, so the SVG viewport has to
+        # make room for them: any label whose ink crosses the viewBox edge gets
+        # sliced off ("COACHING 3" rendering as "NG 3"). Measured in user space,
+        # where getBBox() and viewBox share units.
+        clipped_labels = """() => {
+          const svg = document.querySelector('svg.wheel');
+          const vb = svg.viewBox.baseVal, EPS = 0.5;
+          return [...svg.querySelectorAll('text')].filter((t) => {
+            const b = t.getBBox();
+            return b.x < vb.x - EPS || b.x + b.width > vb.x + vb.width + EPS
+                || b.y < vb.y - EPS || b.y + b.height > vb.y + vb.height + EPS;
+          }).map((t) => t.textContent);
+        }"""
+        clipped = page.evaluate(clipped_labels)
+        check("areas: no wheel label is clipped by the SVG viewport",
+              clipped == [])
+        if clipped:
+            print("   clipped:", clipped)
         page.screenshot(path=shot("areas.png"))
+
+        # A long area name must not spill off the wheel either — the ring makes
+        # room for the widest label, not the other way round.
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector("#board.board")
+        page.click("#edit-cats-btn")
+        page.wait_for_selector("#cats-dialog[open]")
+        page.fill("#cat-add-name", "Photography")
+        page.click("#cat-add-btn")
+        page.wait_for_timeout(150)
+        page.click("#close-cats")
+        page.wait_for_timeout(100)
+        page.locator('[data-col="inbox"] .card').first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        page.locator('.category-picker label:has(input[value="photography"])').click()
+        page.click('#card-form button[type="submit"]')
+        page.wait_for_timeout(100)
+        page.locator('.view-switch button[data-view="areas"]').click()
+        page.wait_for_selector("#board.areas svg.wheel")
+        long_clipped = page.evaluate(clipped_labels)
+        check("areas: a long area name still fits inside the wheel viewport",
+              page.locator("svg.wheel text", has_text="Photography").count() == 1
+              and long_clipped == [])
+        if long_clipped:
+            print("   clipped:", long_clipped)
+        page.screenshot(path=shot("areas-long-label.png"))
 
         # ---- Review view -----------------------------------------------------
         page.locator('.view-switch button[data-view="review"]').click()

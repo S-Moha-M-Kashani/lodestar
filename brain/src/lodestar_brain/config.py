@@ -2,6 +2,16 @@
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+from urllib.parse import urlparse
+
+# Chat memory lives on a shared Chroma server, so real and non-real data are
+# separated by *database*: only the board on PRODUCTION_BOARD_PORT writes to the
+# production one. Everything else — the paired test board, e2e's throwaway
+# ports, anything added later — lands in the test database, which can be dropped
+# whole without touching real memory.
+PRODUCTION_BOARD_PORT = 3000
+PRODUCTION_DATABASE = 'lodestar'
+NON_PRODUCTION_DATABASE = 'lodestar-test'
 
 
 @dataclass(frozen=True)
@@ -12,17 +22,51 @@ class Settings:
     llm_provider: str = 'openrouter'   # 'openrouter' | 'fake'
     embedder: str = 'auto'             # 'auto' | 'fastembed' | 'hash'
     board_api_url: str = 'http://127.0.0.1:3000'
+    # Chroma server for chat memory. '' = off, so Settings built directly in
+    # code (unit tests, evals) reach no store at all; 'memory' = in-process
+    # client; any http(s) url = the real server. load_settings pairs the
+    # database and collection with the board.
+    chroma_url: str = ''
+    chroma_database: str = PRODUCTION_DATABASE
+    chat_collection: str = 'chat'
     max_agent_steps: int = 8
+    transcriber: str = 'auto'          # 'auto' | 'openrouter' | 'fake'
+    # Audio/photo/video → text. Matches the Assistant view's omni picker default.
+    omni_model: str = 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free'
+
+
+def _board_port(board_api_url: str) -> int | None:
+    return urlparse(board_api_url).port
+
+
+def _chat_collection_for(board_api_url: str) -> str:
+    port = _board_port(board_api_url)
+    return f'chat-board-{port}' if port else 'chat-board-default'
+
+
+def _chroma_database_for(board_api_url: str) -> str:
+    if _board_port(board_api_url) == PRODUCTION_BOARD_PORT:
+        return PRODUCTION_DATABASE
+    return NON_PRODUCTION_DATABASE
 
 
 def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     env = os.environ if env is None else env
+    board_api_url = env.get('BOARD_API_URL', 'http://127.0.0.1:3000')
     return Settings(
         openrouter_api_key=env.get('OPENROUTER_API_KEY', ''),
         openrouter_base_url=env.get('OPENROUTER_BASE_URL', 'https://openrouter.ai/api/v1'),
         model=env.get('BRAIN_MODEL', 'openai/gpt-4o-mini'),
         llm_provider=env.get('BRAIN_LLM', 'openrouter'),
         embedder=env.get('BRAIN_EMBEDDER', 'auto'),
-        board_api_url=env.get('BOARD_API_URL', 'http://127.0.0.1:3000'),
+        board_api_url=board_api_url,
+        chroma_url=env.get('BRAIN_CHROMA_URL', 'http://localhost:8001'),
+        chroma_database=env.get('BRAIN_CHROMA_DATABASE')
+                        or _chroma_database_for(board_api_url),
+        chat_collection=env.get('BRAIN_CHAT_COLLECTION')
+                        or _chat_collection_for(board_api_url),
         max_agent_steps=int(env.get('BRAIN_MAX_STEPS', '8')),
+        transcriber=env.get('BRAIN_TRANSCRIBER', 'auto'),
+        omni_model=env.get('BRAIN_OMNI_MODEL',
+                           'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free'),
     )
