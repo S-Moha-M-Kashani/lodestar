@@ -1693,15 +1693,33 @@
     return { cards, open, oldestAge: open.length ? Date.now() - oldest : 0, top };
   }
 
+  // Area names ring the wheel outside the plot, so the viewport has to reserve
+  // room for them or a long name gets sliced off at the viewBox edge. Widths come
+  // from an off-screen twin that inherits the same `.wheel text` type styles, so
+  // the reservation tracks the real font instead of guessing at glyph advances.
+  let wheelRuler = null;
+  function wheelLabelWidth(text) {
+    if (!wheelRuler) {
+      const svg = document.createElementNS(SVGNS, 'svg');
+      // Deliberately NOT class="wheel": that selector is test-stable API for the
+      // one real wheel. `.wheel-ruler text` copies the type styles instead.
+      svg.setAttribute('class', 'wheel-ruler');
+      svg.setAttribute('aria-hidden', 'true');
+      wheelRuler = document.createElementNS(SVGNS, 'text');
+      svg.append(wheelRuler);
+      document.body.append(svg);
+    }
+    wheelRuler.textContent = text;
+    // getComputedTextLength() needs a rendered node; fall back to a mono estimate.
+    return wheelRuler.getComputedTextLength() || text.length * 6;
+  }
+
   // Attention wheel — spoke length is open-question mass (high importance
   // counts double). Purely derived from the board: no scoring ritual to keep up.
   function renderWheel(cats) {
-    const SIZE = 260, CX = SIZE / 2, CY = SIZE / 2, R = 88;
+    const SIZE = 260, CX = SIZE / 2, CY = SIZE / 2, R = 88, COLLAR = 18, MARGIN = 2;
     const svg = document.createElementNS(SVGNS, 'svg');
     svg.setAttribute('class', 'wheel');
-    svg.setAttribute('viewBox', `0 0 ${SIZE} ${SIZE}`);
-    svg.setAttribute('width', SIZE);
-    svg.setAttribute('height', SIZE);
     svg.setAttribute('role', 'img');
     svg.setAttribute('aria-label', 'Attention wheel — open questions per life area');
 
@@ -1716,6 +1734,8 @@
       stats.open.reduce((s, c) => s + (c.importance === 'high' ? 2 : 1), 0));
     const maxMass = Math.max(1, ...masses);
     const pts = [];
+    // The plot box is fixed; the label ink pushes these bounds outward instead.
+    let minX = 0, maxX = SIZE;
     cats.forEach(({ cat, stats }, i) => {
       const a = -Math.PI / 2 + (i / cats.length) * Math.PI * 2;
       const frac = 0.1 + 0.9 * (masses[i] / maxMass);
@@ -1733,15 +1753,27 @@
       dot.style.fill = catColor(cat.id);
       svg.append(dot);
 
-      const lx = CX + Math.cos(a) * (R + 18), ly = CY + Math.sin(a) * (R + 18);
+      const lx = CX + Math.cos(a) * (R + COLLAR), ly = CY + Math.sin(a) * (R + COLLAR);
+      const anchor = Math.abs(Math.cos(a)) < 0.3 ? 'middle' : Math.cos(a) > 0 ? 'start' : 'end';
       const label = document.createElementNS(SVGNS, 'text');
       label.setAttribute('x', lx.toFixed(1)); label.setAttribute('y', ly.toFixed(1));
-      label.setAttribute('text-anchor', Math.abs(Math.cos(a)) < 0.3 ? 'middle' : Math.cos(a) > 0 ? 'start' : 'end');
+      label.setAttribute('text-anchor', anchor);
       label.setAttribute('dominant-baseline', 'middle');
       label.style.fill = catColor(cat.id);
       label.textContent = `${cat.label} ${stats.open.length}`;
       svg.append(label);
+
+      const w = wheelLabelWidth(label.textContent);
+      const left = anchor === 'start' ? lx : anchor === 'end' ? lx - w : lx - w / 2;
+      minX = Math.min(minX, left - MARGIN);
+      maxX = Math.max(maxX, left + w + MARGIN);
     });
+
+    // Widen the viewport around the untouched plot box, so the ring keeps its
+    // size and the names simply get the room they need on either side.
+    svg.setAttribute('viewBox', `${minX.toFixed(1)} 0 ${(maxX - minX).toFixed(1)} ${SIZE}`);
+    svg.setAttribute('width', Math.ceil(maxX - minX));
+    svg.setAttribute('height', SIZE);
 
     if (cats.length > 1) {
       const poly = document.createElementNS(SVGNS, 'polygon');
@@ -2329,7 +2361,9 @@
   // Assistant view — chat with the brain service via /api/agent/chat
   // --------------------------------------------------------------------------
 
-  const assistantState = { messages: [], busy: false };
+  // `draft` holds the composer text across re-renders — render() rebuilds the
+  // textarea, so anything typed (or dictated) has to live in state, not the DOM.
+  const assistantState = { messages: [], busy: false, draft: '' };
 
   // Model choices for the brain, one per capability. Only the text pick has
   // an effect today — it rides along on every /api/agent/chat request (the
@@ -2389,9 +2423,305 @@
     }
     const hint = document.createElement('p');
     hint.className = 'field-hint';
-    hint.textContent = 'Text generation applies to the chat now; the other two are saved for upcoming media and retrieval features.';
+    hint.textContent = 'Text generation applies to the chat and the omni model transcribes your voice; the embedding pick is saved for upcoming retrieval features.';
     panel.appendChild(hint);
     return panel;
+  }
+
+  // --------------------------------------------------------------------------
+  // Voice input — speak into the composer instead of typing.
+  //
+  // MediaRecorder emits webm/opus, which the omni models don't accept, so the
+  // blob is decoded and re-encoded here as 16 kHz mono WAV (a third of the
+  // bytes of the 48 kHz source) and posted as base64 to the brain. The
+  // transcript lands in the composer as editable text and is never auto-sent:
+  // a misheard word must be fixable before it reaches the agent.
+  // --------------------------------------------------------------------------
+
+  const VOICE_RATE = 16000;      // Hz, mono — plenty for speech
+  // 90s ≈ 3.8 MB of base64, comfortably inside the server's ~5 MB body cap.
+  const VOICE_MAX_MS = 90_000;
+
+  const voiceState = {
+    phase: 'idle',               // 'idle' | 'recording' | 'transcribing'
+    error: '',
+    startedAt: 0,
+    recorder: null,
+    stream: null,
+    chunks: [],
+    timer: null,
+  };
+
+  function voiceSupported() {
+    return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia
+      && window.MediaRecorder && (window.AudioContext || window.webkitAudioContext));
+  }
+
+  function formatElapsed(ms) {
+    const total = Math.floor(ms / 1000);
+    return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+  }
+
+  function releaseMic() {
+    if (voiceState.stream) {
+      for (const track of voiceState.stream.getTracks()) track.stop();
+      voiceState.stream = null;
+    }
+  }
+
+  function stopTimer() {
+    if (voiceState.timer) clearInterval(voiceState.timer);
+    voiceState.timer = null;
+  }
+
+  // Resolve once the recorder has flushed its final chunk.
+  function flushRecorder() {
+    return new Promise((resolve) => {
+      const rec = voiceState.recorder;
+      if (!rec || rec.state === 'inactive') return resolve();
+      rec.addEventListener('stop', () => resolve(), { once: true });
+      rec.stop();
+    });
+  }
+
+  async function startRecording() {
+    if (voiceState.phase !== 'idle' || assistantState.busy) return;
+    voiceState.error = '';
+    try {
+      voiceState.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      voiceState.error = 'Microphone blocked — check your browser permissions.';
+      render();
+      announce('Microphone blocked');
+      return;
+    }
+    voiceState.chunks = [];
+    const rec = new MediaRecorder(voiceState.stream);
+    rec.addEventListener('dataavailable', (event) => {
+      if (event.data && event.data.size) voiceState.chunks.push(event.data);
+    });
+    voiceState.recorder = rec;
+    rec.start();
+    voiceState.phase = 'recording';
+    voiceState.startedAt = Date.now();
+    voiceState.timer = setInterval(tickRecording, 250);
+    render();
+    announce('Recording — press Stop when you are done');
+  }
+
+  function tickRecording() {
+    const elapsed = Date.now() - voiceState.startedAt;
+    const readout = document.querySelector('.chat-elapsed');
+    if (readout) readout.textContent = formatElapsed(elapsed);
+    // Stop ourselves rather than let the payload grow past what the server takes.
+    if (elapsed >= VOICE_MAX_MS) stopRecording();
+  }
+
+  async function cancelRecording() {
+    if (voiceState.phase !== 'recording') return;
+    stopTimer();
+    await flushRecorder();
+    releaseMic();
+    voiceState.chunks = [];
+    voiceState.recorder = null;
+    voiceState.phase = 'idle';
+    voiceState.error = '';
+    render();
+    announce('Recording discarded');
+  }
+
+  async function stopRecording() {
+    if (voiceState.phase !== 'recording') return;
+    stopTimer();
+    // mimeType is only meaningful once recording has started.
+    const type = voiceState.recorder.mimeType || 'audio/webm';
+    await flushRecorder();
+    releaseMic();
+    const blob = new Blob(voiceState.chunks, { type });
+    voiceState.chunks = [];
+    voiceState.recorder = null;
+    voiceState.phase = 'transcribing';
+    render();
+
+    try {
+      const audio = await encodeWav(blob);
+      if (!audio) throw new Error('empty');
+      const res = await fetch('/api/agent/transcribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ audio, format: 'wav', model: assistantModels.omni }),
+      });
+      if (res.status === 413) throw new Error('too-long');
+      if (!res.ok) throw new Error(`transcribe ${res.status}`);
+      const data = await res.json();
+      const text = (data.text || '').trim();
+      if (!text) {
+        voiceState.error = 'Didn’t catch that — nothing was transcribed.';
+        announce('Nothing was transcribed');
+      } else {
+        appendToDraft(text);
+        announce('Transcript added to the composer');
+      }
+    } catch (err) {
+      voiceState.error = err && err.message === 'too-long'
+        ? 'That recording was too long to transcribe — try a shorter one.'
+        : 'Couldn’t transcribe that — check that the brain service is running.';
+      announce('Transcription failed');
+    }
+
+    voiceState.phase = 'idle';
+    render();
+    const input = document.getElementById('chat-input');
+    if (input) {
+      input.focus();
+      input.selectionStart = input.selectionEnd = input.value.length;
+    }
+  }
+
+  // Dictation adds to the draft rather than replacing it — never lose a thought.
+  function appendToDraft(text) {
+    const current = assistantState.draft;
+    assistantState.draft = current && !/\s$/.test(current)
+      ? `${current} ${text}`
+      : `${current}${text}`;
+  }
+
+  // ---- WAV encoding (no dependencies) --------------------------------------
+
+  async function encodeWav(blob) {
+    if (!blob.size) return '';
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    const ctx = new Ctx();
+    let buffer;
+    try {
+      buffer = await ctx.decodeAudioData(await blob.arrayBuffer());
+    } finally {
+      ctx.close();
+    }
+    const samples = resample(downmix(buffer), buffer.sampleRate, VOICE_RATE);
+    if (!samples.length) return '';
+    return base64FromBytes(wavBytes(samples, VOICE_RATE));
+  }
+
+  function downmix(buffer) {
+    const channels = buffer.numberOfChannels;
+    const mono = new Float32Array(buffer.length);
+    for (let c = 0; c < channels; c += 1) {
+      const data = buffer.getChannelData(c);
+      for (let i = 0; i < mono.length; i += 1) mono[i] += data[i];
+    }
+    if (channels > 1) for (let i = 0; i < mono.length; i += 1) mono[i] /= channels;
+    return mono;
+  }
+
+  function resample(input, fromRate, toRate) {
+    if (fromRate === toRate) return input;
+    const ratio = fromRate / toRate;
+    const out = new Float32Array(Math.floor(input.length / ratio));
+    for (let i = 0; i < out.length; i += 1) {
+      const pos = i * ratio;
+      const low = Math.floor(pos);
+      const high = Math.min(low + 1, input.length - 1);
+      out[i] = input[low] + (input[high] - input[low]) * (pos - low);
+    }
+    return out;
+  }
+
+  function wavBytes(samples, rate) {
+    const bytes = new ArrayBuffer(44 + samples.length * 2);
+    const view = new DataView(bytes);
+    const ascii = (at, text) => {
+      for (let i = 0; i < text.length; i += 1) view.setUint8(at + i, text.charCodeAt(i));
+    };
+    ascii(0, 'RIFF');
+    view.setUint32(4, 36 + samples.length * 2, true);
+    ascii(8, 'WAVE');
+    ascii(12, 'fmt ');
+    view.setUint32(16, 16, true);        // fmt chunk size
+    view.setUint16(20, 1, true);         // PCM
+    view.setUint16(22, 1, true);         // mono
+    view.setUint32(24, rate, true);
+    view.setUint32(28, rate * 2, true);  // byte rate
+    view.setUint16(32, 2, true);         // block align
+    view.setUint16(34, 16, true);        // bits per sample
+    ascii(36, 'data');
+    view.setUint32(40, samples.length * 2, true);
+    for (let i = 0; i < samples.length; i += 1) {
+      // Clamp: browsers can hand back samples slightly outside [-1, 1].
+      const s = Math.max(-1, Math.min(1, samples[i]));
+      view.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    }
+    return new Uint8Array(bytes);
+  }
+
+  function base64FromBytes(bytes) {
+    // Chunked so a long recording can't blow the argument limit.
+    const CHUNK = 0x8000;
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+    }
+    return btoa(binary);
+  }
+
+  // Escape discards the take in progress. Registered once; harmless otherwise.
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && voiceState.phase === 'recording') {
+      event.preventDefault();
+      cancelRecording();
+    }
+  });
+
+  function renderMicButton() {
+    const mic = document.createElement('button');
+    mic.type = 'button';
+    mic.id = 'chat-mic';
+    mic.className = 'btn chat-mic';
+    const recording = voiceState.phase === 'recording';
+    mic.textContent = recording ? '■' : '\u{1F3A4}';
+    mic.setAttribute('aria-pressed', recording ? 'true' : 'false');
+    mic.setAttribute('aria-label', recording ? 'Stop recording' : 'Dictate a message');
+    mic.title = recording ? 'Stop recording' : 'Dictate a message';
+    mic.disabled = assistantState.busy || voiceState.phase === 'transcribing';
+    mic.addEventListener('click', () => {
+      if (voiceState.phase === 'recording') stopRecording();
+      else startRecording();
+    });
+    return mic;
+  }
+
+  function renderRecordingBar() {
+    const bar = document.createElement('div');
+    bar.className = 'chat-recording';
+    bar.setAttribute('role', 'status');
+
+    const dot = document.createElement('span');
+    dot.className = 'chat-rec-dot';
+    dot.setAttribute('aria-hidden', 'true');
+
+    const label = document.createElement('span');
+    label.className = 'chat-rec-label';
+    label.textContent = 'Recording…';
+
+    const elapsed = document.createElement('span');
+    elapsed.className = 'chat-elapsed';
+    elapsed.textContent = formatElapsed(Date.now() - voiceState.startedAt);
+
+    const stop = document.createElement('button');
+    stop.type = 'button';
+    stop.className = 'btn primary chat-stop';
+    stop.textContent = 'Stop';
+    stop.addEventListener('click', stopRecording);
+
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'btn chat-cancel';
+    cancel.textContent = 'Cancel';
+    cancel.title = 'Discard this recording (Esc)';
+    cancel.addEventListener('click', cancelRecording);
+
+    bar.append(dot, label, elapsed, stop, cancel);
+    return bar;
   }
 
   function renderAssistant() {
@@ -2433,8 +2763,20 @@
 
     const status = document.createElement('div');
     status.className = 'chat-status';
-    status.textContent = assistantState.busy ? 'Thinking…' : '';
+    if (assistantState.busy) status.textContent = 'Thinking…';
+    else if (voiceState.phase === 'transcribing') status.textContent = 'Transcribing…';
+    else if (voiceState.phase === 'recording') status.textContent = 'Listening…';
     sheet.appendChild(status);
+
+    if (voiceState.error) {
+      const problem = document.createElement('p');
+      problem.className = 'chat-voice-error';
+      problem.setAttribute('role', 'alert');
+      problem.textContent = voiceState.error;
+      sheet.appendChild(problem);
+    }
+
+    if (voiceState.phase === 'recording') sheet.appendChild(renderRecordingBar());
 
     const form = document.createElement('form');
     form.className = 'chat-composer';
@@ -2442,18 +2784,27 @@
     input.id = 'chat-input';
     input.placeholder = 'Message the assistant…';
     input.disabled = assistantState.busy;
+    input.value = assistantState.draft;
+    input.addEventListener('input', () => { assistantState.draft = input.value; });
+    const actions = document.createElement('div');
+    actions.className = 'composer-actions';
+    if (voiceSupported()) actions.appendChild(renderMicButton());
     const send = document.createElement('button');
     send.type = 'submit';
     send.id = 'chat-send';
     send.className = 'btn primary';
     send.textContent = 'Send';
     send.disabled = assistantState.busy;
+    actions.appendChild(send);
     form.appendChild(input);
-    form.appendChild(send);
+    form.appendChild(actions);
     form.addEventListener('submit', (event) => {
       event.preventDefault();
       const text = input.value.trim();
-      if (text && !assistantState.busy) sendChat(text);
+      if (text && !assistantState.busy) {
+        assistantState.draft = '';
+        sendChat(text);
+      }
     });
     input.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' && !event.shiftKey) {

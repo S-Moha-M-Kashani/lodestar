@@ -8,5 +8,5 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-install-project --no-dev --extra semantic
 COPY src ./src
 RUN uv sync --frozen --no-dev --extra semantic
-EXPOSE 8000
-CMD ["uv", "run", "--no-dev", "uvicorn", "lodestar_brain.server:app", "--host", "0.0.0.0", "--port", "8000"]
+EXPOSE 9000
+CMD ["uv", "run", "--no-dev", "uvicorn", "lodestar_brain.server:app", "--host", "0.0.0.0", "--port", "9000"]

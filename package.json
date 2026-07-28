@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "test-board": "PORT=3001 BOARD_DB=board-3001.db node server.js",
+    "test-board": "PORT=3001 BOARD_DB=board-3001.db AGENT_URL=http://127.0.0.1:9001 node server.js",
+    "test-brain": "BOARD_API_URL=http://127.0.0.1:3001 BRAIN_CHROMA_DATABASE=lodestar-test uv run --project brain uvicorn lodestar_brain.server:app --port 9001",
     "backup": "node scripts/backup-db.mjs",
     "test:server": "node scripts/backup-db.mjs && node --test tests/*.test.js",
     "test:all": "node scripts/backup-db.mjs && node --test tests/*.test.js && uv run --project brain pytest brain/tests -v && uv run --with playwright python tests/e2e_test.py"
