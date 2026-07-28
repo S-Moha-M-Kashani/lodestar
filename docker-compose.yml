@@ -13,6 +13,13 @@ services:
       AGENT_URL: http://brain:9000
     volumes:
       - board-data:/data
+      # Serve the working tree, not the copy baked in at build time. Without this
+      # the container keeps serving the frontend it was built with — the API and
+      # the board stay current, so the staleness shows up only as views quietly
+      # missing from :3000. The whole tree, not single files: a file bind mount
+      # is pinned to an inode, so an editor that saves by rename would silently
+      # go stale again. Read-only — the container never writes back over source.
+      - .:/app:ro
     restart: unless-stopped
 
   # The "brain" — agent, web search, and Leiden RAG. Internal only: the browser
@@ -31,6 +38,14 @@ services:
       BRAIN_CHROMA_URL: ${BRAIN_CHROMA_URL:-http://host.docker.internal:8001}
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    volumes:
+      # Same reason as the board above: run the working tree, not the copy baked
+      # in at build time. Only src/ — the image's virtualenv lives at /app/.venv,
+      # and mounting the host's brain/ over /app would swap a Linux venv for the
+      # host's macOS one and the service would not start. uv installs the project
+      # editable, so lodestar_brain resolves to this mount. Python has no reload
+      # here, so a change needs `docker compose restart brain`, not a rebuild.
+      - ./brain/src:/app/src:ro
     restart: unless-stopped
 
 volumes:
