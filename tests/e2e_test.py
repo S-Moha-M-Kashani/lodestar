@@ -966,7 +966,14 @@ try:
         # changes behaviour today (it rides along on every chat request); the
         # omni and embedding picks are stored preferences for the brain's
         # coming media/RAG features. All three persist in localStorage.
-        DEFAULT_TEXT = "moonshotai/kimi-k3"
+        # The text picker offers one cheap default and one step up, nothing else.
+        # moonshotai/kimi-k3 and openai/gpt-4o-mini are retired, and so is
+        # openrouter/auto: it is deprecated, it routes to a different model per
+        # request, and the brain never reads the resolved slug back out of the
+        # response — so a slow or badly tool-calling turn was unattributable.
+        DEFAULT_TEXT = "openai/gpt-5-nano"
+        ALT_TEXT = "openai/gpt-5-mini"
+        RETIRED_TEXT = ["moonshotai/kimi-k3", "openai/gpt-4o-mini", "openrouter/auto"]
         # The omni default must be a model that actually receives audio. The old
         # nemotron:free default is advertised as audio-capable but its provider
         # discards the input_audio part, so every dictation came back an invented
@@ -988,6 +995,11 @@ try:
         omni_options = page.locator("#model-omni option").all_inner_texts()
         check("assistant: the free omni model stays selectable, just not default",
               BROKEN_OMNI in omni_options and DEFAULT_OMNI in omni_options)
+        text_options = page.locator("#model-text option").all_inner_texts()
+        check("assistant: the text picker offers exactly the two GPT-5 tiers",
+              text_options == [DEFAULT_TEXT, ALT_TEXT])
+        check("assistant: the retired text models are gone from the picker",
+              not any(slug in text_options for slug in RETIRED_TEXT))
 
         n_replies = page.locator(".chat-msg.assistant").count()
         page.fill("#chat-input", "model ride-along probe")
@@ -998,13 +1010,13 @@ try:
         page.wait_for_function(
             f"document.querySelectorAll('.chat-msg.assistant').length >= {n_replies + 1}")
 
-        page.select_option("#model-text", "openai/gpt-4o-mini")
+        page.select_option("#model-text", ALT_TEXT)
         page.reload()
         page.wait_for_selector("#board")
         page.locator('.view-switch button[data-view="assistant"]').click()
         page.wait_for_selector("#model-text")
         check("assistant: model choice survives a reload",
-              page.input_value("#model-text") == "openai/gpt-4o-mini")
+              page.input_value("#model-text") == ALT_TEXT)
         page.select_option("#model-text", DEFAULT_TEXT)
 
         # ---- Assistant error path: a 503 renders the friendly unavailable message.

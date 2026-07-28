@@ -88,7 +88,7 @@ Every capability sits behind a small interface chosen by env vars, so each piece
 | --- | --- | --- |
 | `OPENROUTER_API_KEY` | *(empty)* | LLM access. Without it the assistant errors politely; the board is unaffected |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | Any OpenAI-compatible endpoint works (e.g. a local Ollama later) |
-| `BRAIN_MODEL` | `openai/gpt-4o-mini` | Default model; any OpenRouter model id |
+| `BRAIN_MODEL` | `openai/gpt-5-nano` | Fallback when the browser sends no pick; any OpenRouter model id |
 | `BRAIN_LLM` | `openrouter` | `fake` = deterministic offline provider (tests/CI) |
 | `BRAIN_EMBEDDER` | `auto` | `fastembed` (semantic), `hash` (offline), `auto` = fastembed with hash fallback |
 | `BRAIN_MAX_STEPS` | `8` | Tool-call budget per chat turn |

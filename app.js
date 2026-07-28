@@ -2375,13 +2375,13 @@
   // serving it discards the audio and answers an apology, so it stays
   // selectable (it is the only free one) without being the default.
   const DEFAULT_MODELS = {
-    text: 'moonshotai/kimi-k3',
+    text: 'openai/gpt-5-nano',
     omni: 'google/gemini-2.5-flash-lite',
     embed: 'nvidia/llama-nemotron-embed-vl-1b-v2:free',
   };
   const MODEL_PICKERS = [
     { key: 'text', id: 'model-text', label: 'Text generation',
-      options: [DEFAULT_MODELS.text, 'openai/gpt-4o-mini', 'openrouter/auto'] },
+      options: [DEFAULT_MODELS.text, 'openai/gpt-5-mini'] },
     { key: 'omni', id: 'model-omni', label: 'Audio / photo / video → text',
       options: [DEFAULT_MODELS.omni, 'openai/gpt-audio-mini',
                 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',

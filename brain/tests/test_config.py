@@ -9,6 +9,9 @@ def test_defaults():
     assert s.board_api_url == 'http://127.0.0.1:3000'
     assert s.max_agent_steps == 8
     assert s.transcriber == 'auto'
+    # The cheap tier is the default: a request that arrives without a model
+    # (evals, direct API use) should not silently buy the expensive one.
+    assert s.model == 'openai/gpt-5-nano'
     # The old default, nvidia/nemotron-3-nano-omni-...:free, is advertised as
     # audio-capable but its provider silently discards the input_audio part —
     # every dictation came back a hallucinated apology. The default must be a
