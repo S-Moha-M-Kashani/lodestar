@@ -9,7 +9,12 @@ def test_defaults():
     assert s.board_api_url == 'http://127.0.0.1:3000'
     assert s.max_agent_steps == 8
     assert s.transcriber == 'auto'
-    assert s.omni_model == 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free'
+    # The old default, nvidia/nemotron-3-nano-omni-...:free, is advertised as
+    # audio-capable but its provider silently discards the input_audio part —
+    # every dictation came back a hallucinated apology. The default must be a
+    # model verified to actually receive audio.
+    assert s.omni_model == 'google/gemini-2.5-flash-lite'
+    assert s.parakeet_model == 'mlx-community/parakeet-tdt-0.6b-v3'
 
 
 def test_env_overrides():
@@ -22,6 +27,7 @@ def test_env_overrides():
         'BRAIN_MAX_STEPS': '3',
         'BRAIN_TRANSCRIBER': 'fake',
         'BRAIN_OMNI_MODEL': 'google/gemini-2.5-flash',
+        'BRAIN_PARAKEET_MODEL': 'mlx-community/parakeet-tdt-1.1b',
     })
     assert s.openrouter_api_key == 'sk-test'
     assert s.model == 'anthropic/claude-sonnet-4.5'
@@ -31,6 +37,7 @@ def test_env_overrides():
     assert s.max_agent_steps == 3
     assert s.transcriber == 'fake'
     assert s.omni_model == 'google/gemini-2.5-flash'
+    assert s.parakeet_model == 'mlx-community/parakeet-tdt-1.1b'
 
 
 # ---- chat memory lives on the shared Chroma server ------------------------
