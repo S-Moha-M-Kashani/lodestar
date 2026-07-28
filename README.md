@@ -162,7 +162,17 @@ uv run --project brain pytest brain/tests -v        # brain unit
 uv run --project brain pytest brain/tests/evals -v  # brain evals
 ```
 
-**Backup guarantee:** every test entry point backs up `board.db` first — a timestamped copy under `backups/` (git-ignored, newest 30 kept) and, if [rclone](https://rclone.org/) is configured, a copy to `gdrive:lodestar-backups/`. Auth is one-time (`rclone config` and sign in to Google in the browser; rclone stores an OAuth token on the machine). **No Google password is ever stored in or read by this repo.** A missing or unconfigured rclone prints a warning and never blocks the tests.
+**Backup guarantee:** every test entry point backs up `board.db` first — a timestamped copy under `backups/` (git-ignored, newest 100 kept) and, if [rclone](https://rclone.org/) is configured, a copy to `gdrive:lodestar-backups/`. Auth is one-time (`rclone config` and sign in to Google in the browser; rclone stores an OAuth token on the machine). **No Google password is ever stored in or read by this repo.** A missing or unconfigured rclone prints a warning and never blocks the tests.
+
+**Backups also follow the data, not just the test runs.** When a `PUT /api/state` brings a card the database has never seen, the server takes a snapshot — one per save, however many new cards it carried. Edits, column moves and deletes do not trigger one, and neither does restoring a card from the Trash (its id is already known, so it is not a new entry). The snapshot runs in a detached child process after the response is sent, so a save is never blocked by a Drive upload, and it is taken after the commit so it contains the card that triggered it. `VACUUM INTO` is used rather than a file copy, so a snapshot taken while the server is mid-write is still a consistent database.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `LODESTAR_BACKUP_ON_WRITE` | on | Set to `0` to turn off write-triggered backups. The test suites set this so they never add throwaway boards to your real history. |
+| `LODESTAR_BACKUP_DIR` | `backups/` | Where snapshots are written. |
+| `LODESTAR_BACKUP_KEEP` | `100` | How many snapshots to retain; older ones are deleted. |
+| `LODESTAR_RCLONE_REMOTE` | `gdrive` | The rclone remote to push to. |
+| `LODESTAR_RCLONE_BIN` | `rclone` | Path to the rclone binary. |
 
 A CI workflow (`.github/workflows/ci.yml`) runs the brain unit tests and the full e2e suite on every push and pull request. Note that the repository currently has **no git remote**, so CI has not actually run yet — the suites are run locally before each commit.
 

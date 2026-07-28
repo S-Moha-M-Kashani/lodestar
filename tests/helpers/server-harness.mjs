@@ -39,7 +39,12 @@ export async function startServer({ env = {} } = {}) {
   const port = 20000 + Math.floor((Date.now() % 40000));
   const proc = spawn('node', ['server.js'], {
     cwd: ROOT,
-    env: { ...process.env, PORT: String(port), BOARD_DB: dbPath, NODE_NO_WARNINGS: '1', ...env },
+    // Write-triggered backups are OFF by default here: most tests create cards,
+    // and each one would otherwise drop a snapshot of a temp board into the
+    // user's real backups/ and evict a genuine one. The backup tests opt in
+    // explicitly via `env`, pointing at a temp directory.
+    env: { ...process.env, PORT: String(port), BOARD_DB: dbPath, NODE_NO_WARNINGS: '1',
+           LODESTAR_BACKUP_ON_WRITE: '0', ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   proc.stderr.on('data', () => {}); // drain
