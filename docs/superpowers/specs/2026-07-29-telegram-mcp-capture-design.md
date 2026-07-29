@@ -2,8 +2,10 @@
 
 **Date:** 2026-07-29
 **Status:** approved, not yet implemented
-**Cycle 2 of 2.** Depends on `2026-07-29-langchain-agent-rewrite-design.md`; do not start
-until that cycle is merged and the whole suite is green.
+**Cycle 5 of 5.** Roadmap: Tooka Farsi embedder → LangChain agent rewrite → model registry &
+pickers → factor explainers → **this**. Depends on
+`2026-07-29-langchain-agent-rewrite-design.md`; do not start until that cycle is merged and the
+whole suite is green.
 
 ## Why
 

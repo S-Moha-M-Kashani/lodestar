@@ -2,8 +2,9 @@
 
 **Date:** 2026-07-29
 **Status:** approved, not yet implemented
-**Cycle 1 of 2.** Cycle 2 is `2026-07-29-telegram-mcp-capture-design.md`, which depends on
-this one and must not start until this is merged and green.
+**Cycle 2 of 5.** Roadmap: Tooka Farsi embedder → **this** → model registry & pickers →
+factor explainers → Telegram MCP capture. `2026-07-29-telegram-mcp-capture-design.md` depends
+on this cycle and must not start until it is merged and green.
 
 ## Why
 
