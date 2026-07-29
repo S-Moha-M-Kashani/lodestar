@@ -118,6 +118,11 @@ def api_trash():
         return json.loads(r.read())
 
 
+def api_proposals():
+    with urllib.request.urlopen(URL + "/api/proposals", timeout=3) as r:
+        return json.loads(r.read())
+
+
 def api_put(cards):
     body = json.dumps({"version": 1, "cards": cards}).encode()
     req = urllib.request.Request(
@@ -949,17 +954,63 @@ try:
         check("assistant: chat roundtrip through the Node proxy",
               "FAKE: hello brain" in page.inner_text(".chat-log"))
 
+        # ---- Agent card confirmation gate -----------------------------------
+        # A card the agent invents is a PROPOSAL: nothing reaches the board until
+        # the user approves it.
+        board_before = len(api_state()["cards"])
         page.fill("#chat-input", "add: What is Leiden clustering?")
         page.click("#chat-send")
         page.wait_for_function(
             "document.querySelectorAll('.chat-msg.assistant').length >= 2")
         check("assistant: tool chip shown for create_question",
               "create_question" in page.inner_text(".chat-log"))
-        check("assistant: agent created the card via the board API",
+        check("gate: the proposed card is NOT on the board yet",
+              not any(c["title"] == "What is Leiden clustering?"
+                      for c in api_state()["cards"])
+              and len(api_state()["cards"]) == board_before)
+        check("gate: it is waiting in the proposals list",
+              any(c["title"] == "What is Leiden clustering?"
+                  for c in api_proposals()["cards"]))
+
+        page.wait_for_selector(".proposal")
+        check("gate: the proposal renders in the Assistant view with both actions",
+              page.locator(".proposal").count() == 1
+              and "Leiden clustering" in page.inner_text(".proposal-title")
+              and page.locator(".proposal-approve").count() == 1
+              and page.locator(".proposal-reject").count() == 1)
+        check("gate: the Assistant tab carries a count badge",
+              page.locator('.view-switch button[data-view="assistant"] .view-badge')
+                  .inner_text().strip() == "1")
+
+        page.click(".proposal-approve")
+        page.wait_for_function("document.querySelectorAll('.proposal').length === 0")
+        check("gate: approving puts the card on the board",
               any(c["title"] == "What is Leiden clustering?" for c in api_state()["cards"]))
+        check("gate: the badge clears once nothing is pending",
+              page.locator('.view-switch button[data-view="assistant"] .view-badge').count() == 0)
         page.locator('.view-switch button[data-view="board"]').click()
-        check("assistant: created card visible on the board",
-              page.locator(".card-title", has_text="What is Leiden clustering?").count() >= 1)
+        approved = page.locator(".card", has_text="What is Leiden clustering?").first
+        check("gate: approved card visible on the board", approved.count() >= 1)
+        # ensureNums must run on adopt, or the confirmed card shows Q-000.
+        check("gate: the approved card gets a real ledger number, not Q-000",
+              approved.locator(".card-num").inner_text().strip() not in ("Q-000", ""))
+
+        # Rejecting sends the proposal to the Trash rather than erasing it.
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector("#chat-input")
+        page.fill("#chat-input", "add: A thought I do not want")
+        page.click("#chat-send")
+        page.wait_for_selector(".proposal")
+        page.click(".proposal-reject")
+        page.wait_for_function("document.querySelectorAll('.proposal').length === 0")
+        check("gate: rejecting clears it from the proposals list",
+              not any(c["title"] == "A thought I do not want"
+                      for c in api_proposals()["cards"]))
+        check("gate: a rejected proposal is not on the board",
+              not any(c["title"] == "A thought I do not want"
+                      for c in api_state()["cards"]))
+        check("gate: a rejected proposal is recoverable from the Trash",
+              any(c["title"] == "A thought I do not want" for c in api_trash()["cards"]))
 
         # ---- Assistant model settings ----------------------------------------
         # A "Models" panel with three pickers. Only the text-generation pick

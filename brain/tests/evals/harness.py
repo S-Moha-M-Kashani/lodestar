@@ -28,6 +28,7 @@ class InMemoryBoard:
 
     def __init__(self, cards=None):
         self._cards = [dict(c) for c in (cards or [])]
+        self._proposals = []
         self.saves = []  # record each full-list save for assertions
 
     def list_cards(self):
@@ -43,6 +44,18 @@ class InMemoryBoard:
         self._cards = saved
         self.saves.append(self.list_cards())
         return self.list_cards()
+
+    def create_proposal(self, card):
+        """Mirrors POST /api/proposals: the card is stored but stays OFF the
+        board until the user confirms it, so list_cards must not show it."""
+        proposal = dict(card)
+        proposal['id'] = f'new-{next(_id_counter)}'
+        proposal['num'] = 0  # a ledger number is earned at confirmation
+        self._proposals.append(proposal)
+        return dict(proposal)
+
+    def list_proposals(self):
+        return [dict(c) for c in self._proposals]
 
 
 def _turn_from_spec(spec):

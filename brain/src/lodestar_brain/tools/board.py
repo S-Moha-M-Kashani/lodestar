@@ -28,6 +28,18 @@ class BoardClient:
         res.raise_for_status()
         return res.json()['cards']
 
+    def create_proposal(self, card: dict) -> dict:
+        """Offer one card for the user's approval.
+
+        Deliberately NOT save_cards: a proposal is a single card on its own
+        endpoint, so it never travels through the whole-board PUT and the
+        "always send the full list" contract above stays intact.
+        """
+        res = httpx.post(f'{self.base_url}/api/proposals',
+                         json=card, timeout=self.timeout)
+        res.raise_for_status()
+        return res.json()
+
 
 def _brief(c: dict) -> dict:
     return {'id': c['id'], 'title': c['title'], 'columnId': c['columnId'],
@@ -52,13 +64,14 @@ def make_board_tools(client: BoardClient) -> list[Tool]:
     def create_question(title: str, notes: str = '', type: str = 'question',
                         category: str = '', column_id: str = 'inbox',
                         tags: list | None = None) -> dict:
-        cards = client.list_cards()
-        known = {c['id'] for c in cards}
-        new_card = {'title': title, 'notes': notes, 'type': type,
-                    'category': category, 'columnId': column_id, 'tags': tags or []}
-        saved = client.save_cards(cards + [new_card])  # server assigns id/num
-        created = [c for c in saved if c['id'] not in known]
-        return _brief(created[0]) if created else {'error': 'card was not created'}
+        """Propose a card. The user approves it before it joins the board, so
+        this does NOT put anything on the board by itself."""
+        proposal = client.create_proposal(
+            {'title': title, 'notes': notes, 'type': type,
+             'category': category, 'columnId': column_id, 'tags': tags or []})
+        # `pending` tells the model the card is not on the board yet, so it
+        # reports a proposal instead of claiming it added something.
+        return {**_brief(proposal), 'pending': True}
 
     def update_question(id: str, title: str | None = None, notes: str | None = None,
                         type: str | None = None, category: str | None = None,
@@ -93,7 +106,9 @@ def make_board_tools(client: BoardClient) -> list[Tool]:
               'required': []},
              list_questions),
         Tool('create_question',
-             'Add a new card (question, problem, task, idea or plan) to the board.',
+             'Propose a new card (question, problem, task, idea or plan). The user '
+             'must approve it before it appears on the board, so tell them you have '
+             'proposed it — never claim it was added.',
              {'type': 'object', 'properties': {
                  'title': {'type': 'string', 'description': "the card's text"},
                  'notes': {'type': 'string'},
