@@ -18,6 +18,12 @@ from playwright.sync_api import sync_playwright
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PORT = int(os.environ.get("TEST_PORT", "8799"))
 BRAIN_PORT = int(os.environ.get("TEST_BRAIN_PORT", "8798"))
+# The RAG lab is the one upstream this suite deliberately never starts, because
+# the absent-lab panel is part of what it checks. So the proxy is pinned at a
+# port nothing listens on: left unset, server.js falls back to :9002 and the
+# suite would reach a real lab a developer happens to have running, turning
+# three checks red on their machine and green in CI.
+RAGLAB_PORT = int(os.environ.get("TEST_RAGLAB_PORT", "8797"))
 URL = f"http://localhost:{PORT}"
 DB_PATH = os.path.join(tempfile.mkdtemp(prefix="qboard-test-"), "board.db")
 
@@ -59,6 +65,7 @@ def start_server():
         cwd=ROOT,
         env={**os.environ, "PORT": str(PORT), "BOARD_DB": DB_PATH, "NODE_NO_WARNINGS": "1",
              "AGENT_URL": f"http://127.0.0.1:{BRAIN_PORT}",
+             "RAGLAB_URL": f"http://127.0.0.1:{RAGLAB_PORT}",
              "LODESTAR_BACKUP_ON_WRITE": "1", "LODESTAR_BACKUP_DIR": BACKUP_DIR,
              "LODESTAR_RCLONE_BIN": NO_RCLONE},
         stdout=subprocess.DEVNULL,
@@ -1168,6 +1175,184 @@ try:
         check("assistant error surfaced a console error to scrub", len(provoked) >= 1)
         for e in provoked:
             errors.remove(e)
+        page.locator('.view-switch button[data-view="board"]').click()
+
+        # ---- RAG test lab ----------------------------------------------------
+        # The lab is a page inside the platform, reached from the Assistant, and it
+        # talks to a service (brain/tests/raglab) that this suite never starts and
+        # pins to a dead port (RAGLAB_PORT), so "not running" is a fact here rather
+        # than an assumption about the developer's machine. Both states are covered:
+        # the honest "not running" panel, and — with the lab's own API shape mocked —
+        # the working page. The mock is what keeps these checks about the
+        # integration rather than about retrieval quality.
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector("#chat-input")
+        check("raglab: the Assistant offers a button into the lab",
+              page.locator("#raglab-open").count() == 1)
+        check("raglab: the lab is not a life view, so the switcher has no button for it",
+              page.locator('.view-switch button[data-view="raglab"]').count() == 0
+              and page.locator(".view-switch button").count() == 7)
+
+        n_before = len(errors)
+        page.click("#raglab-open")
+        page.wait_for_selector(".raglab-sheet")
+        check("raglab: the button opens the lab page",
+              page.locator(".raglab-sheet h2").inner_text().strip().lower() == "rag test lab")
+        page.wait_for_selector(".rag-absent")
+        check("raglab: a lab that is not running says how to start it",
+              "npm run raglab" in page.locator(".rag-absent").inner_text())
+        check("raglab: no view-switch button is pressed while on the lab page",
+              page.locator('.view-switch button[aria-pressed="true"]').count() == 0)
+
+        page.click("#raglab-back")
+        page.wait_for_selector("#chat-input")
+        check("raglab: back returns to the Assistant",
+              page.get_attribute('.view-switch button[data-view="assistant"]',
+                                 "aria-pressed") == "true")
+
+        # Probing an absent lab is a 503 by design, and the browser logs it. Scrub
+        # only what this block provoked (by count and status), so an unrelated
+        # future error is still caught by the console check.
+        provoked = [e for e in errors[n_before:] if "503" in e]
+        check("raglab: the absent-lab probe surfaced a console error to scrub",
+              len(provoked) >= 1)
+        for e in provoked:
+            errors.remove(e)
+
+        # Now with the lab's API mocked, to exercise the working page.
+        LAB_OPTIONS = {
+            "chunkers": ["fixed", "semantic-drift"],
+            "embedders": ["ascii-hash", "char-hash", "fastembed"],
+            "summarizers": ["extractive", "llm"],
+            "layers": ["chunk", "session", "month", "thread", "commitment"],
+            "retrievers": ["dense", "bm25", "hybrid-rrf"],
+            "rerankers": ["none", "lexical", "cross-encoder", "llm"],
+            "graders": ["none", "lexical", "llm"],
+            "expansions": ["none", "neighbors", "session"],
+            "answerers": ["none", "extractive", "llm"],
+            "question_types": ["single-hop", "temporal"],
+            "defaults": {
+                "index": {"chunker": "semantic-drift", "chunk_chars": 500,
+                          "overlap": 100, "contextual": True, "embedder": "char-hash",
+                          "summarizer": "extractive",
+                          "layers": ["chunk", "session", "month", "thread", "commitment"]},
+                "retrieval": {"retriever": "hybrid-rrf", "k": 8, "candidates": 40,
+                              "search_layers": ["chunk", "session"],
+                              "rollup_boost": 1.0, "time_filter": True,
+                              "multi_query": True, "hyde": False, "mmr_lambda": 1.0,
+                              "reranker": "lexical", "rerank_depth": 20,
+                              "grader": "none", "grade_threshold": 0.0,
+                              "parent_expansion": "none"},
+                "generation": {"answerer": "extractive", "key_facts_judge": False},
+                "label": "",
+            },
+            "corpus": {"sessions": 157, "messages": 954, "from": "2025-08-02",
+                       "to": "2026-07-27", "threads": 17, "questions": 100,
+                       "query_date": "2026-07-28"},
+            "capabilities": {"fastembed": True, "cross_encoder": False, "llm": True,
+                             "llm_model": "openai/gpt-5-nano",
+                             "ragas": {"installed": True, "llm_ready": False,
+                                       "version": "0.4.3", "notes": []},
+                             "chroma_database": "lodestar-raglab",
+                             "chroma_url": "http://localhost:8001"},
+            "indexes": [],
+        }
+        LAB_RESULT = {
+            "run_id": "20260729-000000-abcdef", "label": "e2e mock run",
+            "seconds": 3.2, "started_at": "2026-07-29 00:00:00", "notes": [],
+            "index": {"collection": "raglab-abc", "chunks": 688,
+                      "by_layer": {"chunk": 509, "session": 157},
+                      "avg_chars": 640.0, "p95_chars": 1200, "embed_dim": 384,
+                      "build_seconds": 12.0, "reused": True},
+            "summary": {"n_questions": 100,
+                        "overall": {"headline": 0.5129, "recall": 0.5881,
+                                    "quote_recall": 0.5552, "ndcg": 0.5555,
+                                    "mrr": 0.7005, "precision": 0.3407,
+                                    "abstained_correctly": 0.0,
+                                    "false_abstention": 0.0217, "latency_ms": 26.5},
+                        "by_type": {"single-hop": {"n": 20, "recall": 0.775,
+                                                   "quote_recall": 0.6, "ndcg": 0.7,
+                                                   "hit": 0.9,
+                                                   "abstained_correctly": None,
+                                                   "false_abstention": 0.0}},
+                        "by_difficulty": {}, "layer_usage": {"chunk": 100}},
+            "ragas": {"mode": "offline", "n_samples": 92, "skipped": 8,
+                      "metrics": {"non_llm_context_recall": 0.2249},
+                      "notes": ["offline RAGAS context metrics are "
+                                "whole-string similarity"]},
+            "rows": [{"id": "q-sh-001", "type": "single-hop", "difficulty": "easy",
+                      "answerable": True, "n_contexts": 8, "layers": ["chunk"],
+                      "latency_ms": 26.0, "abstained": False}],
+        }
+
+        def lab_route(route):
+            url = route.request.url
+            payload = None
+            if "/api/raglab/options" in url:
+                payload = LAB_OPTIONS
+            elif "/api/raglab/runs" in url:
+                payload = {"runs": []}
+            elif "/api/raglab/questions" in url:
+                payload = {"questions": [
+                    {"id": "q-sh-001", "type": "single-hop", "difficulty": "easy",
+                     "question_fa": "الان وضعیت کارم چیه؟",
+                     "question_en": "What is my job situation?",
+                     "answerable": True, "evidence_sessions": ["2026-05-12-a"]}]}
+            elif "/api/raglab/jobs/" in url:
+                payload = {"id": "job-1", "kind": "run", "state": "done",
+                           "stage": "done", "progress": 1.0, "result": LAB_RESULT,
+                           "error": None}
+            elif "/api/raglab/run" in url:
+                payload = {"job_id": "job-1"}
+            if payload is None:
+                return route.continue_()
+            return route.fulfill(status=200, content_type="application/json",
+                                 body=json.dumps(payload))
+
+        page.route("**/api/raglab/**", lab_route)
+        page.click("#raglab-open")
+        page.wait_for_selector(".rag-grid")
+        check("raglab: every stage of the pipeline gets a panel",
+              page.locator(".rag-panel").count() >= 3)
+        check("raglab: the strategy lists come from the lab, not from the browser",
+              "semantic-drift" in page.locator(".rag-panel select").first.inner_text()
+              and page.locator(".rag-checks input[type=checkbox]").count() >= 5)
+        corpus_line = page.locator(".rag-corpus").inner_text()
+        check("raglab: the corpus under test is named on the page",
+              "157 sessions" in corpus_line and "100 ground-truth questions" in corpus_line)
+        check("raglab: missing capabilities are shown as missing",
+              page.locator(".rag-cap.off").count() >= 1
+              and page.locator(".rag-cap.on").count() >= 1)
+
+        # The lab is a page like any other, so a reload lands back on it rather
+        # than dumping the developer on the Board mid-experiment.
+        page.reload()
+        page.wait_for_selector(".rag-grid")
+        check("raglab: the lab page is remembered across a reload",
+              page.locator(".raglab-sheet").count() == 1)
+
+        page.click("#raglab-run")
+        page.wait_for_selector(".rag-figures")
+        figures = page.locator(".rag-figures").inner_text()
+        check("raglab: a run renders its grades",
+              "0.588" in figures and "0.555" in figures)
+        check("raglab: grades are broken down by question type",
+              "single-hop" in page.locator(".rag-table").first.inner_text())
+        check("raglab: the RAGAS caveat travels with the numbers",
+              "whole-string similarity" in page.locator(".rag-results").inner_text())
+
+        # A chosen strategy is what a developer changes twenty times in a sitting;
+        # losing it on every reload would make the page useless.
+        page.select_option(".rag-panel select", "fixed")
+        page.reload()
+        page.wait_for_selector(".rag-grid")
+        check("raglab: the chosen configuration survives a reload",
+              page.locator(".rag-panel select").first.input_value() == "fixed")
+
+        page.unroute("**/api/raglab/**")
+        page.evaluate("() => localStorage.removeItem('lodestar-raglab-config')")
+        page.click("#raglab-back")
+        page.wait_for_selector("#chat-input")
         page.locator('.view-switch button[data-view="board"]').click()
 
         # ---- Assistant voice input -------------------------------------------

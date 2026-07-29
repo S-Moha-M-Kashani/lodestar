@@ -26,6 +26,11 @@ const ROOT = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 3000;
 const DB_PATH = process.env.BOARD_DB || join(ROOT, 'board.db');
 const AGENT_URL = process.env.AGENT_URL || 'http://127.0.0.1:9000';
+// The RAG lab (brain/tests/raglab) — developer tooling, in the 9000 block like
+// the brains but a separate service, and usually not running at all. The
+// Assistant's lab page reaches it through this proxy so the browser talks to one
+// origin, exactly as it does for the brain.
+const RAGLAB_URL = process.env.RAGLAB_URL || 'http://127.0.0.1:9002';
 
 // A new question on the board is worth a snapshot of the database. Off only
 // when explicitly disabled — the test suites set this to '0' so they never add
@@ -530,9 +535,18 @@ const server = createServer(async (req, res) => {
     return sendJson(res, 405, { error: 'Method not allowed' });
   }
 
-  // Assistant/RAG proxy — the brain service holds the LLM key; the browser never sees it.
-  if (path.startsWith('/api/agent/') || path.startsWith('/api/rag/')) {
-    const target = AGENT_URL + path.slice('/api'.length) + url.search;
+  // Upstream proxies. Two services, deliberately reported apart: the brain holds
+  // the LLM key so the browser never sees it, and the RAG lab is developer
+  // tooling that is usually not running. Telling the user "assistant
+  // unavailable" because the lab is down would send them restarting a brain
+  // that works fine.
+  const upstream = path.startsWith('/api/raglab/')
+    ? { url: RAGLAB_URL + '/api' + path.slice('/api/raglab'.length), down: 'RAG lab unavailable' }
+    : path.startsWith('/api/agent/') || path.startsWith('/api/rag/')
+      ? { url: AGENT_URL + path.slice('/api'.length), down: 'assistant unavailable' }
+      : null;
+  if (upstream) {
+    const target = upstream.url + url.search;
     let body;
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       try {
@@ -557,7 +571,7 @@ const server = createServer(async (req, res) => {
       });
       res.end(text);
     } catch {
-      sendJson(res, 503, { error: 'assistant unavailable' });
+      sendJson(res, 503, { error: upstream.down });
     }
     return;
   }
