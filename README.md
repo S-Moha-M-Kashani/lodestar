@@ -203,6 +203,55 @@ uv run --project brain pytest brain/tests/evals -v  # brain evals
 
 A CI workflow (`.github/workflows/ci.yml`) runs the brain unit tests and the full e2e suite on every push and pull request. Note that the repository currently has **no git remote**, so CI has not actually run yet — the suites are run locally before each commit.
 
+### RAG test lab — measuring diary retrieval
+
+Diary mode has to find one sentence out of a year of rambling, multi-topic Farsi
+monologue. Which chunking and retrieval strategy does that best is an empirical
+question, so it is answered empirically: the **RAG test lab** indexes a synthetic year
+of diary chat, runs a 100-question ground-truth set through whatever pipeline you
+configure, and grades the result.
+
+It is a page inside the board — **Assistant → “RAG test lab”** — backed by a test-only
+service on :9002 that the board proxies to. Start the service, open the board, and the
+page finds it:
+
+```sh
+npm run raglab      # the lab service on :9002 (test-only)
+npm run test-board  # the board on :3001 → Assistant → RAG test lab
+```
+
+The page says how to start the service if it is not running, so a board with no lab
+behind it is a normal state rather than a broken screen. The service also serves a
+standalone panel at `http://localhost:9002/` if you would rather run it without a board.
+
+Two fixtures are the whole basis of it: `brain/tests/fixtures/diary_year_fa.json`
+(157 sessions, 954 messages, Aug 2025 → Jul 2026, with a mood and storyline tags per
+session) and `diary_year_fa_groundtruth.json` (100 questions across ten types —
+single-hop, temporal, multi-hop, aggregation, knowledge-update, commitment, entity,
+pattern, abstention, adversarial — each with a reference answer and verbatim evidence
+quotes). Both are synthetic; every person and event in them is fictional.
+
+Pick a strategy per stage and the panel grades it:
+
+| Stage | Choices |
+| --- | --- |
+| Chunking | fixed 500 (what the brain ships), fixed+overlap, per-message, turn-pair, whole-session, semantic-drift (topic segmentation) — each optionally with Anthropic-style contextual headers |
+| Hierarchy | raw chunks plus, additively, session summaries, month digests, per-storyline digests, and a promise/deadline ledger; summaries extractive (offline) or LLM |
+| Embedding | `ascii-hash` (the brain's current default), `token-hash`, `char-hash` (character n-grams), or a multilingual transformer via fastembed |
+| Retrieval | dense, BM25, or hybrid with Reciprocal Rank Fusion; Farsi time expressions («آذر», «پارسال پاییز») resolved into a Chroma date range; multi-query expansion; HyDE |
+| Reranking | none, lexical, recency, "agentic" (relevance + recency + emotional importance), multilingual cross-encoder, or LLM grading |
+| Gating | a relevance threshold — what makes an honest *"I have nothing on that"* possible — plus parent/session expansion and MMR diversification |
+| Scoring | recall/precision/MRR/nDCG@k over evidence sessions, verbatim **quote recall**, latest-state recall for facts that changed, abstention accuracy, and **RAGAS** — its non-LLM context metrics offline, its judged metrics (faithfulness, relevancy, factual correctness) with an API key |
+
+Everything is reported per question *type*, because a change that lifts single-hop
+recall while destroying temporal recall is not an improvement.
+
+The lab is strictly test-side: it writes only to its own Chroma database
+(`lodestar-raglab`, and it refuses to start against the production one) and to a
+git-ignored `.runs/` folder, and no production module imports it — the board knows
+nothing about it beyond a proxy prefix. Its own tests are part of the brain suite
+(`npm run test:raglab`), and the page is covered by the e2e suite.
+
 ## More
 
 - `details.md` — the full architecture deep dive: every module, the data flows, the invariants, and the design trade-offs.

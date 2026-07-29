@@ -1,0 +1,225 @@
+"""The RAG Lab service: settings panel, ad-hoc query inspector, eval runner.
+
+Binds :9002, in the 9000 block with the brains — never a board port, because the
+lab's primary surface is a page *inside* the board (Assistant → "RAG test lab"),
+which proxies /api/raglab/* here. It reads two JSON fixtures and writes only to
+its own Chroma database and its own .runs directory. The standalone panel at /
+remains for running the lab on its own.
+
+Runs are jobs, not requests: building a fastembed index over 157 sessions and
+scoring 100 questions takes longer than any sensible HTTP timeout, so POST /run
+returns a job id and the panel polls it. One job at a time — concurrent runs
+would fight over the same collection and produce numbers neither of them
+describes.
+"""
+import threading
+import traceback
+import uuid
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse, JSONResponse
+
+from . import embedding, evaluate, metrics, pipeline, ragas_eval, retrieval
+from .config import (ANSWERERS, CHUNKERS, EMBEDDERS, EXPANSIONS, GRADERS, LAYERS,
+                     RERANKERS, RETRIEVERS, SUMMARIZERS, LabConfig,
+                     load_lab_settings)
+from .corpus import load_diary, load_ground_truth
+from .index import IndexRegistry, _lab_llm
+
+STATIC = Path(__file__).resolve().parent / 'static'
+
+
+class Jobs:
+    """In-process job table. A lab restart loses running jobs; finished runs are
+    on disk, which is the part that matters."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.jobs: dict[str, dict] = {}
+        self.current: str | None = None
+
+    def start(self, kind: str, target) -> str:
+        with self.lock:
+            if self.current and self.jobs[self.current]['state'] == 'running':
+                raise HTTPException(409, f'a {self.jobs[self.current]["kind"]} job '
+                                         'is already running')
+            job_id = uuid.uuid4().hex[:10]
+            self.jobs[job_id] = {'id': job_id, 'kind': kind, 'state': 'running',
+                                 'stage': 'starting', 'progress': 0.0,
+                                 'result': None, 'error': None}
+            self.current = job_id
+
+        def report(stage: str, fraction: float) -> None:
+            job = self.jobs[job_id]
+            job['stage'] = stage
+            job['progress'] = round(min(1.0, max(0.0, fraction)), 3)
+
+        def run() -> None:
+            job = self.jobs[job_id]
+            try:
+                job['result'] = target(report)
+                job['state'] = 'done'
+                job['progress'] = 1.0
+                job['stage'] = 'done'
+            except Exception as error:              # surfaced, never swallowed
+                job['state'] = 'error'
+                job['error'] = f'{type(error).__name__}: {error}'
+                job['traceback'] = traceback.format_exc()[-2000:]
+
+        threading.Thread(target=run, daemon=True).start()
+        return job_id
+
+    def get(self, job_id: str) -> dict:
+        job = self.jobs.get(job_id)
+        if not job:
+            raise HTTPException(404, 'unknown job')
+        return job
+
+
+def create_app() -> FastAPI:
+    settings = load_lab_settings()
+    diary = load_diary()
+    ground_truth = load_ground_truth()
+    registry = IndexRegistry(settings, diary)
+    jobs = Jobs()
+    app = FastAPI(title='Lodestar RAG Lab')
+
+    @app.get('/')
+    def panel():
+        return FileResponse(STATIC / 'index.html')
+
+    @app.get('/api/options')
+    def options():
+        """Everything the panel needs to render itself, including what is
+        actually installed — a dropdown offering a reranker whose wheel is
+        missing is a bug report waiting to happen."""
+        return {
+            'chunkers': list(CHUNKERS), 'embedders': list(EMBEDDERS),
+            'summarizers': list(SUMMARIZERS), 'layers': list(LAYERS),
+            'retrievers': list(RETRIEVERS), 'rerankers': list(RERANKERS),
+            'graders': list(GRADERS), 'expansions': list(EXPANSIONS),
+            'answerers': list(ANSWERERS),
+            'question_types': list(metrics.TYPES),
+            'defaults': LabConfig().to_dict(),
+            'corpus': {
+                'sessions': len(diary['sessions']),
+                'messages': sum(len(s['messages']) for s in diary['sessions']),
+                'from': diary['meta']['period']['from'],
+                'to': diary['meta']['period']['to'],
+                'threads': len(diary['threads']),
+                'questions': len(ground_truth['questions']),
+                'query_date': ground_truth['meta'].get('query_date'),
+            },
+            'capabilities': {
+                'fastembed': embedding.fastembed_available(),
+                'cross_encoder': retrieval.cross_encoder_available(
+                    settings.cross_encoder_model),
+                'cross_encoder_model': settings.cross_encoder_model,
+                'fastembed_model': settings.fastembed_model,
+                'llm': bool(settings.openrouter_api_key),
+                'llm_model': settings.llm_model,
+                'ragas': ragas_eval.availability(settings).as_dict(),
+                'chroma_url': settings.chroma_url,
+                'chroma_database': settings.chroma_database,
+            },
+            'indexes': registry.known(),
+        }
+
+    @app.post('/api/index')
+    def build_index(payload: dict):
+        cfg = LabConfig.from_dict(payload)
+        force = bool(payload.get('force'))
+
+        def work(report):
+            index = registry.get(cfg.index, progress=report, force=force)
+            return {'collection': index.stats.collection,
+                    'chunks': index.stats.chunks,
+                    'by_layer': index.stats.by_layer,
+                    'avg_chars': index.stats.avg_chars,
+                    'p95_chars': index.stats.p95_chars,
+                    'embed_dim': index.stats.embed_dim,
+                    'build_seconds': index.stats.build_seconds,
+                    'reused': index.stats.reused, 'notes': index.stats.notes}
+
+        return {'job_id': jobs.start('index', work)}
+
+    @app.post('/api/run')
+    def start_run(payload: dict):
+        cfg = LabConfig.from_dict(payload)
+        problems = cfg.validate()
+        if problems:
+            raise HTTPException(400, '; '.join(problems))
+
+        def work(report):
+            result = evaluate.run_eval(
+                registry, ground_truth, cfg, settings,
+                types=payload.get('types') or None,
+                difficulty=payload.get('difficulty') or None,
+                limit=payload.get('limit') or None,
+                ragas_mode=payload.get('ragas_mode', 'offline'),
+                ragas_limit=payload.get('ragas_limit') or None,
+                workers=int(payload.get('workers', 1)), progress=report)
+            return result.as_dict()
+
+        return {'job_id': jobs.start('run', work)}
+
+    @app.get('/api/jobs/{job_id}')
+    def job_status(job_id: str):
+        return jobs.get(job_id)
+
+    @app.get('/api/runs')
+    def runs(limit: int = 50):
+        return {'runs': evaluate.list_runs(limit)}
+
+    @app.get('/api/runs/{run_id}')
+    def run_detail(run_id: str):
+        data = evaluate.load_run(run_id)
+        if data is None:
+            raise HTTPException(404, 'unknown run')
+        return data
+
+    @app.post('/api/query')
+    def ad_hoc_query(payload: dict):
+        """Run one question through the current settings and return every stage.
+        The fastest way to understand *why* a config scores the way it does."""
+        cfg = LabConfig.from_dict(payload)
+        question = (payload.get('question') or '').strip()
+        if not question:
+            raise HTTPException(400, 'question is required')
+        problems = cfg.validate()
+        if problems:
+            raise HTTPException(400, '; '.join(problems))
+        index = registry.get(cfg.index)
+        llm = _lab_llm(settings)
+        model = cfg.generation.model or settings.llm_model
+        query_date = payload.get('query_date') or ground_truth['meta']['query_date']
+        outcome = pipeline.retrieve(index, cfg.retrieval, question, query_date,
+                                    llm=llm, model=model)
+        outcome = pipeline.answer(outcome, cfg.generation, llm=llm, model=model)
+        return outcome.as_dict()
+
+    @app.get('/api/questions')
+    def questions(limit: int = 200):
+        """The ground truth without its answers — for picking a question to
+        inspect in the query panel."""
+        return {'questions': [
+            {'id': q['id'], 'type': q['type'], 'difficulty': q['difficulty'],
+             'question_fa': q['question_fa'], 'question_en': q['question_en'],
+             'answerable': q['answerable'],
+             'evidence_sessions': [ev['session_id'] for ev in q['evidence']]}
+            for q in ground_truth['questions'][:limit]]}
+
+    @app.get('/api/health')
+    def health():
+        return {'ok': True, 'chroma': settings.chroma_url,
+                'database': settings.chroma_database}
+
+    @app.exception_handler(ValueError)
+    def value_error(_request, error: ValueError):
+        return JSONResponse({'detail': str(error)}, status_code=400)
+
+    return app
+
+
+app = create_app()

@@ -11,6 +11,9 @@ wheels/
 
 # Test artifacts
 tests/artifacts/
+# RAG Lab output: eval runs and the summary cache. Reproducible from the
+# fixtures, machine-specific, and appended to on every sweep.
+brain/tests/raglab/.runs/
 
 # Node / SQLite
 node_modules/

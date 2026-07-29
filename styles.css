@@ -2070,3 +2070,296 @@ kbd {
   color: var(--ink-soft);
   min-height: 1em;
 }
+
+/* ---------------------------------------------------------------------------
+   RAG test lab — a wide working page, not a reading sheet.
+   Reached from the Assistant; it is scanned and operated, so the type is mono
+   throughout and every number is tabular. Same tokens as the rest of the
+   ledger: no new colours, the red rule still marks a heading, and category
+   inks are left alone because nothing here belongs to a life area.
+---------------------------------------------------------------------------- */
+.raglab { display: block; }
+.raglab-sheet {
+  width: min(1180px, 100%);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: var(--card);
+  border: 1px solid var(--card-line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  padding: 16px;
+}
+.assistant-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.assistant-head h2 { flex: 1 1 auto; }
+.raglab-sheet h2 {
+  font-family: var(--display);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 1rem;
+  margin: 0;
+  padding-bottom: 8px;
+  border-bottom: 2px solid var(--rule-red);
+}
+.raglab-sheet h3 {
+  font-family: var(--display);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  margin: 6px 0 0;
+}
+.raglab-sheet h4 {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-soft);
+  margin: 10px 0 -4px;
+}
+.rag-blurb { margin: 0; font-size: 0.85rem; color: var(--ink-soft); max-width: 62ch; }
+.rag-meta {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-soft);
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.rag-corpus { padding-bottom: 2px; }
+.rag-note {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  margin: 0;
+  padding: 4px 8px;
+  border-left: 3px solid var(--rule-red);
+  background: color-mix(in srgb, var(--rule-red) 7%, transparent);
+}
+
+.rag-caps { display: flex; flex-wrap: wrap; gap: 5px; }
+.rag-cap {
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+}
+.rag-cap.on { border-color: var(--low); color: var(--low); }
+.rag-cap.off { border-color: var(--danger); color: var(--danger); }
+
+.rag-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  align-items: start;
+}
+.rag-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 8px 12px 12px;
+  margin: 0;
+}
+.rag-panel legend {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-soft);
+  padding: 0 4px;
+}
+.rag-panel .field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-soft);
+}
+.rag-panel .field.rag-inline {
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  color: var(--ink);
+}
+/* The app-wide `.field input` rule makes every input a full-width block: right
+   for a text field, wrong for a checkbox — it left the box floating mid-panel
+   with its label shoved to the far edge. Reset it here rather than loosening a
+   rule the dialogs depend on. */
+.rag-panel .field input[type="checkbox"],
+.rag-checks input[type="checkbox"] {
+  display: inline-block;
+  width: auto;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0;
+}
+.rag-panel select,
+.rag-panel input[type="number"],
+.rag-panel input[type="text"] {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 3px 5px;
+  width: 100%;
+}
+.rag-checks { display: flex; flex-wrap: wrap; gap: 2px 10px; }
+.rag-checks label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink);
+}
+.rag-panel input[type="checkbox"],
+.rag-checks input[type="checkbox"] { accent-color: var(--rule-red); }
+
+.rag-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.rag-progress { display: flex; flex-direction: column; gap: 4px; }
+.rag-bar {
+  height: 3px;
+  background: color-mix(in srgb, var(--ink-blue) 15%, transparent);
+  margin-top: 4px;
+}
+.rag-bar i { display: block; height: 3px; background: var(--ink-blue); }
+
+.rag-absent {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--rule-red);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+.rag-absent h3 { margin: 0; }
+.rag-absent p { margin: 0; font-size: 0.85rem; }
+.rag-cmd {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  margin: 0;
+  padding: 6px 10px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+}
+
+.rag-results { display: flex; flex-direction: column; gap: 8px; }
+.rag-results-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.rag-figures { display: flex; flex-wrap: wrap; gap: 8px; }
+.rag-figure {
+  flex: 1 1 130px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 6px 9px 8px;
+  background: var(--paper);
+}
+.rag-figure-label,
+.rag-figure-foot {
+  display: block;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--ink-soft);
+}
+.rag-figure-foot { text-transform: none; letter-spacing: 0; }
+.rag-figure b {
+  display: block;
+  font-family: var(--mono);
+  font-size: 1.25rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  margin: 1px 0;
+}
+
+.rag-scroll { overflow-x: auto; }
+.rag-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.rag-table th,
+.rag-table td {
+  text-align: right;
+  padding: 3px 7px;
+  border-bottom: 1px solid var(--line);
+}
+.rag-table th:first-child,
+.rag-table td:first-child { text-align: left; }
+.rag-table thead th {
+  color: var(--ink-soft);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border-bottom: 1px solid var(--ink-soft);
+}
+.rag-open-run { padding: 0 4px; font-size: 10.5px; }
+
+.rag-query { gap: 8px; }
+.rag-ask { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.rag-question {
+  flex: 3 1 220px;
+  font-family: Tahoma, var(--body);
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 4px 6px;
+}
+.rag-pick {
+  flex: 2 1 180px;
+  max-width: 340px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 3px 5px;
+}
+.rag-answer {
+  margin: 0;
+  padding: 6px 9px;
+  border-left: 3px solid var(--ink-blue);
+  background: var(--paper);
+  font-family: Tahoma, var(--body);
+  font-size: 12.5px;
+}
+.rag-context {
+  border-left: 3px solid var(--line);
+  padding: 4px 9px;
+  background: var(--paper);
+}
+.rag-context-text {
+  font-family: Tahoma, var(--body);
+  font-size: 12px;
+  white-space: pre-wrap;
+  max-height: 9em;
+  overflow-y: auto;
+}
