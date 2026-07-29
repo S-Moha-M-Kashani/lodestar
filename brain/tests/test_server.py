@@ -46,18 +46,41 @@ def test_chat_echo_roundtrip():
 
 
 @respx.mock
-def test_chat_add_creates_card_and_flags_mutation():
-    respx.get('http://board.test/api/state').mock(return_value=board_state([]))
-    respx.put('http://board.test/api/state').mock(
-        return_value=board_state([card('n1', 'What is Leiden clustering?')]))
+def test_chat_add_proposes_a_card_without_mutating_the_board():
+    # create_question now proposes; the board is unchanged until the user
+    # confirms. The two events are distinct flags because the frontend reacts
+    # differently: `mutated` means adopt the board, `proposed` means refresh the
+    # proposals list.
+    proposal = respx.post('http://board.test/api/proposals').mock(
+        return_value=httpx.Response(200, json=card('n1', 'What is Leiden clustering?')))
+    put = respx.put('http://board.test/api/state').mock(return_value=board_state([]))
     client = TestClient(fake_app())
     res = client.post('/agent/chat', json={
         'messages': [{'role': 'user', 'content': 'add: What is Leiden clustering?'}]})
     body = res.json()
-    assert body['mutated'] is True
+    assert proposal.called
+    assert not put.called, 'proposing must not write the board'
+    assert body['proposed'] is True
+    assert body['mutated'] is False
     assert body['steps'] == [{'tool': 'create_question',
                               'arguments': {'title': 'What is Leiden clustering?'}}]
-    assert 'created' in body['reply']
+
+
+def test_tool_classification_separates_proposing_from_mutating():
+    from lodestar_brain.server import MUTATING_TOOLS, PROPOSING_TOOLS
+    assert PROPOSING_TOOLS == {'create_question'}
+    assert MUTATING_TOOLS == {'update_question'}
+    # An edit still applies immediately, so it must stay a mutation.
+    assert 'update_question' not in PROPOSING_TOOLS
+
+
+@respx.mock
+def test_chat_echo_reports_neither_flag():
+    client = TestClient(fake_app())
+    body = client.post('/agent/chat', json={
+        'messages': [{'role': 'user', 'content': 'just talking'}]}).json()
+    assert body['mutated'] is False
+    assert body['proposed'] is False
 
 
 # ---- POST /agent/transcribe ----------------------------------------------

@@ -82,6 +82,8 @@ browser ── :3000 Node (board + SQLite + static) ──proxy /api/agent/*─�
 
 The brain **never touches SQLite directly** — every board change goes through the Node API, so the Trash/purge durability guarantee above applies to agent edits too. The browser never sees the LLM key; it stays in the brain's environment.
 
+**The assistant cannot put a card on your board by itself.** A card it invents is a **proposal**: it is saved immediately (a suggestion shouldn't be lost to a crash) but stays off the board until you accept it. Proposals appear in a *Proposed* section at the top of the Assistant view, with a count badge on the Assistant tab so you notice them from any view. **Approve** makes the card real — that is also the moment it earns its permanent `Q-0NN` ledger number and triggers a database snapshot. **Reject** sends it to the Trash, where it stays recoverable, because "Delete permanently" remains the only thing that truly erases a card. Agent *edits* to cards you already own are not gated — those apply straight away and are covered by Undo and History.
+
 Every capability sits behind a small interface chosen by env vars, so each piece can be swapped without touching the rest:
 
 | Env var | Default | Meaning |

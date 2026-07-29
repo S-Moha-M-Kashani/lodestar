@@ -2363,7 +2363,7 @@
 
   // `draft` holds the composer text across re-renders — render() rebuilds the
   // textarea, so anything typed (or dictated) has to live in state, not the DOM.
-  const assistantState = { messages: [], busy: false, draft: '' };
+  const assistantState = { messages: [], busy: false, draft: '', proposals: [] };
 
   // Model choices for the brain, one per capability. Only the text pick has
   // an effect today — it rides along on every /api/agent/chat request (the
@@ -2813,6 +2813,9 @@
 
     sheet.appendChild(renderChatSettings());
 
+    // Nothing proposed, nothing shown — the section must not sit there empty.
+    if (assistantState.proposals.length) sheet.appendChild(renderProposals());
+
     const log = document.createElement('div');
     log.className = 'chat-log';
     if (!assistantState.messages.length) {
@@ -2917,8 +2920,11 @@
         content: data.reply || '',
         steps: data.steps || [],
       });
+      // Two distinct outcomes: an edit changed the board, a proposal did not.
       if (data.mutated) await adoptServerBoard();
-      announce('Assistant replied');
+      if (data.proposed) await refreshProposals();
+      announce(data.proposed ? 'Assistant proposed a card for your approval'
+        : 'Assistant replied');
     } catch {
       assistantState.messages.push({
         role: 'assistant',
@@ -2943,10 +2949,104 @@
       if (data && Array.isArray(data.cards)) {
         const cats = sanitizeCategories(data.categories);
         if (cats) categories = cats;
-        state.cards = data.cards;
+        // ensureNums matters here: a card the server created (an agent edit, or a
+        // just-confirmed proposal) arrives with num 0, and without this it would
+        // render as Q-000 until the next reload.
+        state.cards = ensureNums(data.cards);
         saveState();
       }
     } catch { /* offline — keep the local board */ }
+  }
+
+  // --------------------------------------------------------------------------
+  // Proposals — cards the Assistant suggested, waiting for the user's yes.
+  // They are stored server-side but stay off the board until confirmed, so they
+  // live outside `state` and are fetched on their own.
+  // --------------------------------------------------------------------------
+
+  const PROPOSALS_API = '/api/proposals';
+
+  async function refreshProposals() {
+    try {
+      const res = await fetch(PROPOSALS_API, { headers: { Accept: 'application/json' } });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data && Array.isArray(data.cards)) {
+        assistantState.proposals = data.cards;
+        syncProposalBadge();
+        render();
+      }
+    } catch { /* offline — leave the list as it was */ }
+  }
+
+  async function actOnProposal(id, action) {
+    try {
+      const res = await fetch(`${PROPOSALS_API}/${encodeURIComponent(id)}/${action}`,
+        { method: 'POST' });
+      if (!res.ok) throw new Error(`proposal ${res.status}`);
+      // Approving adds a card to the board, so adopt server state before the
+      // debounced local push can overwrite it with a board that lacks the card.
+      if (action === 'confirm') await adoptServerBoard();
+      await refreshProposals();
+      announce(action === 'confirm' ? 'Proposal approved and added to the board'
+        : 'Proposal rejected — it is recoverable from the Trash');
+    } catch {
+      announce('Could not reach the server — the proposal is unchanged');
+    }
+  }
+
+  function renderProposals() {
+    const wrap = document.createElement('section');
+    wrap.className = 'proposals';
+    const heading = document.createElement('h3');
+    heading.className = 'proposals-heading';
+    const n = assistantState.proposals.length;
+    heading.textContent = `Proposed — ${n} card${n === 1 ? '' : 's'} awaiting your approval`;
+    wrap.appendChild(heading);
+
+    for (const card of assistantState.proposals) {
+      const row = document.createElement('article');
+      row.className = 'proposal';
+      row.dataset.id = card.id;
+
+      const title = document.createElement('p');
+      title.className = 'proposal-title';
+      title.textContent = card.title;
+      row.appendChild(title);
+
+      const meta = document.createElement('p');
+      meta.className = 'proposal-meta';
+      const cat = card.category ? ` · ${catLabel(card.category)}` : '';
+      meta.textContent = `${TYPE_META[card.type].label}${cat} · would land in ${columnTitle(card.columnId)}`;
+      row.appendChild(meta);
+
+      if (card.notes) {
+        const notes = document.createElement('p');
+        notes.className = 'proposal-notes';
+        notes.textContent = card.notes;
+        row.appendChild(notes);
+      }
+
+      const actions = document.createElement('div');
+      actions.className = 'proposal-actions';
+      const approve = document.createElement('button');
+      approve.type = 'button';
+      approve.className = 'btn primary proposal-approve';
+      approve.textContent = 'Approve';
+      approve.addEventListener('click', () => actOnProposal(card.id, 'confirm'));
+      const reject = document.createElement('button');
+      reject.type = 'button';
+      reject.className = 'btn ghost proposal-reject';
+      reject.textContent = 'Reject';
+      reject.title = 'Sends it to the Trash, where it stays recoverable';
+      reject.addEventListener('click', () => actOnProposal(card.id, 'reject'));
+      actions.appendChild(reject);
+      actions.appendChild(approve);
+      row.appendChild(actions);
+
+      wrap.appendChild(row);
+    }
+    return wrap;
   }
 
   // --------------------------------------------------------------------------
@@ -3739,6 +3839,28 @@
 
   function syncViewButtons() {
     for (const btn of viewButtons) btn.setAttribute('aria-pressed', String(btn.dataset.view === view));
+    syncProposalBadge();
+  }
+
+  // A count on the Assistant tab, so a proposal made while the user is on the
+  // Board is still noticed. Absent entirely when nothing is pending.
+  function syncProposalBadge() {
+    const btn = viewButtons.find((b) => b.dataset.view === 'assistant');
+    if (!btn) return;
+    const n = assistantState.proposals.length;
+    let badge = btn.querySelector('.view-badge');
+    if (!n) {
+      if (badge) badge.remove();
+      btn.removeAttribute('aria-description');
+      return;
+    }
+    if (!badge) {
+      badge = document.createElement('span');
+      badge.className = 'view-badge';
+      btn.appendChild(badge);
+    }
+    badge.textContent = String(n);
+    btn.setAttribute('aria-description', `${n} proposal${n === 1 ? '' : 's'} awaiting approval`);
   }
 
   function setView(next) {
@@ -3746,6 +3868,8 @@
     view = next;
     try { localStorage.setItem(VIEW_KEY, view); } catch (_) { /* private mode */ }
     syncViewButtons();
+    // Entering the Assistant: make sure the list is current, not stale.
+    if (view === 'assistant') refreshProposals();
     dealCards = true; // re-deal for a gentle transition between views
     render();
     announce(`${VIEW_LABELS[view]} view`);
@@ -3758,6 +3882,7 @@
   // Go
   // --------------------------------------------------------------------------
 
-  render();          // instant paint from localStorage
-  initServerSync();  // then reconcile with the SQLite backend if one is running
+  render();            // instant paint from localStorage
+  initServerSync();    // then reconcile with the SQLite backend if one is running
+  refreshProposals();  // and surface anything the Assistant left awaiting approval
 })();
