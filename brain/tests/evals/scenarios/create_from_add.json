@@ -1,15 +1,16 @@
 {
-  "name": "create a question from an add request",
+  "name": "propose a question from an add request (the user approves it later)",
   "board": [],
   "messages": [{ "role": "user", "content": "add: research vector DB options" }],
   "script": [
     { "tool_calls": [ { "name": "create_question", "arguments": { "title": "Research vector DB options", "type": "task" } } ] },
-    { "content": "Added \"Research vector DB options\" to your inbox." }
+    { "content": "Proposed \"Research vector DB options\" — approve it in the Assistant view and it joins your inbox." }
   ],
   "expect": {
     "tools_called": ["create_question"],
     "reply_contains": "Research vector DB options",
-    "board_size": 1,
-    "board_titles_contain": "Research vector DB options"
+    "board_size": 0,
+    "proposals_size": 1,
+    "proposals_titles_contain": "Research vector DB options"
   }
 }

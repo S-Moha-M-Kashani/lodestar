@@ -116,7 +116,8 @@ db.exec(`
     control     TEXT NOT NULL DEFAULT 'influence',
     effort_src  TEXT NOT NULL DEFAULT 'default',
     control_src TEXT NOT NULL DEFAULT 'default',
-    deadline    TEXT NOT NULL DEFAULT ''
+    deadline    TEXT NOT NULL DEFAULT '',
+    pending     INTEGER NOT NULL DEFAULT 0
   );
 `);
 
@@ -134,6 +135,9 @@ if (!columnNames.has('control')) db.exec("ALTER TABLE cards ADD COLUMN control T
 if (!columnNames.has('effort_src')) db.exec("ALTER TABLE cards ADD COLUMN effort_src TEXT NOT NULL DEFAULT 'default'");
 if (!columnNames.has('control_src')) db.exec("ALTER TABLE cards ADD COLUMN control_src TEXT NOT NULL DEFAULT 'default'");
 if (!columnNames.has('deadline')) db.exec("ALTER TABLE cards ADD COLUMN deadline TEXT NOT NULL DEFAULT ''");
+// pending = 1 is a card the Assistant proposed and the user has not accepted
+// yet: stored durably, but off the board until confirmed.
+if (!columnNames.has('pending')) db.exec('ALTER TABLE cards ADD COLUMN pending INTEGER NOT NULL DEFAULT 0');
 
 // The user's category registry. Seeded with the default life areas the first
 // time; from then on the client's edits (add/remove/import) are the truth.
@@ -201,11 +205,21 @@ function safeTags(json) {
   }
 }
 
-// The live board is only the questions that have not been soft-deleted.
+// The live board is the questions that are neither soft-deleted nor still
+// awaiting the user's approval.
 function readBoard() {
   const catIds = categoryIds();
-  const rows = db.prepare('SELECT * FROM cards WHERE deleted_at IS NULL ORDER BY position ASC').all();
+  const rows = db.prepare(
+    'SELECT * FROM cards WHERE deleted_at IS NULL AND pending = 0 ORDER BY position ASC').all();
   return { version: 1, cards: rows.map((r) => rowToCard(r, catIds)), categories: readCategories() };
+}
+
+// Cards the Assistant proposed, oldest first, still waiting to be accepted.
+function readProposals() {
+  const catIds = categoryIds();
+  const rows = db.prepare(
+    'SELECT * FROM cards WHERE deleted_at IS NULL AND pending = 1 ORDER BY created_at ASC').all();
+  return { version: 1, cards: rows.map((r) => rowToCard(r, catIds)) };
 }
 
 // The Trash is the soft-deleted questions, newest deletion first. They are still
@@ -284,10 +298,16 @@ function writeBoard(cards) {
       created_at = excluded.created_at, updated_at = excluded.updated_at, position = excluded.position,
       deleted_at = NULL
   `);
+  // NOTE: `pending` is deliberately absent from both the column list and the
+  // conflict SET, so a board save can neither create a proposal nor silently
+  // accept one. Only /api/proposals/:id/confirm clears that flag.
 
   db.exec('BEGIN');
   try {
-    for (const { id } of db.prepare('SELECT id FROM cards WHERE deleted_at IS NULL').all()) {
+    // `AND pending = 0` is load-bearing: the browser cannot see proposals, so it
+    // never sends them, and without this clause every save would archive them.
+    for (const { id } of db.prepare(
+      'SELECT id FROM cards WHERE deleted_at IS NULL AND pending = 0').all()) {
       if (!keep.has(id)) softDelete.run(now, id);
     }
     clean.forEach((c, i) =>
@@ -300,6 +320,57 @@ function writeBoard(cards) {
     throw err;
   }
   return { board: readBoard(), created };
+}
+
+/**
+ * Store a card the Assistant proposed. It is durable immediately — losing a
+ * suggestion to a crash would be its own kind of data loss — but `pending = 1`
+ * keeps it off the board until the user accepts it. Returns the stored proposal,
+ * or null if the card had no usable title.
+ */
+function writeProposal(raw) {
+  const now = Date.now();
+  const catIds = categoryIds();
+  const card = cleanCard(raw, now, catIds);
+  if (!card) return null;
+  db.prepare(`
+    INSERT INTO cards (id, column_id, title, notes, type, category, importance, urgency,
+                       effort, control, effort_src, control_src, deadline,
+                       num, tags, created_at, updated_at, position, deleted_at, pending)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1)
+  `).run(card.id, card.columnId, card.title, card.notes, card.type, card.category,
+    card.importance, card.urgency, card.effort, card.control, card.effortSrc,
+    card.controlSrc, card.deadline,
+    // num stays 0: a ledger number is earned at confirmation, so a rejected
+    // proposal never burns one.
+    0, JSON.stringify(card.tags), card.createdAt, card.updatedAt, 0);
+  return rowToCard(db.prepare('SELECT * FROM cards WHERE id = ?').get(card.id), catIds);
+}
+
+/**
+ * Accept a proposal: it becomes an ordinary board card. Returns false if there
+ * is no such pending card, so confirming twice (or confirming something already
+ * live) is a 404 rather than a silent no-op.
+ */
+function confirmProposal(id) {
+  return db.prepare(
+    'UPDATE cards SET pending = 0, updated_at = ? WHERE id = ? AND pending = 1 AND deleted_at IS NULL',
+  ).run(Date.now(), id).changes > 0;
+}
+
+/**
+ * Decline a proposal. It goes to the Trash, recoverable, rather than being
+ * erased — DELETE /api/cards/:id stays the only hard delete in the system.
+ *
+ * `pending` is cleared as well as `deleted_at` set: leaving it at 1 would mean a
+ * restore from Trash brought back a row still invisible to the board, and the
+ * restore would look like it had silently failed.
+ */
+function rejectProposal(id) {
+  const now = Date.now();
+  return db.prepare(
+    'UPDATE cards SET pending = 0, deleted_at = ?, updated_at = ? WHERE id = ? AND pending = 1 AND deleted_at IS NULL',
+  ).run(now, now, id).changes > 0;
 }
 
 // A backup child is running. Overlapping writes skip the spawn rather than
@@ -408,6 +479,45 @@ const server = createServer(async (req, res) => {
   if (path === '/api/trash') {
     if (req.method === 'GET') return sendJson(res, 200, readTrash());
     return sendJson(res, 405, { error: 'Method not allowed' });
+  }
+
+  // Proposals — cards the Assistant suggested, awaiting the user's approval.
+  // Deliberately NOT part of /api/state: they never travel through a whole-board
+  // PUT, so the "never send a partial card list" contract is untouched.
+  if (path === '/api/proposals') {
+    if (req.method === 'GET') return sendJson(res, 200, readProposals());
+    if (req.method === 'POST') {
+      try {
+        const proposal = writeProposal(JSON.parse(await readBody(req)));
+        if (!proposal) return sendJson(res, 400, { error: 'A proposal needs a title' });
+        return sendJson(res, 200, proposal);
+      } catch (err) {
+        return sendJson(res, 400, { error: 'Invalid JSON: ' + err.message });
+      }
+    }
+    return sendJson(res, 405, { error: 'Method not allowed' });
+  }
+
+  // Accept or decline one proposal.
+  if (path.startsWith('/api/proposals/')) {
+    const rest = path.slice('/api/proposals/'.length);
+    const slash = rest.lastIndexOf('/');
+    const id = decodeURIComponent(rest.slice(0, slash));
+    const action = rest.slice(slash + 1);
+    if (req.method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed' });
+    if (action === 'confirm') {
+      if (!confirmProposal(id)) return sendJson(res, 404, { error: 'No such proposal' });
+      sendJson(res, 200, readBoard());
+      // The card is the user's now, which is the moment worth a snapshot.
+      backupAfterNewCards();
+      return;
+    }
+    if (action === 'reject') {
+      if (!rejectProposal(id)) return sendJson(res, 404, { error: 'No such proposal' });
+      // No backup: declining a suggestion is not a new entry.
+      return sendJson(res, 200, { ok: true });
+    }
+    return sendJson(res, 404, { error: 'Not found' });
   }
 
   // Permanent delete of a single question (the deliberate second step).

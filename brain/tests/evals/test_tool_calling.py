@@ -29,6 +29,12 @@ def test_scenario_tool_calls_and_effect(path):
         assert len(cards) == expect["board_size"]
     if "board_titles_contain" in expect:
         assert any(expect["board_titles_contain"] in c["title"] for c in cards)
+    # Proposed cards are stored but stay off the board until the user confirms.
+    proposals = board.list_proposals()
+    if "proposals_size" in expect:
+        assert len(proposals) == expect["proposals_size"]
+    if "proposals_titles_contain" in expect:
+        assert any(expect["proposals_titles_contain"] in c["title"] for c in proposals)
     if "answered_id" in expect:
         moved = next(c for c in cards if c["id"] == expect["answered_id"])
         assert moved["columnId"] == "answered"

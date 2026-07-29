@@ -19,7 +19,12 @@ from .tools.websearch import DdgsSearch, make_search_tool
 from .voice import make_transcriber
 from .voice.base import TranscriptionError
 
-MUTATING_TOOLS = {'create_question', 'update_question'}
+# Two different events, kept apart because the frontend reacts differently:
+# `mutated` means the board changed and the client should adopt server state,
+# `proposed` means a card is waiting for the user's approval and only the
+# proposals list needs refreshing. Creating a card no longer changes the board.
+MUTATING_TOOLS = {'update_question'}
+PROPOSING_TOOLS = {'create_question'}
 
 
 class ChatBody(BaseModel):
@@ -88,6 +93,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             memory.record(chunk_text(result.reply), metadata={'role': 'assistant'})
         return {'reply': result.reply,
                 'mutated': any(s.tool in MUTATING_TOOLS for s in result.steps),
+                'proposed': any(s.tool in PROPOSING_TOOLS for s in result.steps),
                 'steps': [{'tool': s.tool, 'arguments': s.arguments}
                           for s in result.steps]}
 

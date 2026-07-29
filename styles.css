@@ -1910,6 +1910,64 @@ kbd {
   color: var(--ink-soft);
 }
 
+/* Proposals — the Assistant's suggestions, pending the user's yes. Inked in
+   amber rather than a category colour: colour means category everywhere else,
+   and a proposal has no standing on the board yet. */
+.proposals {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px dashed var(--ink-amber);
+  border-radius: var(--radius);
+}
+.proposals-heading {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-amber);
+  margin: 0;
+}
+.proposal {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  background: var(--card);
+  border: 1px solid var(--card-line);
+  border-radius: var(--radius);
+}
+.proposal-title { margin: 0; font-weight: 600; }
+.proposal-meta,
+.proposal-notes {
+  margin: 0;
+  font-size: 11px;
+  color: var(--ink-soft);
+}
+.proposal-notes { white-space: pre-wrap; }
+.proposal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+/* The count on the Assistant tab — noticed from any view. */
+.view-badge {
+  display: inline-block;
+  margin-left: 6px;
+  min-width: 16px;
+  padding: 0 5px;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  line-height: 16px;
+  text-align: center;
+  color: var(--paper);
+  background: var(--ink-amber);
+  border-radius: 999px;
+}
+
 .chat-log {
   display: flex;
   flex-direction: column;

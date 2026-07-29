@@ -32,19 +32,35 @@ def test_list_questions_filters():
 
 
 @respx.mock
-def test_create_question_puts_full_list():
-    existing = [card('a', 'Old question')]
-    respx.get(f'{BOARD}/api/state').mock(return_value=httpx.Response(200, json={
-        'version': 1, 'cards': existing}))
+def test_create_question_posts_a_proposal_not_a_board_save():
+    # The agent may no longer write a card straight onto the board: it proposes
+    # one, and the user confirms it. So this posts a single card to
+    # /api/proposals and never touches PUT /api/state.
+    post = respx.post(f'{BOARD}/api/proposals').mock(
+        return_value=httpx.Response(200, json=card('new', 'Fresh question', pending=1)))
     put = respx.put(f'{BOARD}/api/state').mock(return_value=httpx.Response(200, json={
-        'version': 1, 'cards': existing + [card('new', 'Fresh question')]}))
+        'version': 1, 'cards': []}))
     tools = tools_by_name(BoardClient(BOARD))
-    created = tools['create_question'].run({'title': 'Fresh question'})
-    sent = json.loads(put.calls.last.request.content)
-    # durability guarantee: the pre-existing card MUST be in the PUT payload
-    assert {c.get('id') for c in sent['cards']} >= {'a'}
-    assert any(c['title'] == 'Fresh question' for c in sent['cards'])
+    created = tools['create_question'].run({'title': 'Fresh question',
+                                            'type': 'idea', 'category': 'work'})
+    assert not put.called, 'a proposal must not go through the whole-board save'
+    sent = json.loads(post.calls.last.request.content)
+    # One card, not a full list — proposals are outside the durability contract
+    # that PUT /api/state carries.
+    assert sent['title'] == 'Fresh question'
+    assert sent['type'] == 'idea'
+    assert sent['category'] == 'work'
     assert created['id'] == 'new'
+    # The model must be able to tell that nothing is on the board yet, so it
+    # reports a proposal instead of claiming it added a card.
+    assert created['pending'] is True
+
+
+@respx.mock
+def test_create_question_tool_description_says_it_needs_approval():
+    tools = tools_by_name(BoardClient(BOARD))
+    described = tools['create_question'].spec()['function']['description'].lower()
+    assert 'propos' in described or 'approv' in described or 'confirm' in described
 
 
 @respx.mock

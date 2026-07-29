@@ -503,6 +503,163 @@ test('LODESTAR_BACKUP_ON_WRITE=0 disables write-triggered backups', async () => 
   } finally { await s.stop(); }
 });
 
+// ---- Agent card confirmation gate -----------------------------------------
+// A card the Assistant invents is a PROPOSAL: it lives in the cards table with
+// pending = 1, is invisible to the board, and becomes real only when the user
+// confirms it. Rejecting it sends it to the Trash, so DELETE /api/cards/:id
+// stays the only hard delete in the system.
+
+const postProposal = (base, card) =>
+  fetch(base + '/api/proposals', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(card),
+  });
+
+const getJson = async (base, path) => (await fetch(base + path)).json();
+const act = (base, id, what) =>
+  fetch(`${base}/api/proposals/${encodeURIComponent(id)}/${what}`, { method: 'POST' });
+
+test('POST /api/proposals creates a card the board does not show', async () => {
+  const s = await startServer();
+  try {
+    const res = await postProposal(s.base, { title: 'Agent idea', type: 'idea' });
+    assert.equal(res.status, 200);
+    const proposal = await res.json();
+    assert.ok(proposal.id, 'the server assigns an id');
+    assert.equal(proposal.title, 'Agent idea');
+
+    const board = await getJson(s.base, '/api/state');
+    assert.equal(board.cards.filter((c) => c.id === proposal.id).length, 0,
+      'a proposal must not appear on the board');
+
+    const pending = await getJson(s.base, '/api/proposals');
+    assert.deepEqual(pending.cards.map((c) => c.title), ['Agent idea']);
+  } finally { await s.stop(); }
+});
+
+test('a proposal with a blank title is rejected as a bad request', async () => {
+  const s = await startServer();
+  try {
+    const res = await postProposal(s.base, { title: '   ' });
+    assert.equal(res.status, 400);
+    const pending = await getJson(s.base, '/api/proposals');
+    assert.equal(pending.cards.length, 0);
+  } finally { await s.stop(); }
+});
+
+test('creating a proposal triggers no backup', async () => {
+  const bk = backupSandbox();
+  const s = await startServer({ env: bk.env });
+  try {
+    await postProposal(s.base, { title: 'Not yours yet' });
+    await settle();
+    assert.equal(snapshots(bk.dir).length, 0,
+      'the backup belongs at confirmation, not when the agent writes');
+  } finally { await s.stop(); }
+});
+
+test('a browser PUT that omits proposals does not trash them', async () => {
+  // The load-bearing case: writeBoard soft-deletes any live card missing from a
+  // save, and the browser never sends proposals because it cannot see them.
+  const s = await startServer();
+  try {
+    const proposal = await (await postProposal(s.base, { title: 'Survive the sweep' })).json();
+    await putCards(s.base, [{ id: 'mine', columnId: 'inbox', title: 'My own card' }]);
+
+    const pending = await getJson(s.base, '/api/proposals');
+    assert.deepEqual(pending.cards.map((c) => c.id), [proposal.id],
+      'the proposal must survive a whole-board save that omits it');
+    const trash = await getJson(s.base, '/api/trash');
+    assert.equal(trash.cards.filter((c) => c.id === proposal.id).length, 0,
+      'and it must not have been archived');
+  } finally { await s.stop(); }
+});
+
+test('confirming a proposal puts it on the board and takes one backup', async () => {
+  const bk = backupSandbox();
+  const s = await startServer({ env: bk.env });
+  try {
+    const proposal = await (await postProposal(s.base, { title: 'Now it is mine' })).json();
+    const res = await act(s.base, proposal.id, 'confirm');
+    assert.equal(res.status, 200);
+
+    const board = await getJson(s.base, '/api/state');
+    assert.ok(board.cards.some((c) => c.id === proposal.id), 'confirmed cards join the board');
+    const pending = await getJson(s.base, '/api/proposals');
+    assert.equal(pending.cards.length, 0, 'and leave the pending list');
+
+    const files = await waitForSnapshots(bk.dir, 1);
+    assert.equal(files.length, 1, 'confirmation is what earns the snapshot');
+  } finally { await s.stop(); }
+});
+
+test('rejecting a proposal trashes it and takes no backup', async () => {
+  const bk = backupSandbox();
+  const s = await startServer({ env: bk.env });
+  try {
+    const proposal = await (await postProposal(s.base, { title: 'No thanks' })).json();
+    const res = await act(s.base, proposal.id, 'reject');
+    assert.equal(res.status, 200);
+
+    const board = await getJson(s.base, '/api/state');
+    assert.equal(board.cards.filter((c) => c.id === proposal.id).length, 0);
+    const pending = await getJson(s.base, '/api/proposals');
+    assert.equal(pending.cards.length, 0);
+    const trash = await getJson(s.base, '/api/trash');
+    assert.ok(trash.cards.some((c) => c.id === proposal.id),
+      'a rejected proposal is recoverable, not erased');
+
+    await settle();
+    assert.equal(snapshots(bk.dir).length, 0, 'rejection is not a new entry');
+  } finally { await s.stop(); }
+});
+
+test('a rejected proposal restores from Trash as an ordinary card', async () => {
+  // Reject clears `pending` as well as setting deleted_at. If it did not, the
+  // restored row would still be invisible and the restore would look broken.
+  const s = await startServer();
+  try {
+    const proposal = await (await postProposal(s.base, { title: 'Second thoughts' })).json();
+    await act(s.base, proposal.id, 'reject');
+    // Restoring is what the app does: re-include the card in a whole-board save.
+    await putCards(s.base, [{ id: proposal.id, columnId: 'inbox', title: 'Second thoughts' }]);
+
+    const board = await getJson(s.base, '/api/state');
+    assert.ok(board.cards.some((c) => c.id === proposal.id),
+      'a restored proposal comes back as a normal board card');
+    const pending = await getJson(s.base, '/api/proposals');
+    assert.equal(pending.cards.length, 0, 'and is not pending again');
+  } finally { await s.stop(); }
+});
+
+test('confirm or reject on an unknown or already-live card → 404', async () => {
+  const s = await startServer();
+  try {
+    for (const what of ['confirm', 'reject']) {
+      const res = await act(s.base, 'no-such-proposal', what);
+      assert.equal(res.status, 404, `${what} on an unknown id`);
+    }
+    // A live card is not a proposal; acting on one is a bug, not a no-op.
+    await putCards(s.base, [{ id: 'live', columnId: 'inbox', title: 'Already mine' }]);
+    for (const what of ['confirm', 'reject']) {
+      const res = await act(s.base, 'live', what);
+      assert.equal(res.status, 404, `${what} on a live card`);
+    }
+    const board = await getJson(s.base, '/api/state');
+    assert.ok(board.cards.some((c) => c.id === 'live'), 'and the live card is untouched');
+  } finally { await s.stop(); }
+});
+
+test('/api/proposals rejects methods it does not implement', async () => {
+  const s = await startServer();
+  try {
+    const res = await fetch(s.base + '/api/proposals', { method: 'DELETE' });
+    assert.equal(res.status, 405);
+    assert.deepEqual(await res.json(), { error: 'Method not allowed' });
+  } finally { await s.stop(); }
+});
+
 // ---- Paired backends: every board gets its own brain ----------------------
 // The test board on :3001 (board-3001.db) must proxy the assistant to its own
 // brain on :9001, which in turn writes back to :3001 — never to board.db.
