@@ -1,6 +1,9 @@
 """Embedders behind one protocol. HashEmbedder mirrors the frontend's offline
-fallback (deterministic, no downloads) — used in tests/e2e/CI and whenever
-fastembed isn't installed. FastEmbedEmbedder is the real semantic model."""
+fallback (deterministic, no downloads) — used in tests/e2e/CI and as the default,
+since fastembed is an optional extra. FastEmbedEmbedder is the real semantic
+model; ask for it by name (`BRAIN_EMBEDDER=fastembed`) and install the 'semantic'
+extra. There is no mode that picks between them, so a missing wheel raises here
+instead of quietly turning semantic search into token-bucket overlap."""
 import hashlib
 import re
 from typing import Protocol
@@ -41,11 +44,14 @@ class FastEmbedEmbedder:
 
 
 def make_embedder(kind: str) -> Embedder:
+    # No 'auto' mode. It meant "FastEmbedEmbedder, or HashEmbedder if the import
+    # blows up", which turned a missing optional wheel into a silent downgrade:
+    # Leiden RAG and chat memory ran on md5 token buckets while the config still
+    # said 'auto'. A wrong kind is now a boot-time error, and an environment that
+    # wants the real model has to install the 'semantic' extra and say so.
     if kind == 'hash':
         return HashEmbedder()
     if kind == 'fastembed':
         return FastEmbedEmbedder()
-    try:                       # kind == 'auto'
-        return FastEmbedEmbedder()
-    except Exception:          # fastembed extra not installed → offline fallback
-        return HashEmbedder()
+    raise ValueError(f'unknown embedder: {kind!r}; expected '
+                     "'fastembed' or 'hash'")

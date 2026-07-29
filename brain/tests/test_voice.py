@@ -463,22 +463,22 @@ def test_make_transcriber_passes_the_configured_checkpoint_to_parakeet():
     assert made.model_name == 'mlx-community/parakeet-tdt-1.1b'
 
 
-def test_make_transcriber_auto_prefers_local_parakeet_when_available(monkeypatch):
-    # Free, offline and private beats a paid API call, so auto takes the local
-    # backend whenever mlx is importable.
+def test_make_transcriber_rejects_auto(monkeypatch):
+    # 'auto' picked Parakeet when mlx was importable and OpenRouter otherwise, so
+    # the same config transcribed locally on a Mac and billed an API on Linux —
+    # invisibly. The backend is now named outright; each environment pins it.
     monkeypatch.setattr('lodestar_brain.voice.parakeet_available', lambda: True)
-    made = make_transcriber(Settings(transcriber='auto', openrouter_api_key='sk-test'))
-    assert isinstance(made, ParakeetTranscriber)
+    with pytest.raises(ValueError):
+        make_transcriber(Settings(transcriber='auto', openrouter_api_key='sk-test'))
 
 
-def test_make_transcriber_auto_falls_back_to_openrouter_without_mlx(monkeypatch):
-    # Docker and Linux cannot install mlx; auto must still produce a working
-    # transcriber there rather than crashing the brain at boot.
+def test_make_transcriber_parakeet_ignores_availability(monkeypatch):
+    # An explicit pick is honoured even where mlx is missing: the failure then
+    # surfaces at transcribe time with a real reason, instead of being papered
+    # over by a silent switch to a paid API.
     monkeypatch.setattr('lodestar_brain.voice.parakeet_available', lambda: False)
-    made = make_transcriber(Settings(transcriber='auto', openrouter_api_key='sk-test',
-                                     omni_model=OMNI))
-    assert isinstance(made, OpenRouterTranscriber)
-    assert made.default_model == OMNI
+    assert isinstance(make_transcriber(Settings(transcriber='parakeet')),
+                      ParakeetTranscriber)
 
 
 def test_make_transcriber_openrouter_is_explicit_and_ignores_local_availability(monkeypatch):

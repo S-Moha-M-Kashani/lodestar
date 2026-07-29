@@ -2370,31 +2370,73 @@
   // brain forwards it to OpenRouter). The omni and embedding picks are stored
   // preferences for the media-ingestion and remote-embedder features to come.
   const MODELS_KEY = 'question-board:models';
-  // The omni default has to be a model that genuinely receives audio.
+  // Every omni option has to be a model that genuinely receives audio.
   // nemotron-3-nano-omni:free is listed as audio-capable but the provider
-  // serving it discards the audio and answers an apology, so it stays
-  // selectable (it is the only free one) without being the default.
+  // serving it discards the audio and answers an apology, and it was kept here
+  // only for being free. It is gone: OpenRouter lists exactly one free
+  // audio-input model and that was it, so "free" never meant "works". Free
+  // dictation is the local Parakeet backend's job instead (BRAIN_TRANSCRIBER
+  // defaults to it). voxtral-small is the replacement — a purpose-built speech
+  // model priced the same as the default, rather than a general omni one.
   const DEFAULT_MODELS = {
-    text: 'moonshotai/kimi-k3',
+    text: 'openai/gpt-5-nano',
     omni: 'google/gemini-2.5-flash-lite',
     embed: 'nvidia/llama-nemotron-embed-vl-1b-v2:free',
   };
   const MODEL_PICKERS = [
     { key: 'text', id: 'model-text', label: 'Text generation',
-      options: [DEFAULT_MODELS.text, 'openai/gpt-4o-mini', 'openrouter/auto'] },
+      options: [DEFAULT_MODELS.text, 'openai/gpt-5-mini'] },
     { key: 'omni', id: 'model-omni', label: 'Audio / photo / video → text',
       options: [DEFAULT_MODELS.omni, 'openai/gpt-audio-mini',
-                'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
-                'openrouter/auto'] },
+                'mistralai/voxtral-small-24b-2507'] },
     { key: 'embed', id: 'model-embed', label: 'Embeddings',
       options: [DEFAULT_MODELS.embed, 'openai/text-embedding-3-small'] },
   ];
+  // Slugs retired *for cause* — not merely dropped from the preset list above.
+  // Dropping a model from MODEL_PICKERS does not deselect it: a saved pick that
+  // left the list is re-added as an option and stays selected. That is right for
+  // a slug the user chose deliberately and wrong for one removed because it was
+  // broken, and the difference is not visible in the options list alone. It cost
+  // us a whole release: nemotron came out of the picker while the only browser
+  // that had it selected kept dictating through the provider that discards the
+  // audio, so the fix reached everyone except the person it was for.
+  const RETIRED_MODELS = new Set([
+    // Dictation: advertises audio input, but the provider serving it drops the
+    // input_audio part and answers an invented apology instead of a transcript.
+    'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
+    // Text. kimi-k3 stays here permanently: at $3/$15 per M tokens it was the
+    // dearest model ever offered in this picker — 60x the default's input price,
+    // ~50x per turn for the same work — and it is not in the OpenRouter key's
+    // allowlist at all, so it now fails outright rather than merely costing more.
+    // It also took ~11s against the default's under 3, and nothing streams, so
+    // the wait was a motionless "Thinking…" that read as a hang. No free
+    // replacement exists to weigh against it: every ':free' slug 404s under the
+    // key's guardrail, so the cheapest reachable tool-calling model is the
+    // default itself.
+    'moonshotai/kimi-k3',
+    'openai/gpt-4o-mini',
+    // Deprecated upstream, and it routes per request to a model the brain never
+    // reads back out of the response — so a slow turn is unattributable.
+    'openrouter/auto',
+  ]);
   const assistantModels = { ...DEFAULT_MODELS };
+  const persistModels = () => {
+    try { localStorage.setItem(MODELS_KEY, JSON.stringify(assistantModels)); }
+    catch { /* private mode — the pick still applies to this session */ }
+  };
   try {
     const saved = JSON.parse(localStorage.getItem(MODELS_KEY) || '{}');
+    let swept = false;
     for (const k of Object.keys(DEFAULT_MODELS)) {
-      if (typeof saved[k] === 'string' && saved[k]) assistantModels[k] = saved[k];
+      if (typeof saved[k] !== 'string' || !saved[k]) continue;
+      // Leave the default in place for a retired pick; keep anything else,
+      // including an off-list slug that was chosen on purpose.
+      if (RETIRED_MODELS.has(saved[k])) { swept = true; continue; }
+      assistantModels[k] = saved[k];
     }
+    // Write the sweep back rather than re-running it every load: left in storage,
+    // a dead slug would return the moment a later version trimmed the list above.
+    if (swept) persistModels();
   } catch { /* corrupted or private mode — keep defaults */ }
 
   function renderChatSettings() {
@@ -2422,7 +2464,7 @@
       sel.value = assistantModels[picker.key];
       sel.addEventListener('change', () => {
         assistantModels[picker.key] = sel.value;
-        try { localStorage.setItem(MODELS_KEY, JSON.stringify(assistantModels)); } catch { /* private mode */ }
+        persistModels();
       });
       label.appendChild(sel);
       panel.appendChild(label);

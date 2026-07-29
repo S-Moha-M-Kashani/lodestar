@@ -15,9 +15,12 @@ Two deliberate departures from parakeet-mlx's own convenience API:
   user's voice is never written to disk for another process to read.
 
 Every mlx/librosa import is lazy, never at module scope: the brain has to boot
-on Linux and in Docker where mlx cannot be installed at all. `make_transcriber`
-falls back to OpenRouter wherever the wheel is missing, so the seam degrades
-instead of crashing.
+on Linux and in Docker where mlx cannot be installed at all. Constructing this
+class is therefore safe anywhere; only `transcribe` needs the wheel, and it says
+so plainly (`parakeet_available` is the probe, and the error names
+`BRAIN_TRANSCRIBER=openrouter` as the fix). `make_transcriber` no longer switches
+backends on its own — an environment without mlx must ask for OpenRouter, which
+is why `docker-compose.yml` pins it.
 """
 import importlib.util
 import io
