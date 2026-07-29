@@ -1033,6 +1033,70 @@ try:
               page.input_value("#model-text") == ALT_TEXT)
         page.select_option("#model-text", DEFAULT_TEXT)
 
+        # ---- Retired picks do not survive, even though off-list picks do.
+        # Removing a model from the options list was not enough: a saved slug that
+        # left the list stays *selected* (it is re-added as an extra option), and no
+        # migration shipped, so the browser that had nemotron kept dictating through
+        # the model whose provider drops the audio — the removal never reached the
+        # only person affected by it. Same for the retired text models: kimi-k3 cost
+        # $3/$15 per M tokens against the default's $0.05/$0.40 — ~50x per turn for
+        # the same work — and it is not in the OpenRouter key's allowlist, so it is
+        # retired for good. It was slow with it: 11s against nano's 2.6s behind a
+        # non-streaming "Thinking…", which reads as a hang.
+        #
+        # So a slug retired *for cause* is reset to the default on load, while a
+        # slug the user picked deliberately is still honoured — that escape hatch is
+        # why off-list options exist and it has to stay. The reset is also written
+        # back to storage: left in place, the dead slug would return the moment a
+        # future version trimmed the retirement list.
+        MODELS_KEY = "question-board:models"
+        for retired_text in RETIRED_TEXT:
+            page.evaluate(
+                "([key, text, omni]) => localStorage.setItem(key, JSON.stringify("
+                "{ text, omni, embed: 'openai/text-embedding-3-small' }))",
+                [MODELS_KEY, retired_text, BROKEN_OMNI])
+            page.reload()
+            page.wait_for_selector("#board")
+            page.locator('.view-switch button[data-view="assistant"]').click()
+            page.wait_for_selector("#model-text")
+            check(f"assistant: retired text pick {retired_text} resets to the default",
+                  page.input_value("#model-text") == DEFAULT_TEXT)
+            check(f"assistant: retired text pick {retired_text} is not offered",
+                  retired_text
+                  not in page.locator("#model-text option").all_inner_texts())
+            check(f"assistant: retired {retired_text} is cleared from storage",
+                  retired_text not in page.evaluate(
+                      "key => localStorage.getItem(key) || ''", MODELS_KEY))
+            # The broken omni pick rides along on the same load: one retirement
+            # sweep covers every picker, not just the text one.
+            check("assistant: the audio-dropping saved omni pick resets to the default",
+                  page.input_value("#model-omni") == DEFAULT_OMNI)
+            check("assistant: the audio-dropping omni pick is not offered",
+                  BROKEN_OMNI
+                  not in page.locator("#model-omni option").all_inner_texts())
+            # A live pick in the same payload must be left exactly as it was.
+            check("assistant: a still-valid saved pick survives the sweep",
+                  page.input_value("#model-embed") == "openai/text-embedding-3-small")
+
+        # The escape hatch: a slug that was never retired, merely unknown to the
+        # preset list, is still selected and still offered.
+        HAND_PICKED = "anthropic/claude-sonnet-5"
+        page.evaluate(
+            "([key, text]) => localStorage.setItem(key, JSON.stringify({ text }))",
+            [MODELS_KEY, HAND_PICKED])
+        page.reload()
+        page.wait_for_selector("#board")
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector("#model-text")
+        check("assistant: a deliberately hand-set model is still honoured",
+              page.input_value("#model-text") == HAND_PICKED
+              and HAND_PICKED in page.locator("#model-text option").all_inner_texts())
+
+        # Back to a clean slate so the later assistant checks see the defaults.
+        page.evaluate("key => localStorage.removeItem(key)", MODELS_KEY)
+        page.reload()
+        page.wait_for_selector("#board")
+
         # ---- Assistant error path: a 503 renders the friendly unavailable message.
         page.locator('.view-switch button[data-view="assistant"]').click()
         page.wait_for_selector("#chat-input")
