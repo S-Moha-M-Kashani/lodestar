@@ -84,6 +84,69 @@ test('the paired test board and test brain point at each other', () => {
   assert.notEqual(testBoardPort(), MAIN_BOARD_PORT);
 });
 
+// The RAG Lab (brain/tests/raglab) is a test-only workbench reached from a page
+// inside the board. It is a *third* service in the 9000 block, not a frontend:
+// the boards own 3000/3001, so a lab that bound 3001 would take the test board's
+// port and there would be no platform left to open the lab page from. What must
+// also never drift is which data it can reach — a lab that rebuilds collections
+// dozens of times per sweep, pointed at the production Chroma database, would
+// delete real chat memory.
+const RAGLAB_PORT = 9002;
+const raglabPort = () => portOf('raglab', /--port\s+(\d+)/);
+
+test('the RAG lab lives in the 9000 block, not on a board port', () => {
+  const port = raglabPort();
+  assert.equal(port, RAGLAB_PORT);
+  assert.notEqual(port, MAIN_BOARD_PORT);
+  assert.notEqual(port, testBoardPort(),
+    'the test board needs :3001 — the lab page is served from it');
+});
+
+test('the RAG lab never binds a port owned by Chroma or a brain', () => {
+  const port = raglabPort();
+  assert.ok(!CHROMA_PORTS.includes(port), `raglab binds :${port}, Chroma's port`);
+  assert.notEqual(port, MAIN_BRAIN_PORT);
+  assert.notEqual(port, testBrainPort());
+});
+
+test("the Node proxy's default RAGLAB_URL matches the port the lab binds", () => {
+  const m = read('server.js').match(
+    /RAGLAB_URL\s*=\s*process\.env\.RAGLAB_URL\s*\|\|\s*'http:\/\/127\.0\.0\.1:(\d+)'/,
+  );
+  assert.ok(m, 'could not read the RAGLAB_URL default out of server.js');
+  assert.equal(Number(m[1]), raglabPort());
+});
+
+test('the e2e suite pins RAGLAB_URL at a port it never starts', () => {
+  // The suite checks the "lab is not running" panel, so it must not inherit
+  // server.js's :9002 default: on a machine with the real lab up, the proxy
+  // reaches it and three checks go red — green in CI, red for whoever is
+  // actually working on the lab, which is the worst way round.
+  const e2e = read('tests/e2e_test.py');
+  const pin = e2e.match(/"RAGLAB_URL":\s*f"http:\/\/127\.0\.0\.1:\{RAGLAB_PORT\}"/);
+  assert.ok(pin, 'tests/e2e_test.py must pass RAGLAB_URL to the Node server');
+  const port = e2e.match(/RAGLAB_PORT\s*=\s*int\(os\.environ\.get\("TEST_RAGLAB_PORT",\s*"(\d+)"\)\)/);
+  assert.ok(port, 'could not read RAGLAB_PORT out of tests/e2e_test.py');
+  assert.notEqual(Number(port[1]), raglabPort(),
+    'the e2e proxy port must differ from the port a real lab binds');
+});
+
+test('lab traffic and assistant traffic go to different upstreams', () => {
+  // One prefix routed to the wrong service is a silent 404 that reads as "the
+  // lab is broken", so the split is asserted rather than trusted.
+  const server = read('server.js');
+  assert.match(server, /\/api\/raglab\//);
+  assert.match(server, /RAG lab unavailable/);
+  assert.match(server, /assistant unavailable/);
+});
+
+test('the RAG lab writes to its own Chroma database', () => {
+  const m = scripts.raglab.match(/RAGLAB_CHROMA_DATABASE=([\w-]+)/);
+  assert.ok(m, 'the raglab script must pin RAGLAB_CHROMA_DATABASE');
+  assert.notEqual(m[1], 'lodestar', 'that is production chat memory');
+  assert.notEqual(m[1], 'lodestar-test', "that is the test board's chat memory");
+});
+
 test("the Node proxy's default AGENT_URL matches the brain's port", () => {
   const m = read('server.js').match(
     /AGENT_URL\s*=\s*process\.env\.AGENT_URL\s*\|\|\s*'http:\/\/127\.0\.0\.1:(\d+)'/,

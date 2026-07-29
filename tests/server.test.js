@@ -208,6 +208,74 @@ test('/api/rag/* is also proxied (503 when brain down)', async () => {
   } finally { await s.stop(); }
 });
 
+// ---- RAG lab proxy -------------------------------------------------------
+// The lab is a second upstream, separate from the brain: it runs only when a
+// developer starts it, and it must never be reached at AGENT_URL — a request
+// for lab options landing on the brain would 404 in a way that reads like the
+// lab is broken.
+
+test('/api/raglab/* is proxied to the lab, not to the brain', async () => {
+  const seen = [];
+  const lab = await startStubBrain((req) => seen.push(req), {
+    status: 200, body: { chunkers: ['fixed'] },
+  });
+  const brain = await startStubBrain((req) => seen.push({ ...req, wrong: true }));
+  const s = await startServer({ env: { AGENT_URL: brain.url, RAGLAB_URL: lab.url } });
+  try {
+    const res = await fetch(s.base + '/api/raglab/options');
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { chunkers: ['fixed'] });
+    assert.equal(seen.length, 1, 'exactly one upstream was called');
+    assert.equal(seen[0].wrong, undefined, 'the brain must not receive lab traffic');
+    // The lab serves /api/options; the browser asks for /api/raglab/options.
+    assert.equal(seen[0].path, '/api/options');
+  } finally { await s.stop(); await lab.stop(); await brain.stop(); }
+});
+
+test('/api/raglab/* forwards POST bodies and query strings', async () => {
+  const seen = [];
+  const lab = await startStubBrain((req) => seen.push(req), {
+    status: 200, body: { job_id: 'abc' },
+  });
+  const s = await startServer({ env: { RAGLAB_URL: lab.url } });
+  try {
+    const res = await fetch(s.base + '/api/raglab/run?limit=5', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ index: { chunker: 'session' } }),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { job_id: 'abc' });
+    assert.equal(seen[0].path, '/api/run?limit=5');
+    assert.deepEqual(JSON.parse(seen[0].body), { index: { chunker: 'session' } });
+  } finally { await s.stop(); await lab.stop(); }
+});
+
+test('the lab being down is reported as the lab, not as the assistant', async () => {
+  // Distinct wording is the whole point: "assistant unavailable" would send the
+  // user restarting a brain that is running perfectly well.
+  const s = await startServer({ env: { RAGLAB_URL: 'http://127.0.0.1:59998' } });
+  try {
+    const res = await fetch(s.base + '/api/raglab/options');
+    assert.equal(res.status, 503);
+    assert.deepEqual(await res.json(), { error: 'RAG lab unavailable' });
+  } finally { await s.stop(); }
+});
+
+test('a lab error status passes through instead of becoming a 503', async () => {
+  const lab = await startStubBrain(() => {}, {
+    status: 400, body: { detail: 'unknown chunker: nope' },
+  });
+  const s = await startServer({ env: { RAGLAB_URL: lab.url } });
+  try {
+    const res = await fetch(s.base + '/api/raglab/query', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ question: 'x' }),
+    });
+    assert.equal(res.status, 400);
+    assert.deepEqual(await res.json(), { detail: 'unknown chunker: nope' });
+  } finally { await s.stop(); await lab.stop(); }
+});
+
 test('static index.html served at / with html content-type', async () => {
   const s = await startServer();
   try {

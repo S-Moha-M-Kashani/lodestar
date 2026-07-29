@@ -1,0 +1,548 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lodestar RAG Lab</title>
+<style>
+  :root {
+    --paper: #f7f4ea; --ink: #22201b; --ink-soft: #6b665c; --rule: #cfc7b2;
+    --rule-red: #c0533f; --grid: #dfd8c4; --good: #3f7d4f; --bad: #b0442f;
+    --panel: #fffdf6; --shadow: 0 1px 0 #e6dfcb;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0 0 4rem; color: var(--ink); background: var(--paper);
+    font: 13px/1.5 "SF Mono", "IBM Plex Mono", Menlo, monospace;
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 22px 22px;
+  }
+  header {
+    background: var(--panel); border-bottom: 2px solid var(--rule-red);
+    padding: .9rem 1.2rem; position: sticky; top: 0; z-index: 5;
+    box-shadow: var(--shadow);
+  }
+  h1 { font-size: 1.1rem; margin: 0 0 .3rem; letter-spacing: .04em; }
+  h2 { font-size: .82rem; text-transform: uppercase; letter-spacing: .12em;
+       color: var(--ink-soft); margin: 0 0 .6rem; }
+  h3 { font-size: .8rem; margin: 1.1rem 0 .4rem; }
+  main { padding: 1.1rem 1.2rem; max-width: 1500px; margin: 0 auto; }
+  .row { display: flex; flex-wrap: wrap; gap: .9rem; align-items: flex-start; }
+  .card {
+    background: var(--panel); border: 1px solid var(--rule); border-radius: 3px;
+    padding: .85rem; box-shadow: var(--shadow);
+  }
+  .grow { flex: 1 1 300px; min-width: 280px; }
+  .full { flex: 1 1 100%; }
+  label { display: block; margin: .45rem 0 .1rem; color: var(--ink-soft);
+          font-size: .74rem; text-transform: uppercase; letter-spacing: .07em; }
+  select, input[type=number], input[type=text], textarea {
+    width: 100%; font: inherit; padding: .28rem .35rem; color: var(--ink);
+    background: #fff; border: 1px solid var(--rule); border-radius: 2px;
+  }
+  textarea { min-height: 3.2rem; resize: vertical; }
+  .inline { display: flex; gap: .5rem; }
+  .inline > * { flex: 1; }
+  .checks { display: flex; flex-wrap: wrap; gap: .1rem .8rem; margin-top: .2rem; }
+  .checks label { display: flex; align-items: center; gap: .3rem; margin: 0;
+                  text-transform: none; letter-spacing: 0; font-size: .78rem;
+                  color: var(--ink); }
+  input[type=checkbox] { accent-color: var(--rule-red); }
+  button {
+    font: inherit; padding: .4rem .8rem; cursor: pointer; color: var(--paper);
+    background: var(--ink); border: 0; border-radius: 2px; letter-spacing: .04em;
+  }
+  button.ghost { background: transparent; color: var(--ink);
+                 border: 1px solid var(--rule); }
+  button:disabled { opacity: .45; cursor: default; }
+  .badges { display: flex; flex-wrap: wrap; gap: .35rem; font-size: .72rem; }
+  .badge { padding: .1rem .45rem; border: 1px solid var(--rule);
+           border-radius: 10px; background: #fff; }
+  .badge.on { border-color: var(--good); color: var(--good); }
+  .badge.off { border-color: var(--bad); color: var(--bad); }
+  table { border-collapse: collapse; width: 100%; font-size: .76rem; }
+  th, td { text-align: right; padding: .22rem .4rem; border-bottom: 1px solid var(--rule); }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--ink-soft); font-weight: 600; text-transform: uppercase;
+       font-size: .68rem; letter-spacing: .06em; }
+  tbody tr:hover { background: #fbf8ee; }
+  .scores { display: flex; flex-wrap: wrap; gap: .55rem; }
+  .score { border: 1px solid var(--rule); border-radius: 3px; padding: .45rem .6rem;
+           background: #fff; min-width: 8.5rem; }
+  .score b { display: block; font-size: 1.3rem; letter-spacing: -.02em; }
+  .score span { color: var(--ink-soft); font-size: .68rem; text-transform: uppercase;
+                letter-spacing: .07em; }
+  .bar { height: 3px; background: var(--grid); margin-top: .3rem; }
+  .bar i { display: block; height: 3px; background: var(--rule-red); }
+  .fa { direction: rtl; text-align: right; font-family: Tahoma, "Vazirmatn", sans-serif; }
+  .ctx { border-left: 3px solid var(--rule-red); padding: .35rem .55rem;
+         margin: .4rem 0; background: #fff; }
+  .ctx .meta { font-size: .7rem; color: var(--ink-soft); }
+  .muted { color: var(--ink-soft); }
+  .note { border-left: 3px solid var(--rule-red); padding: .2rem .5rem;
+          font-size: .74rem; background: #fff8f2; margin: .25rem 0; }
+  progress { width: 100%; height: 6px; }
+  details summary { cursor: pointer; color: var(--ink-soft); font-size: .76rem; }
+  .pill { font-size: .66rem; padding: 0 .3rem; border: 1px solid var(--rule);
+          border-radius: 8px; color: var(--ink-soft); }
+  .right { margin-left: auto; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Lodestar RAG Lab <span class="pill" id="corpus"></span></h1>
+  <div class="badges" id="caps"></div>
+  <details style="margin-top:.4rem">
+    <summary>What the numbers said last time (measured on this fixture, 2026-07-29 — re-run to confirm)</summary>
+    <ul style="margin:.3rem 0 0 1rem;font-size:.76rem;line-height:1.45">
+      <li><b>The embedder decides everything else.</b> The brain's current default
+        (<code>ascii-hash</code>) scores 0.014 session recall — its tokeniser is
+        <code>[a-z0-9]+</code>, so Farsi embeds to the zero vector. Unicode character
+        n-grams take it to 0.386; a multilingual transformer to 0.612.</li>
+      <li><b>Hybrid BM25 + dense with RRF is the biggest retrieval win</b> (0.386 →
+        0.546 recall; single-hop 0.57 → 0.85). Lexical finds the rare literal, dense
+        finds the paraphrase.</li>
+      <li><b>Semantic chunking pays in quote recall, not session recall</b> — better
+        boundaries change what is <i>inside</i> the chunk (quote recall 0.471 → 0.489,
+        precision 0.191 → 0.243, pattern questions 0.11 → 0.26).</li>
+      <li><b>Rollups must be conditional, not boosted globally.</b> Adding all four
+        summary layers raises quote recall and precision but costs session recall at
+        fixed k, and a blanket <code>rollup_boost</code> of 1.3 makes it worse (0.513 →
+        0.477 headline).</li>
+      <li><b>Only an LLM gate can abstain honestly.</b> The lexical gate needs a 0.6
+        threshold to refuse 6 of 8 unanswerable questions, and there it wrongly refuses
+        52% of answerable ones. The LLM gate at 0.4 refuses 5 of 8 with 3% false
+        refusals, and <i>improves</i> precision 0.34 → 0.59 and MRR 0.70 → 0.77.</li>
+      <li><b>Offline RAGAS context metrics are length-sensitive</b> (whole-string
+        similarity): they fell by half when chunks got longer even as quote recall rose.
+        Compare them only within similar chunk sizes; the judged metrics on the same
+        retrieval read 0.65 context recall against their 0.30.</li>
+    </ul>
+  </details>
+</header>
+
+<main>
+<div class="row">
+
+  <section class="card grow">
+    <h2>1 · Index (what gets stored)</h2>
+    <label>Chunking strategy</label>
+    <select id="chunker"></select>
+    <div class="inline">
+      <div><label>Chunk chars</label><input type="number" id="chunk_chars" min="120" max="2000" step="20"></div>
+      <div><label>Overlap</label><input type="number" id="overlap" min="0" max="800" step="20"></div>
+    </div>
+    <label>Embedder</label>
+    <select id="embedder"></select>
+    <label>Summarizer (hierarchy)</label>
+    <select id="summarizer"></select>
+    <label>Indexed layers</label>
+    <div class="checks" id="layers"></div>
+    <div class="checks" style="margin-top:.5rem">
+      <label><input type="checkbox" id="contextual"> contextual chunk headers</label>
+    </div>
+    <div style="margin-top:.7rem" class="inline">
+      <button id="build">Build / reuse index</button>
+      <button class="ghost" id="rebuild">Force rebuild</button>
+    </div>
+    <div id="indexInfo" class="muted" style="margin-top:.5rem;font-size:.74rem"></div>
+  </section>
+
+  <section class="card grow">
+    <h2>2 · Retrieval &amp; ranking</h2>
+    <label>Retriever</label>
+    <select id="retriever"></select>
+    <div class="inline">
+      <div><label>k (contexts)</label><input type="number" id="k" min="1" max="40"></div>
+      <div><label>Candidates</label><input type="number" id="candidates" min="5" max="200" step="5"></div>
+    </div>
+    <label>Search layers</label>
+    <div class="checks" id="search_layers"></div>
+    <label>Reranker</label>
+    <select id="reranker"></select>
+    <div class="inline">
+      <div><label>Rerank depth</label><input type="number" id="rerank_depth" min="5" max="100" step="5"></div>
+      <div><label>Half-life (days)</label><input type="number" id="recency_half_life_days" min="7" max="900" step="7"></div>
+    </div>
+    <div class="inline">
+      <div><label>MMR λ (1 = off)</label><input type="number" id="mmr_lambda" min="0.1" max="1" step="0.05"></div>
+      <div><label>Rollup boost</label><input type="number" id="rollup_boost" min="0.5" max="2" step="0.05"></div>
+    </div>
+    <label>Relevance grader (enables abstention)</label>
+    <select id="grader"></select>
+    <div class="inline">
+      <div><label>Grade threshold</label><input type="number" id="grade_threshold" min="0" max="1" step="0.05"></div>
+      <div><label>Parent expansion</label><select id="parent_expansion"></select></div>
+    </div>
+    <div class="checks" style="margin-top:.5rem">
+      <label><input type="checkbox" id="time_filter"> Farsi time-scope filter</label>
+      <label><input type="checkbox" id="multi_query"> multi-query expansion</label>
+      <label><input type="checkbox" id="hyde"> HyDE (LLM)</label>
+    </div>
+  </section>
+
+  <section class="card grow">
+    <h2>3 · Generation &amp; scoring</h2>
+    <label>Answerer</label>
+    <select id="answerer"></select>
+    <div class="checks" style="margin-top:.3rem">
+      <label><input type="checkbox" id="key_facts_judge"> LLM key-facts judge</label>
+    </div>
+    <label>RAGAS mode</label>
+    <select id="ragas_mode">
+      <option value="offline">offline (non-LLM context metrics)</option>
+      <option value="llm">llm (faithfulness, relevancy, correctness)</option>
+      <option value="off">off</option>
+    </select>
+    <div class="inline">
+      <div><label>Questions (0 = all)</label><input type="number" id="limit" min="0" max="100" value="0"></div>
+      <div><label>RAGAS samples</label><input type="number" id="ragas_limit" min="0" max="100" value="0"></div>
+    </div>
+    <label>Question types (none = all)</label>
+    <div class="checks" id="types"></div>
+    <label>Run label</label>
+    <input type="text" id="label" placeholder="e.g. semantic + hybrid + ce">
+    <div style="margin-top:.7rem" class="inline">
+      <button id="run">Run evaluation</button>
+      <button class="ghost" id="stopPoll">Refresh</button>
+    </div>
+    <div id="jobBox" style="margin-top:.55rem"></div>
+  </section>
+
+  <section class="card full" id="resultCard">
+    <h2>Grades <span class="right muted" id="resultMeta"></span></h2>
+    <div id="notes"></div>
+    <div class="scores" id="scores"></div>
+    <div class="row" style="margin-top:.8rem">
+      <div class="grow"><h3>By question type</h3><div id="byType"></div></div>
+      <div class="grow"><h3>RAGAS</h3><div id="ragas"></div>
+        <h3>Layer usage &amp; difficulty</h3><div id="extras"></div></div>
+    </div>
+    <details style="margin-top:.7rem"><summary>Per-question rows</summary>
+      <div id="rows" style="max-height:26rem;overflow:auto"></div></details>
+  </section>
+
+  <section class="card full">
+    <h2>Query inspector</h2>
+    <div class="inline">
+      <div style="flex:2"><label>Question (Farsi)</label>
+        <input type="text" id="question" class="fa" placeholder="الان وضعیت کارم چیه؟"></div>
+      <div><label>Pick from ground truth</label><select id="gtPick"></select></div>
+      <div style="flex:0 0 9rem;align-self:flex-end"><button id="ask">Retrieve</button></div>
+    </div>
+    <div id="queryOut" style="margin-top:.6rem"></div>
+  </section>
+
+  <section class="card full">
+    <h2>Leaderboard</h2>
+    <div id="board"></div>
+  </section>
+
+</div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const fmt = (v, d = 3) => (v === null || v === undefined || Number.isNaN(v))
+  ? '—' : (typeof v === 'number' ? v.toFixed(d) : String(v));
+const pct = (v) => v === null || v === undefined ? '—' : Math.round(v * 100) + '%';
+let OPTIONS = null;
+
+const CHUNKER_HELP = {
+  'fixed': "the brain's current 500-char packing — baseline",
+  'fixed-overlap': 'sliding window, so a split thought survives whole in one window',
+  'message': 'one chunk per turn — precise, but short turns lose context',
+  'turn-pair': 'user turn + coach reply together',
+  'session': 'whole session — max fidelity, low precision',
+  'semantic-drift': 'topic segmentation: cut where the subject changes',
+};
+
+function fill(select, values, help) {
+  select.innerHTML = values.map((v) =>
+    `<option value="${v}">${v}${help && help[v] ? ' — ' + help[v] : ''}</option>`).join('');
+}
+
+function checkboxes(host, values, checked) {
+  host.innerHTML = values.map((v) =>
+    `<label><input type="checkbox" value="${v}"${checked.includes(v) ? ' checked' : ''}> ${v}</label>`
+  ).join('');
+}
+
+function selected(host) {
+  return [...host.querySelectorAll('input:checked')].map((el) => el.value);
+}
+
+async function api(path, body) {
+  const res = await fetch(path, body ? {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  } : undefined);
+  const data = await res.json().catch(() => ({ detail: res.statusText }));
+  if (!res.ok) throw new Error(data.detail || res.statusText);
+  return data;
+}
+
+function readConfig() {
+  return {
+    label: $('label').value,
+    index: {
+      chunker: $('chunker').value, chunk_chars: +$('chunk_chars').value,
+      overlap: +$('overlap').value, contextual: $('contextual').checked,
+      embedder: $('embedder').value, summarizer: $('summarizer').value,
+      layers: selected($('layers')),
+    },
+    retrieval: {
+      retriever: $('retriever').value, k: +$('k').value,
+      candidates: +$('candidates').value, search_layers: selected($('search_layers')),
+      rollup_boost: +$('rollup_boost').value, time_filter: $('time_filter').checked,
+      multi_query: $('multi_query').checked, hyde: $('hyde').checked,
+      mmr_lambda: +$('mmr_lambda').value, reranker: $('reranker').value,
+      rerank_depth: +$('rerank_depth').value,
+      recency_half_life_days: +$('recency_half_life_days').value,
+      grader: $('grader').value, grade_threshold: +$('grade_threshold').value,
+      parent_expansion: $('parent_expansion').value,
+    },
+    generation: {
+      answerer: $('answerer').value, key_facts_judge: $('key_facts_judge').checked,
+    },
+  };
+}
+
+function applyDefaults(d) {
+  $('chunker').value = d.index.chunker; $('chunk_chars').value = d.index.chunk_chars;
+  $('overlap').value = d.index.overlap; $('contextual').checked = d.index.contextual;
+  $('embedder').value = d.index.embedder; $('summarizer').value = d.index.summarizer;
+  $('retriever').value = d.retrieval.retriever; $('k').value = d.retrieval.k;
+  $('candidates').value = d.retrieval.candidates;
+  $('rollup_boost').value = d.retrieval.rollup_boost;
+  $('time_filter').checked = d.retrieval.time_filter;
+  $('multi_query').checked = d.retrieval.multi_query;
+  $('hyde').checked = d.retrieval.hyde;
+  $('mmr_lambda').value = d.retrieval.mmr_lambda;
+  $('reranker').value = d.retrieval.reranker;
+  $('rerank_depth').value = d.retrieval.rerank_depth;
+  $('recency_half_life_days').value = d.retrieval.recency_half_life_days;
+  $('grader').value = d.retrieval.grader;
+  $('grade_threshold').value = d.retrieval.grade_threshold;
+  $('parent_expansion').value = d.retrieval.parent_expansion;
+  $('answerer').value = d.generation.answerer;
+  $('key_facts_judge').checked = d.generation.key_facts_judge;
+}
+
+async function boot() {
+  OPTIONS = await api('/api/options');
+  const o = OPTIONS;
+  fill($('chunker'), o.chunkers, CHUNKER_HELP);
+  fill($('embedder'), o.embedders);
+  fill($('summarizer'), o.summarizers);
+  fill($('retriever'), o.retrievers);
+  fill($('reranker'), o.rerankers);
+  fill($('grader'), o.graders);
+  fill($('parent_expansion'), o.expansions);
+  fill($('answerer'), o.answerers);
+  checkboxes($('layers'), o.layers, o.defaults.index.layers);
+  checkboxes($('search_layers'), o.layers, o.defaults.retrieval.search_layers);
+  checkboxes($('types'), o.question_types, []);
+  applyDefaults(o.defaults);
+
+  const c = o.corpus;
+  $('corpus').textContent =
+    `${c.sessions} sessions · ${c.messages} messages · ${c.from} → ${c.to} · ` +
+    `${c.questions} questions · asked as of ${c.query_date}`;
+
+  const caps = o.capabilities;
+  const badge = (on, text) => `<span class="badge ${on ? 'on' : 'off'}">${text}</span>`;
+  $('caps').innerHTML = [
+    badge(caps.fastembed, `fastembed ${caps.fastembed ? 'ready' : 'missing'}`),
+    badge(caps.cross_encoder, `cross-encoder ${caps.cross_encoder ? 'ready' : 'missing'}`),
+    badge(caps.llm, caps.llm ? `LLM ${caps.llm_model}` : 'no OPENROUTER_API_KEY'),
+    badge(caps.ragas.installed, `ragas ${caps.ragas.installed ? caps.ragas.version : 'missing'}`),
+    badge(caps.ragas.llm_ready, `ragas LLM metrics ${caps.ragas.llm_ready ? 'ready' : 'off'}`),
+    `<span class="badge">chroma ${caps.chroma_database} @ ${caps.chroma_url}</span>`,
+  ].join('');
+  if (caps.ragas.notes.length) {
+    $('notes').innerHTML = caps.ragas.notes.map((n) => `<div class="note">${n}</div>`).join('');
+  }
+
+  const gt = await api('/api/questions');
+  $('gtPick').innerHTML = '<option value="">—</option>' + gt.questions.map((q) =>
+    `<option value="${q.question_fa.replace(/"/g, '&quot;')}">${q.id} · ${q.type} · ${q.question_en.slice(0, 60)}</option>`).join('');
+  $('gtPick').onchange = () => { if ($('gtPick').value) $('question').value = $('gtPick').value; };
+
+  renderIndexes(o.indexes);
+  loadBoard();
+}
+
+function renderIndexes(indexes) {
+  if (!indexes.length) { $('indexInfo').textContent = 'no index built in this session yet'; return; }
+  $('indexInfo').innerHTML = indexes.map((i) =>
+    `${i.collection}: ${i.chunks} chunks (${Object.entries(i.by_layer).map(([k, v]) => k + ' ' + v).join(', ')})`
+  ).join('<br>');
+}
+
+async function poll(jobId, onDone) {
+  const box = $('jobBox');
+  const tick = async () => {
+    const job = await api('/api/jobs/' + jobId);
+    box.innerHTML = `<div class="muted">${job.kind}: ${job.stage} ` +
+      `${Math.round(job.progress * 100)}%</div><progress value="${job.progress}" max="1"></progress>`;
+    if (job.state === 'running') { setTimeout(tick, 700); return; }
+    if (job.state === 'error') {
+      box.innerHTML = `<div class="note"><b>${job.error}</b><pre style="white-space:pre-wrap;font-size:.7rem">${job.traceback || ''}</pre></div>`;
+      return;
+    }
+    box.innerHTML = '<div class="muted">done</div>';
+    onDone(job.result);
+  };
+  tick();
+}
+
+$('build').onclick = () => doBuild(false);
+$('rebuild').onclick = () => doBuild(true);
+async function doBuild(force) {
+  const body = Object.assign(readConfig(), { force });
+  const { job_id } = await api('/api/index', body);
+  poll(job_id, (result) => {
+    $('indexInfo').innerHTML =
+      `<b>${result.collection}</b> — ${result.chunks} chunks, avg ${result.avg_chars} chars, ` +
+      `p95 ${result.p95_chars}, dim ${result.embed_dim}, ${result.build_seconds}s` +
+      (result.reused ? ' (reused)' : '') +
+      (result.notes || []).map((n) => `<div class="note">${n}</div>`).join('');
+  });
+}
+
+$('run').onclick = async () => {
+  const body = Object.assign(readConfig(), {
+    ragas_mode: $('ragas_mode').value,
+    limit: +$('limit').value || null,
+    ragas_limit: +$('ragas_limit').value || null,
+    types: selected($('types')),
+  });
+  try {
+    const { job_id } = await api('/api/run', body);
+    poll(job_id, (result) => { renderResult(result); loadBoard(); });
+  } catch (e) { $('jobBox').innerHTML = `<div class="note">${e.message}</div>`; }
+};
+
+$('stopPoll').onclick = () => { boot(); };
+
+const SCORE_CARDS = [
+  ['headline', 'headline', 'weighted retrieval score'],
+  ['recall', 'session recall@k', 'evidence sessions retrieved'],
+  ['quote_recall', 'quote recall', 'verbatim evidence in context'],
+  ['ndcg', 'nDCG@k', 'evidence ranked first'],
+  ['mrr', 'MRR', 'rank of first evidence'],
+  ['precision', 'precision@k', 'signal-to-noise'],
+  ['abstained_correctly', 'abstention', 'unanswerable refused'],
+  ['false_abstention', 'false refusal', 'answerable wrongly refused'],
+  ['latest_state_hit', 'latest state', 'knowledge-update currency'],
+  ['answer_similarity', 'answer sim', 'vs reference answer'],
+  ['key_fact_coverage', 'key facts', 'LLM-judged fact coverage'],
+  ['latency_ms', 'latency ms', 'per question'],
+];
+
+function renderResult(result) {
+  const s = result.summary.overall;
+  $('resultMeta').textContent =
+    `${result.label} · ${result.summary.n_questions} questions · ${result.seconds}s · ` +
+    `${result.index.chunks} chunks (${result.index.collection})` +
+    (result.index.reused ? ' reused' : '');
+  $('notes').innerHTML = (result.notes || []).map((n) => `<div class="note">${n}</div>`).join('');
+  $('scores').innerHTML = SCORE_CARDS.filter(([key]) => s[key] !== null && s[key] !== undefined)
+    .map(([key, title, sub]) => {
+      const v = s[key];
+      const isRate = key !== 'latency_ms';
+      const bar = isRate ? `<div class="bar"><i style="width:${Math.max(0, Math.min(1, v)) * 100}%"></i></div>` : '';
+      return `<div class="score"><span>${title}</span><b>${isRate ? fmt(v) : Math.round(v)}</b>
+        <span class="muted">${sub}</span>${bar}</div>`;
+    }).join('');
+
+  const t = result.summary.by_type;
+  $('byType').innerHTML = table(
+    ['type', 'n', 'recall', 'quote', 'nDCG', 'hit', 'abstain ok', 'false ref'],
+    Object.entries(t).map(([name, row]) => [name, row.n, fmt(row.recall),
+      fmt(row.quote_recall), fmt(row.ndcg), fmt(row.hit),
+      fmt(row.abstained_correctly), fmt(row.false_abstention)]));
+
+  const r = result.ragas || {};
+  const metrics = r.metrics || {};
+  $('ragas').innerHTML = Object.keys(metrics).length
+    ? table(['metric', 'score'], Object.entries(metrics).map(([k, v]) => [k, fmt(v)])) +
+      `<div class="muted" style="font-size:.7rem">mode ${r.mode} · ${r.n_samples} samples · ${r.skipped} skipped</div>` +
+      (r.notes || []).map((n) => `<div class="note">${n}</div>`).join('')
+    : `<div class="muted">no RAGAS scores${(r.notes || []).length ? ': ' + r.notes.join('; ') : ''}</div>`;
+
+  $('extras').innerHTML =
+    table(['layer', 'questions using it'], Object.entries(result.summary.layer_usage)) +
+    table(['difficulty', 'n', 'recall'], Object.entries(result.summary.by_difficulty)
+      .map(([k, v]) => [k, v.n, fmt(v.recall)]));
+
+  $('rows').innerHTML = table(
+    ['id', 'type', 'diff', 'recall', 'quote', 'ndcg', 'ctx', 'abst', 'layers', 'ms'],
+    result.rows.map((row) => [row.id, row.type, row.difficulty,
+      fmt(row.recall, 2), fmt(row.quote_recall, 2), fmt(row.ndcg, 2),
+      row.n_contexts, row.abstained ? 'yes' : '', (row.layers || []).join('+'),
+      Math.round(row.latency_ms)]));
+}
+
+function table(head, rows) {
+  return `<table><thead><tr>${head.map((h) => `<th>${h}</th>`).join('')}</tr></thead><tbody>` +
+    rows.map((r) => `<tr>${r.map((c) => `<td>${c === null || c === undefined ? '—' : c}</td>`).join('')}</tr>`).join('') +
+    '</tbody></table>';
+}
+
+$('ask').onclick = async () => {
+  const body = Object.assign(readConfig(), { question: $('question').value });
+  $('queryOut').innerHTML = '<div class="muted">retrieving…</div>';
+  try {
+    const out = await api('/api/query', body);
+    const scope = out.time_scope
+      ? `time scope <b>${out.time_scope.label}</b> ${out.time_scope.from} → ${out.time_scope.to} (${out.time_scope.kind})`
+      : 'no time scope detected';
+    $('queryOut').innerHTML =
+      `<div class="muted">${scope} · ${out.diagnostics.candidates_in_scope} chunks in scope · ` +
+      `dense ${out.diagnostics.dense_hits} · bm25 ${out.diagnostics.bm25_hits} · ` +
+      `graded out ${out.diagnostics.graded_out ?? 0} · ` +
+      Object.entries(out.timings).map(([k, v]) => `${k} ${v}`).join(' · ') + '</div>' +
+      (out.answer ? `<div class="ctx fa"><b>${out.abstained ? '(abstained) ' : ''}</b>${out.answer}</div>` : '') +
+      out.contexts.map((c) => `<div class="ctx">
+          <div class="meta">${c.chunk_id} · ${c.layer} · ${c.date} · score ${fmt(c.score)} ·
+            ${Object.entries(c.stages).map(([k, v]) => k + ' ' + fmt(v, 2)).join(' · ')}
+            ${c.expanded_from ? ' · expanded from ' + c.expanded_from : ''}</div>
+          <div class="fa">${escapeHtml(c.text).replace(/\n/g, '<br>')}</div></div>`).join('');
+  } catch (e) { $('queryOut').innerHTML = `<div class="note">${e.message}</div>`; }
+};
+
+function escapeHtml(s) {
+  return s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+}
+
+async function loadBoard() {
+  const { runs } = await api('/api/runs');
+  if (!runs.length) { $('board').innerHTML = '<div class="muted">no runs yet</div>'; return; }
+  $('board').innerHTML = table(
+    ['run', 'label', 'chunker', 'embedder', 'retriever', 'reranker', 'layers',
+      'n', 'headline', 'recall', 'quote', 'nDCG', 'abstain', 'ragas ctx recall', 's'],
+    runs.map((r) => {
+      const i = r.config.index, q = r.config.retrieval, s = r.summary.overall || {};
+      return [`<a href="#" onclick="showRun('${r.run_id}');return false">${r.run_id}</a>`,
+        r.label, i.chunker + (i.contextual ? '+ctx' : ''), i.embedder,
+        q.retriever, q.reranker, (i.layers || []).join('+'), r.n_questions,
+        fmt(s.headline), fmt(s.recall), fmt(s.quote_recall), fmt(s.ndcg),
+        fmt(s.abstained_correctly), fmt((r.ragas || {}).non_llm_context_recall),
+        Math.round(r.seconds)];
+    }));
+}
+
+window.showRun = async (runId) => {
+  renderResult(await api('/api/runs/' + runId));
+  $('resultCard').scrollIntoView({ behavior: 'smooth' });
+};
+
+boot();
+</script>
+</body>
+</html>

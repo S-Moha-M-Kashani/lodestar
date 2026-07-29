@@ -208,8 +208,13 @@
   let draggedId = null;
   let dealCards = true; // deal-in animation runs on first render only
 
-  const VIEWS = ['board', 'backlog', 'overview', 'matrix', 'areas', 'review', 'assistant'];
-  const VIEW_LABELS = { board: 'Board', backlog: 'Backlog', overview: 'Overview', matrix: 'Matrix', areas: 'Areas', review: 'Review', assistant: 'Assistant' };
+  // 'raglab' is a page, not a tab: it is developer tooling for tuning diary
+  // retrieval, reached from a button in the Assistant rather than the view
+  // switcher, so the seven life-facing views stay seven. It is still a real
+  // view — the switcher simply has no button for it, which syncViewButtons
+  // already tolerates.
+  const VIEWS = ['board', 'backlog', 'overview', 'matrix', 'areas', 'review', 'assistant', 'raglab'];
+  const VIEW_LABELS = { board: 'Board', backlog: 'Backlog', overview: 'Overview', matrix: 'Matrix', areas: 'Areas', review: 'Review', assistant: 'Assistant', raglab: 'RAG lab' };
   let view = 'board';
   try {
     const v = localStorage.getItem(VIEW_KEY);
@@ -530,6 +535,8 @@
       board.appendChild(renderReview());
     } else if (view === 'assistant') {
       board.appendChild(renderAssistant());
+    } else if (view === 'raglab') {
+      board.appendChild(renderRagLab());
     } else {
       for (const col of COLUMNS) board.appendChild(renderColumn(col));
     }
@@ -2807,9 +2814,20 @@
     const sheet = document.createElement('section');
     sheet.className = 'assistant-sheet';
 
+    const head = document.createElement('div');
+    head.className = 'assistant-head';
     const heading = document.createElement('h2');
     heading.textContent = 'Assistant';
-    sheet.appendChild(heading);
+    head.appendChild(heading);
+    const labBtn = document.createElement('button');
+    labBtn.type = 'button';
+    labBtn.id = 'raglab-open';
+    labBtn.className = 'btn ghost';
+    labBtn.textContent = 'RAG test lab';
+    labBtn.title = 'Tune and grade diary retrieval against the test fixtures';
+    labBtn.addEventListener('click', () => setView('raglab'));
+    head.appendChild(labBtn);
+    sheet.appendChild(head);
 
     sheet.appendChild(renderChatSettings());
 
@@ -3863,6 +3881,704 @@
     btn.setAttribute('aria-description', `${n} proposal${n === 1 ? '' : 's'} awaiting approval`);
   }
 
+  // --------------------------------------------------------------------------
+  // RAG lab page — tuning diary retrieval against the synthetic test fixtures.
+  //
+  // Developer tooling, not a life view: it talks to brain/tests/raglab through
+  // the Node proxy (/api/raglab/*), so the browser still speaks to one origin.
+  // The lab is usually not running, and that is a normal state, not an error —
+  // the page says how to start it instead of showing a broken panel.
+  // --------------------------------------------------------------------------
+  const RAGLAB_CFG_KEY = 'lodestar-raglab-config';
+
+  const ragState = {
+    phase: 'idle',        // idle | loading | ready | absent
+    options: null,
+    problem: '',
+    cfg: null,            // whatever the panel last had; server defaults fill it
+    run: { ragas_mode: 'offline', limit: 0, types: [] },
+    job: null,            // { stage, progress, kind }
+    result: null,
+    runs: [],
+    questions: [],        // ground truth without its answers, for the picker
+    indexInfo: null,      // stats from the last build
+    question: '',
+    queryOut: null,
+    queryProblem: '',
+    busy: false,
+  };
+
+  // One row per knob. Kept declarative because the lab's whole point is that
+  // these are swappable: a new strategy in the brain shows up as another option
+  // from /api/raglab/options without touching this file.
+  const RAG_FIELDS = [
+    { group: 'index', key: 'chunker', label: 'Chunking', kind: 'select', from: 'chunkers' },
+    { group: 'index', key: 'chunk_chars', label: 'Chunk chars', kind: 'number', min: 120, max: 2000, step: 20 },
+    { group: 'index', key: 'overlap', label: 'Overlap', kind: 'number', min: 0, max: 800, step: 20 },
+    { group: 'index', key: 'embedder', label: 'Embedder', kind: 'select', from: 'embedders' },
+    { group: 'index', key: 'summarizer', label: 'Summaries', kind: 'select', from: 'summarizers' },
+    { group: 'index', key: 'contextual', label: 'Contextual chunk headers', kind: 'check' },
+    { group: 'index', key: 'layers', label: 'Indexed layers', kind: 'checks', from: 'layers' },
+    { group: 'retrieval', key: 'retriever', label: 'Retriever', kind: 'select', from: 'retrievers' },
+    { group: 'retrieval', key: 'k', label: 'Contexts (k)', kind: 'number', min: 1, max: 40, step: 1 },
+    { group: 'retrieval', key: 'candidates', label: 'Candidates', kind: 'number', min: 5, max: 200, step: 5 },
+    { group: 'retrieval', key: 'reranker', label: 'Reranker', kind: 'select', from: 'rerankers' },
+    { group: 'retrieval', key: 'rerank_depth', label: 'Rerank depth', kind: 'number', min: 5, max: 100, step: 5 },
+    { group: 'retrieval', key: 'mmr_lambda', label: 'MMR λ (1 = off)', kind: 'number', min: 0.1, max: 1, step: 0.05 },
+    { group: 'retrieval', key: 'rollup_boost', label: 'Rollup boost', kind: 'number', min: 0.5, max: 2, step: 0.05 },
+    { group: 'retrieval', key: 'grader', label: 'Relevance gate', kind: 'select', from: 'graders' },
+    { group: 'retrieval', key: 'grade_threshold', label: 'Gate threshold', kind: 'number', min: 0, max: 1, step: 0.05 },
+    { group: 'retrieval', key: 'parent_expansion', label: 'Parent expansion', kind: 'select', from: 'expansions' },
+    { group: 'retrieval', key: 'time_filter', label: 'Farsi time-scope filter', kind: 'check' },
+    { group: 'retrieval', key: 'multi_query', label: 'Multi-query expansion', kind: 'check' },
+    { group: 'retrieval', key: 'hyde', label: 'HyDE (needs a model)', kind: 'check' },
+    { group: 'retrieval', key: 'search_layers', label: 'Searched layers', kind: 'checks', from: 'layers' },
+    { group: 'generation', key: 'answerer', label: 'Answerer', kind: 'select', from: 'answerers' },
+    { group: 'generation', key: 'key_facts_judge', label: 'LLM key-facts judge', kind: 'check' },
+  ];
+
+  const RAG_SCORES = [
+    ['headline', 'Composite', 'weighted retrieval score'],
+    ['recall', 'Recall@k', 'evidence sessions found'],
+    ['quote_recall', 'Quote recall', 'answering sentence survived chunking'],
+    ['ndcg', 'nDCG@k', 'evidence ranked first'],
+    ['mrr', 'MRR', 'rank of first evidence'],
+    ['precision', 'Precision@k', 'signal to noise'],
+    ['abstained_correctly', 'Abstention', 'unanswerable refused'],
+    ['false_abstention', 'False refusals', 'answerable wrongly refused'],
+    ['latest_state_hit', 'Latest state', 'changed facts, current version'],
+    ['key_fact_coverage', 'Key facts', 'judged fact coverage'],
+    ['latency_ms', 'Latency', 'ms per question'],
+  ];
+
+  const ragNum = (v, digits = 3) =>
+    v === null || v === undefined ? '—' : Number(v).toFixed(digits);
+
+  async function ragApi(path, body) {
+    const res = await fetch('/api/raglab' + path, body ? {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    } : undefined);
+    const data = await res.json().catch(() => ({ error: res.statusText }));
+    if (!res.ok) throw new Error(data.detail || data.error || res.statusText);
+    return data;
+  }
+
+  function ragConfig() {
+    const defaults = ragState.options ? ragState.options.defaults : null;
+    if (!defaults) return null;
+    if (!ragState.cfg) {
+      let saved = null;
+      try { saved = JSON.parse(localStorage.getItem(RAGLAB_CFG_KEY) || 'null'); } catch (_) { saved = null; }
+      // Server defaults are the base, so a knob added since the last visit
+      // appears with its intended value rather than as undefined.
+      ragState.cfg = {
+        index: { ...defaults.index, ...(saved && saved.index) },
+        retrieval: { ...defaults.retrieval, ...(saved && saved.retrieval) },
+        generation: { ...defaults.generation, ...(saved && saved.generation) },
+        label: (saved && saved.label) || '',
+      };
+    }
+    return ragState.cfg;
+  }
+
+  function ragPersist() {
+    try { localStorage.setItem(RAGLAB_CFG_KEY, JSON.stringify(ragState.cfg)); } catch (_) { /* private mode */ }
+  }
+
+  async function ragLoad() {
+    ragState.phase = 'loading';
+    render();
+    try {
+      ragState.options = await ragApi('/options');
+      ragConfig();
+      ragState.phase = 'ready';
+      ragState.problem = '';
+      // Both are conveniences: a lab with no run history and no question picker
+      // is still fully usable, so neither failure blocks the page.
+      try { ragState.runs = (await ragApi('/runs?limit=30')).runs; } catch (_) { ragState.runs = []; }
+      try { ragState.questions = (await ragApi('/questions?limit=200')).questions; } catch (_) { ragState.questions = []; }
+    } catch (error) {
+      ragState.phase = 'absent';
+      ragState.problem = error.message;
+    }
+    if (view === 'raglab') render();
+  }
+
+  // Runs outlive any sane HTTP timeout (a fastembed index plus 100 questions),
+  // so the lab hands back a job id and the page polls it.
+  async function ragPoll(jobId, onDone) {
+    try {
+      const job = await ragApi('/jobs/' + jobId);
+      ragState.job = job;
+      if (job.state === 'running') {
+        if (view === 'raglab') render();
+        setTimeout(() => ragPoll(jobId, onDone), 900);
+        return;
+      }
+      ragState.busy = false;
+      ragState.job = null;
+      if (job.state === 'error') ragState.problem = job.error;
+      else onDone(job.result);
+    } catch (error) {
+      ragState.busy = false;
+      ragState.job = null;
+      ragState.problem = error.message;
+    }
+    if (view === 'raglab') render();
+  }
+
+  async function ragStart(kind, extra) {
+    if (ragState.busy) return;
+    ragState.busy = true;
+    ragState.problem = '';
+    render();
+    try {
+      const { job_id: jobId } = await ragApi('/' + kind, { ...ragConfig(), ...extra });
+      ragPoll(jobId, async (result) => {
+        if (kind === 'run') {
+          ragState.result = result;
+          try { ragState.runs = (await ragApi('/runs?limit=30')).runs; } catch (_) { /* leaderboard is optional */ }
+        } else {
+          ragState.indexInfo = result;
+        }
+      });
+    } catch (error) {
+      ragState.busy = false;
+      ragState.problem = error.message;
+      render();
+    }
+  }
+
+  async function ragAsk() {
+    const question = ragState.question.trim();
+    if (!question || ragState.busy) return;
+    ragState.busy = true;
+    ragState.queryProblem = '';
+    render();
+    try {
+      ragState.queryOut = await ragApi('/query', { ...ragConfig(), question });
+    } catch (error) {
+      ragState.queryOut = null;
+      ragState.queryProblem = error.message;
+    }
+    ragState.busy = false;
+    render();
+  }
+
+  function ragFieldControl(field, cfg) {
+    const options = ragState.options;
+    const bag = cfg[field.group];
+    if (field.kind === 'checks') {
+      const wrap = document.createElement('div');
+      wrap.className = 'rag-checks';
+      for (const value of options[field.from]) {
+        const label = document.createElement('label');
+        const box = document.createElement('input');
+        box.type = 'checkbox';
+        box.value = value;
+        box.checked = (bag[field.key] || []).includes(value);
+        box.addEventListener('change', () => {
+          const set = new Set(bag[field.key] || []);
+          if (box.checked) set.add(value); else set.delete(value);
+          // Kept in the registry's order, because the lab fingerprints an index
+          // from this list and a reordered list is the same index.
+          bag[field.key] = options[field.from].filter((v) => set.has(v));
+          ragPersist();
+        });
+        label.appendChild(box);
+        label.append(' ' + value);
+        wrap.appendChild(label);
+      }
+      return wrap;
+    }
+    if (field.kind === 'check') {
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.checked = Boolean(bag[field.key]);
+      box.addEventListener('change', () => { bag[field.key] = box.checked; ragPersist(); });
+      return box;
+    }
+    if (field.kind === 'number') {
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.min = field.min;
+      input.max = field.max;
+      input.step = field.step;
+      input.value = bag[field.key];
+      input.addEventListener('change', () => {
+        bag[field.key] = Number(input.value);
+        ragPersist();
+      });
+      return input;
+    }
+    const sel = document.createElement('select');
+    for (const value of options[field.from]) {
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = value;
+      sel.appendChild(opt);
+    }
+    sel.value = bag[field.key];
+    sel.addEventListener('change', () => { bag[field.key] = sel.value; ragPersist(); });
+    return sel;
+  }
+
+  function ragFieldset(title, group, cfg) {
+    const box = document.createElement('fieldset');
+    box.className = 'rag-panel';
+    const legend = document.createElement('legend');
+    legend.textContent = title;
+    box.appendChild(legend);
+    for (const field of RAG_FIELDS.filter((f) => f.group === group)) {
+      const label = document.createElement('label');
+      label.className = field.kind === 'check' ? 'field rag-inline' : 'field';
+      const control = ragFieldControl(field, cfg);
+      if (field.kind === 'check') {
+        label.appendChild(control);
+        label.append(' ' + field.label);
+      } else {
+        label.append(field.label);
+        label.appendChild(control);
+      }
+      box.appendChild(label);
+    }
+    return box;
+  }
+
+  function ragTable(head, rows, className) {
+    const table = document.createElement('table');
+    table.className = 'rag-table' + (className ? ' ' + className : '');
+    const thead = document.createElement('thead');
+    const hr = document.createElement('tr');
+    for (const cell of head) {
+      const th = document.createElement('th');
+      th.textContent = cell;
+      hr.appendChild(th);
+    }
+    thead.appendChild(hr);
+    table.appendChild(thead);
+    const body = document.createElement('tbody');
+    for (const row of rows) {
+      const tr = document.createElement('tr');
+      for (const cell of row) {
+        const td = document.createElement('td');
+        if (cell instanceof Node) td.appendChild(cell); else td.textContent = cell;
+        tr.appendChild(td);
+      }
+      body.appendChild(tr);
+    }
+    table.appendChild(body);
+    const scroll = document.createElement('div');
+    scroll.className = 'rag-scroll';
+    scroll.appendChild(table);
+    return scroll;
+  }
+
+  function renderRagResult() {
+    const result = ragState.result;
+    const wrap = document.createElement('section');
+    wrap.className = 'rag-results';
+    const head = document.createElement('div');
+    head.className = 'rag-results-head';
+    const title = document.createElement('h3');
+    title.textContent = 'Grades';
+    head.appendChild(title);
+    const meta = document.createElement('span');
+    meta.className = 'rag-meta';
+    meta.textContent = `${result.label || 'run'} · ${result.summary.n_questions} questions · `
+      + `${result.index.chunks} chunks · ${result.seconds}s`;
+    head.appendChild(meta);
+    wrap.appendChild(head);
+
+    for (const note of result.notes || []) {
+      const line = document.createElement('p');
+      line.className = 'rag-note';
+      line.textContent = note;
+      wrap.appendChild(line);
+    }
+
+    const scores = document.createElement('div');
+    scores.className = 'rag-figures';
+    const overall = result.summary.overall;
+    for (const [key, label, foot] of RAG_SCORES) {
+      if (overall[key] === null || overall[key] === undefined) continue;
+      const card = document.createElement('div');
+      card.className = 'rag-figure';
+      const name = document.createElement('span');
+      name.className = 'rag-figure-label';
+      name.textContent = label;
+      const value = document.createElement('b');
+      value.textContent = key === 'latency_ms' ? Math.round(overall[key]) : ragNum(overall[key]);
+      const hint = document.createElement('span');
+      hint.className = 'rag-figure-foot';
+      hint.textContent = foot;
+      card.append(name, value, hint);
+      if (key !== 'latency_ms') {
+        const bar = document.createElement('div');
+        bar.className = 'rag-bar';
+        const fill = document.createElement('i');
+        fill.style.width = `${Math.max(0, Math.min(1, overall[key])) * 100}%`;
+        bar.appendChild(fill);
+        card.appendChild(bar);
+      }
+      scores.appendChild(card);
+    }
+    wrap.appendChild(scores);
+
+    const byType = Object.entries(result.summary.by_type);
+    if (byType.length) {
+      const caption = document.createElement('h4');
+      caption.textContent = 'By question type';
+      wrap.appendChild(caption);
+      wrap.appendChild(ragTable(
+        ['Type', 'n', 'Recall', 'Quote', 'nDCG', 'Hit', 'Abstained', 'False refusal'],
+        byType.map(([name, row]) => [name, String(row.n), ragNum(row.recall),
+          ragNum(row.quote_recall), ragNum(row.ndcg), ragNum(row.hit),
+          ragNum(row.abstained_correctly), ragNum(row.false_abstention)])));
+    }
+
+    const ragas = (result.ragas && result.ragas.metrics) || {};
+    const caption = document.createElement('h4');
+    caption.textContent = 'RAGAS';
+    wrap.appendChild(caption);
+    if (Object.keys(ragas).length) {
+      wrap.appendChild(ragTable(['Metric', 'Score'],
+        Object.entries(ragas).map(([k, v]) => [k, ragNum(v)])));
+    } else {
+      const none = document.createElement('p');
+      none.className = 'rag-note';
+      none.textContent = 'No RAGAS scores for this run.';
+      wrap.appendChild(none);
+    }
+    for (const note of (result.ragas && result.ragas.notes) || []) {
+      const line = document.createElement('p');
+      line.className = 'rag-note';
+      line.textContent = note;
+      wrap.appendChild(line);
+    }
+    return wrap;
+  }
+
+  function renderRagQuery() {
+    const box = document.createElement('section');
+    box.className = 'rag-panel rag-query';
+    const legend = document.createElement('h3');
+    legend.textContent = 'Ask one question';
+    box.appendChild(legend);
+
+    const form = document.createElement('form');
+    form.className = 'rag-ask';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.id = 'raglab-question';
+    input.className = 'rag-question';
+    input.dir = 'rtl';
+    input.placeholder = 'الان وضعیت کارم چیه؟';
+    input.value = ragState.question;
+    input.addEventListener('input', () => { ragState.question = input.value; });
+    const pick = document.createElement('select');
+    pick.className = 'rag-pick';
+    const blank = document.createElement('option');
+    blank.value = '';
+    blank.textContent = 'from the ground truth…';
+    pick.appendChild(blank);
+    for (const q of ragState.questions || []) {
+      const opt = document.createElement('option');
+      opt.value = q.question_fa;
+      opt.textContent = `${q.id} · ${q.type} · ${q.question_en.slice(0, 54)}`;
+      pick.appendChild(opt);
+    }
+    pick.addEventListener('change', () => {
+      if (!pick.value) return;
+      ragState.question = pick.value;
+      input.value = pick.value;
+    });
+    const ask = document.createElement('button');
+    ask.type = 'submit';
+    ask.className = 'btn primary';
+    ask.id = 'raglab-ask';
+    ask.textContent = 'Retrieve';
+    ask.disabled = ragState.busy;
+    form.append(input, pick, ask);
+    form.addEventListener('submit', (event) => { event.preventDefault(); ragAsk(); });
+    box.appendChild(form);
+
+    if (ragState.queryProblem) {
+      const problem = document.createElement('p');
+      problem.className = 'rag-note';
+      problem.textContent = ragState.queryProblem;
+      box.appendChild(problem);
+    }
+
+    const out = ragState.queryOut;
+    if (out) {
+      const diag = document.createElement('p');
+      diag.className = 'rag-meta';
+      const scope = out.time_scope
+        ? `time scope ${out.time_scope.label} (${out.time_scope.from} → ${out.time_scope.to})`
+        : 'no time scope detected';
+      diag.textContent = `${scope} · ${out.diagnostics.candidates_in_scope} chunks in scope`
+        + ` · dense ${out.diagnostics.dense_hits} · lexical ${out.diagnostics.bm25_hits}`
+        + ` · graded out ${out.diagnostics.graded_out || 0}`;
+      box.appendChild(diag);
+      if (out.answer) {
+        const answer = document.createElement('p');
+        answer.className = 'rag-answer';
+        answer.dir = 'rtl';
+        answer.textContent = (out.abstained ? '(abstained) ' : '') + out.answer;
+        box.appendChild(answer);
+      }
+      for (const context of out.contexts) {
+        const item = document.createElement('div');
+        item.className = 'rag-context';
+        const meta = document.createElement('div');
+        meta.className = 'rag-meta';
+        meta.textContent = `${context.chunk_id} · ${context.layer} · ${context.date}`
+          + ` · score ${ragNum(context.score)}`;
+        const text = document.createElement('div');
+        text.className = 'rag-context-text';
+        text.dir = 'rtl';
+        text.textContent = context.text;
+        item.append(meta, text);
+        box.appendChild(item);
+      }
+    }
+    return box;
+  }
+
+  function renderRagLab() {
+    const sheet = document.createElement('section');
+    sheet.className = 'raglab-sheet';
+
+    const head = document.createElement('div');
+    head.className = 'assistant-head';
+    const heading = document.createElement('h2');
+    heading.textContent = 'RAG test lab';
+    head.appendChild(heading);
+    const back = document.createElement('button');
+    back.type = 'button';
+    back.id = 'raglab-back';
+    back.className = 'btn ghost';
+    back.textContent = '← Assistant';
+    back.addEventListener('click', () => setView('assistant'));
+    head.appendChild(back);
+    sheet.appendChild(head);
+
+    const blurb = document.createElement('p');
+    blurb.className = 'rag-blurb';
+    blurb.textContent = 'Tune how diary conversations are chunked, stored and retrieved, '
+      + 'then grade the result against the synthetic year of test data. Nothing here '
+      + 'touches your board or your real chat memory.';
+    sheet.appendChild(blurb);
+
+    if (ragState.phase === 'idle') ragLoad();
+
+    if (ragState.phase !== 'ready') {
+      const card = document.createElement('div');
+      card.className = 'rag-absent';
+      const title = document.createElement('h3');
+      title.textContent = ragState.phase === 'loading'
+        ? 'Reaching the lab…' : 'The lab service is not running';
+      card.appendChild(title);
+      if (ragState.phase === 'absent') {
+        const how = document.createElement('p');
+        how.textContent = 'Start it in a terminal, then reload this page:';
+        card.appendChild(how);
+        const cmd = document.createElement('pre');
+        cmd.className = 'rag-cmd';
+        cmd.textContent = 'npm run raglab';
+        card.appendChild(cmd);
+        const why = document.createElement('p');
+        why.className = 'rag-meta';
+        why.textContent = `It serves on :9002 and this board proxies to it. (${ragState.problem})`;
+        card.appendChild(why);
+        const retry = document.createElement('button');
+        retry.type = 'button';
+        retry.className = 'btn ghost';
+        retry.id = 'raglab-retry';
+        retry.textContent = 'Try again';
+        retry.addEventListener('click', () => ragLoad());
+        card.appendChild(retry);
+      }
+      sheet.appendChild(card);
+      return sheet;
+    }
+
+    const options = ragState.options;
+    const cfg = ragConfig();
+
+    const facts = document.createElement('p');
+    facts.className = 'rag-meta rag-corpus';
+    const corpus = options.corpus;
+    facts.textContent = `${corpus.sessions} sessions · ${corpus.messages} messages · `
+      + `${corpus.from} → ${corpus.to} · ${corpus.questions} ground-truth questions · `
+      + `asked as of ${corpus.query_date}`;
+    sheet.appendChild(facts);
+
+    const caps = document.createElement('div');
+    caps.className = 'rag-caps';
+    const capability = (on, text) => {
+      const chip = document.createElement('span');
+      chip.className = 'rag-cap ' + (on ? 'on' : 'off');
+      chip.textContent = text;
+      caps.appendChild(chip);
+    };
+    const c = options.capabilities;
+    capability(c.fastembed, c.fastembed ? 'embeddings ready' : 'fastembed missing');
+    capability(c.cross_encoder, c.cross_encoder ? 'cross-encoder ready' : 'cross-encoder missing');
+    capability(c.llm, c.llm ? `model ${c.llm_model}` : 'no API key');
+    capability(c.ragas.installed, c.ragas.installed ? `ragas ${c.ragas.version}` : 'ragas missing');
+    capability(true, `chroma ${c.chroma_database}`);
+    sheet.appendChild(caps);
+
+    const grid = document.createElement('div');
+    grid.className = 'rag-grid';
+    grid.appendChild(ragFieldset('Index — what gets stored', 'index', cfg));
+    grid.appendChild(ragFieldset('Retrieval & ranking', 'retrieval', cfg));
+
+    const scoring = ragFieldset('Generation & scoring', 'generation', cfg);
+    const ragasLabel = document.createElement('label');
+    ragasLabel.className = 'field';
+    ragasLabel.append('RAGAS');
+    const ragasSel = document.createElement('select');
+    for (const [value, text] of [['offline', 'offline (no model)'],
+      ['llm', 'judged (needs a model)'], ['off', 'off']]) {
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = text;
+      ragasSel.appendChild(opt);
+    }
+    ragasSel.value = ragState.run.ragas_mode;
+    ragasSel.addEventListener('change', () => { ragState.run.ragas_mode = ragasSel.value; });
+    ragasLabel.appendChild(ragasSel);
+    scoring.appendChild(ragasLabel);
+
+    const limitLabel = document.createElement('label');
+    limitLabel.className = 'field';
+    limitLabel.append('Questions (0 = all)');
+    const limitInput = document.createElement('input');
+    limitInput.type = 'number';
+    limitInput.min = 0;
+    limitInput.max = corpus.questions;
+    limitInput.value = ragState.run.limit;
+    limitInput.addEventListener('change', () => { ragState.run.limit = Number(limitInput.value); });
+    limitLabel.appendChild(limitInput);
+    scoring.appendChild(limitLabel);
+
+    const labelField = document.createElement('label');
+    labelField.className = 'field';
+    labelField.append('Run label');
+    const labelInput = document.createElement('input');
+    labelInput.type = 'text';
+    labelInput.id = 'raglab-label';
+    labelInput.placeholder = 'e.g. semantic + hybrid + gate';
+    labelInput.value = cfg.label || '';
+    labelInput.addEventListener('input', () => { cfg.label = labelInput.value; ragPersist(); });
+    labelField.appendChild(labelInput);
+    scoring.appendChild(labelField);
+    grid.appendChild(scoring);
+    sheet.appendChild(grid);
+
+    const actions = document.createElement('div');
+    actions.className = 'rag-actions';
+    const buildBtn = document.createElement('button');
+    buildBtn.type = 'button';
+    buildBtn.className = 'btn ghost';
+    buildBtn.id = 'raglab-build';
+    buildBtn.textContent = 'Build index';
+    buildBtn.disabled = ragState.busy;
+    buildBtn.addEventListener('click', () => ragStart('index', {}));
+    const runBtn = document.createElement('button');
+    runBtn.type = 'button';
+    runBtn.className = 'btn primary';
+    runBtn.id = 'raglab-run';
+    runBtn.textContent = 'Run evaluation';
+    runBtn.disabled = ragState.busy;
+    runBtn.addEventListener('click', () => ragStart('run', {
+      ragas_mode: ragState.run.ragas_mode,
+      limit: ragState.run.limit || null,
+      types: ragState.run.types,
+    }));
+    actions.append(buildBtn, runBtn);
+    sheet.appendChild(actions);
+
+    if (ragState.indexInfo) {
+      const info = ragState.indexInfo;
+      const line = document.createElement('p');
+      line.className = 'rag-meta';
+      const layers = Object.entries(info.by_layer)
+        .map(([layer, n]) => `${layer} ${n}`).join(', ');
+      line.textContent = `${info.collection}: ${info.chunks} chunks (${layers}) · `
+        + `avg ${info.avg_chars} chars · dim ${info.embed_dim} · ${info.build_seconds}s`
+        + (info.reused ? ' · reused' : '');
+      sheet.appendChild(line);
+      for (const note of info.notes || []) {
+        const warn = document.createElement('p');
+        warn.className = 'rag-note';
+        warn.textContent = note;
+        sheet.appendChild(warn);
+      }
+    }
+
+    if (ragState.job) {
+      const progress = document.createElement('div');
+      progress.className = 'rag-progress';
+      const label = document.createElement('span');
+      label.className = 'rag-meta';
+      label.textContent = `${ragState.job.kind}: ${ragState.job.stage} `
+        + `${Math.round((ragState.job.progress || 0) * 100)}%`;
+      const track = document.createElement('div');
+      track.className = 'rag-bar';
+      const fill = document.createElement('i');
+      fill.style.width = `${(ragState.job.progress || 0) * 100}%`;
+      track.appendChild(fill);
+      progress.append(label, track);
+      sheet.appendChild(progress);
+    }
+
+    if (ragState.problem) {
+      const problem = document.createElement('p');
+      problem.className = 'rag-note';
+      problem.setAttribute('role', 'alert');
+      problem.textContent = ragState.problem;
+      sheet.appendChild(problem);
+    }
+
+    if (ragState.result) sheet.appendChild(renderRagResult());
+
+    sheet.appendChild(renderRagQuery());
+
+    if (ragState.runs.length) {
+      const boardTitle = document.createElement('h3');
+      boardTitle.textContent = 'Previous runs';
+      sheet.appendChild(boardTitle);
+      const rows = ragState.runs.map((r) => {
+        const overall = r.summary.overall || {};
+        const open = document.createElement('button');
+        open.type = 'button';
+        open.className = 'btn ghost rag-open-run';
+        open.textContent = r.label || r.run_id;
+        open.addEventListener('click', async () => {
+          try {
+            ragState.result = await ragApi('/runs/' + r.run_id);
+            ragState.problem = '';
+          } catch (error) { ragState.problem = error.message; }
+          render();
+        });
+        return [open, r.config.index.chunker, r.config.index.embedder,
+          r.config.retrieval.retriever, r.config.retrieval.reranker,
+          String(r.n_questions), ragNum(overall.headline), ragNum(overall.recall),
+          ragNum(overall.quote_recall), r.started_at];
+      });
+      sheet.appendChild(ragTable(['Run', 'Chunker', 'Embedder', 'Retriever',
+        'Reranker', 'n', 'Composite', 'Recall', 'Quote', 'When'], rows, 'rag-board'));
+    }
+
+    return sheet;
+  }
+
   function setView(next) {
     if (next === view || !VIEWS.includes(next)) return;
     view = next;
@@ -3870,6 +4586,10 @@
     syncViewButtons();
     // Entering the Assistant: make sure the list is current, not stale.
     if (view === 'assistant') refreshProposals();
+    // Entering the lab: probe again unless it already answered. The usual reason
+    // for coming back is that the service was just started in a terminal, and
+    // making the developer find a retry button for that is silly.
+    if (view === 'raglab' && ragState.phase !== 'ready') ragLoad();
     dealCards = true; // re-deal for a gentle transition between views
     render();
     announce(`${VIEW_LABELS[view]} view`);
