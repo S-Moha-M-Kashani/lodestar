@@ -15,15 +15,16 @@ __all__ = ['PARAKEET_MODEL', 'SUPPORTED_FORMATS', 'FakeTranscriber',
 def make_transcriber(settings: Settings) -> Transcriber:
     if settings.transcriber == 'fake':
         return FakeTranscriber()
+    # No 'auto'. It preferred local Parakeet when mlx was importable and fell to
+    # OpenRouter otherwise, so one config transcribed privately on Apple Silicon
+    # and billed a paid API on Linux without ever saying which. Each environment
+    # names its backend now: the default is 'parakeet' and compose pins
+    # 'openrouter', since the brain image cannot install mlx.
     if settings.transcriber == 'parakeet':
         return ParakeetTranscriber(model_name=settings.parakeet_model)
-    # 'auto' prefers the local model: free, offline and private beats a paid API
-    # call. Docker and Linux cannot install mlx, so they land on OpenRouter.
-    if settings.transcriber == 'auto' and parakeet_available():
-        return ParakeetTranscriber(model_name=settings.parakeet_model)
-    if settings.transcriber in ('auto', 'openrouter'):
+    if settings.transcriber == 'openrouter':
         return OpenRouterTranscriber(api_key=settings.openrouter_api_key,
                                      base_url=settings.openrouter_base_url,
                                      default_model=settings.omni_model)
     raise ValueError(f'unknown transcriber: {settings.transcriber!r}; expected '
-                     "'auto', 'parakeet', 'openrouter', or 'fake'")
+                     "'parakeet', 'openrouter', or 'fake'")

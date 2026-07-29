@@ -966,12 +966,24 @@ try:
         # changes behaviour today (it rides along on every chat request); the
         # omni and embedding picks are stored preferences for the brain's
         # coming media/RAG features. All three persist in localStorage.
-        DEFAULT_TEXT = "moonshotai/kimi-k3"
-        # The omni default must be a model that actually receives audio. The old
-        # nemotron:free default is advertised as audio-capable but its provider
-        # discards the input_audio part, so every dictation came back an invented
-        # apology. It stays selectable (below) but is no longer the default.
+        # The text picker offers one cheap default and one step up, nothing else.
+        # moonshotai/kimi-k3 and openai/gpt-4o-mini are retired, and so is
+        # openrouter/auto: it is deprecated, it routes to a different model per
+        # request, and the brain never reads the resolved slug back out of the
+        # response — so a slow or badly tool-calling turn was unattributable.
+        DEFAULT_TEXT = "openai/gpt-5-nano"
+        ALT_TEXT = "openai/gpt-5-mini"
+        RETIRED_TEXT = ["moonshotai/kimi-k3", "openai/gpt-4o-mini", "openrouter/auto"]
+        # Every omni option must be a model that actually receives audio.
+        # nemotron:free advertises audio input but its provider discards the
+        # input_audio part, so every dictation came back an invented apology; it
+        # was kept selectable only for being free. It is gone now: OpenRouter has
+        # exactly one free audio-input model and that is it, so "free" was never
+        # a working choice — free dictation is Parakeet's job, locally and offline
+        # (BRAIN_TRANSCRIBER defaults to parakeet). Voxtral replaces it: a
+        # purpose-built speech model at the same price as the default.
         DEFAULT_OMNI = "google/gemini-2.5-flash-lite"
+        ALT_OMNI = ["openai/gpt-audio-mini", "mistralai/voxtral-small-24b-2507"]
         BROKEN_OMNI = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
         DEFAULT_EMBED = "nvidia/llama-nemotron-embed-vl-1b-v2:free"
         page.locator('.view-switch button[data-view="assistant"]').click()
@@ -986,8 +998,22 @@ try:
               and page.input_value("#model-omni") == DEFAULT_OMNI
               and page.input_value("#model-embed") == DEFAULT_EMBED)
         omni_options = page.locator("#model-omni option").all_inner_texts()
-        check("assistant: the free omni model stays selectable, just not default",
-              BROKEN_OMNI in omni_options and DEFAULT_OMNI in omni_options)
+        check("assistant: the audio-dropping free model is gone from the picker",
+              BROKEN_OMNI not in omni_options)
+        check("assistant: the audio picker offers only models that take audio",
+              omni_options == [DEFAULT_OMNI, *ALT_OMNI])
+        text_options = page.locator("#model-text option").all_inner_texts()
+        check("assistant: the text picker offers exactly the two GPT-5 tiers",
+              text_options == [DEFAULT_TEXT, ALT_TEXT])
+        check("assistant: the retired text models are gone from the picker",
+              not any(slug in text_options for slug in RETIRED_TEXT))
+        # openrouter/auto is gone from every picker, not just the text one: it is
+        # deprecated, and the resolved model was never read back out of the
+        # response, so no picker should be able to hand the brain a router.
+        embed_options = page.locator("#model-embed option").all_inner_texts()
+        check("assistant: no picker offers the deprecated openrouter/auto router",
+              all("openrouter/auto" not in opts
+                  for opts in (text_options, omni_options, embed_options)))
 
         n_replies = page.locator(".chat-msg.assistant").count()
         page.fill("#chat-input", "model ride-along probe")
@@ -998,13 +1024,13 @@ try:
         page.wait_for_function(
             f"document.querySelectorAll('.chat-msg.assistant').length >= {n_replies + 1}")
 
-        page.select_option("#model-text", "openai/gpt-4o-mini")
+        page.select_option("#model-text", ALT_TEXT)
         page.reload()
         page.wait_for_selector("#board")
         page.locator('.view-switch button[data-view="assistant"]').click()
         page.wait_for_selector("#model-text")
         check("assistant: model choice survives a reload",
-              page.input_value("#model-text") == "openai/gpt-4o-mini")
+              page.input_value("#model-text") == ALT_TEXT)
         page.select_option("#model-text", DEFAULT_TEXT)
 
         # ---- Assistant error path: a 503 renders the friendly unavailable message.
