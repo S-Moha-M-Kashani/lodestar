@@ -986,16 +986,23 @@ def test_no_two_candidates_are_the_same_configuration():
         seen[key] = cfg.label
 
 
-def test_the_final_run_refuses_to_start_without_a_judge(monkeypatch):
+def test_the_final_run_refuses_to_start_without_a_judge(monkeypatch, tmp_path):
     """The final run is the one whose numbers go in the document.
 
     Without a key the LLM stages fall back to the offline fake, so it would
     produce a full leaderboard row of meaningless scores under the winner's
     name — the worst output of the two, because the sweep that chose it did
-    refuse."""
+    refuse.
+
+    `RUNS_DIR` is redirected as well, and that is not belt-and-braces: writing
+    this test found that the unguarded `final()` had already dropped a
+    112-question fake-provider run into the real `.runs/`, labelled `WINNER`,
+    where it sat in the leaderboard beside the judged rows."""
     monkeypatch.setattr(sweep, 'load_lab_settings', lambda: LAB_SETTINGS)
+    monkeypatch.setattr(evaluate, 'RUNS_DIR', tmp_path)
     with pytest.raises(SystemExit):
         sweep.final(None, 1, 'A')
+    assert not list(tmp_path.iterdir()), 'refusing must happen before any run'
 
 
 # --- picking a model per task ----------------------------------------------
