@@ -117,3 +117,42 @@ def test_tool_schemas_are_derived_from_the_signatures():
     assert {t.name for t in tools} == {'list_questions', 'create_question',
                                        'update_question'}
     assert all(t.args_schema is not None and t.description for t in tools)
+
+
+# ---- Habits ---------------------------------------------------------------
+# The Assistant may propose a habit like any other card. It deliberately cannot
+# tick one: logging a repetition is the user's act, and a history an agent could
+# write into is not a record of anything.
+
+
+@respx.mock
+def test_create_question_proposes_a_habit_with_its_cadence():
+    post = respx.post(f'{BOARD}/api/proposals').mock(
+        return_value=httpx.Response(200, json=card(
+            'new', 'Meditate', type='habit', habitFreq='daily', habitCount=2, pending=1)))
+    tools = tools_by_name(BoardClient(BOARD))
+    created = tools['create_question'].run({
+        'title': 'Meditate', 'type': 'habit',
+        'frequency': 'daily', 'times_per_period': 2, 'category': 'health'})
+    sent = json.loads(post.calls.last.request.content)
+    assert sent['type'] == 'habit'
+    assert sent['habitFreq'] == 'daily'
+    assert sent['habitCount'] == 2
+    assert created['pending'] is True
+
+
+@respx.mock
+def test_a_non_habit_proposal_carries_no_cadence():
+    post = respx.post(f'{BOARD}/api/proposals').mock(
+        return_value=httpx.Response(200, json=card('new', 'A thought')))
+    tools = tools_by_name(BoardClient(BOARD))
+    tools['create_question'].run({'title': 'A thought', 'type': 'idea'})
+    sent = json.loads(post.calls.last.request.content)
+    assert sent.get('habitFreq', '') == ''
+
+
+@respx.mock
+def test_the_agent_has_no_tool_for_ticking_a_habit():
+    names = {t.name for t in make_board_tools(BoardClient(BOARD))}
+    assert not any('habit' in n or 'tick' in n or 'complete' in n for n in names), (
+        'the history must record what the user did, not what the model claimed')

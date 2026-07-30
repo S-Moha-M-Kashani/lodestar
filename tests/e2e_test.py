@@ -2180,6 +2180,137 @@ try:
         page.locator('.view-switch button[data-view="board"]').click()
         page.wait_for_selector("#board.board")
 
+        # ---- Habits ---------------------------------------------------------
+        # A habit is a card you repeat. The punch strip is the count, the
+        # progress and the control in one object, so almost every check here
+        # goes through it rather than through a separate widget.
+        # text_content, not inner_text: the column heading is styled uppercase,
+        # and the label is "Done" whatever the stylesheet does to it.
+        check("board: the third column is labelled Done",
+              page.locator('[data-col="answered"] .column-title').text_content() == "Done")
+
+        page.fill(".quick-add input", "Meditate")
+        page.press(".quick-add input", "Enter")
+        habit_card = page.locator('[data-col="inbox"] .card', has_text="Meditate").first
+        habit_card.click()
+        page.wait_for_selector("#card-dialog[open]")
+        check("habit: the cadence fields are hidden until the card is a habit",
+              page.locator("#card-habit[hidden]").count() == 1)
+        page.locator('.type-picker label:has(input[value="habit"])').click()
+        check("habit: stamping Habit reveals the cadence fields",
+              page.locator("#card-habit:not([hidden])").count() == 1)
+        page.select_option("#card-habit-freq", "daily")
+        page.fill("#card-habit-count", "2")
+        page.locator('.category-picker label:has(input[value="health"])').click()
+        page.click('#card-form button[type="submit"]')
+
+        habit_card = page.locator('[data-col="inbox"] .card', has_text="Meditate").first
+        check("habit: the card wears the habit stamp",
+              habit_card.locator(".badge.type-habit").count() == 1)
+        check("habit: the card states the cadence in words",
+              "2× per day" in habit_card.locator(".habit-cadence").inner_text())
+        check("habit: the punch strip has one box per repetition",
+              habit_card.locator(".habit-punch .punch-box").count() == 2)
+        check("habit: no box is stamped yet",
+              habit_card.locator(".habit-punch .punch-box.done").count() == 0)
+
+        rail_row = page.locator('.habit-rail .habit-rail-row', has_text="Meditate").first
+        check("habit: the rail lists the habit as due", rail_row.count() == 1)
+        check("habit: the rail counts none of two done",
+              "0/2" in rail_row.inner_text())
+
+        # Punching from the rail and from the card must be the same act.
+        rail_row.locator(".punch-box").first.click()
+        page.wait_for_timeout(120)
+        rail_row = page.locator('.habit-rail .habit-rail-row', has_text="Meditate").first
+        check("habit: punching from the rail records one repetition",
+              "1/2" in rail_row.inner_text())
+        habit_card = page.locator('[data-col="inbox"] .card', has_text="Meditate").first
+        check("habit: the card's strip shows the same single stamp",
+              habit_card.locator(".habit-punch .punch-box.done").count() == 1)
+
+        habit_card.locator(".habit-punch .punch-box:not(.done)").first.click()
+        page.wait_for_timeout(120)
+        rail_row = page.locator('.habit-rail .habit-rail-row', has_text="Meditate").first
+        check("habit: punching the card's last box completes the day",
+              "2/2" in rail_row.inner_text())
+        check("habit: a completed habit is marked done in the rail, not removed",
+              rail_row.evaluate("el => el.classList.contains('done')"))
+
+        # Undo — a mis-tap must be takeable back, or the history stops being true.
+        habit_card = page.locator('[data-col="inbox"] .card', has_text="Meditate").first
+        habit_card.locator(".habit-punch .punch-box.done").last.click()
+        page.wait_for_timeout(120)
+        rail_row = page.locator('.habit-rail .habit-rail-row', has_text="Meditate").first
+        check("habit: clicking the newest stamp takes the repetition back",
+              "1/2" in rail_row.inner_text())
+
+        check("habit: the completions reach the database",
+              any(len(c.get("habitHistory", {})) == 1 and c.get("habitFreq") == "daily"
+                  for c in api_state()["cards"] if c["title"] == "Meditate"))
+
+        # History lives on the card, behind a button.
+        check("habit: the history tape is closed until asked for",
+              habit_card.locator(".habit-tape").count() == 0)
+        habit_card.locator(".habit-history-toggle").click()
+        page.wait_for_timeout(120)
+        habit_card = page.locator('[data-col="inbox"] .card', has_text="Meditate").first
+        check("habit: the history button opens the tape on the card",
+              habit_card.locator(".habit-tape").count() == 1)
+        check("habit: today's cell carries the number punched into it",
+              habit_card.locator(".habit-tape .tape-cell.today").inner_text() == "1")
+        page.screenshot(path=shot("habits.png"))
+
+        # The reminder is the thing that makes a habit a habit.
+        page.reload()
+        page.wait_for_selector("#board.board")
+        check("habit: a due habit announces itself when the board opens",
+              page.locator(".habit-banner").count() == 1
+              and "Meditate" in page.locator(".habit-banner").inner_text())
+        check("habit: the sound can be muted from the board",
+              page.locator("#habit-mute").count() == 1)
+        page.locator(".habit-banner .habit-banner-hide").click()
+        page.wait_for_timeout(100)
+        check("habit: the banner can be dismissed",
+              page.locator(".habit-banner").count() == 0)
+
+        # Finish the day, then reload: nothing is due, so nothing nags.
+        rail_row = page.locator('.habit-rail .habit-rail-row', has_text="Meditate").first
+        rail_row.locator(".punch-box:not(.done)").first.click()
+        page.wait_for_timeout(300)
+        page.reload()
+        page.wait_for_selector("#board.board")
+        check("habit: a finished habit does not announce itself",
+              page.locator(".habit-banner").count() == 0)
+        check("habit: the rail still shows it, marked done",
+              page.locator('.habit-rail .habit-rail-row.done', has_text="Meditate").count() == 1)
+
+        # Done means retired: it leaves the rail and stops reminding, but keeps
+        # its history.
+        habit_card = page.locator('[data-col="inbox"] .card', has_text="Meditate").first
+        habit_card.focus()
+        page.keyboard.press("]")
+        page.wait_for_timeout(100)
+        page.locator('[data-col="in-progress"] .card', has_text="Meditate").first.focus()
+        page.keyboard.press("]")
+        page.wait_for_timeout(150)
+        check("habit: a habit moved to Done is retired from the rail",
+              page.locator('.habit-rail .habit-rail-row', has_text="Meditate").count() == 0)
+        retired = page.locator('[data-col="answered"] .card', has_text="Meditate").first
+        check("habit: a retired habit keeps its history",
+              any(sum(len(v) for v in c.get("habitHistory", {}).values()) == 2
+                  for c in api_state()["cards"] if c["title"] == "Meditate"))
+        check("habit: a retired habit is still stamped a habit",
+              retired.locator(".badge.type-habit").count() == 1)
+
+        # Backlog sorting knows the new type, and the toolbar can filter to it.
+        page.select_option("#type-filter", "habit")
+        page.wait_for_timeout(150)
+        check("habit: the type filter narrows the board to habits",
+              page.locator(".card").count() == 1)
+        page.select_option("#type-filter", "")
+        page.wait_for_timeout(150)
+
         # ---- Server-offline banner + recovery -------------------------------
         def block_state_put(route):
             if route.request.method == "PUT":
