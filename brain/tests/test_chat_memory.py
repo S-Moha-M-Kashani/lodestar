@@ -148,7 +148,8 @@ def test_recall_tool_searches_the_store():
     store.record(['the wifi password is hunter2'])
     tool = make_recall_tool(store)
     assert tool.name == 'recall_chat'
-    assert 'text' in tool.parameters['properties']
-    assert tool.parameters['required'] == ['text']
+    schema = tool.args_schema.model_json_schema()
+    assert 'text' in schema['properties']
+    assert schema['required'] == ['text']
     matches = tool.run({'text': 'wifi password'})
     assert matches and 'hunter2' in matches[0]['text']

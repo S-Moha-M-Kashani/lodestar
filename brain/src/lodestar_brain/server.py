@@ -9,8 +9,6 @@ from pydantic import BaseModel
 
 from .agent.registry import build_agent
 from .config import Settings, load_settings
-from .llm.fake import FakeProvider
-from .llm.openrouter import OpenRouterProvider
 from .rag.chat_memory import ChromaChatMemory, chunk_text, make_recall_tool
 from .rag.embedder import make_embedder
 from .rag.index import LeidenIndex, make_retrieve_tool
@@ -46,12 +44,6 @@ class RecallBody(BaseModel):
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or load_settings()
 
-    if settings.llm_provider == 'fake':
-        llm = FakeProvider()
-    else:
-        llm = OpenRouterProvider(api_key=settings.openrouter_api_key,
-                                 base_url=settings.openrouter_base_url,
-                                 default_model=settings.model)
     board = BoardClient(settings.board_api_url)
     embedder = make_embedder(settings.embedder)
     index = LeidenIndex(embedder)
@@ -74,7 +66,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             logging.getLogger(__name__).warning(
                 'chat memory disabled: Chroma at %s is unreachable (%s)',
                 settings.chroma_url, exc)
-    agent = build_agent("default", llm=llm, tools=tools, max_steps=settings.max_agent_steps)
+    agent = build_agent("default", settings=settings, tools=tools,
+                        max_steps=settings.max_agent_steps)
     transcriber = make_transcriber(settings)
 
     app = FastAPI(title='lodestar-brain')
@@ -84,8 +77,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {'ok': True, 'service': 'lodestar-brain'}
 
     @app.post('/agent/chat')
-    def chat(body: ChatBody) -> dict:
-        result = agent.run(body.messages, model=body.model)
+    async def chat(body: ChatBody) -> dict:
+        # Async because cycle 2's MCP tools are coroutine-only. Safe today: the
+        # sync tools (board HTTP, ddgs, Chroma) run in LangChain's thread
+        # executor, so nothing here blocks the event loop.
+        result = await agent.arun(body.messages, model=body.model)
         if memory is not None:
             last_user = next((m.get('content', '') for m in reversed(body.messages)
                               if m.get('role') == 'user'), '')
