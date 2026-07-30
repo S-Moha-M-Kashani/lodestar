@@ -91,7 +91,6 @@ class LLMSummarizer:
     session on any provider error — a half-built hierarchy would silently
     change what a run is measuring, and a wrong number is worse than a slow
     one."""
-    name = 'llm'
     PROMPT = (
         'این یک نشست از دفترچه روزانه یک کاربر با دستیارش است. در دو تا سه جمله '
         'فارسی خلاصه کن: چه اتفاقی افتاد، چه حسی داشت، چه تصمیم یا قولی داد. '
@@ -102,6 +101,13 @@ class LLMSummarizer:
         self.model = model
         self.fallback = fallback
         self.failures = 0
+
+    @property
+    def name(self) -> str:
+        """The cache key carries the model, so switching summary models does not
+        serve one model's summaries as the other's. Without this, comparing two
+        summarisers silently compares whichever one ran first."""
+        return f'llm:{self.model}' if self.model else 'llm'
 
     def session(self, session: dict) -> str:
         from .corpus import session_text
