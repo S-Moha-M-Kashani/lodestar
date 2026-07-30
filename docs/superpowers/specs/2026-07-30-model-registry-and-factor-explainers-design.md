@@ -1,9 +1,12 @@
 # Model registry and factor explainers — design
 
 **Date:** 2026-07-30
-**Status:** approved, not yet implemented
+**Status:** implemented and merged. The registry and explainers ship in
+`brain/tests/raglab/models.py` (`ROLES`), `config.py` (`HELP`, `STEPS`) and `explain.py`, with
+`explain.missing() == []` enforced by the test suite.
 **Cycles 3 and 4 of 5.** Roadmap: Tooka Farsi embedder → LangChain agent rewrite → **model
-registry & pickers (3)** → **factor explainers (4)** → Telegram MCP capture.
+registry & pickers (3)** → **factor explainers (4)**. The fifth cycle (Telegram MCP capture)
+was **abandoned** and its spec removed.
 
 Two features in one spec because they share one mechanism — a registry that lives beside the
 definition it describes, is served over the API, and is rendered by one frontend component —

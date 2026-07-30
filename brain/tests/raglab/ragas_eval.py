@@ -36,6 +36,83 @@ OFFLINE_METRICS = ('non_llm_context_precision_with_reference',
 LLM_METRICS = ('faithfulness', 'answer_relevancy', 'factual_correctness(mode=f1)',
                'llm_context_precision_with_reference', 'context_recall')
 
+# The four that get a vote. Everything else the lab measures is still computed,
+# still reported and still worth reading — it simply does not choose the
+# architecture, because a metric only earns a vote if it grades something the
+# others do not.
+#
+# Between them these four cover both ways a RAG pipeline fails, in both
+# directions:
+#
+#   context precision   was what came back relevant, and ranked well?
+#   context recall       did retrieval get everything the answer needed?
+#   faithfulness         did the answer stay inside what was retrieved?
+#   answer relevancy     did it actually address the question asked?
+#
+# What is deliberately excluded and why: `factual_correctness` scores against
+# the reference *answer*, so it grades the fixture's phrasing as much as the
+# pipeline; the offline pair are whole-string similarity, so they penalise large
+# chunks regardless of whether the answer is inside them (measured: switching to
+# multi-turn semantic segments halved them while *raising* quote recall), which
+# makes them unusable for ranking across chunkers; and our own deterministic
+# metrics grade retrieval almost exclusively, so ranking on them picks a config
+# that finds the evidence and then says nothing useful about it. Those stay as
+# the numbers to *debug* with — they never vary between runs, which is exactly
+# what a judged score cannot promise.
+DECISION_METRICS = ('faithfulness', 'answer_relevancy',
+                    'llm_context_precision_with_reference', 'context_recall')
+
+
+def decision_score(metrics: dict) -> float | None:
+    """The one number the architecture is chosen by: the unweighted mean of the
+    four deciding metrics, or None unless every one of them is present.
+
+    Unweighted because any weighting would be a claim about their relative
+    importance that this fixture cannot support, and a hidden thumb on the scale
+    is how a sweep ends up confirming whatever its author already believed.
+
+    None rather than a partial mean because a mean over whichever metrics
+    happened to succeed is not comparable between runs: an offline run would
+    score on nothing, a half-failed judged run on two, and the shorter list
+    would win for being easier.
+    """
+    values = []
+    for name in DECISION_METRICS:
+        value = metrics.get(name)
+        if not isinstance(value, (int, float)) or value != value:   # missing/NaN
+            return None
+        values.append(float(value))
+    return round(sum(values) / len(values), 4)
+
+
+def decision_spread(rows: list[dict]) -> dict:
+    """The deciding score's mean and standard error over per-question composites.
+
+    A leaderboard of means alone cannot say whether it ranked anything. These
+    candidates land within ~0.01 of each other, and on a couple of dozen
+    questions that gap is smaller than the error on either number — which is a
+    fact about the experiment, not an opinion about it, so the score carries it.
+
+    Per question first, then across questions: the four metrics score the same
+    answers and move together, so pooling four separate standard errors as if
+    they were independent would understate the spread. A question missing any of
+    the four has no composite and is not a sample — the same rule
+    `decision_score` applies to the run as a whole.
+    """
+    composites = [value for value in (decision_score(row) for row in rows)
+                  if value is not None]
+    n = len(composites)
+    if not n:
+        return {'n': 0, 'mean': None, 'stderr': None}
+    mean = sum(composites) / n
+    if n < 2:
+        # One sample has no spread. Reporting 0.0 would read as certainty.
+        return {'n': n, 'mean': round(mean, 4), 'stderr': None}
+    variance = sum((value - mean) ** 2 for value in composites) / (n - 1)
+    return {'n': n, 'mean': round(mean, 4),
+            'stderr': round((variance / n) ** 0.5, 4)}
+
+
 INSTALL_HINT = 'npm run raglab  (it pins these: ' \
     "ragas==0.4.*, langchain-community<0.4, langchain-openai<1, rapidfuzz)"
 
@@ -48,6 +125,29 @@ JUDGED = ', scored by the RAGAS judge model — a model\'s verdict, so it varies
 NO_JUDGE = ' — string distance via rapidfuzz, no model involved'
 
 RAGAS_MEASURES = (
+    Measure('ragas_decision', 'RAGAS decision score',
+            'the number the architecture was chosen by', '',
+            'mean(faithfulness, answer_relevancy, '
+            'llm_context_precision_with_reference, context_recall) — undefined '
+            'unless all four are present',
+            'ragas_eval.decision_score over ragas 0.4.x metrics' + JUDGED,
+            'Four judged RAGAS metrics, averaged unweighted, and the only score '
+            'that picks between configurations here. They were chosen because '
+            'between them they cover both halves of the pipeline in both '
+            'directions: context precision asks whether what came back was '
+            'relevant and well ranked, context recall whether everything the '
+            'answer needed was retrieved, faithfulness whether the answer '
+            'stayed inside what was retrieved, and answer relevancy whether it '
+            'addressed the question at all. Everything else on this screen is '
+            'reported and none of it votes — factual correctness grades the '
+            'fixture\'s phrasing as much as the pipeline, the offline context '
+            'pair punish large chunks for being large, and our own '
+            'deterministic metrics grade retrieval almost exclusively, so '
+            'ranking on them rewards a config that finds the evidence and then '
+            'says nothing useful about it. The cost of that choice is honest: '
+            'all four come from a judge, so this number carries a model\'s '
+            'variance, and it is only comparable between runs scored by the '
+            'same RAGAS judge model.'),
     Measure('non_llm_context_recall', 'Context recall (offline)',
             'RAGAS, string distance', 'retrieval',
             'reference quotes matched in the retrieved contexts / reference '
@@ -223,8 +323,14 @@ def run(pairs, settings, embedder, mode: str = 'offline',
     Returns means per metric plus notes; never raises."""
     import warnings
 
+    # `decision` starts as None and stays None on every path that cannot measure
+    # all four — a missing key, a failed import, an offline run. A leaderboard
+    # that ranked on a partially-measured composite would put the run that
+    # measured least at the top.
     report: dict = {'mode': mode, 'metrics': {}, 'n_samples': 0, 'skipped': 0,
-                    'notes': []}
+                    'decision': None,
+                    'decision_spread': decision_spread([]),
+                    'decision_metrics': list(DECISION_METRICS), 'notes': []}
     status = availability(settings)
     if not status.installed:
         report['notes'] = list(status.notes) + [f'install with: {INSTALL_HINT}']
@@ -270,6 +376,16 @@ def run(pairs, settings, embedder, mode: str = 'offline',
 
     report['n_samples'] = len(samples)
     report['metrics'] = _means(result)
+    report['decision'] = decision_score(report['metrics'])
+    report['decision_spread'] = decision_spread(
+        list(getattr(result, 'scores', []) or []))
+    if report['decision'] is None:
+        absent = [name for name in DECISION_METRICS
+                  if name not in report['metrics']]
+        report['notes'].append(
+            'no decision score: this run did not measure '
+            + ', '.join(absent)
+            + ' — only a judged run with an answerer can be ranked')
     if mode == 'offline':
         # Measured, not hypothetical: switching from 500-char packing to
         # multi-turn semantic segments *raised* quote recall while these scores

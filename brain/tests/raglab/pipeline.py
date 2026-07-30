@@ -38,13 +38,17 @@ class Context:
     score: float
     stages: dict = field(default_factory=dict)
     expanded_from: str = ''
+    # Which habit's ledger this is, when it is one. A habit chunk carries no
+    # session id, so without this the panel shows a block of tallies with
+    # nothing saying whose they are.
+    habit: str = ''
 
     def as_dict(self) -> dict:
         return {'chunk_id': self.chunk_id, 'layer': self.layer,
                 'session_id': self.session_id, 'date': self.date,
                 'score': round(self.score, 4), 'text': self.text,
                 'stages': {k: round(v, 4) for k, v in self.stages.items()},
-                'expanded_from': self.expanded_from}
+                'expanded_from': self.expanded_from, 'habit': self.habit}
 
 
 @dataclass
@@ -195,7 +199,7 @@ def retrieve(index, cfg: RetrievalConfig, question: str, query_date: str,
         chunk = chunks[i]
         contexts.append(Context(chunk_id=chunk.id, text=chunk.text, layer=chunk.layer,
                                 session_id=chunk.session_id, date=chunk.date,
-                                score=float(final[i]),
+                                score=float(final[i]), habit=chunk.habit,
                                 stages=stage_scores[chunk.id]))
 
     start = clock()
@@ -311,7 +315,7 @@ def _expand_parents(index, cfg, contexts):
             extra.append(Context(chunk_id=sibling.id, text=sibling.text,
                                  layer=sibling.layer, session_id=sibling.session_id,
                                  date=sibling.date, score=context.score * 0.5,
-                                 stages={'expanded': 1.0},
+                                 stages={'expanded': 1.0}, habit=sibling.habit,
                                  expanded_from=context.chunk_id))
     return contexts + extra
 

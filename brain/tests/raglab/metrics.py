@@ -27,7 +27,7 @@ from . import textnorm
 from .corpus import evidence_sessions
 
 TYPES = ('single-hop', 'temporal', 'multi-hop', 'aggregation', 'knowledge-update',
-         'commitment', 'entity', 'pattern', 'abstention', 'adversarial')
+         'commitment', 'entity', 'pattern', 'habit', 'abstention', 'adversarial')
 
 
 @dataclass(frozen=True)

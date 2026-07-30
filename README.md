@@ -263,5 +263,9 @@ nothing about it beyond a proxy prefix. Its own tests are part of the brain suit
 ## More
 
 - `details.md` — the full architecture deep dive: every module, the data flows, the invariants, and the design trade-offs.
-- `plan.md` — the original design/implementation plan.
-- `docs/superpowers/` — a design spec and an implementation plan per major feature.
+- `plan.md` — the requirements ledger: every Sprint 2 task requirement and optional task, what
+  is shipped, what is planned, and where each one is implemented. Includes a known-limitations
+  section.
+- `docs/` — a design spec per major feature (what was built, why, and what was rejected), plus the
+  one implementation plan currently being executed. Start at `docs/README.md`, which carries a
+  status per document.

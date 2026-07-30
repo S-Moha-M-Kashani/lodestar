@@ -130,6 +130,9 @@ def create_app() -> FastAPI:
                 'from': diary['meta']['period']['from'],
                 'to': diary['meta']['period']['to'],
                 'threads': len(diary['threads']),
+                # The habit ledger is only as good as the habits behind it, so
+                # how many the corpus tracks is part of describing it.
+                'habits': len(diary.get('habits', {})),
                 'questions': len(ground_truth['questions']),
                 'query_date': ground_truth['meta'].get('query_date'),
             },
