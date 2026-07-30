@@ -3,7 +3,8 @@ the `ddgs` package (keyless). Swap by passing a different provider to
 make_search_tool()."""
 from typing import Protocol
 
-from .base import Tool
+from langchain_core.tools import BaseTool, tool
+from pydantic import BaseModel, Field
 
 
 class SearchProvider(Protocol):
@@ -19,16 +20,16 @@ class DdgsSearch:
                     for r in ddgs.text(query, max_results=max_results)]
 
 
-def make_search_tool(provider: SearchProvider) -> Tool:
+class WebSearchArgs(BaseModel):
+    query: str
+    max_results: int = Field(5, ge=1, le=10)
+
+
+def make_search_tool(provider: SearchProvider) -> BaseTool:
+    @tool('web_search', args_schema=WebSearchArgs)
     def web_search(query: str, max_results: int = 5) -> list[dict]:
+        """Search the public web. Returns results with title, url, and snippet.
+        Use for researching a question; cite urls in your reply."""
         return provider.search(query, max_results=max_results)
 
-    return Tool(
-        'web_search',
-        'Search the public web. Returns results with title, url, and snippet. '
-        'Use for researching a question; cite urls in your reply.',
-        {'type': 'object', 'properties': {
-            'query': {'type': 'string'},
-            'max_results': {'type': 'integer', 'minimum': 1, 'maximum': 10}},
-         'required': ['query']},
-        web_search)
+    return web_search

@@ -4,10 +4,16 @@ agent can surface 'these questions belong together'."""
 import igraph as ig
 import leidenalg
 import numpy as np
+from langchain_core.tools import BaseTool, tool
+from pydantic import BaseModel, Field
 
-from ..tools.base import Tool
 from ..tools.board import BoardClient
 from .embedder import Embedder
+
+
+class FindRelatedArgs(BaseModel):
+    text: str
+    k: int = Field(5, ge=1, le=20)
 
 
 def card_text(card: dict) -> str:
@@ -83,17 +89,12 @@ class LeidenIndex:
                 for community, members in sorted(groups.items())]
 
 
-def make_retrieve_tool(index: LeidenIndex, client: BoardClient) -> Tool:
+def make_retrieve_tool(index: LeidenIndex, client: BoardClient) -> BaseTool:
+    @tool('find_related', args_schema=FindRelatedArgs)
     def find_related(text: str, k: int = 5) -> list[dict]:
+        """Find board questions related to a text, with their Leiden community id.
+        Same community = same theme; use it to point out duplicates/connections."""
         index.build(client.list_cards())  # board is small — rebuild keeps it fresh
         return index.query(text, k=k)
 
-    return Tool(
-        'find_related',
-        'Find board questions related to a text, with their Leiden community id. '
-        'Same community = same theme; use it to point out duplicates/connections.',
-        {'type': 'object', 'properties': {
-            'text': {'type': 'string'},
-            'k': {'type': 'integer', 'minimum': 1, 'maximum': 20}},
-         'required': ['text']},
-        find_related)
+    return find_related

@@ -29,6 +29,7 @@ from collections import defaultdict
 import numpy as np
 
 from . import textnorm
+from .llm import lab_chat
 
 
 class BM25:
@@ -180,10 +181,10 @@ def llm_scores(llm, model: str, query: str, documents: list[str],
     listing = '\n\n'.join(f'[{i + 1}] {d[:max_chars]}'
                           for i, d in enumerate(documents))
     try:
-        turn = llm.chat([{'role': 'system', 'content': LLM_GRADE_PROMPT},
-                         {'role': 'user',
-                          'content': f'Question: {query}\n\n{listing}'}],
-                        model=model)
+        turn = lab_chat(llm, [{'role': 'system', 'content': LLM_GRADE_PROMPT},
+                              {'role': 'user',
+                               'content': f'Question: {query}\n\n{listing}'}],
+                        model)
         text = turn.content or ''
     except Exception:
         return np.full(len(documents), 0.5, dtype=np.float32)

@@ -191,16 +191,10 @@ class LabIndex:
         self.store.drop()
 
 
-def _lab_llm(settings: LabSettings):
-    """The production provider, or the offline fake when there is no key — the
-    lab must remain runnable with no network at all."""
-    from lodestar_brain.llm.fake import FakeProvider
-    from lodestar_brain.llm.openrouter import OpenRouterProvider
-    if not settings.openrouter_api_key:
-        return FakeProvider()
-    return OpenRouterProvider(api_key=settings.openrouter_api_key,
-                              base_url=settings.openrouter_base_url,
-                              default_model=settings.llm_model)
+# Re-exported: evaluate.py and server.py import _lab_llm from here. The body
+# moved to llm.py so summarize.py can reach it without importing this module,
+# which imports summarize.
+from .llm import lab_llm as _lab_llm  # noqa: E402  (kept beside its callers)
 
 
 class IndexRegistry:

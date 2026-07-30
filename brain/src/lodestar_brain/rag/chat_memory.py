@@ -19,11 +19,18 @@ import urllib.request
 import uuid
 from urllib.parse import urlparse
 
-from ..tools.base import Tool
+from langchain_core.tools import BaseTool, tool
+from pydantic import BaseModel, Field
+
 from .embedder import Embedder
 
 # Sentinel url selecting the in-process client: no server, no disk, no network.
 MEMORY_URL = 'memory'
+
+
+class RecallChatArgs(BaseModel):
+    text: str
+    k: int = Field(5, ge=1, le=20)
 
 
 def chunk_text(text: str, max_chars: int = 500) -> list[str]:
@@ -136,16 +143,11 @@ class ChromaChatMemory:
         self.client.delete_collection(self.collection_name)
 
 
-def make_recall_tool(memory: ChromaChatMemory) -> Tool:
+def make_recall_tool(memory: ChromaChatMemory) -> BaseTool:
+    @tool('recall_chat', args_schema=RecallChatArgs)
     def recall_chat(text: str, k: int = 5) -> list[dict]:
+        """Recall relevant snippets from past assistant conversations on this
+        board. Use it to answer questions about things discussed before."""
         return memory.search(text, k=k)
 
-    return Tool(
-        'recall_chat',
-        'Recall relevant snippets from past assistant conversations on this '
-        'board. Use it to answer questions about things discussed before.',
-        {'type': 'object', 'properties': {
-            'text': {'type': 'string'},
-            'k': {'type': 'integer', 'minimum': 1, 'maximum': 20}},
-         'required': ['text']},
-        recall_chat)
+    return recall_chat
