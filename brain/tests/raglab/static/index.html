@@ -9,7 +9,27 @@
     --paper: #f7f4ea; --ink: #22201b; --ink-soft: #6b665c; --rule: #cfc7b2;
     --rule-red: #c0533f; --grid: #dfd8c4; --good: #3f7d4f; --bad: #b0442f;
     --panel: #fffdf6; --shadow: 0 1px 0 #e6dfcb;
+    /* One ink per pipeline step, so a control says which stage it belongs to
+       before you read its label. Same three hues as the board's lab page — the
+       two panels must not disagree about what orange means. */
+    --step-index: oklch(0.52 0.11 52);        /* orange — what gets stored */
+    --step-retrieval: oklch(0.52 0.11 148);   /* green  — what gets found */
+    --step-generation: oklch(0.52 0.11 252);  /* blue   — what gets written */
   }
+  [data-step="index"] { --step: var(--step-index); }
+  [data-step="retrieval"] { --step: var(--step-retrieval); }
+  [data-step="generation"] { --step: var(--step-generation); }
+  .card[data-step] { border-left: 3px solid var(--step); }
+  .card[data-step] > h2 { color: var(--step); }
+  .step { border-left: 3px solid var(--step); padding: .1rem 0 .3rem .5rem;
+          margin-bottom: .55rem; }
+  .step-tag { font-size: .64rem; font-weight: 700; text-transform: uppercase;
+              letter-spacing: .12em; color: var(--step); }
+  /* A score wears the ink of the step it grades; whole-pipeline numbers (the
+     composite, latency) carry no step and stay in plain ink. */
+  .score[data-step] { border-left: 3px solid var(--step); }
+  .score[data-step] > span:first-child { color: var(--step); }
+  .score[data-step] .bar i { background: var(--step); }
   * { box-sizing: border-box; }
   body {
     margin: 0; padding: 0 0 4rem; color: var(--ink); background: var(--paper);
@@ -50,6 +70,17 @@
                   text-transform: none; letter-spacing: 0; font-size: .78rem;
                   color: var(--ink); }
   input[type=checkbox] { accent-color: var(--rule-red); }
+  button.why {
+    font-size: .62rem; line-height: 1; padding: .1rem .3rem; margin-left: .3rem;
+    background: transparent; color: var(--ink-soft); border: 1px solid var(--rule);
+    border-radius: 999px; vertical-align: middle;
+  }
+  button.why:hover { color: var(--rule-red); border-color: var(--rule-red); }
+  p.explain {
+    flex-basis: 100%; margin: .25rem 0 .1rem; font-size: .72rem; line-height: 1.45;
+    color: var(--ink-soft); border-left: 2px solid var(--rule-red);
+    padding-left: .5rem;
+  }
   button {
     font: inherit; padding: .4rem .8rem; cursor: pointer; color: var(--paper);
     background: var(--ink); border: 0; border-radius: 2px; letter-spacing: .04em;
@@ -127,7 +158,7 @@
 <main>
 <div class="row">
 
-  <section class="card grow">
+  <section class="card grow" data-step="index">
     <h2>1 · Index (what gets stored)</h2>
     <label>Chunking strategy</label>
     <select id="chunker"></select>
@@ -135,8 +166,6 @@
       <div><label>Chunk chars</label><input type="number" id="chunk_chars" min="120" max="2000" step="20"></div>
       <div><label>Overlap</label><input type="number" id="overlap" min="0" max="800" step="20"></div>
     </div>
-    <label>Embedder</label>
-    <select id="embedder"></select>
     <label>Summarizer (hierarchy)</label>
     <select id="summarizer"></select>
     <label>Indexed layers</label>
@@ -151,7 +180,7 @@
     <div id="indexInfo" class="muted" style="margin-top:.5rem;font-size:.74rem"></div>
   </section>
 
-  <section class="card grow">
+  <section class="card grow" data-step="retrieval">
     <h2>2 · Retrieval &amp; ranking</h2>
     <label>Retriever</label>
     <select id="retriever"></select>
@@ -184,7 +213,7 @@
     </div>
   </section>
 
-  <section class="card grow">
+  <section class="card grow" data-step="generation">
     <h2>3 · Generation &amp; scoring</h2>
     <label>Answerer</label>
     <select id="answerer"></select>
@@ -210,6 +239,36 @@
       <button class="ghost" id="stopPoll">Refresh</button>
     </div>
     <div id="jobBox" style="margin-top:.55rem"></div>
+  </section>
+
+  <!-- One model per task, never one model for everything: a summariser runs 157
+       times and wants cheap, a judge runs once and wants strong. Licences are on
+       the label because on Farsi the open-weight candidates are the interesting
+       ones, and a model nobody has run here stays listed as NA.
+
+       Every model lives in this one card, the embedder included — it is a language
+       model too, and it was the odd one out among the chunking knobs. Each group
+       wears the ink of the step it drives, so leaving the step card costs nothing
+       in knowing which stage a choice changes. -->
+  <section class="card grow" id="modelCard">
+    <h2>4 · Models (one per task)</h2>
+    <div class="step" data-step="index">
+      <span class="step-tag">Index</span>
+      <label>Embedder</label>
+      <select id="embedder"></select>
+      <label>Embedding model <span class="muted">· fastembed, sentence-transformers or openai</span></label>
+      <select id="embed_model"></select>
+      <div id="modelRoles-index"></div>
+    </div>
+    <div class="step" data-step="retrieval">
+      <span class="step-tag">Retrieval</span>
+      <div id="modelRoles-retrieval"></div>
+    </div>
+    <div class="step" data-step="generation">
+      <span class="step-tag">Generation</span>
+      <div id="modelRoles-generation"></div>
+    </div>
+    <div id="modelRoles"></div>
   </section>
 
   <section class="card full" id="resultCard">
@@ -265,6 +324,98 @@ function fill(select, values, help) {
     `<option value="${v}">${v}${help && help[v] ? ' — ' + help[v] : ''}</option>`).join('');
 }
 
+// A model's label always carries where its weights stand, and a model this lab
+// has not run is offered as NA rather than dropped from the list.
+function modelLabel(m) {
+  const licence = m.source === 'default' ? '' : m.source === 'open' ? ' (open source)'
+    : m.source === 'closed' ? ' (closed source)' : ' (licence not recorded)';
+  const na = m.available ? '' : ' — NA, not available here but worth checking';
+  return `${m.label}${licence}${na}`;
+}
+
+// Language coverage travels in the option text: on a Farsi corpus an
+// English-only embedder returns a full set of confident numbers that measure
+// nothing, and that has to be visible while picking, not after the run.
+function fillEmbedders() {
+  const hints = OPTIONS.embedder_hints || [];
+  $('embedder').innerHTML = hints.map((h) =>
+    `<option value="${escapeHtml(h.kind)}">${escapeHtml(h.kind)} — `
+    + `${escapeHtml(h.languages)}`
+    + `${h.available === false ? ' — NA, not installed or no key here' : ''}`
+    + `</option>`).join('');
+  $('embed_model').innerHTML = (OPTIONS.embed_models || []).map((m) => {
+    const licence = m.source === 'default' ? '' : m.source === 'open' ? ' (open source)'
+      : m.source === 'closed' ? ' (closed source)' : ' (licence not recorded)';
+    const na = m.available ? '' : ' — NA, not served here but worth checking';
+    const dim = m.dim ? ` · ${m.dim}d` : '';
+    // The backend is what picking it costs: an ONNX download, a multi-gigabyte
+    // checkpoint, or an API bill.
+    const via = m.backend ? ` · via ${escapeHtml(m.backend)}` : '';
+    const tag = m.tag ? ` (${escapeHtml(m.tag)})` : '';
+    return `<option value="${escapeHtml(m.id)}">${escapeHtml(m.label)}${tag} — `
+      + `${escapeHtml(m.languages)}${licence}${dim}${via}${na}</option>`;
+  }).join('');
+}
+
+// Grouped by the step each model serves, into the host that carries that step's
+// ink. A role whose step this page has no group for still renders, in the
+// catch-all under them: a stage added in the service must never silently vanish
+// from the panel.
+function fillModels() {
+  const options = (OPTIONS.models || []).map((m) =>
+    `<option value="${escapeHtml(m.id)}">${escapeHtml(modelLabel(m))}</option>`).join('');
+  const row = (role) =>
+    `<label>${escapeHtml(role.label)} <span class="muted">· ${escapeHtml(role.only_when)}</span>`
+    + `<button type="button" class="why" data-topic="model.${role.key}" `
+    + `aria-label="What is ${escapeHtml(role.label)}?">!</button></label>`
+    + `<select class="rag-model" data-role="${role.key}" data-field="${role.field}">`
+    + `${options}</select>`;
+  const groups = {};
+  for (const role of OPTIONS.model_roles || []) {
+    const step = role.step || role.field.split('.')[0];
+    (groups[step] = groups[step] || []).push(role);
+  }
+  const spare = [];
+  for (const host of document.querySelectorAll('[id^="modelRoles-"]')) {
+    const step = host.id.slice('modelRoles-'.length);
+    host.innerHTML = (groups[step] || []).map(row).join('');
+    delete groups[step];
+  }
+  for (const roles of Object.values(groups)) spare.push(...roles);
+  $('modelRoles').innerHTML = spare.map(row).join('');
+}
+
+// Every knob explains itself. The text comes from the service (config.HELP and
+// models.ROLES), so a knob added there is explained here without editing this
+// file — and the id of each control is the field it sets.
+function decorateExplainers() {
+  const byField = {};
+  for (const [topic, text] of Object.entries(OPTIONS.help || {})) {
+    byField[topic.split('.').pop()] = { topic, text };
+  }
+  for (const control of document.querySelectorAll('main [id]')) {
+    const found = byField[control.id];
+    // A checkbox lives *inside* its own label, so it explains itself there; every
+    // other control is preceded by one. Walking up blindly would hang a
+    // checkbox's explainer on the previous checkbox's label.
+    const label = control.type === 'checkbox' ? control.closest('label')
+      : control.previousElementSibling;
+    if (!found || !label || label.tagName !== 'LABEL' || label.querySelector('.why')) continue;
+    label.insertAdjacentHTML('beforeend',
+      ` <button type="button" class="why" data-topic="${found.topic}" `
+      + `aria-label="What is this?">!</button>`);
+  }
+  document.addEventListener('click', (event) => {
+    const btn = event.target.closest('.why');
+    if (!btn) return;
+    const open = btn.parentElement.nextElementSibling;
+    if (open && open.classList.contains('explain')) { open.remove(); return; }
+    const text = (OPTIONS.help || {})[btn.dataset.topic] || '';
+    btn.parentElement.insertAdjacentHTML('afterend',
+      `<p class="explain">${escapeHtml(text)}</p>`);
+  });
+}
+
 function checkboxes(host, values, checked) {
   host.innerHTML = values.map((v) =>
     `<label><input type="checkbox" value="${v}"${checked.includes(v) ? ' checked' : ''}> ${v}</label>`
@@ -286,12 +437,13 @@ async function api(path, body) {
 }
 
 function readConfig() {
-  return {
+  const cfg = {
     label: $('label').value,
     index: {
       chunker: $('chunker').value, chunk_chars: +$('chunk_chars').value,
       overlap: +$('overlap').value, contextual: $('contextual').checked,
-      embedder: $('embedder').value, summarizer: $('summarizer').value,
+      embedder: $('embedder').value, embed_model: $('embed_model').value,
+      summarizer: $('summarizer').value,
       layers: selected($('layers')),
     },
     retrieval: {
@@ -309,12 +461,21 @@ function readConfig() {
       answerer: $('answerer').value, key_facts_judge: $('key_facts_judge').checked,
     },
   };
+  // Each role writes into the config group whose stage uses it, so the index
+  // fingerprint keeps describing exactly what was stored.
+  for (const select of document.querySelectorAll('.rag-model')) {
+    const [group, field] = select.dataset.field.split('.');
+    cfg[group][field] = select.value;
+  }
+  return cfg;
 }
 
 function applyDefaults(d) {
   $('chunker').value = d.index.chunker; $('chunk_chars').value = d.index.chunk_chars;
   $('overlap').value = d.index.overlap; $('contextual').checked = d.index.contextual;
-  $('embedder').value = d.index.embedder; $('summarizer').value = d.index.summarizer;
+  $('embedder').value = d.index.embedder;
+  $('embed_model').value = d.index.embed_model || '';
+  $('summarizer').value = d.index.summarizer;
   $('retriever').value = d.retrieval.retriever; $('k').value = d.retrieval.k;
   $('candidates').value = d.retrieval.candidates;
   $('rollup_boost').value = d.retrieval.rollup_boost;
@@ -330,13 +491,17 @@ function applyDefaults(d) {
   $('parent_expansion').value = d.retrieval.parent_expansion;
   $('answerer').value = d.generation.answerer;
   $('key_facts_judge').checked = d.generation.key_facts_judge;
+  for (const select of document.querySelectorAll('.rag-model')) {
+    const [group, field] = select.dataset.field.split('.');
+    select.value = (d[group] || {})[field] || '';
+  }
 }
 
 async function boot() {
   OPTIONS = await api('/api/options');
   const o = OPTIONS;
   fill($('chunker'), o.chunkers, CHUNKER_HELP);
-  fill($('embedder'), o.embedders);
+  fillEmbedders();
   fill($('summarizer'), o.summarizers);
   fill($('retriever'), o.retrievers);
   fill($('reranker'), o.rerankers);
@@ -346,7 +511,9 @@ async function boot() {
   checkboxes($('layers'), o.layers, o.defaults.index.layers);
   checkboxes($('search_layers'), o.layers, o.defaults.retrieval.search_layers);
   checkboxes($('types'), o.question_types, []);
+  fillModels();
   applyDefaults(o.defaults);
+  decorateExplainers();
 
   const c = o.corpus;
   $('corpus').textContent =
@@ -429,20 +596,16 @@ $('run').onclick = async () => {
 
 $('stopPoll').onclick = () => { boot(); };
 
-const SCORE_CARDS = [
-  ['headline', 'headline', 'weighted retrieval score'],
-  ['recall', 'session recall@k', 'evidence sessions retrieved'],
-  ['quote_recall', 'quote recall', 'verbatim evidence in context'],
-  ['ndcg', 'nDCG@k', 'evidence ranked first'],
-  ['mrr', 'MRR', 'rank of first evidence'],
-  ['precision', 'precision@k', 'signal-to-noise'],
-  ['abstained_correctly', 'abstention', 'unanswerable refused'],
-  ['false_abstention', 'false refusal', 'answerable wrongly refused'],
-  ['latest_state_hit', 'latest state', 'knowledge-update currency'],
-  ['answer_similarity', 'answer sim', 'vs reference answer'],
-  ['key_fact_coverage', 'key facts', 'LLM-judged fact coverage'],
-  ['latency_ms', 'latency ms', 'per question'],
-];
+// The labels, the step each score grades and the text behind its '!' all come
+// from the service (metrics.MEASURES and ragas_eval.RAGAS_MEASURES). Nothing
+// about a metric is written twice, so this panel and the board's cannot end up
+// explaining different things.
+const measures = () => OPTIONS.metrics || [];
+const measureOf = (key) => measures().find((m) => m.key === key)
+  || { key, label: key, short: '', step: '' };
+const measureWhy = (key) =>
+  `<button type="button" class="why" data-topic="metric.${key}" `
+  + `aria-label="What is ${escapeHtml(measureOf(key).label)}?">!</button>`;
 
 function renderResult(result) {
   const s = result.summary.overall;
@@ -451,13 +614,16 @@ function renderResult(result) {
     `${result.index.chunks} chunks (${result.index.collection})` +
     (result.index.reused ? ' reused' : '');
   $('notes').innerHTML = (result.notes || []).map((n) => `<div class="note">${n}</div>`).join('');
-  $('scores').innerHTML = SCORE_CARDS.filter(([key]) => s[key] !== null && s[key] !== undefined)
-    .map(([key, title, sub]) => {
-      const v = s[key];
-      const isRate = key !== 'latency_ms';
+  $('scores').innerHTML = measures()
+    .filter((m) => s[m.key] !== null && s[m.key] !== undefined)
+    .map((m) => {
+      const v = s[m.key];
+      const isRate = m.key !== 'latency_ms';
       const bar = isRate ? `<div class="bar"><i style="width:${Math.max(0, Math.min(1, v)) * 100}%"></i></div>` : '';
-      return `<div class="score"><span>${title}</span><b>${isRate ? fmt(v) : Math.round(v)}</b>
-        <span class="muted">${sub}</span>${bar}</div>`;
+      return `<div class="score"${m.step ? ` data-step="${m.step}"` : ''}>
+        <span>${escapeHtml(m.label)}${measureWhy(m.key)}</span>
+        <b>${isRate ? fmt(v) : Math.round(v)}</b>
+        <span class="muted">${escapeHtml(m.short)}</span>${bar}</div>`;
     }).join('');
 
   const t = result.summary.by_type;
@@ -470,7 +636,12 @@ function renderResult(result) {
   const r = result.ragas || {};
   const metrics = r.metrics || {};
   $('ragas').innerHTML = Object.keys(metrics).length
-    ? table(['metric', 'score'], Object.entries(metrics).map(([k, v]) => [k, fmt(v)])) +
+    // Wrapped in a span on purpose: the explainer is inserted after the button's
+    // parent, and a <p> placed directly after a <td> would be hoisted out of the
+    // table by the parser.
+    ? table(['metric', 'score'], Object.entries(metrics).map(([k, v]) =>
+      [`<span class="measure">${escapeHtml(measureOf(k).label)}`
+       + `${measureWhy(k)}</span>`, fmt(v)])) +
       `<div class="muted" style="font-size:.7rem">mode ${r.mode} · ${r.n_samples} samples · ${r.skipped} skipped</div>` +
       (r.notes || []).map((n) => `<div class="note">${n}</div>`).join('')
     : `<div class="muted">no RAGAS scores${(r.notes || []).length ? ': ' + r.notes.join('; ') : ''}</div>`;
@@ -529,7 +700,10 @@ async function loadBoard() {
     runs.map((r) => {
       const i = r.config.index, q = r.config.retrieval, s = r.summary.overall || {};
       return [`<a href="#" onclick="showRun('${r.run_id}');return false">${r.run_id}</a>`,
-        r.label, i.chunker + (i.contextual ? '+ctx' : ''), i.embedder,
+        r.label, i.chunker + (i.contextual ? '+ctx' : ''),
+        // The model, not just the kind: two "fastembed" rows can be two entirely
+        // different representations, and the row has to say which one it was.
+        i.embedder + (i.embed_model ? '·' + i.embed_model.split('/').pop() : ''),
         q.retriever, q.reranker, (i.layers || []).join('+'), r.n_questions,
         fmt(s.headline), fmt(s.recall), fmt(s.quote_recall), fmt(s.ndcg),
         fmt(s.abstained_correctly), fmt((r.ragas || {}).non_llm_context_recall),
