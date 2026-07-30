@@ -6,7 +6,11 @@ import httpx
 from .base import Tool
 
 COLUMNS = ['inbox', 'in-progress', 'answered']
-TYPES = ['question', 'problem', 'task', 'idea', 'plan']
+TYPES = ['question', 'problem', 'task', 'idea', 'plan', 'habit']
+HABIT_FREQS = ['daily', 'weekly', 'monthly', 'yearly']
+# A habit's cadence travels with the proposal; its *history* deliberately does
+# not. There is no tool for ticking a habit — logging a repetition is the user's
+# act, and a record an agent could write into is not a record of anything.
 # Categories are a user-defined registry (add/remove in the app, stored by the
 # Node server) — so 'category' is a plain string here, validated server-side:
 # an id the registry doesn't know is stored as '' (uncategorized), never an error.
@@ -63,12 +67,18 @@ def make_board_tools(client: BoardClient) -> list[Tool]:
 
     def create_question(title: str, notes: str = '', type: str = 'question',
                         category: str = '', column_id: str = 'inbox',
-                        tags: list | None = None) -> dict:
+                        tags: list | None = None, frequency: str = '',
+                        times_per_period: int = 1) -> dict:
         """Propose a card. The user approves it before it joins the board, so
         this does NOT put anything on the board by itself."""
-        proposal = client.create_proposal(
-            {'title': title, 'notes': notes, 'type': type,
-             'category': category, 'columnId': column_id, 'tags': tags or []})
+        card = {'title': title, 'notes': notes, 'type': type,
+                'category': category, 'columnId': column_id, 'tags': tags or []}
+        # A cadence only means something on a habit; sending one with a question
+        # would leave a dormant "2× per day" on a card nobody repeats.
+        if type == 'habit':
+            card['habitFreq'] = frequency or 'daily'
+            card['habitCount'] = times_per_period
+        proposal = client.create_proposal(card)
         # `pending` tells the model the card is not on the board yet, so it
         # reports a proposal instead of claiming it added something.
         return {**_brief(proposal), 'pending': True}
@@ -93,6 +103,9 @@ def make_board_tools(client: BoardClient) -> list[Tool]:
 
     enum = {'column': {'type': 'string', 'enum': COLUMNS},
             'card_type': {'type': 'string', 'enum': TYPES},
+            'frequency': {'type': 'string', 'enum': HABIT_FREQS,
+                          'description': 'habits only: which calendar period the '
+                                         'count applies to'},
             'category': {'type': 'string',
                          'description': "a category id from the user's own registry "
                                         "(e.g. work, love, health — list_questions shows "
@@ -106,15 +119,22 @@ def make_board_tools(client: BoardClient) -> list[Tool]:
               'required': []},
              list_questions),
         Tool('create_question',
-             'Propose a new card (question, problem, task, idea or plan). The user '
-             'must approve it before it appears on the board, so tell them you have '
-             'proposed it — never claim it was added.',
+             'Propose a new card (question, problem, task, idea, plan or habit). A '
+             'habit is something repeated on a schedule — give it a frequency and '
+             'how many times per period. The user must approve the card before it '
+             'appears on the board, so tell them you have proposed it — never claim '
+             'it was added.',
              {'type': 'object', 'properties': {
                  'title': {'type': 'string', 'description': "the card's text"},
                  'notes': {'type': 'string'},
                  'type': enum['card_type'],
                  'category': enum['category'],
                  'column_id': enum['column'],
+                 'frequency': enum['frequency'],
+                 'times_per_period': {
+                     'type': 'integer',
+                     'description': 'habits only: repetitions per period, 1-99 '
+                                    '(2 with frequency "daily" means twice a day)'},
                  'tags': {'type': 'array', 'items': {'type': 'string'}}},
               'required': ['title']},
              create_question),
