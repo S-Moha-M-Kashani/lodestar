@@ -112,6 +112,9 @@
          margin: .4rem 0; background: #fff; }
   .ctx .meta { font-size: .7rem; color: var(--ink-soft); }
   .muted { color: var(--ink-soft); }
+  /* Attached to the score it qualifies, quieter but never dropped. */
+  .stderr { font-size: .72em; font-weight: 400; color: var(--ink-soft);
+            white-space: nowrap; }
   .note { border-left: 3px solid var(--rule-red); padding: .2rem .5rem;
           font-size: .74rem; background: #fff8f2; margin: .25rem 0; }
   progress { width: 100%; height: 6px; }
@@ -682,6 +685,7 @@ $('ask').onclick = async () => {
       out.contexts.map((c) => `<div class="ctx">
           <div class="meta">${c.chunk_id} · ${c.layer} · ${c.date} · score ${fmt(c.score)} ·
             ${Object.entries(c.stages).map(([k, v]) => k + ' ' + fmt(v, 2)).join(' · ')}
+            ${c.habit ? ' · habit ' + c.habit : ''}
             ${c.expanded_from ? ' · expanded from ' + c.expanded_from : ''}</div>
           <div class="fa">${escapeHtml(c.text).replace(/\n/g, '<br>')}</div></div>`).join('');
   } catch (e) { $('queryOut').innerHTML = `<div class="note">${e.message}</div>`; }
@@ -694,19 +698,40 @@ function escapeHtml(s) {
 async function loadBoard() {
   const { runs } = await api('/api/runs');
   if (!runs.length) { $('board').innerHTML = '<div class="muted">no runs yet</div>'; return; }
+  // Ranked by the RAGAS decision score, because that is the number the
+  // architecture is chosen by. Rows it could not be measured on — offline runs,
+  // runs recorded before the score existed — sort to the bottom rather than
+  // being dropped: an unranked run is still a measurement.
+  const ranked = runs.slice().sort((a, b) => {
+    const x = a.ragas_decision, y = b.ragas_decision;
+    if (x === y || (x == null && y == null)) return 0;
+    if (x == null) return 1;
+    if (y == null) return -1;
+    return y - x;
+  });
   $('board').innerHTML = table(
     ['run', 'label', 'chunker', 'embedder', 'retriever', 'reranker', 'layers',
-      'n', 'headline', 'recall', 'quote', 'nDCG', 'abstain', 'ragas ctx recall', 's'],
-    runs.map((r) => {
+      'n', 'ragas_decision ▼', 'faith', 'ans rel', 'ctx prec', 'ctx recall',
+      'headline', 'recall', 'quote', 'nDCG', 'abstain', 's'],
+    ranked.map((r) => {
       const i = r.config.index, q = r.config.retrieval, s = r.summary.overall || {};
+      const g = r.ragas || {};
       return [`<a href="#" onclick="showRun('${r.run_id}');return false">${r.run_id}</a>`,
         r.label, i.chunker + (i.contextual ? '+ctx' : ''),
         // The model, not just the kind: two "fastembed" rows can be two entirely
         // different representations, and the row has to say which one it was.
         i.embedder + (i.embed_model ? '·' + i.embed_model.split('/').pop() : ''),
         q.retriever, q.reranker, (i.layers || []).join('+'), r.n_questions,
+        // The deciding score first, then its four constituents, so a row can be
+        // checked rather than trusted.
+        // With its standard error, where there is one. Candidates in a sweep can
+        // sit inside each other's error bars, and a bare mean cannot say so.
+        `<b>${fmt(r.ragas_decision)}</b>` + (r.ragas_decision_stderr != null
+          ? ` <span class="stderr">± ${fmt(r.ragas_decision_stderr)}</span>` : ''),
+        fmt(g.faithfulness), fmt(g.answer_relevancy),
+        fmt(g.llm_context_precision_with_reference), fmt(g.context_recall),
         fmt(s.headline), fmt(s.recall), fmt(s.quote_recall), fmt(s.ndcg),
-        fmt(s.abstained_correctly), fmt((r.ragas || {}).non_llm_context_recall),
+        fmt(s.abstained_correctly),
         Math.round(r.seconds)];
     }));
 }

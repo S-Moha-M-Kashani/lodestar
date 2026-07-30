@@ -91,11 +91,22 @@ class RunResult:
                 'started_at': self.started_at, 'notes': self.notes}
 
     def brief(self) -> dict:
-        """Leaderboard row — no per-question detail."""
+        """Leaderboard row — no per-question detail.
+
+        `ragas_decision` is carried explicitly rather than left for the frontend
+        to recompute from `ragas`: it is the number the architecture was chosen
+        by, and a leaderboard that ranks on a figure it does not store cannot be
+        checked against the run it came from."""
         return {'run_id': self.run_id, 'label': self.label,
                 'started_at': self.started_at, 'seconds': self.seconds,
                 'config': self.config, 'summary': self.summary,
                 'ragas': self.ragas.get('metrics', {}),
+                'ragas_decision': self.ragas.get('decision'),
+                # The error travels with the mean it qualifies. These candidates
+                # sit within 0.01 of one another, so a row without it cannot say
+                # whether it beat the row below it.
+                'ragas_decision_stderr': (self.ragas.get('decision_spread')
+                                          or {}).get('stderr'),
                 'n_questions': self.summary.get('n_questions', 0)}
 
 
@@ -107,11 +118,18 @@ def select_questions(ground_truth: dict, types: list[str] | None = None,
         questions = [q for q in questions if q['type'] in set(types)]
     if difficulty:
         questions = [q for q in questions if q['difficulty'] in set(difficulty)]
-    if limit:
-        # Stride rather than truncate: the set is sorted by type, so the first N
+    if limit and limit < len(questions):
+        # Stride rather than truncate: the set is grouped by type, so the first N
         # would be twenty single-hop questions and nothing else.
-        step = max(1, len(questions) // limit)
-        questions = questions[::step][:limit]
+        #
+        # Spread across the *whole* set rather than `questions[::step][:limit]`,
+        # which drops a tail whenever the count is not a multiple of the limit —
+        # at 112 questions and a limit of 20 the step is 5, so it stopped at
+        # index 95 and the last sixteen were unreachable. Since new question
+        # types are appended, that silently excluded the newest type from every
+        # limited run.
+        total = len(questions)
+        questions = [questions[i * total // limit] for i in range(limit)]
     return questions
 
 
@@ -124,7 +142,12 @@ def run_eval(registry: IndexRegistry, ground_truth: dict, cfg: LabConfig,
     if problems:
         raise ValueError('; '.join(problems))
     started = time.time()
-    run_id = time.strftime('%Y%m%d-%H%M%S') + '-' + cfg.index.fingerprint()[:6]
+    # Both stamps come from the one clock read, so a field named for the start
+    # cannot end up holding the finish — a ten-minute run whose start time is its
+    # end time makes the leaderboard's timeline unreconstructable.
+    clock = time.localtime(started)
+    started_at = time.strftime('%Y-%m-%d %H:%M:%S', clock)
+    run_id = time.strftime('%Y%m%d-%H%M%S', clock) + '-' + cfg.index.fingerprint()[:6]
     report = lambda stage, fraction: progress(stage, fraction) if progress else None
 
     index = registry.get(cfg.index, progress=lambda stage, f: report(stage, f * 0.4))
@@ -208,7 +231,7 @@ def run_eval(registry: IndexRegistry, ground_truth: dict, cfg: LabConfig,
                               'reused': index.stats.reused},
                        summary=summary, rows=rows, ragas=ragas_report,
                        seconds=round(time.time() - started, 2),
-                       started_at=time.strftime('%Y-%m-%d %H:%M:%S'), notes=notes)
+                       started_at=started_at, notes=notes)
     save_run(result)
     return result
 
@@ -234,11 +257,21 @@ def list_runs(limit: int = 50) -> list[dict]:
             continue
         if 'run_id' not in data:
             continue        # not a run: never assume a directory holds only ours
+        ragas = data.get('ragas') or {}
         out.append({'run_id': data['run_id'], 'label': data.get('label', ''),
                     'started_at': data.get('started_at', ''),
                     'seconds': data.get('seconds', 0), 'config': data.get('config'),
                     'summary': data.get('summary', {}),
-                    'ragas': (data.get('ragas') or {}).get('metrics', {}),
+                    'ragas': ragas.get('metrics', {}),
+                    # Absent on every run recorded before the score existed, and
+                    # None on every run that could not measure all four — both
+                    # read as "this row was not ranked", which is the truth.
+                    'ragas_decision': ragas.get('decision'),
+                    # None on every run recorded before the spread existed: those
+                    # per-question composites are not recoverable, and `± 0`
+                    # would claim more precision than the rows that measured it.
+                    'ragas_decision_stderr': (ragas.get('decision_spread')
+                                              or {}).get('stderr'),
                     'n_questions': (data.get('summary') or {}).get('n_questions', 0)})
     return out
 

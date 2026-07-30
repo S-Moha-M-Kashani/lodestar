@@ -91,7 +91,7 @@ EMBEDDERS = ('ascii-hash', 'token-hash', 'char-hash', 'fastembed',
              'sentence-transformers', 'openai')
 MODEL_EMBEDDERS = ('fastembed', 'sentence-transformers', 'openai')
 SUMMARIZERS = ('extractive', 'llm')
-LAYERS = ('chunk', 'session', 'month', 'thread', 'commitment')
+LAYERS = ('chunk', 'session', 'month', 'thread', 'commitment', 'habit')
 RETRIEVERS = ('dense', 'bm25', 'hybrid-rrf')
 RERANKERS = ('none', 'lexical', 'recency', 'agentic', 'cross-encoder', 'llm')
 GRADERS = ('none', 'lexical', 'llm')
@@ -329,7 +329,12 @@ HELP = {
     'index.layers': (
         'Which rollups get stored beside the raw chunks. Layers are additive on '
         'purpose: raw text always stays, because replacing it with a summary '
-        'makes "how many times did I say X" permanently unanswerable.'),
+        'makes "how many times did I say X" permanently unanswerable. '
+        '"session" and "month" digest time, "thread" digests one storyline, '
+        '"commitment" collects every promise-shaped sentence, and "habit" is an '
+        'adherence ledger per tracked habit — the diary side of the board\'s '
+        'punch card, stating each tally against its target so "did I keep it" '
+        'is one retrieval rather than counting across fifty chunks.'),
     'retrieval.retriever': (
         '"dense" searches vectors (meaning), "bm25" searches words (exact names, '
         'numbers, rare terms), "hybrid-rrf" runs both and fuses the two rankings '

@@ -6,6 +6,7 @@ the real one-year fixture rather than a toy corpus, because the properties worth
 asserting — that a Farsi question finds its evidence session, that the current
 production embedder finds nothing at all — only exist at that scale.
 """
+import json
 import os
 from dataclasses import replace
 
@@ -16,7 +17,7 @@ from lodestar_brain.llm.fake import FakeChat
 
 from .raglab import (chunking, config, corpus, embedding, evaluate, explain,
                      metrics, models, pipeline, query, retrieval, summarize,
-                     textnorm)
+                     sweep, textnorm)
 from .raglab.config import (EMBEDDERS, GenerationConfig, IndexConfig, LabConfig,
                             LabSettings, RetrievalConfig)
 from .raglab.index import IndexRegistry, LabIndex
@@ -242,6 +243,175 @@ def test_summary_cache_is_keyed_by_content(tmp_path, session):
         == 'خلاصه'
     edited = dict(session, messages=[dict(session['messages'][0], content='عوض شد')])
     assert cache.get('extractive', edited) is None
+
+
+# --- habits: the card you repeat instead of finish -------------------------
+# The board grew a habit type — a card carrying `habitCount` repetitions per
+# `habitFreq` period and a `habitHistory` of the completions themselves. Diary
+# memory has to be able to answer questions about it, and none of the existing
+# layers can: "how many times did I go to the gym in تیر" is an aggregation over
+# fifty sessions, and "am I still doing German" is a knowledge-update question
+# whose answer is an *absence* of recent entries. So the corpus declares its
+# habits the way a board card does, and the lab indexes an adherence ledger
+# beside the raw text.
+
+HABIT_FREQS = ('daily', 'weekly', 'monthly', 'yearly')
+
+
+def habit_period(freq: str, day: str) -> str:
+    """The board's period id for a date, reimplemented from the spec rather than
+    imported — app.js is the other implementation, and a test that shares code
+    with the thing it checks cannot catch the two drifting apart."""
+    from datetime import date
+    d = date.fromisoformat(day)
+    if freq == 'yearly':
+        return f'{d.year}'
+    if freq == 'monthly':
+        return f'{d.year}-{d.month:02d}'
+    if freq == 'weekly':
+        year, week, _ = d.isocalendar()
+        return f'{year}-W{week:02d}'
+    return d.isoformat()
+
+
+def test_the_corpus_declares_its_habits_the_way_a_board_card_does(diary):
+    habits = diary['habits']
+    assert habits, 'the corpus must carry the habits the diarist tracks'
+    for slug, habit in habits.items():
+        assert habit['freq'] in HABIT_FREQS, slug
+        assert habit['count'] >= 1, slug
+        assert habit['title_fa'], slug
+        assert isinstance(habit['times'], list), slug
+        assert isinstance(habit['history'], dict), slug
+    # All four board cadences are not required, but a corpus that only ever
+    # measured weekly habits would leave the monthly and daily period arithmetic
+    # untested by every run.
+    assert {h['freq'] for h in habits.values()} >= {'daily', 'weekly', 'monthly'}
+
+
+def test_every_habit_completion_sits_in_the_period_it_is_filed_under(diary):
+    """`habitHistory` is bucketed by period id, so a date filed under the wrong
+    bucket would make every count wrong in a way no other assertion notices."""
+    for slug, habit in diary['habits'].items():
+        for period, days in habit['history'].items():
+            for day in days:
+                assert habit_period(habit['freq'], day) == period, f'{slug} {day}'
+
+
+def test_a_habit_is_never_punched_more_often_than_its_period_asks(diary):
+    """The punch strip has exactly `count` boxes, so a history with more
+    completions than that in one period could not have come from the board."""
+    for slug, habit in diary['habits'].items():
+        for period, days in habit['history'].items():
+            assert len(days) <= habit['count'], f'{slug} {period}'
+            assert len(days) == len(set(days)), f'{slug} {period} has a repeat'
+
+
+def test_the_habit_sessions_joined_the_corpus_without_disturbing_it(diary):
+    """Additive on purpose: the habit sessions were appended on dates the corpus
+    had not used, so every pre-existing session — and therefore every cached
+    summary and every earlier leaderboard row — stays exactly as it was."""
+    sessions = diary['sessions']
+    ids = [s['session_id'] for s in sessions]
+    assert len(ids) == len(set(ids)), 'a session id was reused'
+    assert ids == sorted(ids), 'the corpus must stay chronological'
+    habit_sessions = [s for s in sessions if 'habit-tracking' in s['recurring_threads']]
+    assert len(habit_sessions) >= 8
+    period = diary['meta']['period']
+    for s in habit_sessions:
+        assert period['from'] <= s['date'] <= period['to'], s['session_id']
+
+
+def test_the_habit_storyline_is_described_like_every_other_thread(diary):
+    """thread_layer builds its digest title from this description; a thread with
+    no entry gets an empty one, which reads as a bug in the digest."""
+    assert diary['threads']['habit-tracking']
+
+
+def test_habit_layer_is_a_ledger_of_the_repeated_practice(diary):
+    chunks = summarize.habit_layer(diary['sessions'], diary['habits'])
+    assert chunks
+    assert all(c.layer == 'habit' for c in chunks)
+    text = '\n'.join(c.text for c in chunks)
+    assert 'باشگاه' in text, 'the gym habit is the corpus\'s signature one'
+
+
+def test_the_habit_ledger_states_the_target_next_to_the_tally(diary):
+    """A count with no target is not an answer: "18 times" only means something
+    beside "3 per week". This is what makes "did I keep it" answerable at all."""
+    chunks = summarize.habit_layer(diary['sessions'], diary['habits'])
+    gym = next(c for c in chunks if c.metadata()['habit'] == 'gym')
+    target = diary['habits']['gym']
+    assert str(target['count']) in gym.text
+    assert target['title_fa'] in gym.text
+
+
+def test_the_habit_ledger_carries_its_slug_as_filterable_metadata(diary):
+    """The one new metadata field. Chroma filters on scalars, so it is a string,
+    and it is what lets a retrieval ask for one habit's ledger by name."""
+    chunks = summarize.habit_layer(diary['sessions'], diary['habits'])
+    slugs = {c.metadata()['habit'] for c in chunks}
+    assert slugs == set(diary['habits']), 'every habit needs a ledger'
+    for chunk in chunks:
+        assert isinstance(chunk.metadata()['habit'], str)
+
+
+def test_the_habit_ledger_spans_the_dates_it_covers(diary):
+    """span_from/span_to are what the Farsi time filter compares against, so a
+    ledger with a zero span is invisible to every scoped question."""
+    for chunk in summarize.habit_layer(diary['sessions'], diary['habits']):
+        assert chunk.span_from <= chunk.span_to
+        assert chunk.span_from > 20250000
+
+
+def test_every_chunk_reports_a_habit_field_even_when_it_has_none(session):
+    """Chroma metadata is a fixed shape per collection in practice: a field that
+    only some rows carry turns a `where` clause into a silent partial scan."""
+    chunk = chunking.chunk_session(session, IndexConfig(chunker='session'),
+                                   None, '')[0]
+    assert chunk.metadata()['habit'] == ''
+
+
+def test_habit_is_an_additive_layer_like_every_other_rollup():
+    """Raw text always stays. A habit ledger that *replaced* the sessions it
+    summarises would make "what did I say the day I quit" unanswerable."""
+    assert config.LAYERS[:5] == ('chunk', 'session', 'month', 'thread',
+                                 'commitment')
+    assert 'habit' in config.LAYERS
+
+
+def test_the_habit_layer_is_indexed_and_searchable(registry):
+    index = registry.get(IndexConfig(chunker='session', embedder='char-hash',
+                                    layers=('chunk', 'habit')))
+    assert index.stats.by_layer['habit'] >= 4
+    outcome = pipeline.retrieve(
+        index, RetrievalConfig(k=5, search_layers=('habit',), retriever='bm25'),
+        'باشگاه هفته‌ای چند بار؟', '2026-07-28')
+    assert outcome.contexts
+    assert {c.layer for c in outcome.contexts} == {'habit'}
+
+
+def test_habit_questions_cite_verbatim_evidence_like_the_rest_of_the_set(
+        diary, ground_truth):
+    """The evidence quote is what quote-recall measures survival of, so a quote
+    that is not literally in its cited message silently scores every config down."""
+    sessions = corpus.sessions_by_id(diary)
+    habit_questions = [q for q in ground_truth['questions']
+                       if q['type'] == 'habit']
+    assert len(habit_questions) >= 6
+    for question in habit_questions:
+        assert question['answer_fa'] and question['key_facts'], question['id']
+        for ev in question['evidence']:
+            messages = sessions[ev['session_id']]['messages']
+            cited = ' '.join(messages[i]['content'] for i in ev['message_indices'])
+            assert ev['quote'] in cited, f"{question['id']} {ev['session_id']}"
+
+
+def test_every_question_type_is_one_the_report_breaks_down(ground_truth):
+    """metrics.aggregate walks TYPES, so a question type missing from it is
+    dropped from the per-type table without any error — the breakdown just
+    quietly stops covering part of the set."""
+    assert {q['type'] for q in ground_truth['questions']} <= set(metrics.TYPES)
 
 
 # --- query understanding ---------------------------------------------------
@@ -545,10 +715,58 @@ def test_run_eval_scores_a_slice_end_to_end(registry, ground_truth, tmp_path,
     assert all('answer' in row for row in result.rows)
 
 
+def test_started_at_is_when_the_run_started(registry, ground_truth, tmp_path,
+                                            monkeypatch):
+    """`started_at` must agree with the run id, which is stamped at the start.
+
+    The document that cites these runs prints `started_at` as the time the
+    experiment began; a field named for the start that actually holds the finish
+    turns a 10-minute run into a timeline nobody can reconstruct."""
+    monkeypatch.setattr(evaluate, 'RUNS_DIR', tmp_path)
+    cfg = LabConfig(index=IndexConfig(chunker='session', embedder='char-hash',
+                                      layers=('chunk',)),
+                    retrieval=RetrievalConfig(search_layers=('chunk',), k=4),
+                    generation=GenerationConfig(answerer='extractive'))
+    result = evaluate.run_eval(registry, ground_truth, cfg, LAB_SETTINGS,
+                               limit=2, ragas_mode='off')
+    stamp = result.run_id.split('-')[1]                      # HHMMSS
+    assert result.started_at.endswith(f'{stamp[:2]}:{stamp[2:4]}:{stamp[4:]}')
+
+
 def test_select_questions_strides_across_types(ground_truth):
     picked = evaluate.select_questions(ground_truth, limit=10)
     assert len(picked) == 10
     assert len({q['type'] for q in picked}) > 1, 'a limited run must stay diverse'
+
+
+def test_a_limited_run_reaches_the_end_of_the_question_set(ground_truth):
+    """Striding with `questions[::step][:limit]` silently drops a tail whenever
+    the count is not a multiple of the limit: at 112 questions and a limit of 20
+    the step is 5, `::5` yields 23, and truncating to 20 stops at index 95 — so
+    the last 16 questions could never be sampled.
+
+    That is not a rounding detail. The set is grouped by type and the newest type
+    is appended at the end, so the effect is that the most recently added
+    question type is absent from every limited run, and a sweep tuned on those
+    runs is tuned on a corpus that excludes it."""
+    questions = ground_truth['questions']
+    for limit in (5, 10, 20, 25, 40):
+        picked = evaluate.select_questions(ground_truth, limit=limit)
+        assert len(picked) == limit, limit
+        ids = [q['id'] for q in picked]
+        assert len(set(ids)) == limit, f'{limit} produced duplicates'
+        assert ids[0] == questions[0]['id'], limit
+        # The last pick is within one stride of the end, not 16 short of it.
+        stride = -(-len(questions) // limit)          # ceil
+        assert questions.index(picked[-1]) >= len(questions) - stride, limit
+
+
+def test_a_limited_run_covers_the_newest_question_type(ground_truth):
+    """The concrete consequence, asserted on the type that exposed it: habit
+    questions are last in the file, so a limit that cannot reach the end cannot
+    measure habit retrieval at all."""
+    picked = evaluate.select_questions(ground_truth, limit=20)
+    assert any(q['type'] == 'habit' for q in picked)
 
 
 def test_run_eval_rejects_searching_an_unindexed_layer(registry, ground_truth):
@@ -628,6 +846,225 @@ def test_ragas_offline_metrics_score_a_retrieval(index, ground_truth):
     assert report['n_samples'] == 3, report['notes']
     assert 'non_llm_context_recall' in report['metrics']
     assert 0.0 <= report['metrics']['non_llm_context_recall'] <= 1.0
+
+
+# --- the four metrics that decide the architecture -------------------------
+# Everything the lab measures is reported, but only four of them get a vote.
+# They are RAGAS's, they are judged, and between them they cover the two ways a
+# RAG pipeline fails: retrieval that did not fetch what was needed (context
+# precision and recall) and generation that did not stay inside what it fetched
+# (faithfulness, answer relevancy). Our own deterministic metrics are the ones
+# to *debug* with — they cannot be gamed and they never vary — but they grade
+# retrieval almost exclusively, so ranking on them picks a config that finds
+# evidence and says nothing useful about it.
+
+def test_the_deciding_metrics_are_exactly_the_four_chosen_ones():
+    from .raglab import ragas_eval
+    assert ragas_eval.DECISION_METRICS == (
+        'faithfulness', 'answer_relevancy',
+        'llm_context_precision_with_reference', 'context_recall')
+    # Everything else stays measured and reported; it simply does not vote.
+    assert set(ragas_eval.DECISION_METRICS) < set(ragas_eval.LLM_METRICS)
+    assert 'factual_correctness(mode=f1)' not in ragas_eval.DECISION_METRICS
+
+
+def test_the_decision_score_is_the_unweighted_mean_of_those_four():
+    """Unweighted on purpose: any weighting would be a claim about their relative
+    importance that this fixture cannot support, and a hidden thumb on the scale
+    is how a sweep ends up confirming whatever the author already believed."""
+    from .raglab import ragas_eval
+    score = ragas_eval.decision_score({
+        'faithfulness': 1.0, 'answer_relevancy': 0.6,
+        'llm_context_precision_with_reference': 0.4, 'context_recall': 0.0,
+        # Present, reported, and deliberately ignored by the arithmetic.
+        'factual_correctness(mode=f1)': 0.0, 'non_llm_context_recall': 1.0,
+    })
+    assert score == 0.5
+
+
+def test_the_decision_score_is_undefined_unless_all_four_are_present():
+    """A mean over whichever metrics happened to succeed is not comparable
+    between runs: an offline run would score on two metrics and outrank a judged
+    run scored on four."""
+    from .raglab import ragas_eval
+    assert ragas_eval.decision_score({'faithfulness': 1.0}) is None
+    assert ragas_eval.decision_score({}) is None
+    assert ragas_eval.decision_score(
+        {'faithfulness': 1.0, 'answer_relevancy': 1.0,
+         'llm_context_precision_with_reference': 1.0}) is None
+
+
+def test_the_decision_score_carries_its_own_uncertainty():
+    """A ranking of means with no spread cannot say whether it ranked anything.
+
+    The candidates in this sweep land within ~0.01 of each other on 24
+    questions. Whether that is a result or noise is not a matter of opinion, and
+    the leaderboard is the wrong place to leave it unanswered — so the score
+    ships with the standard error of the per-question composite beside it.
+
+    Computed per question and then across questions, not per metric: the four
+    are measured on the same answers and are correlated, and averaging four
+    independent standard errors would understate the real spread."""
+    from .raglab import ragas_eval
+    rows = [{'faithfulness': 1.0, 'answer_relevancy': 1.0,
+             'llm_context_precision_with_reference': 1.0, 'context_recall': 1.0},
+            {'faithfulness': 0.0, 'answer_relevancy': 0.0,
+             'llm_context_precision_with_reference': 0.0, 'context_recall': 0.0}]
+    spread = ragas_eval.decision_spread(rows)
+    assert spread['n'] == 2
+    assert spread['mean'] == 0.5
+    # Two composites at 0 and 1: sd = 0.7071, so SE = sd/sqrt(2) = 0.5.
+    assert spread['stderr'] == 0.5
+
+    # A question missing one of the four has no composite, so it cannot be one.
+    partial = ragas_eval.decision_spread(
+        rows + [{'faithfulness': 1.0, 'answer_relevancy': 1.0}])
+    assert partial['n'] == 2, 'a partial composite is not a sample'
+
+    # One question cannot have a standard error, and must not claim zero.
+    assert ragas_eval.decision_spread(rows[:1])['stderr'] is None
+    assert ragas_eval.decision_spread([])['n'] == 0
+
+
+def test_every_ragas_report_carries_a_spread_even_when_it_measured_nothing():
+    """The key has to exist on every path, because the leaderboard reads it.
+
+    A run that could not measure the four reports `n=0` rather than omitting the
+    field: a missing key would make the frontend fall back to printing the bare
+    mean, which is the presentation this exists to prevent."""
+    from .raglab import ragas_eval
+    report = ragas_eval.run([], LAB_SETTINGS, None, mode='off')
+    assert report['decision_spread'] == {'n': 0, 'mean': None, 'stderr': None}
+
+
+def test_an_offline_ragas_run_reports_no_decision_score(index, ground_truth):
+    """The offline mode cannot measure any of the four, so it must say so rather
+    than produce a number that looks comparable to a judged run's."""
+    pytest.importorskip('ragas')
+    pytest.importorskip('rapidfuzz')
+    from .raglab import ragas_eval
+    questions = [q for q in ground_truth['questions'] if q['answerable']][:2]
+    pairs = [(q, pipeline.retrieve(index, RetrievalConfig(k=5), q['question_fa'],
+                                   q['query_date'])) for q in questions]
+    report = ragas_eval.run(pairs, LAB_SETTINGS, index.embedder, mode='offline')
+    assert report['decision'] is None
+    assert report['decision_metrics'] == list(ragas_eval.DECISION_METRICS)
+
+
+def test_the_decision_score_explains_itself_like_every_other_number():
+    """It is the number the architecture was chosen by, so of everything on the
+    screen it is the one that must not be a bare figure."""
+    keys = {measure['key']: measure for measure in explain.measures()}
+    decision = keys.get('ragas_decision')
+    assert decision, 'the deciding score has no definition'
+    assert decision['formula'] and decision['library'] and decision['help']
+    for name in ('faithfulness', 'answer relevancy', 'context precision',
+                 'context recall'):
+        assert name in decision['help'].lower(), name
+    assert explain.topics()['metric.ragas_decision']
+
+
+def test_the_leaderboard_row_carries_the_deciding_score(index, ground_truth):
+    """A leaderboard that ranks on a number it does not carry cannot be checked
+    against the run it came from."""
+    result = evaluate.RunResult(
+        run_id='x', label='y', config={}, index={},
+        summary={'overall': {}, 'n_questions': 0},
+        ragas={'mode': 'llm', 'metrics': {'faithfulness': 0.8},
+               'decision': 0.75, 'decision_metrics': [],
+               'decision_spread': {'n': 24, 'mean': 0.75, 'stderr': 0.05}})
+    assert result.brief()['ragas_decision'] == 0.75
+    # The error travels with the mean, or the row it lands in cannot say whether
+    # it beat the row below it.
+    assert result.brief()['ragas_decision_stderr'] == 0.05
+
+
+def test_a_row_recorded_before_the_spread_existed_reports_no_error(tmp_path,
+                                                                  monkeypatch):
+    """Older runs have no per-question composites to recover, so the row says
+    so — an absent error must not be rendered as `± 0`, which would claim the
+    run was measured more precisely than the ones that carry a real number."""
+    monkeypatch.setattr(evaluate, 'RUNS_DIR', tmp_path)
+    (tmp_path / '20260101-000000-abcdef.json').write_text(json.dumps({
+        'run_id': '20260101-000000-abcdef', 'label': 'old',
+        'summary': {'n_questions': 24, 'overall': {}},
+        'ragas': {'metrics': {}, 'decision': 0.6}}), encoding='utf-8')
+    row = evaluate.list_runs()[0]
+    assert row['ragas_decision'] == 0.6
+    assert row['ragas_decision_stderr'] is None
+
+
+# --- the sweep that produces the leaderboard --------------------------------
+# The sweep spends hours of judged model calls, so everything it can get wrong
+# silently is worth an assertion: a row that is not comparable to the others, a
+# row that cannot be ranked at all, and a row that raises after 40 minutes.
+
+def test_every_candidate_is_selected_by_a_unique_letter():
+    """`--only A F` and `--final G` select on `label.split()[0]`.
+
+    Two candidates sharing a letter means `--final` silently re-runs whichever
+    comes first — and the run it writes carries the *other* one's label."""
+    letters = [c.label.split()[0] for c in sweep.candidates()]
+    assert len(letters) == len(set(letters)), letters
+    assert all(len(letter) == 1 for letter in letters), letters
+
+
+def test_every_candidate_holds_the_embedder_and_both_models_fixed():
+    """The sweep's claim is that each row changes one thing.
+
+    The embedder decides whether anything is measurable at all on a Farsi
+    corpus, and the two models decide what the numbers mean; a row that moved
+    one of them would be incomparable to every other row while looking like a
+    knob result."""
+    for cfg in sweep.candidates():
+        assert cfg.index.embedder == sweep.EMBEDDER, cfg.label
+        assert cfg.index.embed_model == sweep.EMBED_MODEL, cfg.label
+        assert cfg.generation.model == sweep.ANSWER_MODEL, cfg.label
+        assert cfg.generation.ragas_model == sweep.JUDGE_MODEL, cfg.label
+        assert cfg.generation.model != cfg.generation.ragas_model, (
+            'a model grading its own answer is not evidence')
+
+
+def test_every_candidate_generates_an_answer_so_it_can_be_ranked():
+    """All four deciding metrics need a response. A candidate that retrieved
+    without answering would score `None`, drop to the bottom of the ranking as
+    if it had lost, and cost a full run to say nothing."""
+    assert all(c.generation.answerer == 'llm' for c in sweep.candidates())
+
+
+def test_every_candidate_validates_before_the_sweep_starts():
+    """`run_eval` raises on an invalid config. Candidate H is the eighth row, so
+    a typo there would surface after an hour of paid judging."""
+    for cfg in sweep.candidates():
+        assert cfg.validate() == [], cfg.label
+
+
+def test_no_two_candidates_are_the_same_configuration():
+    """A duplicated row costs ten minutes and reads as reproducibility."""
+    seen = {}
+    for cfg in sweep.candidates():
+        key = json.dumps(replace(cfg, label='').to_dict(), sort_keys=True)
+        assert key not in seen, f'{cfg.label} duplicates {seen.get(key)}'
+        seen[key] = cfg.label
+
+
+def test_the_final_run_refuses_to_start_without_a_judge(monkeypatch, tmp_path):
+    """The final run is the one whose numbers go in the document.
+
+    Without a key the LLM stages fall back to the offline fake, so it would
+    produce a full leaderboard row of meaningless scores under the winner's
+    name — the worst output of the two, because the sweep that chose it did
+    refuse.
+
+    `RUNS_DIR` is redirected as well, and that is not belt-and-braces: writing
+    this test found that the unguarded `final()` had already dropped a
+    112-question fake-provider run into the real `.runs/`, labelled `WINNER`,
+    where it sat in the leaderboard beside the judged rows."""
+    monkeypatch.setattr(sweep, 'load_lab_settings', lambda: LAB_SETTINGS)
+    monkeypatch.setattr(evaluate, 'RUNS_DIR', tmp_path)
+    with pytest.raises(SystemExit):
+        sweep.final(None, 1, 'A')
+    assert not list(tmp_path.iterdir()), 'refusing must happen before any run'
 
 
 # --- picking a model per task ----------------------------------------------
@@ -1367,10 +1804,14 @@ def test_a_ragas_metric_carries_ragas_own_class_definition_and_formula():
 
 def test_a_judged_metric_says_which_model_judged_it():
     """A number produced by a model is a number with variance, and the reader has
-    to know which model — the same reason every stage carries its own dropdown."""
+    to know which model — the same reason every stage carries its own dropdown.
+
+    The decision score is judged too, being a mean of four judged metrics: a
+    composite must not launder its inputs' variance by being an average."""
     from .raglab import ragas_eval
+    judged = set(ragas_eval.LLM_METRICS) | {'ragas_decision'}
     for measure in ragas_eval.RAGAS_MEASURES:
-        if measure.key in ragas_eval.LLM_METRICS:
+        if measure.key in judged:
             assert 'RAGAS judge' in measure.library, measure.key
         else:
             assert 'no model' in measure.library.lower(), measure.key
@@ -1436,6 +1877,143 @@ def test_a_model_role_is_serialised_with_its_step():
     assert role.as_dict()['step'] == 'retrieval'
 
 
+# --- exporting a run for reading ------------------------------------------
+# A leaderboard says which architecture won. It cannot show what the pipeline
+# did to any individual question, which is what you need to argue about whether
+# the win is real. The export writes that out from a finished run, and only from
+# what the run stored — inventing the missing parts is the one thing it must not
+# do.
+
+RUN_FIXTURE = {
+    'run_id': '20260101-010101-abc123', 'label': 'D wider context k=12',
+    'seconds': 671.68, 'started_at': '2026-01-01 01:01:01',
+    'config': {'index': {'chunker': 'semantic-drift', 'embedder': 'x',
+                         'embed_model': 'y', 'layers': ['chunk', 'habit']},
+               'retrieval': {'k': 12, 'retriever': 'hybrid-rrf',
+                             'reranker': 'lexical'},
+               'generation': {'answerer': 'llm', 'model': 'm'}},
+    'index': {'chunks': 732, 'by_layer': {'chunk': 700, 'habit': 5},
+              'embed_dim': 1024},
+    'summary': {'n_questions': 3, 'overall': {}, 'by_type': {}},
+    'ragas': {'mode': 'llm', 'metrics': {'faithfulness': 0.77},
+              'decision': 0.6501, 'n_samples': 3,
+              'decision_spread': {'n': 3, 'mean': 0.65, 'stderr': 0.04}},
+    'rows': [
+        {'id': 'q-hb-001', 'type': 'habit', 'difficulty': 'medium',
+         'answerable': True, 'abstained': False, 'hit': 1.0, 'recall': 1.0,
+         'quote_recall': 1.0, 'ndcg': 0.63, 'precision': 0.2, 'mrr': 0.5,
+         'n_contexts': 8, 'context_chars': 4689, 'latency_ms': 21140.4,
+         'layers': ['chunk', 'habit'], 'time_scope': None,
+         'retrieved_sessions': ['2026-05-16-a', '2025-11-08-a'],
+         'answer': 'هفته‌ای سه بار.', 'answer_similarity': 0.31,
+         'answer_token_f1': 0.36},
+        {'id': 'q-ab-001', 'type': 'abstention', 'difficulty': 'hard',
+         'answerable': False, 'abstained': True, 'hit': None, 'recall': None,
+         'quote_recall': None, 'n_contexts': 8, 'context_chars': 100,
+         'latency_ms': 900.0, 'layers': ['chunk'], 'time_scope': None,
+         'retrieved_sessions': [], 'answer': 'پیدا نکردم.'},
+        {'id': 'q-sh-001', 'type': 'single-hop', 'difficulty': 'easy',
+         'answerable': True, 'abstained': False, 'hit': 0.0, 'recall': 0.0,
+         'quote_recall': 0.0, 'n_contexts': 8, 'context_chars': 300,
+         'latency_ms': 800.0, 'layers': ['chunk'], 'time_scope': 'تیر',
+         'retrieved_sessions': ['2025-01-01-a'], 'answer': 'نمی‌دانم.'},
+    ],
+}
+
+
+def test_the_difficulty_table_counts_answers_not_just_retrieval():
+    """"What share of the hard questions came out right" needs a definition, and
+    the only per-question one this data supports is evidence-based: the run files
+    store no judged grade per question, so a "correct" column implying a verdict
+    would be an invention.
+
+    An answerable question counts when the pipeline did not refuse *and* reached
+    a gold session; an unanswerable one counts when it did refuse. Refusing a
+    question that had an answer and answering one that did not are the two
+    failures that matter, and both are visible here."""
+    from .raglab import export
+    table = export.difficulty_rates(RUN_FIXTURE['rows'])
+    assert [row['difficulty'] for row in table] == ['easy', 'medium', 'hard']
+    easy, medium, hard = table
+    assert easy['n'] == 1 and easy['answered'] == 0.0     # retrieved nothing gold
+    assert medium['n'] == 1 and medium['answered'] == 1.0
+    assert hard['n'] == 1 and hard['answered'] == 1.0     # correctly refused
+    # The share is a share of that difficulty, so it needs the count beside it:
+    # one hard question at 100% is not a finding.
+    assert all('n' in row for row in table)
+
+
+def test_the_difficulty_table_reports_evidence_separately_from_answers():
+    """Retrieval reaching the evidence and the answer using it are different
+    failures, and collapsing them hides which half to fix."""
+    from .raglab import export
+    rows = export.difficulty_rates(RUN_FIXTURE['rows'])
+    easy = rows[0]
+    assert easy['evidence_found'] == 0.0
+    assert easy['quotes_in_context'] == 0.0
+    # An unanswerable question has no evidence to find, so it must not be
+    # averaged in as a miss.
+    assert rows[2]['evidence_found'] is None
+
+
+def test_a_question_page_shows_reference_retrieval_response_and_grades(ground_truth):
+    """The four things you need to judge one question, in one file."""
+    from .raglab import export
+    question = next(q for q in ground_truth['questions'] if q['id'] == 'q-sh-001')
+    row = next(r for r in RUN_FIXTURE['rows'] if r['id'] == 'q-sh-001')
+    page = export.question_page(RUN_FIXTURE, question, row)
+    assert question['question_fa'] in page
+    assert question['question_en'] in page
+    assert question['answer_fa'] in page                  # the reference
+    assert question['evidence'][0]['quote'] in page       # and its quote
+    assert question['evidence'][0]['session_id'] in page
+    assert row['answer'] in page                          # what it replied
+    assert '2025-01-01-a' in page                         # what it retrieved
+    # Every grade names its own arithmetic, the same rule the dashboard follows.
+    assert '|gold ∩ top-k| / |gold|' in page
+    assert 'Recall@k' in page
+    # And the run it came from, or the page cannot be traced back.
+    assert RUN_FIXTURE['run_id'] in page and RUN_FIXTURE['label'] in page
+
+
+def test_a_question_page_says_which_grades_are_not_per_question(ground_truth):
+    """The four deciding metrics are stored as run means only.
+
+    Printing them on a question page unlabelled would read as that question's
+    faithfulness, which is the most misleading thing this export could do."""
+    from .raglab import export
+    question = next(q for q in ground_truth['questions'] if q['id'] == 'q-sh-001')
+    row = next(r for r in RUN_FIXTURE['rows'] if r['id'] == 'q-sh-001')
+    page = export.question_page(RUN_FIXTURE, question, row)
+    assert 'run mean' in page.lower()
+    assert 'not per question' in page.lower()
+
+
+def test_the_export_writes_one_file_per_question_plus_an_index(ground_truth,
+                                                              tmp_path):
+    from .raglab import export
+    written = export.write_run(RUN_FIXTURE, ground_truth, tmp_path)
+    names = sorted(path.name for path in written)
+    assert names == ['README.md', 'q-ab-001.md', 'q-hb-001.md', 'q-sh-001.md']
+    index = (tmp_path / 'README.md').read_text(encoding='utf-8')
+    assert 'easy' in index and 'medium' in index and 'hard' in index
+    assert RUN_FIXTURE['run_id'] in index
+    # The index links the files, or a folder of 24 pages is unnavigable.
+    assert '(q-sh-001.md)' in index
+
+
+def test_the_export_never_invents_the_context_text(ground_truth, tmp_path):
+    """Runs store the retrieved session ids, not the chunk text.
+
+    So the page says what it has and names what it does not, rather than
+    reconstructing chunks by re-running retrieval — which would document a
+    different retrieval than the one that was graded."""
+    from .raglab import export
+    export.write_run(RUN_FIXTURE, ground_truth, tmp_path)
+    page = (tmp_path / 'q-sh-001.md').read_text(encoding='utf-8')
+    assert 'chunk text is not stored' in page.lower()
+
+
 # --- the service -----------------------------------------------------------
 
 @pytest.fixture(scope='module')
@@ -1450,11 +2028,57 @@ def client():
 
 def test_options_describes_the_corpus_and_capabilities(client):
     body = client.get('/api/options').json()
-    assert body['corpus']['sessions'] == 157
-    assert body['corpus']['questions'] == 100
+    # Pinned rather than derived: the corpus is the measuring instrument, so a
+    # change to its size should have to be stated here on purpose.
+    assert body['corpus']['sessions'] == 167
+    assert body['corpus']['questions'] == 112
     assert 'semantic-drift' in body['chunkers']
     assert body['capabilities']['chroma_database'] == 'raglab-tests'
     assert 'ragas' in body['capabilities']
+
+
+def test_options_counts_the_habits_the_corpus_tracks(client):
+    """The habit ledger is only as good as the habits behind it, so how many the
+    fixture declares is part of describing the corpus."""
+    corpus_facts = client.get('/api/options').json()['corpus']
+    assert corpus_facts['habits'] == 5
+
+
+def test_options_offers_the_habit_layer_to_both_layer_pickers(client):
+    """The layer lists are served, so the habit ledger becomes indexable and
+    searchable in the panel without either frontend learning the word."""
+    body = client.get('/api/options').json()
+    assert 'habit' in body['layers']
+    assert 'habit' in body['defaults']['index']['layers']
+    assert 'habit' in body['defaults']['retrieval']['search_layers']
+
+
+def test_options_names_habit_as_a_question_type(client):
+    """The per-type breakdown is where habit retrieval either shows up or hides
+    inside the aggregation bucket."""
+    assert 'habit' in client.get('/api/options').json()['question_types']
+
+
+def test_options_explains_the_new_metadata_and_the_deciding_score(client):
+    body = client.get('/api/options').json()
+    assert body['help']['index.layers']
+    assert 'habit' in body['help']['index.layers'].lower()
+    assert body['help']['metric.ragas_decision']
+    by_key = {measure['key']: measure for measure in body['metrics']}
+    assert by_key['ragas_decision']['step'] == ''
+
+
+def test_a_retrieved_habit_ledger_reports_its_habit_to_the_panel(client):
+    """The new metadata has to reach the browser, or the context list shows a
+    chunk about the gym with nothing saying which habit it belongs to."""
+    body = client.post('/api/query', json={
+        'question': 'باشگاه هفته‌ای چند بار بود؟',
+        'index': {'chunker': 'session', 'embedder': 'char-hash',
+                  'layers': ['chunk', 'habit']},
+        'retrieval': {'search_layers': ['habit'], 'k': 4, 'retriever': 'bm25'},
+        'generation': {'answerer': 'extractive'}}).json()
+    assert body['contexts']
+    assert any(context.get('habit') for context in body['contexts'])
 
 
 def test_panel_is_served(client):
@@ -1685,3 +2309,22 @@ def test_the_standalone_panel_keeps_every_model_in_one_place():
     assert card, 'the standalone panel has no model column'
     assert 'id="embedder"' in card.group(0)
     assert 'id="embed_model"' in card.group(0)
+
+
+def test_the_standalone_panel_shows_which_habit_a_context_belongs_to():
+    """A habit ledger read cold looks like any other rollup; the slug is the only
+    thing on it that says which habit's numbers you are reading."""
+    from .raglab.server import STATIC
+    html = (STATIC / 'index.html').read_text(encoding='utf-8')
+    assert 'c.habit' in html, 'the retrieved-context list ignores the new metadata'
+
+
+def test_the_standalone_panel_ranks_the_leaderboard_by_the_deciding_score():
+    """Two numbers on one row invite ranking by the wrong one, so the panel has
+    to say which column chose the architecture."""
+    from .raglab.server import STATIC
+    html = (STATIC / 'index.html').read_text(encoding='utf-8')
+    assert 'ragas_decision' in html
+    # And by the score *with its error*: neither panel may show the mean alone,
+    # because the candidates in a sweep sit inside each other's error bars.
+    assert 'ragas_decision_stderr' in html

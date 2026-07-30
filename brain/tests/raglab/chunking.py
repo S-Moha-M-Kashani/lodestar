@@ -45,7 +45,7 @@ SHIFT_MARKERS = ('ولش کن', 'بذریم', 'بگذریم', 'راستی', 'ی�
 class Chunk:
     id: str
     text: str
-    layer: str                  # chunk | session | month | thread
+    layer: str                  # chunk | session | month | thread | commitment | habit
     session_id: str = ''
     date: str = ''
     span_from: int = 0          # date_int; equals span_to for leaf chunks
@@ -58,6 +58,7 @@ class Chunk:
     importance: float = 0.0
     topics: tuple[str, ...] = ()
     threads: tuple[str, ...] = ()
+    habit: str = ''             # the habit slug a ledger chunk belongs to
     msg_start: int = -1
     msg_end: int = -1
     prefix: str = ''            # the contextual header, kept separately so
@@ -66,8 +67,13 @@ class Chunk:
     def metadata(self) -> dict:
         """Flat, Chroma-safe. Lists become space-joined strings: Chroma can only
         filter on scalars, and a JSON blob would not be filterable either — the
-        fields we actually filter on (span_from/span_to/layer/session_id) are
-        scalars by design."""
+        fields we actually filter on (span_from/span_to/layer/session_id/habit)
+        are scalars by design.
+
+        `habit` is present on every chunk, empty on the ones that belong to no
+        habit: a field only some rows carry turns a `where` clause into a silent
+        partial scan, which reads as a retrieval bug rather than a schema one.
+        """
         return {
             'layer': self.layer, 'session_id': self.session_id, 'date': self.date,
             'span_from': self.span_from, 'span_to': self.span_to,
@@ -75,6 +81,7 @@ class Chunk:
             'valence': self.valence, 'arousal': self.arousal,
             'importance': self.importance,
             'topics': ' '.join(self.topics), 'threads': ' '.join(self.threads),
+            'habit': self.habit,
             'msg_start': self.msg_start, 'msg_end': self.msg_end,
             'chars': len(self.text),
         }
