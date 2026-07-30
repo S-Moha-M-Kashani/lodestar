@@ -2153,11 +2153,57 @@ kbd {
 .rag-cap.on { border-color: var(--low); color: var(--low); }
 .rag-cap.off { border-color: var(--danger); color: var(--danger); }
 
+/* The lab's three pipeline steps, as inks. Colour on the board always means a
+   life area; in the lab it means a step — the one place that needs a second
+   colour language, because twenty-eight knobs and eight models are navigable
+   only if each one says which stage it belongs to. Hues only: the lightness and
+   chroma are the theme's own --cat-l/--cat-c pair, so index/retrieval/generation
+   adapt to Morning/Day/Dusk/Night exactly like the category inks do. */
+:root {
+  --step-index-h: 52;         /* orange — what gets stored */
+  --step-retrieval-h: 148;    /* green  — what gets found */
+  --step-generation-h: 252;   /* blue   — what gets written */
+}
+[data-step] { --step: oklch(var(--cat-l) var(--cat-c) var(--step-h)); }
+[data-step="index"] { --step-h: var(--step-index-h); }
+[data-step="retrieval"] { --step-h: var(--step-retrieval-h); }
+[data-step="generation"] { --step-h: var(--step-generation-h); }
+
+/* Steps on the left in pipeline order, every model in one column on the right.
+   Narrow screens stack, because a 300px model column beside 260px step panels is
+   a horizontal scrollbar, and the lab is a desktop tool that must still open on
+   a phone without breaking. */
 .rag-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+}
+.rag-steps {
   display: grid;
   gap: 10px;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   align-items: start;
+}
+@media (min-width: 960px) {
+  .rag-grid { grid-template-columns: minmax(0, 1fr) minmax(240px, 310px); }
+}
+.rag-panel[data-step] { border-left: 3px solid var(--step); }
+.rag-panel[data-step] legend { color: var(--step); }
+.rag-step {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  border-left: 3px solid var(--step);
+  padding: 2px 0 2px 9px;
+}
+.rag-step-tag {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--step);
 }
 .rag-panel {
   display: flex;
@@ -2267,9 +2313,15 @@ kbd {
   gap: 10px;
   flex-wrap: wrap;
 }
-.rag-figures { display: flex; flex-wrap: wrap; gap: 8px; }
+/* A grid rather than a wrapping flex row: with nine scores the last row held one
+   card, and `flex: 1 1 130px` stretched it across the full width as if latency
+   were the headline number. */
+.rag-figures {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 8px;
+}
 .rag-figure {
-  flex: 1 1 130px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 6px 9px 8px;
@@ -2285,6 +2337,15 @@ kbd {
   color: var(--ink-soft);
 }
 .rag-figure-foot { text-transform: none; letter-spacing: 0; }
+/* A score wears the ink of the step it grades, so "green" means retrieval on the
+   settings panels and on the grades alike. Metrics that span the whole pipeline
+   (the composite, latency) carry no step and stay in plain ink — a colour there
+   would claim something untrue. */
+.rag-figure[data-step] { border-left: 3px solid var(--step); }
+.rag-figure[data-step] .rag-figure-label,
+.rag-measure[data-step] { color: var(--step); }
+.rag-figure[data-step] .rag-bar i { background: var(--step); }
+.rag-measure { font-family: var(--mono); }
 .rag-figure b {
   display: block;
   font-family: var(--mono);
@@ -2363,3 +2424,65 @@ kbd {
   max-height: 9em;
   overflow-y: auto;
 }
+
+/* Model pickers and inline explainers ------------------------------------- */
+/* Two standing requirements, both about not taking a decision away from the
+   reader: every model is chosen from a dropdown that says where its weights
+   stand, and every knob can explain itself in place. */
+/* Every host of a '!' has to establish the containing block itself: the button is
+   absolutely positioned, so an unpositioned host sends it to the page corner —
+   where all of them then stack on top of each other, and only the last one is
+   clickable. A score card pins it to its own corner; a metric name in a table
+   cell has no corner to use, so there the button sits in the flow beside the
+   label. */
+.rag-panel .field,
+.rag-figure { position: relative; }
+.rag-measure {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.rag-measure .rag-why { position: static; flex: 0 0 auto; }
+.rag-why {
+  position: absolute;
+  top: 0;
+  right: 0;
+  font: 700 9px/1 var(--mono);
+  color: var(--ink-soft);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  width: 13px;
+  height: 13px;
+  padding: 0;
+  cursor: help;
+}
+.rag-why:hover,
+.rag-why:focus-visible {
+  color: var(--rule-red);
+  border-color: var(--rule-red);
+}
+.rag-help {
+  margin: -2px 0 4px;
+  padding: 4px 0 4px 7px;
+  border-left: 2px solid var(--rule-red);
+  font-family: var(--sans, inherit);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--ink);
+}
+.rag-when {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--ink-soft);
+  opacity: 0.8;
+}
+/* The models panel is its own column on purpose: every language model the lab can
+   call, read as one list, with each group wearing the ink of the step it drives.
+   The widest labels in the lab are here, so keeping them out of the step grid
+   also stops them setting the column width for everything else. */
+.rag-models { gap: 10px; }
+.rag-models .field { gap: 2px; }
+.rag-models select { font-variant-numeric: tabular-nums; }

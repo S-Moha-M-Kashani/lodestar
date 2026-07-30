@@ -17,10 +17,9 @@ import numpy as np
 
 from lodestar_brain.rag.chat_memory import ChromaChatMemory
 
-from . import summarize
+from . import embedding, summarize
 from .chunking import Chunk, chunk_session
 from .config import IndexConfig, LabSettings
-from .embedding import make_embedder
 
 BATCH = 200
 
@@ -63,7 +62,7 @@ class LabIndex:
         cfg = cfg.normalized()
         stats = IndexStats(collection=cfg.collection())
         note = stats.notes.append
-        embedder = make_embedder(cfg.embedder, settings)
+        embedder = embedding.make_embedder(cfg.embedder, settings, cfg.embed_model)
         stats.embed_dim = getattr(embedder, 'dim', 0)
         store = ChromaChatMemory(settings.chroma_url, embedder,
                                  collection=cfg.collection(),
@@ -74,8 +73,9 @@ class LabIndex:
             progress('summarising', 0.05)
         summarizer = summarize.ExtractiveSummarizer(summarize.build_idf(sessions))
         if cfg.summarizer == 'llm':
-            summarizer = summarize.LLMSummarizer(_lab_llm(settings),
-                                                 settings.llm_model, summarizer)
+            summarizer = summarize.LLMSummarizer(
+                _lab_llm(settings),
+                cfg.summarizer_model or settings.llm_model, summarizer)
         cache = summarize.SummaryCache()
         summaries = summarize.session_summaries(
             sessions, summarizer, cache,

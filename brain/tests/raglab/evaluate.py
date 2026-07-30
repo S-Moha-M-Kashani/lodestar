@@ -12,7 +12,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
-from . import corpus, metrics, pipeline, ragas_eval
+from . import corpus, embedding, metrics, models, pipeline, ragas_eval
 from .config import RUNS_DIR, LabConfig, LabSettings
 from .index import IndexRegistry, _lab_llm
 
@@ -130,10 +130,21 @@ def run_eval(registry: IndexRegistry, ground_truth: dict, cfg: LabConfig,
     questions = select_questions(ground_truth, types, limit, difficulty)
     query_date = ground_truth['meta'].get('query_date', '2026-07-28')
     llm = _lab_llm(settings)
-    model = cfg.generation.model or settings.llm_model
+    roles = models.resolve(cfg, settings)
     notes = list(index.stats.notes)
+    # Which model ran which stage belongs in the run's own notes: comparing two
+    # rows of the leaderboard without it compares two unknowns.
+    notes.append(models.note_for(cfg, settings))
+    # Same reason, one layer down: a row whose embedder could not represent the
+    # corpus is not a result, and nothing else on the row would say so.
+    notes.append(embedding.language_note(
+        cfg.index.embedder,
+        embedding.resolve_model(cfg.index.embedder, settings,
+                                cfg.index.embed_model)))
     if not settings.openrouter_api_key and (cfg.generation.answerer == 'llm'
                                             or cfg.retrieval.reranker == 'llm'
+                                            or cfg.retrieval.grader == 'llm'
+                                            or cfg.retrieval.hyde
                                             or cfg.index.summarizer == 'llm'):
         notes.append('no OPENROUTER_API_KEY: LLM stages fell back to the offline '
                      'fake provider, so their numbers are meaningless')
@@ -141,12 +152,12 @@ def run_eval(registry: IndexRegistry, ground_truth: dict, cfg: LabConfig,
     def handle(question: dict):
         outcome = pipeline.retrieve(index, cfg.retrieval, question['question_fa'],
                                     question.get('query_date', query_date),
-                                    llm=llm, model=model)
-        outcome = pipeline.answer(outcome, cfg.generation, llm=llm, model=model)
+                                    llm=llm, models=roles)
+        outcome = pipeline.answer(outcome, cfg.generation, llm=llm, models=roles)
         row = metrics.score_question(question, outcome, cfg.retrieval.k)
         if (cfg.generation.key_facts_judge and outcome.answer
                 and settings.openrouter_api_key and question.get('answerable')):
-            row['key_fact_coverage'] = judge_key_facts(llm, model, question,
+            row['key_fact_coverage'] = judge_key_facts(llm, roles.judge, question,
                                                        outcome.answer)
         return question, outcome, row
 
@@ -181,7 +192,8 @@ def run_eval(registry: IndexRegistry, ground_truth: dict, cfg: LabConfig,
         references = {q['id']: corpus.evidence_texts(sessions, q) for q in questions}
         ragas_report = ragas_eval.run(pairs, settings, index.embedder,
                                       mode=ragas_mode, sample_limit=ragas_limit,
-                                      reference_texts=references)
+                                      reference_texts=references,
+                                      judge_model=roles.ragas)
     report('done', 1.0)
     result = RunResult(run_id=run_id, label=cfg.label or cfg.index.chunker,
                        config=cfg.to_dict(),

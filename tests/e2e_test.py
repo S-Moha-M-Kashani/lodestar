@@ -1222,7 +1222,8 @@ try:
         # Now with the lab's API mocked, to exercise the working page.
         LAB_OPTIONS = {
             "chunkers": ["fixed", "semantic-drift"],
-            "embedders": ["ascii-hash", "char-hash", "fastembed"],
+            "embedders": ["ascii-hash", "char-hash", "fastembed",
+                          "sentence-transformers", "openai"],
             "summarizers": ["extractive", "llm"],
             "layers": ["chunk", "session", "month", "thread", "commitment"],
             "retrievers": ["dense", "bm25", "hybrid-rrf"],
@@ -1234,22 +1235,256 @@ try:
             "defaults": {
                 "index": {"chunker": "semantic-drift", "chunk_chars": 500,
                           "overlap": 100, "contextual": True, "embedder": "char-hash",
-                          "summarizer": "extractive",
+                          "embed_model": "",
+                          "summarizer": "extractive", "summarizer_model": "",
                           "layers": ["chunk", "session", "month", "thread", "commitment"]},
                 "retrieval": {"retriever": "hybrid-rrf", "k": 8, "candidates": 40,
                               "search_layers": ["chunk", "session"],
                               "rollup_boost": 1.0, "time_filter": True,
                               "multi_query": True, "hyde": False, "mmr_lambda": 1.0,
                               "reranker": "lexical", "rerank_depth": 20,
-                              "grader": "none", "grade_threshold": 0.0,
-                              "parent_expansion": "none"},
-                "generation": {"answerer": "extractive", "key_facts_judge": False},
+                              "reranker_model": "", "grader": "none",
+                              "grade_threshold": 0.0, "grader_model": "",
+                              "expansion_model": "", "parent_expansion": "none"},
+                "generation": {"answerer": "extractive", "key_facts_judge": False,
+                               "model": "", "judge_model": "", "ragas_model": ""},
                 "label": "",
+            },
+            # Which languages an embedder can actually represent is the first
+            # thing about it: on this corpus the English-only options measure
+            # nothing at all, and the panel has to say so before a run, not after.
+            "embedder_hints": [
+                {"kind": "ascii-hash", "label": "ascii-hash (brain default)",
+                 "languages": "Latin script only", "farsi": False,
+                 "available": True,
+                 "note": "tokenises [a-z0-9]+, so Farsi embeds to the zero vector"},
+                {"kind": "char-hash", "label": "char-hash",
+                 "languages": "any script, lexical only", "farsi": True,
+                 "available": True,
+                 "note": "character n-grams recover Persian stems"},
+                {"kind": "fastembed", "label": "fastembed (real model)",
+                 "languages": "English + Farsi, depends on the model below",
+                 "farsi": True, "available": True,
+                 "note": "a real multilingual transformer"},
+                {"kind": "sentence-transformers",
+                 "label": "sentence-transformers (any HuggingFace model)",
+                 "languages": "English + Farsi, depends on the model below",
+                 "farsi": True, "available": True,
+                 "note": "reaches Qwen3 and the Persian-tuned models fastembed "
+                         "does not serve"},
+                {"kind": "openai", "label": "openai (API)",
+                 "languages": "English + Farsi, depends on the model below",
+                 "farsi": True, "available": False,
+                 "note": "no download, but it needs OPENAI_API_KEY and spends money"},
+            ],
+            "embed_models": [
+                {"id": "", "label": "lab default (paraphrase-multilingual-MiniLM-L12-v2)",
+                 "languages": "English + Farsi (50+ languages)", "farsi": True,
+                 "source": "default", "available": True, "dim": 384,
+                 "backend": "fastembed",
+                 "note": "follows RAGLAB_FASTEMBED_MODEL",
+                 "query_prefix": "", "passage_prefix": ""},
+                {"id": "intfloat/multilingual-e5-large", "label": "multilingual-e5-large",
+                 "languages": "English + Farsi (100+ languages)", "farsi": True,
+                 "source": "open", "available": True, "dim": 1024,
+                 "backend": "fastembed",
+                 "note": "strongest widely available multilingual retriever",
+                 "query_prefix": "query: ", "passage_prefix": "passage: "},
+                {"id": "BAAI/bge-small-en-v1.5", "label": "bge-small-en-v1.5",
+                 "languages": "English only", "farsi": False, "source": "open",
+                 "available": True, "dim": 384, "backend": "fastembed",
+                 "note": "what the brain hardwires today — here as the baseline",
+                 "query_prefix": "", "passage_prefix": ""},
+                {"id": "BAAI/bge-m3", "label": "bge-m3", "languages":
+                 "English + Farsi (100+ languages)", "farsi": True, "source": "open",
+                 "available": False, "dim": 1024, "backend": "fastembed",
+                 "note": "strong on Persian in public evals, not served here yet",
+                 "query_prefix": "", "passage_prefix": ""},
+                # Neither of these is a fastembed model: one is a HuggingFace
+                # checkpoint, the other an API call. The backend is part of the
+                # option because it decides what picking it actually costs.
+                {"id": "Qwen/Qwen3-Embedding-8B", "label": "Qwen3-Embedding-8B",
+                 "languages": "English + Farsi (100+ languages)", "farsi": True,
+                 "source": "open", "available": False, "dim": 4096,
+                 "backend": "sentence-transformers", "tag": "recommended",
+                 "note": "the recommended pick for Farsi retrieval; ~16 GB",
+                 "query_prefix": "Instruct: retrieve the diary passage\nQuery: ",
+                 "passage_prefix": ""},
+                {"id": "heydariAI/persian-embeddings",
+                 "label": "persian-embeddings",
+                 "languages": "Farsi + English (Persian-tuned)", "farsi": True,
+                 "source": "open", "available": True, "dim": 1024,
+                 "backend": "sentence-transformers", "tag": "lab default",
+                 "note": "trained on Persian text specifically",
+                 "query_prefix": "", "passage_prefix": ""},
+                {"id": "openai/text-embedding-3-small",
+                 "label": "text-embedding-3-small",
+                 "languages": "English + Farsi (100+ languages)", "farsi": True,
+                 "source": "closed", "available": False, "dim": 1536,
+                 "backend": "openai",
+                 "note": "cheapest strong multilingual option; needs OPENAI_API_KEY",
+                 "query_prefix": "", "passage_prefix": ""},
+                {"id": "openai/text-embedding-3-large",
+                 "label": "text-embedding-3-large",
+                 "languages": "English + Farsi (100+ languages)", "farsi": True,
+                 "source": "closed", "available": False, "dim": 3072,
+                 "backend": "openai",
+                 "note": "the strongest API option; needs OPENAI_API_KEY",
+                 "query_prefix": "", "passage_prefix": ""},
+            ],
+            # Every stage that can call a model offers the whole catalogue, with
+            # the licence spelled out and unverified models kept as NA rather
+            # than hidden.
+            "models": [
+                {"id": "", "label": "lab default (openai/gpt-5-nano)",
+                 "source": "default", "available": True, "note": "RAGLAB_MODEL"},
+                {"id": "openai/gpt-5-nano", "label": "GPT-5 nano", "source": "closed",
+                 "available": True, "note": "every grade so far was measured on this"},
+                {"id": "meta-llama/llama-3.3-70b-instruct", "label": "Llama 3.3 70B",
+                 "source": "open", "available": True, "note": "open weights"},
+                {"id": "qwen/qwen-2.5-72b-instruct", "label": "Qwen2.5 72B",
+                 "source": "open", "available": False,
+                 "note": "strong on Farsi, never run here"},
+            ],
+            # The three steps of the pipeline, in order. The panel groups and
+            # colours every control by these, so they are served rather than
+            # invented in the browser.
+            "steps": [
+                {"key": "index", "short": "Index",
+                 "label": "Index — what gets stored",
+                 "note": "Runs once per corpus and decides what can ever be found."},
+                {"key": "retrieval", "short": "Retrieval",
+                 "label": "Retrieval & ranking",
+                 "note": "Runs per question and decides what the answerer sees."},
+                {"key": "generation", "short": "Generation",
+                 "label": "Generation & scoring",
+                 "note": "Turns contexts into a Farsi answer, and grades it."},
+            ],
+            "model_roles": [
+                {"key": "summarize", "label": "Summaries", "step": "index",
+                 "field": "index.summarizer_model", "only_when": "Summaries = llm",
+                 "help": "Writes the session, month and thread summaries the rollup "
+                         "layers are made of. Runs once per session."},
+                {"key": "expand", "label": "Query rewriting (HyDE)",
+                 "step": "retrieval",
+                 "field": "retrieval.expansion_model", "only_when": "HyDE is on",
+                 "help": "Invents a plausible diary answer and searches with that."},
+                {"key": "rerank", "label": "Reranker", "step": "retrieval",
+                 "field": "retrieval.reranker_model", "only_when": "Reranker = llm",
+                 "help": "Scores each candidate chunk against the question."},
+                {"key": "grade", "label": "Relevance gate", "step": "retrieval",
+                 "field": "retrieval.grader_model", "only_when": "Gate = llm",
+                 "help": "Decides whether a chunk is relevant at all, which is what "
+                         "lets the lab abstain instead of inventing an answer."},
+                {"key": "answer", "label": "Answer", "field": "generation.model",
+                 "step": "generation", "only_when": "Answerer = llm",
+                 "help": "Writes the Farsi answer from the retrieved context."},
+                {"key": "judge", "label": "Key-facts judge", "step": "generation",
+                 "field": "generation.judge_model", "only_when": "the judge is on",
+                 "help": "Checks the answer against the ground truth's key facts."},
+                {"key": "ragas", "label": "RAGAS judge", "step": "generation",
+                 "field": "generation.ragas_model", "only_when": "RAGAS = judged",
+                 "help": "The model RAGAS uses for faithfulness and correctness."},
+            ],
+            # Every number the panel can print, defined once by the lab: label,
+            # the step it grades (so it wears that ink), the exact arithmetic, and
+            # what computed it. Judged metrics arrive in the same shape as
+            # deterministic ones so the dashboard renders one concept.
+            "metrics": [
+                {"key": "headline", "label": "Composite", "short": "weighted retrieval score",
+                 "step": "", "formula": "0.4·recall + 0.3·quote_recall + 0.2·ndcg + 0.1·abstained_correctly",
+                 "library": "metrics._headline (pure Python)",
+                 "help": "One comparable number for the leaderboard."},
+                {"key": "recall", "label": "Recall@k (evidence sessions)",
+                 "short": "evidence sessions found", "step": "retrieval",
+                 "formula": "|gold ∩ top-k| / |gold|",
+                 "library": "metrics.recall_at_k (pure Python, no model)",
+                 "help": "Share of the ground truth's evidence sessions inside the top k."},
+                {"key": "quote_recall", "label": "Quote recall", "short": "answering sentence survived",
+                 "step": "retrieval", "formula": "matched quotes / total quotes, a quote counts at >= 0.9 similarity",
+                 "library": "metrics.quote_recall (difflib.SequenceMatcher)",
+                 "help": "Did the sentence that answers the question survive chunking?"},
+                {"key": "ndcg", "label": "nDCG@k", "short": "evidence ranked first",
+                 "step": "retrieval", "formula": "DCG/IDCG with binary gains, discount 1/log2(i+2)",
+                 "library": "metrics.ndcg_at_k (pure Python, math.log2)",
+                 "help": "Rewards putting evidence first, not merely including it."},
+                {"key": "mrr", "label": "MRR", "short": "rank of first evidence",
+                 "step": "retrieval", "formula": "1 / rank of the first evidence session",
+                 "library": "metrics.mrr (pure Python, no model)",
+                 "help": "How deep the reader has to go before the first hit."},
+                {"key": "precision", "label": "Precision@k", "short": "signal to noise",
+                 "step": "retrieval", "formula": "|gold ∩ top-k| / k",
+                 "library": "metrics.precision_at_k (pure Python, no model)",
+                 "help": "How much of the context is actually evidence."},
+                {"key": "abstained_correctly", "label": "Abstention", "short": "unanswerable refused",
+                 "step": "generation", "formula": "refusals / unanswerable questions",
+                 "library": "metrics.score_question (pure Python, no model)",
+                 "help": "Honest silence, measured."},
+                {"key": "false_abstention", "label": "False refusals",
+                 "short": "answerable wrongly refused", "step": "generation",
+                 "formula": "refusals / answerable questions",
+                 "library": "metrics.score_question (pure Python, no model)",
+                 "help": "The failure mode a badly tuned gate produces."},
+                {"key": "latency_ms", "label": "Latency", "short": "ms per question",
+                 "step": "", "formula": "sum of the per-stage timings, in ms",
+                 "library": "time.perf_counter around each stage",
+                 "help": "Whole-pipeline wall clock for one question."},
+                {"key": "non_llm_context_recall", "label": "Context recall (offline)",
+                 "short": "RAGAS, string distance", "step": "retrieval",
+                 "formula": "reference quotes matched in the retrieved contexts / reference quotes",
+                 "library": "ragas 0.4.x NonLLMContextRecall (rapidfuzz string distance, no model)",
+                 "help": "RAGAS's context recall without a judge."},
+                {"key": "faithfulness", "label": "Faithfulness", "short": "answer supported by context",
+                 "step": "generation", "formula": "supported claims / total claims in the answer",
+                 "library": "ragas 0.4.x Faithfulness, scored by the RAGAS judge model",
+                 "help": "RAGAS breaks the answer into claims and asks whether the "
+                         "retrieved context supports each one."},
+            ],
+            "help": {
+                "index.chunker": "How a day of chat is cut into retrievable pieces.",
+                "index.chunk_chars": "Target size of one piece, in characters.",
+                "index.overlap": "Characters repeated between neighbouring pieces.",
+                "index.contextual": "Prepend a situating header to every chunk.",
+                "index.embedder": "Turns text into the vector Chroma searches. "
+                                  "Farsi is unreadable to most of them.",
+                "index.embed_model": "Which real embedding model fastembed loads. "
+                                     "Only the multilingual ones can represent Farsi "
+                                     "at all, so this is the knob that decides "
+                                     "whether a run measures anything.",
+                "index.summarizer": "Extractive picks real sentences; llm writes new ones.",
+                "index.layers": "Which summary rollups are stored beside raw chunks.",
+                "retrieval.retriever": "Vectors, keywords, or both fused.",
+                "retrieval.k": "How many contexts the answerer finally sees.",
+                "retrieval.candidates": "How deep each retriever looks first.",
+                "retrieval.reranker": "Re-scores the candidates before the cut.",
+                "retrieval.rerank_depth": "How many candidates the reranker sees.",
+                "retrieval.mmr_lambda": "Below 1 trades relevance for variety.",
+                "retrieval.rollup_boost": "Above 1 favours summaries over raw chunks.",
+                "retrieval.grader": "The gate that makes abstention possible.",
+                "retrieval.grade_threshold": "Score a chunk must clear to survive.",
+                "retrieval.parent_expansion": "Add surrounding text to a small hit.",
+                "retrieval.time_filter": "Read Farsi time words as a date range.",
+                "retrieval.multi_query": "Search several rewrites of the question.",
+                "retrieval.hyde": "Search with an invented answer, not the question.",
+                "retrieval.search_layers": "Which layers a query is allowed to hit.",
+                "generation.answerer": "Who writes the answer, if anyone.",
+                "generation.key_facts_judge": "Score answers against the key facts.",
+                "run.ragas_mode": "Offline metrics, judged metrics, or none.",
+                "run.limit": "How many ground-truth questions to score.",
+                "model.summarize": "Model that writes the session summaries.",
+                "model.expand": "Model that invents the HyDE query.",
+                "model.rerank": "Model that re-scores candidates.",
+                "model.grade": "Model behind the relevance gate.",
+                "model.answer": "Model that writes the Farsi answer.",
+                "model.judge": "Model that checks the key facts.",
+                "model.ragas": "Model RAGAS judges with.",
             },
             "corpus": {"sessions": 157, "messages": 954, "from": "2025-08-02",
                        "to": "2026-07-27", "threads": 17, "questions": 100,
                        "query_date": "2026-07-28"},
             "capabilities": {"fastembed": True, "cross_encoder": False, "llm": True,
+                             "sentence_transformers": True,
+                             "openai_embeddings": False,
                              "llm_model": "openai/gpt-5-nano",
                              "ragas": {"installed": True, "llm_ready": False,
                                        "version": "0.4.3", "notes": []},
@@ -1257,6 +1492,14 @@ try:
                              "chroma_url": "http://localhost:8001"},
             "indexes": [],
         }
+        # Exactly how the service composes metric help (metrics.MEASURE_HELP):
+        # the paragraph, then the arithmetic, then what computed it. Built here
+        # rather than hand-written so the mock cannot drift from that rule.
+        LAB_OPTIONS["help"].update({
+            f"metric.{m['key']}": f"{m['help']} Formula: {m['formula']}. "
+                                  f"Computed by {m['library']}."
+            for m in LAB_OPTIONS["metrics"]})
+
         LAB_RESULT = {
             "run_id": "20260729-000000-abcdef", "label": "e2e mock run",
             "seconds": 3.2, "started_at": "2026-07-29 00:00:00", "notes": [],
@@ -1277,7 +1520,8 @@ try:
                                                    "false_abstention": 0.0}},
                         "by_difficulty": {}, "layer_usage": {"chunk": 100}},
             "ragas": {"mode": "offline", "n_samples": 92, "skipped": 8,
-                      "metrics": {"non_llm_context_recall": 0.2249},
+                      "metrics": {"non_llm_context_recall": 0.2249,
+                                  "faithfulness": 0.7431},
                       "notes": ["offline RAGAS context metrics are "
                                 "whole-string similarity"]},
             "rows": [{"id": "q-sh-001", "type": "single-hop", "difficulty": "easy",
@@ -1324,6 +1568,202 @@ try:
               page.locator(".rag-cap.off").count() >= 1
               and page.locator(".rag-cap.on").count() >= 1)
 
+        # Model choice per task. Seven stages can call a model and they want
+        # different things from one, so none of them is hard-coded; the licence is
+        # on the label because on a Farsi corpus the open-weight candidates are
+        # the interesting ones.
+        check("raglab: every task that calls a model has its own dropdown",
+              page.locator(".rag-models select.rag-model").count() == 7)
+        models_text = page.locator(".rag-models").inner_text()
+        check("raglab: each model role is named after the task it drives",
+              "Summaries" in models_text and "Relevance gate" in models_text
+              and "RAGAS judge" in models_text)
+        options_text = page.locator('.rag-models select.rag-model[data-role="answer"]').inner_text()
+        check("raglab: model options say whether the weights are open or closed",
+              "(open source)" in options_text and "(closed source)" in options_text)
+        check("raglab: a model worth trying but unverified is offered as NA, not hidden",
+              "NA" in options_text and "Qwen2.5 72B" in options_text)
+        check("raglab: the lab default is the first choice in every role",
+              options_text.strip().startswith("lab default"))
+
+        # The embedder decides everything downstream, and most well-known ones
+        # cannot represent Farsi at all — so the dropdown says which languages
+        # each one covers instead of leaving it to be discovered by a run.
+        embedder_text = page.locator("select.rag-embedder").inner_text()
+        check("raglab: every embedder says which languages it can represent",
+              "Latin script only" in embedder_text
+              and "English + Farsi" in embedder_text)
+        embed_models_text = page.locator("select.rag-embed-model").inner_text()
+        check("raglab: a Farsi-capable embedding model can be picked by name",
+              "multilingual-e5-large" in embed_models_text
+              and "English + Farsi" in embed_models_text)
+        check("raglab: an English-only embedding model is labelled English-only",
+              "English only" in embed_models_text
+              and "bge-small-en" in embed_models_text)
+        check("raglab: an embedding model that is not served is offered as NA",
+              "bge-m3" in embed_models_text and "NA" in embed_models_text)
+        check("raglab: the panel says when the embedding model is consulted",
+              "Embedder = fastembed" in page.locator(".rag-models").inner_text())
+
+        page.locator('.rag-panel .rag-why[data-topic="index.embed_model"]').click()
+        page.wait_for_selector(".rag-help")
+        check("raglab: the embedding-model explainer says why it decides Farsi recall",
+              "farsi" in page.locator(".rag-help").first.inner_text().lower())
+        page.locator('.rag-panel .rag-why[data-topic="index.embed_model"]').click()
+
+        # The strongest Persian models are not fastembed models: two are
+        # HuggingFace checkpoints and two are an API call. They are offered with
+        # the backend that serves them, because that is what picking one costs.
+        check("raglab: the Qwen3 model is offered and marked as the recommendation",
+              "Qwen3-Embedding-8B" in embed_models_text
+              and "recommended" in embed_models_text.lower())
+        check("raglab: a Persian-tuned model is offered by name",
+              "persian-embeddings" in embed_models_text
+              and "Persian-tuned" in embed_models_text)
+        check("raglab: both OpenAI embedding models are offered as closed source",
+              "text-embedding-3-small" in embed_models_text
+              and "text-embedding-3-large" in embed_models_text
+              and "(closed source)" in embed_models_text)
+        check("raglab: each option says which backend would serve it",
+              "sentence-transformers" in embed_models_text
+              and "openai" in embed_models_text.lower())
+        check("raglab: the two new backends are pickable as embedders",
+              "sentence-transformers" in embedder_text and "openai" in embedder_text)
+        check("raglab: a backend that cannot run yet is offered as NA, not hidden",
+              page.locator('select.rag-embedder option[value="openai"]')
+              .inner_text().find("NA") >= 0)
+        check("raglab: the model knob says which backends consult it",
+              "sentence-transformers" in page.locator(
+                  ".rag-models label:has(select.rag-embed-model) .rag-when"
+              ).inner_text())
+
+        page.select_option("select.rag-embedder", "sentence-transformers")
+        page.select_option("select.rag-embed-model", "heydariAI/persian-embeddings")
+        page.reload()
+        page.wait_for_selector(".rag-grid")
+        check("raglab: the chosen embedding model survives a reload",
+              page.input_value("select.rag-embed-model")
+              == "heydariAI/persian-embeddings"
+              and page.input_value("select.rag-embedder") == "sentence-transformers")
+        page.screenshot(path=shot("raglab-embedders.png"))
+        page.select_option("select.rag-embedder", "char-hash")
+        page.select_option("select.rag-embed-model", "intfloat/multilingual-e5-large")
+
+        # Twenty-eight knobs on one sheet are navigable only if the sheet says
+        # which of the three steps each one belongs to, and colour is the fastest
+        # way to say it: index orange, retrieval green, generation blue.
+        check("raglab: each pipeline step gets its own panel, marked with the step",
+              page.locator('fieldset.rag-panel[data-step="index"]').count() == 1
+              and page.locator('fieldset.rag-panel[data-step="retrieval"]').count() == 1
+              and page.locator('fieldset.rag-panel[data-step="generation"]').count() == 1)
+        hues = page.evaluate(
+            "() => { const s = getComputedStyle(document.documentElement);"
+            " return ['index', 'retrieval', 'generation'].map((k) =>"
+            " parseFloat(s.getPropertyValue('--step-' + k + '-h'))); }")
+        check("raglab: index reads orange, retrieval green, generation blue",
+              20 <= hues[0] <= 70 and 120 <= hues[1] <= 175
+              and 215 <= hues[2] <= 280)
+        inks = page.evaluate(
+            "() => ['index', 'retrieval', 'generation'].map((k) =>"
+            " getComputedStyle(document.querySelector('fieldset.rag-panel"
+            "[data-step=\"' + k + '\"] legend')).color)")
+        check("raglab: the three steps are three visibly different inks",
+              len(set(inks)) == 3 and all(inks))
+
+        # The embedder is a language model too, so every model choice belongs in
+        # the one column — each still wearing the ink of the step it drives, so
+        # moving it right does not lose which stage it affects.
+        check("raglab: every language model lives in the models panel",
+              page.locator(".rag-models select.rag-embedder").count() == 1
+              and page.locator(".rag-models select.rag-embed-model").count() == 1
+              and page.locator(".rag-models select.rag-model").count() == 7)
+        check("raglab: the index knobs no longer hold a model picker",
+              page.locator('fieldset.rag-panel[data-step="index"] select').count() >= 1
+              and page.locator(
+                  'fieldset.rag-panel[data-step="index"] select.rag-embedder,'
+                  'fieldset.rag-panel[data-step="index"] select.rag-embed-model,'
+                  'fieldset.rag-panel[data-step="index"] select.rag-model'
+              ).count() == 0)
+        check("raglab: the embedder is coloured as the index-step model it is",
+              page.locator('.rag-models [data-step="index"] select.rag-embedder')
+              .count() == 1
+              and page.locator('.rag-models [data-step="index"] '
+                               "select.rag-embed-model").count() == 1)
+        check("raglab: each per-task model wears the ink of the step it serves",
+              page.locator('.rag-models [data-step="index"] '
+                           'select.rag-model[data-role="summarize"]').count() == 1
+              and page.locator('.rag-models [data-step="retrieval"] '
+                               'select.rag-model[data-role="grade"]').count() == 1
+              and page.locator('.rag-models [data-step="generation"] '
+                               'select.rag-model[data-role="answer"]').count() == 1)
+        sides = page.evaluate(
+            "() => { const left = (s) =>"
+            " document.querySelector(s).getBoundingClientRect().left;"
+            " return {models: left('.rag-models'), steps:"
+            " ['index', 'retrieval', 'generation'].map((k) =>"
+            " left('fieldset.rag-panel[data-step=\"' + k + '\"]'))}; }")
+        check("raglab: the models column sits to the right of the step panels",
+              all(sides["models"] > edge for edge in sides["steps"]))
+        # Rendered text, so it comes back as the stylesheet's uppercase.
+        step_tags = [t.strip().lower() for t
+                     in page.locator(".rag-models .rag-step-tag").all_inner_texts()]
+        check("raglab: the models panel names the step each group belongs to",
+              step_tags == ["index", "retrieval", "generation"])
+        model_inks = page.evaluate(
+            "() => ['index', 'retrieval', 'generation'].map((k) =>"
+            " getComputedStyle(document.querySelector('.rag-models "
+            "[data-step=\"' + k + '\"] .rag-step-tag')).color)")
+        check("raglab: a model's ink matches the step panel it belongs to",
+              model_inks == inks)
+
+        # Theme-derived tokens, not three hard-coded hexes: the lab is used on all
+        # four papers, and an ink that only works on one of them is a bug.
+        before = inks[0]
+        theme_was = page.input_value("#theme-select")
+        page.select_option("#theme-select", "dark")
+        page.wait_for_timeout(700)
+        after = page.evaluate(
+            "() => getComputedStyle(document.querySelector('fieldset.rag-panel"
+            "[data-step=\"index\"] legend')).color")
+        check("raglab: step inks follow the theme instead of being hard-coded",
+              after != before)
+        page.screenshot(path=shot("raglab-steps.png"))
+        page.select_option("#theme-select", theme_was)
+        page.wait_for_timeout(700)
+
+        # An unexplained knob is a knob nobody can make a real decision about.
+        check("raglab: every knob carries a clickable explainer",
+              page.locator(".rag-panel .rag-why").count()
+              >= page.locator(".rag-panel select, .rag-panel input[type=number]").count())
+        check("raglab: explainers stay out of the way until asked",
+              page.locator(".rag-help").count() == 0)
+        page.locator('.rag-models .rag-why[data-topic="model.grade"]').click()
+        page.wait_for_selector(".rag-help")
+        check("raglab: the explainer says what the factor actually does",
+              "relevance gate" in page.locator(".rag-help").first.inner_text().lower())
+        page.locator('.rag-models .rag-why[data-topic="model.grade"]').click()
+        check("raglab: clicking the explainer again puts it away",
+              page.locator(".rag-help").count() == 0)
+
+        # The explainer sits inside a <label>, so a click on it would otherwise
+        # activate the labelled control — asking what a checkbox does must not
+        # tick it.
+        was = page.is_checked('.rag-panel input[type="checkbox"]')
+        page.locator('.rag-panel .field.rag-inline .rag-why').first.click()
+        check("raglab: asking what a checkbox means does not toggle it",
+              page.is_checked('.rag-panel input[type="checkbox"]') == was
+              and page.locator(".rag-help").count() == 1)
+        page.locator('.rag-panel .field.rag-inline .rag-why').first.click()
+
+        page.select_option('select.rag-model[data-role="grade"]',
+                           "meta-llama/llama-3.3-70b-instruct")
+        page.reload()
+        page.wait_for_selector(".rag-grid")
+        check("raglab: a per-task model choice survives a reload",
+              page.input_value('select.rag-model[data-role="grade"]')
+              == "meta-llama/llama-3.3-70b-instruct")
+        page.screenshot(path=shot("raglab-models.png"))
+
         # The lab is a page like any other, so a reload lands back on it rather
         # than dumping the developer on the Board mid-experiment.
         page.reload()
@@ -1340,6 +1780,49 @@ try:
               "single-hop" in page.locator(".rag-table").first.inner_text())
         check("raglab: the RAGAS caveat travels with the numbers",
               "whole-string similarity" in page.locator(".rag-results").inner_text())
+
+        # A score nobody can check is worse than no score: every number says whose
+        # definition it is, the arithmetic behind it, and what computed it — through
+        # the same explainer the knobs use, so the page has one idea of "explain".
+        # Rendered text, so the stylesheet's uppercase comes back with it.
+        check("raglab: the metric labels come from the lab, not the browser",
+              "recall@k (evidence sessions)" in figures.lower())
+        check("raglab: every grade carries an explainer",
+              page.locator(".rag-figure .rag-why").count()
+              >= page.locator(".rag-figure").count())
+        page.locator('.rag-figure .rag-why[data-topic="metric.recall"]').click()
+        page.wait_for_selector(".rag-help")
+        recall_help = page.locator(".rag-help").first.inner_text()
+        check("raglab: a metric explainer gives the exact formula and the library",
+              "|gold ∩ top-k| / |gold|" in recall_help
+              and "metrics.recall_at_k" in recall_help)
+        page.locator('.rag-figure .rag-why[data-topic="metric.recall"]').click()
+
+        # A judged metric is somebody else's definition, computed by somebody
+        # else's code, with a model's variance in it. All three get said.
+        page.locator('.rag-why[data-topic="metric.faithfulness"]').click()
+        page.wait_for_selector(".rag-help")
+        judged_help = page.locator(".rag-help").first.inner_text()
+        check("raglab: a RAGAS metric names the RAGAS class behind it",
+              "Faithfulness" in judged_help and "ragas" in judged_help.lower())
+        check("raglab: a judged metric says a model produced the number",
+              "RAGAS judge" in judged_help)
+        page.locator('.rag-why[data-topic="metric.faithfulness"]').click()
+
+        # Same three inks as the panels: a retrieval number is green wherever it
+        # appears, so a colour means one thing across the whole page.
+        check("raglab: each grade wears the ink of the step it measures",
+              page.locator('.rag-figure[data-step="retrieval"]').count() >= 3
+              and page.locator('.rag-figure[data-step="generation"]').count() >= 1)
+        figure_ink = page.evaluate(
+            "() => getComputedStyle(document.querySelector('.rag-figure"
+            "[data-step=\"retrieval\"] .rag-figure-label')).color")
+        panel_ink = page.evaluate(
+            "() => getComputedStyle(document.querySelector('fieldset.rag-panel"
+            "[data-step=\"retrieval\"] legend')).color")
+        check("raglab: a grade's ink matches its step panel's ink",
+              figure_ink == panel_ink)
+        page.screenshot(path=shot("raglab-metrics.png"))
 
         # A chosen strategy is what a developer changes twenty times in a sitting;
         # losing it on every reload would make the page useless.

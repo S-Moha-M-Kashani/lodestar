@@ -29,3 +29,5 @@ node_modules/
 backups/
 
 .env
+# Subagent-driven-development scratch: ledgers, briefs, review packages.
+.superpowers/

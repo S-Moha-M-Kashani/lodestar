@@ -21,12 +21,174 @@ set:
 import difflib
 import math
 from collections import defaultdict
+from dataclasses import dataclass
 
 from . import textnorm
 from .corpus import evidence_sessions
 
 TYPES = ('single-hop', 'temporal', 'multi-hop', 'aggregation', 'knowledge-update',
          'commitment', 'entity', 'pattern', 'abstention', 'adversarial')
+
+
+@dataclass(frozen=True)
+class Measure:
+    """What one number on the dashboard means.
+
+    A score nobody can check is worse than no score: "faithfulness 0.74" says
+    nothing without whose definition it is, what arithmetic produced it, and what
+    code ran that arithmetic. So every metric — ours and RAGAS's — carries the
+    same four facts in the same shape, which is what lets the panel render them
+    identically instead of having two ideas of what a score is.
+
+    `step` is the pipeline stage the number grades, so it wears that stage's ink
+    (see config.STEPS). '' means the whole pipeline, which no single colour can
+    honestly claim.
+    """
+    key: str          # the key it arrives under in summary.overall / ragas.metrics
+    label: str        # what the score card is titled
+    short: str        # the one-line caption under the number
+    step: str         # 'retrieval' | 'generation' | '' (whole pipeline)
+    formula: str      # the arithmetic, not a description of it
+    library: str      # what computed it, and whether a model was involved
+    help: str         # the paragraph behind the '!'
+
+    def as_dict(self) -> dict:
+        return {'key': self.key, 'label': self.label, 'short': self.short,
+                'step': self.step, 'formula': self.formula,
+                'library': self.library, 'help': self.help}
+
+
+# Order matters: this is the order the score cards appear in, headline first.
+NO_MODEL = ' — pure Python, no model, so it never varies between runs'
+
+MEASURES = (
+    Measure('headline', 'Composite', 'weighted retrieval score', '',
+            '0.4·recall + 0.3·quote_recall + 0.2·ndcg + '
+            '0.1·abstained_correctly, renormalised over whichever of the four '
+            'this run produced',
+            'metrics._headline' + NO_MODEL,
+            'One comparable number for the leaderboard, weighted in the order '
+            'that matters here: did retrieval find the evidence, did the '
+            'answering sentence survive chunking, was the evidence ranked first, '
+            'and was an unanswerable question refused. Generation quality is '
+            'deliberately excluded, so a config measured with the extractive '
+            'answerer stays comparable to one measured with an LLM.'),
+    Measure('recall', 'Recall@k', 'evidence sessions found',
+            'retrieval', '|gold ∩ top-k| / |gold|',
+            'metrics.recall_at_k' + NO_MODEL,
+            'Of the diary sessions the ground truth marks as evidence, the share '
+            'that appear in the top k retrieved. This is the ceiling on '
+            'everything downstream: an answer cannot cite what retrieval never '
+            'returned. Questions with no evidence (the unanswerable ones) are '
+            'excluded rather than scored zero.'),
+    Measure('quote_recall', 'Quote recall', 'answering sentence survived chunking',
+            'retrieval',
+            'matched quotes / total quotes, where a quote counts as matched if it '
+            'is a substring of the normalised context or its longest common run '
+            'covers >= 0.9 of it',
+            'metrics.quote_recall (difflib.SequenceMatcher)' + NO_MODEL,
+            'Session recall says the right day was found; this says the sentence '
+            'that actually answers the question is inside the retrieved text. A '
+            'chunker that cuts mid-thought scores well on the first and badly on '
+            'this one, which is exactly the failure a session-level metric hides.'),
+    Measure('ndcg', 'nDCG@k', 'evidence ranked first', 'retrieval',
+            'DCG/IDCG with binary gains: DCG = Σ gain_i / log2(i+2), IDCG the '
+            'same sum over a perfect ordering',
+            'metrics.ndcg_at_k (math.log2)' + NO_MODEL,
+            'Rewards putting evidence at the top rather than merely including it '
+            'somewhere in k. It matters because the answerer sees a context that '
+            'gets truncated, so rank 1 and rank 8 are not worth the same.'),
+    Measure('mrr', 'MRR', 'rank of first evidence', 'retrieval',
+            '1 / rank of the first evidence session, 0 if none was retrieved',
+            'metrics.mrr' + NO_MODEL,
+            'How deep you have to read before the first correct hit. Sensitive to '
+            'the top of the list only — useful next to nDCG, not instead of it.'),
+    Measure('precision', 'Precision@k', 'signal to noise', 'retrieval',
+            '|top-k ∩ gold| / |top-k|',
+            'metrics.precision_at_k' + NO_MODEL,
+            'How much of what was retrieved is actually evidence. Low precision '
+            'is not automatically bad — it is the cost of a wide k — but it is '
+            'what dilutes the answerer\'s context and what MMR trades against.'),
+    Measure('hit', 'Hit@k', 'at least one evidence session', 'retrieval',
+            '1 if top-k contains any gold session, else 0',
+            'metrics.hit_at_k' + NO_MODEL,
+            'The most forgiving retrieval metric: did anything relevant come '
+            'back at all. Useful for spotting total misses that an averaged '
+            'recall softens.'),
+    Measure('latest_state_hit', 'Latest state',
+            'changed facts, current version', 'retrieval',
+            '1 if the newest evidence session is in top-k, else 0 '
+            '(knowledge-update questions only)',
+            'metrics.latest_state_session' + NO_MODEL,
+            'On facts that changed over the year, retrieving only the superseded '
+            'state is worse than retrieving nothing: it produces a confident, '
+            'stale answer. This checks the most recent evidence session was '
+            'found.'),
+    Measure('abstained_correctly', 'Abstention', 'unanswerable refused',
+            'generation',
+            'refusals / unanswerable questions',
+            'metrics.score_question, reading the answerer\'s refusal flag'
+            + NO_MODEL,
+            'The diary genuinely has nothing about some of these questions. '
+            'Saying so is the correct answer, and this is the fraction of those '
+            'where the answerer refused instead of inventing something.'),
+    Measure('false_abstention', 'False refusals', 'answerable wrongly refused',
+            'generation', 'refusals / answerable questions (lower is better)',
+            'metrics.score_question, reading the answerer\'s refusal flag'
+            + NO_MODEL,
+            'The other side of abstention, and the failure a badly tuned '
+            'relevance gate produces: the evidence was there and the answerer '
+            'still said it had nothing. Read it together with abstention — a '
+            'gate that refuses everything scores perfectly on one and terribly '
+            'here.'),
+    Measure('answer_similarity', 'Answer similarity', 'vs the reference answer',
+            'generation',
+            'difflib ratio = 2·M / T over normalised characters, where M is '
+            'matched characters and T the combined length',
+            'metrics.answer_similarity (difflib.SequenceMatcher)' + NO_MODEL,
+            'A blunt instrument, chosen because it is a *stable* one: no model, '
+            'no variance. On Farsi it mostly tracks whether the same names, dates '
+            'and numbers appear. It punishes a correct short answer, which is why '
+            'token F1 sits beside it.'),
+    Measure('answer_token_f1', 'Answer token F1', 'unigram overlap', 'generation',
+            'F1 = 2PR/(P+R) over content words, P = overlap/|predicted|, '
+            'R = overlap/|reference|, counting duplicates once',
+            'metrics.token_f1 (textnorm tokeniser)' + NO_MODEL,
+            'The SQuAD-style measure. It credits a short correct answer that a '
+            'character-similarity ratio penalises purely for being short.'),
+    Measure('key_fact_coverage', 'Key facts', 'judged fact coverage',
+            'generation',
+            'facts the judge marked present / key facts in the ground truth',
+            'evaluate.judge_key_facts — an LLM judge (the "Key-facts judge" '
+            'model role), so this number carries that model\'s variance',
+            'The ground truth lists the English key facts a correct answer must '
+            'contain; the answers are Farsi. The judge is translating as well as '
+            'checking, which is why no deterministic metric replaces it — and why '
+            'a weak model here produces confidently wrong scores.'),
+    Measure('latency_ms', 'Latency', 'ms per question', '',
+            'sum of the per-stage timings for one question, in milliseconds',
+            'time.perf_counter around each pipeline stage' + NO_MODEL,
+            'Whole-pipeline wall clock, so it spans every stage rather than '
+            'grading one. Dominated by whatever calls a model: an LLM reranker or '
+            'gate moves this by orders of magnitude, a hash embedder does not.'),
+    Measure('n_contexts', 'Contexts', 'chunks handed to the answerer', 'retrieval',
+            'mean number of contexts surviving rerank, gate and expansion',
+            'metrics.score_question' + NO_MODEL,
+            'What k actually delivered. It falls below k when the relevance gate '
+            'removes chunks, which is the honest reason an answer had less to '
+            'work with.'),
+    Measure('context_chars', 'Context size', 'characters of context', 'retrieval',
+            'mean total characters of the assembled context',
+            'metrics.score_question' + NO_MODEL,
+            'How much text the answerer was given. Worth watching next to '
+            'precision: two configs with the same recall can differ by 3x here, '
+            'and the bigger one is paying for it in tokens and in dilution.'),
+)
+
+MEASURE_HELP = {f'metric.{measure.key}':
+                f'{measure.help} Formula: {measure.formula}. Computed by '
+                f'{measure.library}.'
+                for measure in MEASURES}
 
 
 def recall_at_k(retrieved: list[str], gold: list[str], k: int) -> float:
