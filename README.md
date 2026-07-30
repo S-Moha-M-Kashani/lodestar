@@ -6,10 +6,11 @@ The design is a "question ledger": quad-ruled engineering paper, cards as ruled 
 
 ## Features
 
-- **Three-column lifecycle**: Inbox → In Progress → Answered
+- **Three-column lifecycle**: Inbox → In Progress → Done
 - **Seven views**: **Board** (the columns), **Backlog** (the Inbox as a scannable ledger list), **Overview** (a semantic map — see below), **Matrix** (four decision lenses on one grid), **Areas** (which life area is starved), **Review** (the weekly sweep), and **Assistant** (chat with the brain — see below)
 - **Drag & drop** cards within and between columns, with drop-position indicator
-- **Card types**: question, problem, task, idea, plan — stamped on each card in neutral ink, with a per-column sort menu (by deadline, priority, type, newest or oldest)
+- **Card types**: question, problem, task, idea, plan, habit — stamped on each card in neutral ink, with a per-column sort menu (by deadline, priority, type, newest or oldest)
+- **Habits**: a card you repeat rather than finish. Set how many times per day, week, month or year, and optional clock times to be reminded at. Each habit wears a **punch strip** — one box per repetition the period asks for, stamped in the card's own category ink; click the next open box to record one, click the newest stamp to take it back. A rail beside the board lists what is due, a banner and one short beep announce it when the board opens or a reminder time passes (mute it from the Menu), and `↻ history` opens a tape of past periods on the card. A habit moved to Done is retired: it stops reminding and keeps its history
 - **Categories**: nine life areas to start (Work, Love, Family, Health, Mind, Music, Travel, Home, Money), each with its own colour — and the set is **yours**: add or remove areas from the ✎ tab on the rail, pick a hue for each, up to 24. Cards carry a coloured spine, and the rail of coloured tabs under the header filters the board to one life area
 - **Importance & urgency**: set each to High or Low on a card to place it on the **Matrix**
 - **Deadlines and automatic priority**: give a card an ISO date and it carries a deadline chip that turns red once overdue. Priority is **derived**, never stored — P1 urgent & important, P2 urgent, P3 important, P4 neither — so it can never disagree with the two judgements behind it; the toolbar filters by it

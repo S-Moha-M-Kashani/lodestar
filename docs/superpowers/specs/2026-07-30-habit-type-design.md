@@ -89,13 +89,18 @@ midnight. This keeps *2× per year* sane while letting *2× per day* be precise.
 ## The habits panel
 
 A rail on the **right** of the Board view, beside the three columns: today's
-habits, each with its punch strip and `done / target` for the period. Under
-1100px it folds to a full-width section below the columns rather than crushing
-the board. Habits already complete stay listed, dimmed, so the panel reads as a
-day's ledger rather than a nag list.
+habits, each with its punch strip and `done / target` for the period. Habits
+already complete stay listed, dimmed, so the panel reads as a day's ledger
+rather than a nag list.
 
-Empty state: "No habits yet. Make a card, stamp it Habit, and set how often."
-All done: "All habits done today."
+Below 1080px the board is already a horizontal scroll-snap carousel of columns,
+so the rail joins it as the last panel rather than becoming a second layout
+mode. Inventing a stacked-below variant for one panel would give the narrow
+board two competing behaviours.
+
+The rail appears only once a habit exists — a permanently empty panel would
+cost every non-habit user a column of space. Its subtitle carries the state:
+`2 due`, or `All done`.
 
 The rail is a view over habit cards — there is no separate habit store.
 
