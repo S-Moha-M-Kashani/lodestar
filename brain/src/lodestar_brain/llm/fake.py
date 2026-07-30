@@ -15,8 +15,6 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
-from .base import AssistantTurn, ToolCall
-
 
 def _text(message: BaseMessage) -> str:
     content = message.content
@@ -59,27 +57,3 @@ class FakeChat(BaseChatModel):
                      'id': 'fake-1'}])
             return AIMessage(content=f'FAKE: created "{title}"')
         return AIMessage(content=f'FAKE: {text}')
-
-
-class FakeProvider:
-    """The pre-LangChain provider. Still here only because the RAG lab imports
-    it; both it and llm/base.py go away with the lab's migration."""
-
-    def __init__(self, script: list[AssistantTurn] | None = None):
-        self.script = list(script) if script is not None else None
-
-    def chat(self, messages: list[dict], tools: list[dict] | None = None,
-             model: str | None = None) -> AssistantTurn:
-        if self.script is not None:
-            return self.script.pop(0)
-        last_user = next((m for m in reversed(messages) if m['role'] == 'user'),
-                         {'content': ''})
-        text = (last_user.get('content') or '').strip()
-        tool_ran = any(m['role'] == 'tool' for m in messages)
-        if text.lower().startswith('add:'):
-            title = text[4:].strip()
-            if not tool_ran:
-                return AssistantTurn(tool_calls=[ToolCall(
-                    id='fake-1', name='create_question', arguments={'title': title})])
-            return AssistantTurn(content=f'FAKE: created "{title}"')
-        return AssistantTurn(content=f'FAKE: {text}')

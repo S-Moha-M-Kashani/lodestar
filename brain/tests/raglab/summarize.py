@@ -32,6 +32,7 @@ from . import textnorm
 from .chunking import Chunk, importance_of
 from .config import RUNS_DIR
 from .corpus import date_int
+from .llm import lab_chat
 
 SUMMARY_SENTENCES = 3
 THREAD_LINES_PER_CHUNK = 14
@@ -112,12 +113,13 @@ class LLMSummarizer:
     def session(self, session: dict) -> str:
         from .corpus import session_text
         try:
-            turn = self.llm.chat(
+            turn = lab_chat(
+                self.llm,
                 [{'role': 'system', 'content': self.PROMPT},
                  {'role': 'user', 'content':
                   f"تاریخ {session['date']}، حال: {session['mood']['label']}\n"
                   f'{session_text(session)}'}],
-                model=self.model)
+                self.model)
             text = (turn.content or '').strip()
             if text:
                 return text

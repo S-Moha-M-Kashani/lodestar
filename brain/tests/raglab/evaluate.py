@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from . import corpus, embedding, metrics, models, pipeline, ragas_eval
 from .config import RUNS_DIR, LabConfig, LabSettings
 from .index import IndexRegistry, _lab_llm
+from .llm import lab_chat
 
 KEY_FACTS_PROMPT = (
     'You check whether an answer contains specific facts. The answer is in '
@@ -35,10 +36,10 @@ def judge_key_facts(llm, model: str, question: dict, answer: str) -> float:
         return float('nan')
     listing = '\n'.join(f'{i + 1}. {fact}' for i, fact in enumerate(facts))
     try:
-        turn = llm.chat([{'role': 'system', 'content': KEY_FACTS_PROMPT},
-                         {'role': 'user',
-                          'content': f'Answer:\n{answer}\n\nFacts:\n{listing}'}],
-                        model=model)
+        turn = lab_chat(llm, [{'role': 'system', 'content': KEY_FACTS_PROMPT},
+                              {'role': 'user',
+                               'content': f'Answer:\n{answer}\n\nFacts:\n{listing}'}],
+                        model)
         text = turn.content or ''
     except Exception:
         return float('nan')

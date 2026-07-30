@@ -12,7 +12,7 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from lodestar_brain.llm.fake import FakeProvider
+from lodestar_brain.llm.fake import FakeChat
 
 from .raglab import (chunking, config, corpus, embedding, evaluate, explain,
                      metrics, models, pipeline, query, retrieval, summarize,
@@ -330,7 +330,7 @@ def test_llm_grade_parser_defaults_unscored_lines_to_neutral():
         content = '1: 8\nnonsense\n3: 0'
 
     class Provider:
-        def chat(self, messages, tools=None, model=None):
+        def invoke(self, messages, **kwargs):
             return Reply()
 
     scores = retrieval.llm_scores(Provider(), 'm', 'q', ['a', 'b', 'c'])
@@ -647,7 +647,10 @@ class Recorder:
         self.reply = reply
         self.calls: list[str] = []
 
-    def chat(self, messages, tools=None, model=None):
+    def invoke(self, messages, model='', **kwargs):
+        # '' is the default because lab_chat omits the kwarg entirely for a
+        # stage with no model choice — which is what "leave it to the provider"
+        # has to look like on the wire.
         self.calls.append(model)
         return type('Turn', (), {'content': self.reply, 'tool_calls': []})()
 
@@ -761,8 +764,8 @@ def test_two_summary_models_do_not_share_cached_summaries(session, tmp_path):
     summariser. With a per-task model that key has to include the model, or
     comparing two summarisers silently compares one of them twice."""
     fallback = summarize.ExtractiveSummarizer({})
-    first = summarize.LLMSummarizer(FakeProvider(), 'a/model', fallback)
-    second = summarize.LLMSummarizer(FakeProvider(), 'b/model', fallback)
+    first = summarize.LLMSummarizer(FakeChat(), 'a/model', fallback)
+    second = summarize.LLMSummarizer(FakeChat(), 'b/model', fallback)
     assert first.name != second.name
     cache = summarize.SummaryCache(path=tmp_path / 'summaries.json')
     summarize.session_summaries([session], first, cache)
