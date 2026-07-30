@@ -20,9 +20,10 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 
-from . import embedding, evaluate, metrics, pipeline, ragas_eval, retrieval
+from . import (embedding, evaluate, explain, metrics, models, pipeline,
+               ragas_eval, retrieval)
 from .config import (ANSWERERS, CHUNKERS, EMBEDDERS, EXPANSIONS, GRADERS, LAYERS,
-                     RERANKERS, RETRIEVERS, SUMMARIZERS, LabConfig,
+                     RERANKERS, RETRIEVERS, STEPS, SUMMARIZERS, LabConfig,
                      load_lab_settings)
 from .corpus import load_diary, load_ground_truth
 from .index import IndexRegistry, _lab_llm
@@ -102,6 +103,27 @@ def create_app() -> FastAPI:
             'answerers': list(ANSWERERS),
             'question_types': list(metrics.TYPES),
             'defaults': LabConfig().to_dict(),
+            # The three steps, in pipeline order. The panel groups and colours
+            # every control by these, so which step a thing belongs to is served
+            # as a fact about the pipeline rather than guessed in the browser.
+            'steps': [{'key': step.key, 'short': step.short, 'label': step.label,
+                       'note': step.note} for step in STEPS],
+            # What each embedder can actually read, and which real models are
+            # offerable — the choice that decides whether a run on a Farsi corpus
+            # measures anything at all.
+            'embedder_hints': embedding.embedder_hints(settings),
+            'embed_models': embedding.embed_model_catalogue(settings),
+            # One dropdown per LLM stage, and a sentence per knob. Both come from
+            # here rather than the frontend so a new strategy or a new model
+            # appears in the panel without touching app.js.
+            'models': models.catalogue(settings),
+            'model_roles': [role.as_dict() for role in models.ROLES],
+            # What every number on the results screen means: its label, the step
+            # it grades, the exact arithmetic, and what computed it. Served rather
+            # than kept in the frontend so a metric's name cannot drift from its
+            # definition.
+            'metrics': explain.measures(),
+            'help': explain.topics(),
             'corpus': {
                 'sessions': len(diary['sessions']),
                 'messages': sum(len(s['messages']) for s in diary['sessions']),
@@ -113,6 +135,10 @@ def create_app() -> FastAPI:
             },
             'capabilities': {
                 'fastembed': embedding.fastembed_available(),
+                # One per model backend, so the panel can say which of the three
+                # can run right now instead of finding out during a build.
+                'sentence_transformers': embedding.sentence_transformers_available(),
+                'openai_embeddings': embedding.openai_embeddings_available(settings),
                 'cross_encoder': retrieval.cross_encoder_available(
                     settings.cross_encoder_model),
                 'cross_encoder_model': settings.cross_encoder_model,
@@ -192,12 +218,12 @@ def create_app() -> FastAPI:
             raise HTTPException(400, '; '.join(problems))
         index = registry.get(cfg.index)
         llm = _lab_llm(settings)
-        model = cfg.generation.model or settings.llm_model
+        roles = models.resolve(cfg, settings)
         query_date = payload.get('query_date') or ground_truth['meta']['query_date']
         outcome = pipeline.retrieve(index, cfg.retrieval, question, query_date,
-                                    llm=llm, model=model)
-        outcome = pipeline.answer(outcome, cfg.generation, llm=llm, model=model)
-        return outcome.as_dict()
+                                    llm=llm, models=roles)
+        outcome = pipeline.answer(outcome, cfg.generation, llm=llm, models=roles)
+        return outcome.as_dict() | {'models': roles.as_dict()}
 
     @app.get('/api/questions')
     def questions(limit: int = 200):

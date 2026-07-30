@@ -109,6 +109,21 @@ test('the RAG lab never binds a port owned by Chroma or a brain', () => {
   assert.notEqual(port, testBrainPort());
 });
 
+test('the RAG lab launcher installs the backend its default embedder needs', () => {
+  // The lab now defaults to a Persian-tuned sentence-transformers model. Without
+  // the local-embeddings extra the service starts happily and then fails on the
+  // first index build — which reads as "the lab is broken", not "install this".
+  const cfg = read('brain/tests/raglab/config.py');
+  const chosen = cfg.match(/embedder: str = '([^']+)'/);
+  assert.ok(chosen, 'could not read the default embedder out of the lab config');
+  const needed = {
+    fastembed: 'semantic',
+    'sentence-transformers': 'local-embeddings',
+  }[chosen[1]];
+  if (!needed) return;                        // a hash embedder needs nothing
+  assert.match(scripts.raglab, new RegExp(`--extra\\s+${needed}\\b`));
+});
+
 test("the Node proxy's default RAGLAB_URL matches the port the lab binds", () => {
   const m = read('server.js').match(
     /RAGLAB_URL\s*=\s*process\.env\.RAGLAB_URL\s*\|\|\s*'http:\/\/127\.0\.0\.1:(\d+)'/,

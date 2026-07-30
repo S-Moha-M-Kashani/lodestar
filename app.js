@@ -3915,7 +3915,11 @@
     { group: 'index', key: 'chunker', label: 'Chunking', kind: 'select', from: 'chunkers' },
     { group: 'index', key: 'chunk_chars', label: 'Chunk chars', kind: 'number', min: 120, max: 2000, step: 20 },
     { group: 'index', key: 'overlap', label: 'Overlap', kind: 'number', min: 0, max: 800, step: 20 },
-    { group: 'index', key: 'embedder', label: 'Embedder', kind: 'select', from: 'embedders' },
+    // An embedder is a language model, so it lives with the other models in the
+    // right-hand column rather than among the chunking knobs — still wearing the
+    // index ink, because that is the step it decides.
+    { group: 'index', key: 'embedder', label: 'Embedder', kind: 'embedder', panel: 'models' },
+    { group: 'index', key: 'embed_model', label: 'Embedding model', kind: 'embed-model', when: 'Embedder = fastembed, sentence-transformers or openai', panel: 'models' },
     { group: 'index', key: 'summarizer', label: 'Summaries', kind: 'select', from: 'summarizers' },
     { group: 'index', key: 'contextual', label: 'Contextual chunk headers', kind: 'check' },
     { group: 'index', key: 'layers', label: 'Indexed layers', kind: 'checks', from: 'layers' },
@@ -3937,22 +3941,104 @@
     { group: 'generation', key: 'key_facts_judge', label: 'LLM key-facts judge', kind: 'check' },
   ];
 
-  const RAG_SCORES = [
-    ['headline', 'Composite', 'weighted retrieval score'],
-    ['recall', 'Recall@k', 'evidence sessions found'],
-    ['quote_recall', 'Quote recall', 'answering sentence survived chunking'],
-    ['ndcg', 'nDCG@k', 'evidence ranked first'],
-    ['mrr', 'MRR', 'rank of first evidence'],
-    ['precision', 'Precision@k', 'signal to noise'],
-    ['abstained_correctly', 'Abstention', 'unanswerable refused'],
-    ['false_abstention', 'False refusals', 'answerable wrongly refused'],
-    ['latest_state_hit', 'Latest state', 'changed facts, current version'],
-    ['key_fact_coverage', 'Key facts', 'judged fact coverage'],
-    ['latency_ms', 'Latency', 'ms per question'],
-  ];
+  // Every number the results screen prints is defined by the lab
+  // (metrics.MEASURES and ragas_eval.RAGAS_MEASURES): its label, the step it
+  // grades, the exact arithmetic and the library that ran it. Deliberately not a
+  // list in this file any more — a label here could drift from the definition
+  // there, and then the page would be explaining a different metric than it shows.
+  function ragMeasures() {
+    return (ragState.options && ragState.options.metrics) || [];
+  }
+
+  function ragMeasure(key) {
+    return ragMeasures().find((measure) => measure.key === key)
+      || { key, label: key, short: '', step: '' };
+  }
 
   const ragNum = (v, digits = 3) =>
     v === null || v === undefined ? '—' : Number(v).toFixed(digits);
+
+  // Where a model's weights stand is part of its name here: an open-weight model
+  // can be run locally later, which is the direction the brain's LLMProvider seam
+  // exists for. A model the lab has never run stays in the list as NA — dropping
+  // it would hide the option instead of qualifying it.
+  const RAG_LICENCE = {
+    open: '(open source)', closed: '(closed source)',
+    unknown: '(licence not recorded)', default: '',
+  };
+
+  function ragModelLabel(model) {
+    const bits = [model.label, RAG_LICENCE[model.source] || ''];
+    if (!model.available) bits.push('— NA, not verified here but worth checking');
+    return bits.filter(Boolean).join(' ');
+  }
+
+  // Which languages an embedder can represent is the first fact about it, not a
+  // footnote: on a Farsi diary an English-only model returns a full set of
+  // confident numbers that measure nothing. So the coverage is in the option
+  // text itself, where it cannot be missed while picking.
+  function ragEmbedderLabel(hint) {
+    const bits = [hint.kind, '—', hint.languages];
+    // A backend can be unusable for two ordinary reasons — a missing extra, a
+    // missing key — and both are worth saying before a run rather than during it.
+    if (hint.available === false) bits.push('— NA, not installed or no key here');
+    return bits.filter(Boolean).join(' ');
+  }
+
+  function ragEmbedModelLabel(model) {
+    const bits = [model.label];
+    // Which one to reach for is the question being asked while the dropdown is
+    // open, so the standing goes here rather than into the explainer.
+    if (model.tag) bits.push(`(${model.tag})`);
+    bits.push('—', model.languages, RAG_LICENCE[model.source] || '');
+    if (model.dim) bits.push(`· ${model.dim}d`);
+    // Which backend serves it decides what picking it costs: an ONNX download, a
+    // multi-gigabyte checkpoint, or an API bill.
+    if (model.backend) bits.push(`· via ${model.backend}`);
+    if (!model.available) bits.push('— NA, not served here but worth checking');
+    return bits.filter(Boolean).join(' ');
+  }
+
+  // The three steps of the pipeline, in order, as the lab describes them
+  // (config.STEPS). Each one is a colour on the page — the ink itself lives in
+  // styles.css, keyed on data-step, so it can follow the theme like every other
+  // colour here. The fallback only matters against a lab too old to serve them.
+  function ragSteps() {
+    const served = (ragState.options && ragState.options.steps) || [];
+    if (served.length) return served;
+    return [
+      { key: 'index', short: 'Index', label: 'Index — what gets stored', note: '' },
+      { key: 'retrieval', short: 'Retrieval', label: 'Retrieval & ranking', note: '' },
+      { key: 'generation', short: 'Generation', label: 'Generation & scoring', note: '' },
+    ];
+  }
+
+  // Every knob explains itself, from text the lab serves (config.HELP,
+  // config.STEPS and models.ROLES) rather than a copy kept here. Closed until
+  // asked, because twenty-eight paragraphs of prose is not a settings panel.
+  function ragWhy(topic, host, text) {
+    const help = text || ((ragState.options && ragState.options.help) || {})[topic];
+    if (!help) return null;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'rag-why';
+    btn.dataset.topic = topic;
+    btn.textContent = '!';
+    btn.setAttribute('aria-label', 'What is this?');
+    btn.addEventListener('click', (event) => {
+      // Inside a <label>, a plain click would also activate the labelled control
+      // — the explainer for a checkbox would toggle the checkbox.
+      event.preventDefault();
+      event.stopPropagation();
+      const open = host.nextElementSibling;
+      if (open && open.classList.contains('rag-help')) { open.remove(); return; }
+      const note = document.createElement('p');
+      note.className = 'rag-help';
+      note.textContent = help;
+      host.insertAdjacentElement('afterend', note);
+    });
+    return btn;
+  }
 
   async function ragApi(path, body) {
     const res = await fetch('/api/raglab' + path, body ? {
@@ -4113,6 +4199,31 @@
       });
       return input;
     }
+    if (field.kind === 'embedder' || field.kind === 'embed-model') {
+      // Both lists come from the lab (embedding.EMBEDDER_HINTS and
+      // embedding.EMBED_MODELS), so a model added there shows up here untouched.
+      const embedder = field.kind === 'embedder';
+      const sel = document.createElement('select');
+      sel.className = embedder ? 'rag-embedder' : 'rag-embed-model';
+      const list = embedder
+        ? (options.embedder_hints || (options.embedders || []).map((k) => ({ kind: k, languages: 'coverage not reported' })))
+        : (options.embed_models || []);
+      for (const entry of list) {
+        const opt = document.createElement('option');
+        opt.value = embedder ? entry.kind : entry.id;
+        opt.textContent = embedder ? ragEmbedderLabel(entry) : ragEmbedModelLabel(entry);
+        sel.appendChild(opt);
+      }
+      sel.value = bag[field.key] || '';
+      // A saved model the lab no longer offers cannot be shown, so the config
+      // follows the panel rather than the panel quietly lying about it.
+      if (sel.value !== (bag[field.key] || '')) {
+        bag[field.key] = sel.value;
+        ragPersist();
+      }
+      sel.addEventListener('change', () => { bag[field.key] = sel.value; ragPersist(); });
+      return sel;
+    }
     const sel = document.createElement('select');
     for (const value of options[field.from]) {
       const opt = document.createElement('option');
@@ -4125,26 +4236,132 @@
     return sel;
   }
 
-  function ragFieldset(title, group, cfg) {
+  // One row: the label, when the knob is consulted, its explainer, and the
+  // control. Shared by the step panels and the model column, so a field renders
+  // identically wherever it is placed.
+  function ragFieldRow(field, cfg) {
+    const label = document.createElement('label');
+    label.className = field.kind === 'check' ? 'field rag-inline' : 'field';
+    const control = ragFieldControl(field, cfg);
+    const why = ragWhy(`${field.group}.${field.key}`, label);
+    if (field.kind === 'check') {
+      label.appendChild(control);
+      label.append(' ' + field.label);
+      if (why) label.appendChild(why);
+      return label;
+    }
+    label.append(field.label);
+    // When a knob only matters under another setting, say so on the label —
+    // the same courtesy the model panel does for its roles.
+    if (field.when) {
+      const when = document.createElement('span');
+      when.className = 'rag-when';
+      when.textContent = field.when;
+      label.appendChild(when);
+    }
+    if (why) label.appendChild(why);
+    label.appendChild(control);
+    return label;
+  }
+
+  // One panel per step, wearing that step's ink. Models are not here: they all
+  // live in the column on the right (see ragModelPanel).
+  function ragFieldset(step, cfg) {
     const box = document.createElement('fieldset');
     box.className = 'rag-panel';
+    box.dataset.step = step.key;
     const legend = document.createElement('legend');
-    legend.textContent = title;
+    legend.textContent = step.label;
     box.appendChild(legend);
-    for (const field of RAG_FIELDS.filter((f) => f.group === group)) {
-      const label = document.createElement('label');
-      label.className = field.kind === 'check' ? 'field rag-inline' : 'field';
-      const control = ragFieldControl(field, cfg);
-      if (field.kind === 'check') {
-        label.appendChild(control);
-        label.append(' ' + field.label);
-      } else {
-        label.append(field.label);
-        label.appendChild(control);
-      }
-      box.appendChild(label);
+    const why = ragWhy('step.' + step.key, legend, step.note);
+    if (why) legend.appendChild(why);
+    for (const field of RAG_FIELDS.filter(
+      (f) => f.group === step.key && f.panel !== 'models')) {
+      box.appendChild(ragFieldRow(field, cfg));
     }
     return box;
+  }
+
+  function ragModelRow(role, cfg) {
+    const options = ragState.options;
+    const [group, key] = role.field.split('.');
+    const label = document.createElement('label');
+    label.className = 'field';
+    label.append(role.label);
+    const when = document.createElement('span');
+    when.className = 'rag-when';
+    when.textContent = role.only_when;
+    label.appendChild(when);
+    const why = ragWhy('model.' + role.key, label);
+    if (why) label.appendChild(why);
+    const select = document.createElement('select');
+    select.className = 'rag-model';
+    select.dataset.role = role.key;
+    for (const model of options.models || []) {
+      const opt = document.createElement('option');
+      opt.value = model.id;
+      opt.textContent = ragModelLabel(model);
+      select.appendChild(opt);
+    }
+    select.value = (cfg[group] && cfg[group][key]) || '';
+    // A saved model the lab no longer offers cannot be shown, so the config
+    // follows the panel rather than the panel quietly lying about it.
+    if (cfg[group] && select.value !== (cfg[group][key] || '')) {
+      cfg[group][key] = select.value;
+      ragPersist();
+    }
+    select.addEventListener('change', () => {
+      cfg[group][key] = select.value;
+      ragPersist();
+    });
+    label.appendChild(select);
+    return label;
+  }
+
+  // Every model the lab can call, in one column: the seven LLM stages and the
+  // embedder, which is a language model too and was the odd one out among the
+  // chunking knobs. Grouped and tagged by the step each one serves, because a
+  // model choice that has left its step panel must still say which stage it
+  // changes — the ink is that answer. Roles come from the lab
+  // (brain/tests/raglab/models.py), so a new stage appears here untouched.
+  function ragModelPanel(cfg) {
+    const options = ragState.options;
+    const box = document.createElement('fieldset');
+    box.className = 'rag-panel rag-models';
+    const legend = document.createElement('legend');
+    legend.textContent = 'Models — one per task';
+    box.appendChild(legend);
+    for (const step of ragSteps()) {
+      const roles = (options.model_roles || []).filter(
+        (role) => (role.step || role.field.split('.')[0]) === step.key);
+      const fields = RAG_FIELDS.filter(
+        (f) => f.panel === 'models' && f.group === step.key);
+      if (!roles.length && !fields.length) continue;
+      const group = document.createElement('div');
+      group.className = 'rag-step';
+      group.dataset.step = step.key;
+      const tag = document.createElement('span');
+      tag.className = 'rag-step-tag';
+      tag.textContent = step.short || step.key;
+      group.appendChild(tag);
+      for (const field of fields) group.appendChild(ragFieldRow(field, cfg));
+      for (const role of roles) group.appendChild(ragModelRow(role, cfg));
+      box.appendChild(group);
+    }
+    return box;
+  }
+
+  // A metric's name wherever it appears outside a score card: the lab's label,
+  // the step's ink, and the same explainer behind the same '!'.
+  function ragMeasureCell(key) {
+    const measure = ragMeasure(key);
+    const cell = document.createElement('span');
+    cell.className = 'rag-measure';
+    if (measure.step) cell.dataset.step = measure.step;
+    cell.textContent = measure.label;
+    const why = ragWhy('metric.' + key, cell);
+    if (why) cell.appendChild(why);
+    return cell;
   }
 
   function ragTable(head, rows, className) {
@@ -4202,18 +4419,26 @@
     const scores = document.createElement('div');
     scores.className = 'rag-figures';
     const overall = result.summary.overall;
-    for (const [key, label, foot] of RAG_SCORES) {
+    for (const measure of ragMeasures()) {
+      const key = measure.key;
       if (overall[key] === null || overall[key] === undefined) continue;
       const card = document.createElement('div');
       card.className = 'rag-figure';
+      // The ink of the step it grades, so a retrieval number is the same green
+      // wherever it appears on the page. '' = whole pipeline, left uncoloured.
+      if (measure.step) card.dataset.step = measure.step;
       const name = document.createElement('span');
       name.className = 'rag-figure-label';
-      name.textContent = label;
+      name.textContent = measure.label;
+      // A score nobody can check is worse than no score, so the formula and the
+      // library that produced it are one click away — the same click as the knobs.
+      const why = ragWhy('metric.' + key, name);
+      if (why) name.appendChild(why);
       const value = document.createElement('b');
       value.textContent = key === 'latency_ms' ? Math.round(overall[key]) : ragNum(overall[key]);
       const hint = document.createElement('span');
       hint.className = 'rag-figure-foot';
-      hint.textContent = foot;
+      hint.textContent = measure.short;
       card.append(name, value, hint);
       if (key !== 'latency_ms') {
         const bar = document.createElement('div');
@@ -4232,8 +4457,11 @@
       const caption = document.createElement('h4');
       caption.textContent = 'By question type';
       wrap.appendChild(caption);
+      // Same metrics, so the same names the score cards used — a table header
+      // that says "Quote" where the card says something else is two concepts.
       wrap.appendChild(ragTable(
-        ['Type', 'n', 'Recall', 'Quote', 'nDCG', 'Hit', 'Abstained', 'False refusal'],
+        ['Type', 'n', ...['recall', 'quote_recall', 'ndcg', 'hit',
+          'abstained_correctly', 'false_abstention'].map((k) => ragMeasure(k).label)],
         byType.map(([name, row]) => [name, String(row.n), ragNum(row.recall),
           ragNum(row.quote_recall), ragNum(row.ndcg), ragNum(row.hit),
           ragNum(row.abstained_correctly), ragNum(row.false_abstention)])));
@@ -4244,8 +4472,10 @@
     caption.textContent = 'RAGAS';
     wrap.appendChild(caption);
     if (Object.keys(ragas).length) {
+      // RAGAS's metrics are somebody else's definitions computed by somebody
+      // else's code, which is exactly why they get the same explainer as ours.
       wrap.appendChild(ragTable(['Metric', 'Score'],
-        Object.entries(ragas).map(([k, v]) => [k, ragNum(v)])));
+        Object.entries(ragas).map(([k, v]) => [ragMeasureCell(k), ragNum(v)])));
     } else {
       const none = document.createElement('p');
       none.className = 'rag-note';
@@ -4433,15 +4663,28 @@
     capability(true, `chroma ${c.chroma_database}`);
     sheet.appendChild(caps);
 
+    // Steps on the left in pipeline order, every model on the right. The step
+    // panels carry the ink; the model column repeats it per group, so a glance
+    // says which stage a dropdown belongs to.
     const grid = document.createElement('div');
     grid.className = 'rag-grid';
-    grid.appendChild(ragFieldset('Index — what gets stored', 'index', cfg));
-    grid.appendChild(ragFieldset('Retrieval & ranking', 'retrieval', cfg));
+    const steps = document.createElement('div');
+    steps.className = 'rag-steps';
+    const panels = {};
+    for (const step of ragSteps()) {
+      panels[step.key] = ragFieldset(step, cfg);
+      steps.appendChild(panels[step.key]);
+    }
+    grid.appendChild(steps);
 
-    const scoring = ragFieldset('Generation & scoring', 'generation', cfg);
+    // The one-run controls are not configuration, but they belong with the step
+    // whose output they grade.
+    const scoring = panels.generation || steps.lastElementChild;
     const ragasLabel = document.createElement('label');
     ragasLabel.className = 'field';
     ragasLabel.append('RAGAS');
+    const ragasWhy = ragWhy('run.ragas_mode', ragasLabel);
+    if (ragasWhy) ragasLabel.appendChild(ragasWhy);
     const ragasSel = document.createElement('select');
     for (const [value, text] of [['offline', 'offline (no model)'],
       ['llm', 'judged (needs a model)'], ['off', 'off']]) {
@@ -4458,6 +4701,8 @@
     const limitLabel = document.createElement('label');
     limitLabel.className = 'field';
     limitLabel.append('Questions (0 = all)');
+    const limitWhy = ragWhy('run.limit', limitLabel);
+    if (limitWhy) limitLabel.appendChild(limitWhy);
     const limitInput = document.createElement('input');
     limitInput.type = 'number';
     limitInput.min = 0;
@@ -4470,6 +4715,8 @@
     const labelField = document.createElement('label');
     labelField.className = 'field';
     labelField.append('Run label');
+    const labelWhy = ragWhy('run.label', labelField);
+    if (labelWhy) labelField.appendChild(labelWhy);
     const labelInput = document.createElement('input');
     labelInput.type = 'text';
     labelInput.id = 'raglab-label';
@@ -4478,7 +4725,7 @@
     labelInput.addEventListener('input', () => { cfg.label = labelInput.value; ragPersist(); });
     labelField.appendChild(labelInput);
     scoring.appendChild(labelField);
-    grid.appendChild(scoring);
+    grid.appendChild(ragModelPanel(cfg));
     sheet.appendChild(grid);
 
     const actions = document.createElement('div');
@@ -4567,7 +4814,12 @@
           } catch (error) { ragState.problem = error.message; }
           render();
         });
-        return [open, r.config.index.chunker, r.config.index.embedder,
+        // The embedding model, not only the kind: two "fastembed" rows can be two
+        // different representations, and the row has to say which one it was.
+        const embedder = r.config.index.embedder
+          + (r.config.index.embed_model
+            ? '·' + r.config.index.embed_model.split('/').pop() : '');
+        return [open, r.config.index.chunker, embedder,
           r.config.retrieval.retriever, r.config.retrieval.reranker,
           String(r.n_questions), ragNum(overall.headline), ragNum(overall.recall),
           ragNum(overall.quote_recall), r.started_at];
