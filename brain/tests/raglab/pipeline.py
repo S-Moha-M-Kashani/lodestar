@@ -11,9 +11,11 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from . import embedding
 from . import query as query_mod
 from . import retrieval, textnorm
 from .config import LAYERS, GenerationConfig, RetrievalConfig
+from .models import Roles
 
 REFUSAL = 'تو دفترچه چیزی دربارهٔ این پیدا نکردم.'
 # Phrases only a *refusing assistant* produces. «نمیدونم» is deliberately absent:
@@ -101,7 +103,11 @@ def lexical_grade(index, question: str, text: str) -> float:
 
 
 def retrieve(index, cfg: RetrievalConfig, question: str, query_date: str,
-             llm=None, model: str = '') -> Outcome:
+             llm=None, models: Roles | None = None) -> Outcome:
+    # Each stage asks for its own model. An empty Roles means "whatever the
+    # provider defaults to", which is how a caller with nothing to say about
+    # models still works.
+    roles = models or Roles()
     timings: dict = {}
     diagnostics: dict = {}
     clock = time.perf_counter
@@ -111,7 +117,7 @@ def retrieve(index, cfg: RetrievalConfig, question: str, query_date: str,
              if cfg.time_filter else None)
     queries = query_mod.expand(question) if cfg.multi_query else [question]
     if cfg.hyde and llm is not None:
-        queries = queries + [query_mod.hyde(llm, model, question)]
+        queries = queries + [query_mod.hyde(llm, roles.expand, question)]
     where = query_mod.where_clause(scope, cfg.search_layers, LAYERS)
     allowed = _mask(index, scope, cfg.search_layers)
     timings['understand_ms'] = round((clock() - start) * 1000, 1)
@@ -122,7 +128,9 @@ def retrieve(index, cfg: RetrievalConfig, question: str, query_date: str,
     dense_ranked: list[str] = []
     dense_scores: dict[str, float] = {}
     if cfg.retriever in ('dense', 'hybrid-rrf'):
-        vectors = index.embedder.embed(queries)
+        # A question is embedded as a question: the E5 family was trained with
+        # "query: " / "passage: " and quietly loses accuracy without them.
+        vectors = embedding.query_vectors(index.embedder, queries)
         for chunk_id, score in index.dense(vectors, cfg.candidates, where):
             dense_scores[chunk_id] = score
             dense_ranked.append(chunk_id)
@@ -172,7 +180,7 @@ def retrieve(index, cfg: RetrievalConfig, question: str, query_date: str,
 
     start = clock()
     final = _rerank(index, cfg, question, chunks, relevance, query_date,
-                    stage_scores, llm, model)
+                    stage_scores, llm, roles.rerank)
     timings['rerank_ms'] = round((clock() - start) * 1000, 1)
 
     start = clock()
@@ -190,7 +198,7 @@ def retrieve(index, cfg: RetrievalConfig, question: str, query_date: str,
                                 stages=stage_scores[chunk.id]))
 
     start = clock()
-    kept, abstained = _grade(index, cfg, question, contexts, llm, model)
+    kept, abstained = _grade(index, cfg, question, contexts, llm, roles.grade)
     timings['grade_ms'] = round((clock() - start) * 1000, 1)
     diagnostics['graded_out'] = len(contexts) - len(kept)
 
@@ -329,7 +337,7 @@ ANSWER_PROMPT = (
 
 
 def answer(outcome: Outcome, cfg: GenerationConfig, llm=None,
-           model: str = '') -> Outcome:
+           models: Roles | None = None) -> Outcome:
     if cfg.answerer == 'none':
         return outcome
     if outcome.abstained or not outcome.contexts:
@@ -339,7 +347,8 @@ def answer(outcome: Outcome, cfg: GenerationConfig, llm=None,
     if cfg.answerer == 'extractive':
         outcome.answer = _extractive_answer(outcome)
     else:
-        outcome.answer = _llm_answer(outcome, llm, model or cfg.model)
+        roles = models or Roles()
+        outcome.answer = _llm_answer(outcome, llm, roles.answer or cfg.model)
     outcome.timings['answer_ms'] = round((time.perf_counter() - started) * 1000, 1)
     if reads_as_refusal(outcome.answer or '', cfg.answerer):
         outcome.abstained = True
