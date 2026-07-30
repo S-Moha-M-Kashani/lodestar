@@ -714,6 +714,24 @@ def test_run_eval_scores_a_slice_end_to_end(registry, ground_truth, tmp_path,
     assert all('answer' in row for row in result.rows)
 
 
+def test_started_at_is_when_the_run_started(registry, ground_truth, tmp_path,
+                                            monkeypatch):
+    """`started_at` must agree with the run id, which is stamped at the start.
+
+    The document that cites these runs prints `started_at` as the time the
+    experiment began; a field named for the start that actually holds the finish
+    turns a 10-minute run into a timeline nobody can reconstruct."""
+    monkeypatch.setattr(evaluate, 'RUNS_DIR', tmp_path)
+    cfg = LabConfig(index=IndexConfig(chunker='session', embedder='char-hash',
+                                      layers=('chunk',)),
+                    retrieval=RetrievalConfig(search_layers=('chunk',), k=4),
+                    generation=GenerationConfig(answerer='extractive'))
+    result = evaluate.run_eval(registry, ground_truth, cfg, LAB_SETTINGS,
+                               limit=2, ragas_mode='off')
+    stamp = result.run_id.split('-')[1]                      # HHMMSS
+    assert result.started_at.endswith(f'{stamp[:2]}:{stamp[2:4]}:{stamp[4:]}')
+
+
 def test_select_questions_strides_across_types(ground_truth):
     picked = evaluate.select_questions(ground_truth, limit=10)
     assert len(picked) == 10

@@ -137,7 +137,12 @@ def run_eval(registry: IndexRegistry, ground_truth: dict, cfg: LabConfig,
     if problems:
         raise ValueError('; '.join(problems))
     started = time.time()
-    run_id = time.strftime('%Y%m%d-%H%M%S') + '-' + cfg.index.fingerprint()[:6]
+    # Both stamps come from the one clock read, so a field named for the start
+    # cannot end up holding the finish — a ten-minute run whose start time is its
+    # end time makes the leaderboard's timeline unreconstructable.
+    clock = time.localtime(started)
+    started_at = time.strftime('%Y-%m-%d %H:%M:%S', clock)
+    run_id = time.strftime('%Y%m%d-%H%M%S', clock) + '-' + cfg.index.fingerprint()[:6]
     report = lambda stage, fraction: progress(stage, fraction) if progress else None
 
     index = registry.get(cfg.index, progress=lambda stage, f: report(stage, f * 0.4))
@@ -221,7 +226,7 @@ def run_eval(registry: IndexRegistry, ground_truth: dict, cfg: LabConfig,
                               'reused': index.stats.reused},
                        summary=summary, rows=rows, ragas=ragas_report,
                        seconds=round(time.time() - started, 2),
-                       started_at=time.strftime('%Y-%m-%d %H:%M:%S'), notes=notes)
+                       started_at=started_at, notes=notes)
     save_run(result)
     return result
 
