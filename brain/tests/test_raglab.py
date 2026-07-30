@@ -894,6 +894,49 @@ def test_the_decision_score_is_undefined_unless_all_four_are_present():
          'llm_context_precision_with_reference': 1.0}) is None
 
 
+def test_the_decision_score_carries_its_own_uncertainty():
+    """A ranking of means with no spread cannot say whether it ranked anything.
+
+    The candidates in this sweep land within ~0.01 of each other on 24
+    questions. Whether that is a result or noise is not a matter of opinion, and
+    the leaderboard is the wrong place to leave it unanswered — so the score
+    ships with the standard error of the per-question composite beside it.
+
+    Computed per question and then across questions, not per metric: the four
+    are measured on the same answers and are correlated, and averaging four
+    independent standard errors would understate the real spread."""
+    from .raglab import ragas_eval
+    rows = [{'faithfulness': 1.0, 'answer_relevancy': 1.0,
+             'llm_context_precision_with_reference': 1.0, 'context_recall': 1.0},
+            {'faithfulness': 0.0, 'answer_relevancy': 0.0,
+             'llm_context_precision_with_reference': 0.0, 'context_recall': 0.0}]
+    spread = ragas_eval.decision_spread(rows)
+    assert spread['n'] == 2
+    assert spread['mean'] == 0.5
+    # Two composites at 0 and 1: sd = 0.7071, so SE = sd/sqrt(2) = 0.5.
+    assert spread['stderr'] == 0.5
+
+    # A question missing one of the four has no composite, so it cannot be one.
+    partial = ragas_eval.decision_spread(
+        rows + [{'faithfulness': 1.0, 'answer_relevancy': 1.0}])
+    assert partial['n'] == 2, 'a partial composite is not a sample'
+
+    # One question cannot have a standard error, and must not claim zero.
+    assert ragas_eval.decision_spread(rows[:1])['stderr'] is None
+    assert ragas_eval.decision_spread([])['n'] == 0
+
+
+def test_every_ragas_report_carries_a_spread_even_when_it_measured_nothing():
+    """The key has to exist on every path, because the leaderboard reads it.
+
+    A run that could not measure the four reports `n=0` rather than omitting the
+    field: a missing key would make the frontend fall back to printing the bare
+    mean, which is the presentation this exists to prevent."""
+    from .raglab import ragas_eval
+    report = ragas_eval.run([], LAB_SETTINGS, None, mode='off')
+    assert report['decision_spread'] == {'n': 0, 'mean': None, 'stderr': None}
+
+
 def test_an_offline_ragas_run_reports_no_decision_score(index, ground_truth):
     """The offline mode cannot measure any of the four, so it must say so rather
     than produce a number that looks comparable to a judged run's."""

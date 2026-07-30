@@ -84,6 +84,35 @@ def decision_score(metrics: dict) -> float | None:
         values.append(float(value))
     return round(sum(values) / len(values), 4)
 
+
+def decision_spread(rows: list[dict]) -> dict:
+    """The deciding score's mean and standard error over per-question composites.
+
+    A leaderboard of means alone cannot say whether it ranked anything. These
+    candidates land within ~0.01 of each other, and on a couple of dozen
+    questions that gap is smaller than the error on either number — which is a
+    fact about the experiment, not an opinion about it, so the score carries it.
+
+    Per question first, then across questions: the four metrics score the same
+    answers and move together, so pooling four separate standard errors as if
+    they were independent would understate the spread. A question missing any of
+    the four has no composite and is not a sample — the same rule
+    `decision_score` applies to the run as a whole.
+    """
+    composites = [value for value in (decision_score(row) for row in rows)
+                  if value is not None]
+    n = len(composites)
+    if not n:
+        return {'n': 0, 'mean': None, 'stderr': None}
+    mean = sum(composites) / n
+    if n < 2:
+        # One sample has no spread. Reporting 0.0 would read as certainty.
+        return {'n': n, 'mean': round(mean, 4), 'stderr': None}
+    variance = sum((value - mean) ** 2 for value in composites) / (n - 1)
+    return {'n': n, 'mean': round(mean, 4),
+            'stderr': round((variance / n) ** 0.5, 4)}
+
+
 INSTALL_HINT = 'npm run raglab  (it pins these: ' \
     "ragas==0.4.*, langchain-community<0.4, langchain-openai<1, rapidfuzz)"
 
@@ -300,6 +329,7 @@ def run(pairs, settings, embedder, mode: str = 'offline',
     # measured least at the top.
     report: dict = {'mode': mode, 'metrics': {}, 'n_samples': 0, 'skipped': 0,
                     'decision': None,
+                    'decision_spread': decision_spread([]),
                     'decision_metrics': list(DECISION_METRICS), 'notes': []}
     status = availability(settings)
     if not status.installed:
@@ -347,6 +377,8 @@ def run(pairs, settings, embedder, mode: str = 'offline',
     report['n_samples'] = len(samples)
     report['metrics'] = _means(result)
     report['decision'] = decision_score(report['metrics'])
+    report['decision_spread'] = decision_spread(
+        list(getattr(result, 'scores', []) or []))
     if report['decision'] is None:
         absent = [name for name in DECISION_METRICS
                   if name not in report['metrics']]
