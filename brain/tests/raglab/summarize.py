@@ -304,6 +304,13 @@ def habit_layer(sessions: list[dict], habits: dict) -> list[Chunk]:
     """L5: one adherence ledger per habit — the diary equivalent of the board's
     punch card, flattened into a document.
 
+    `sessions` is accepted and unused: every layer builder takes it first, and
+    this one happens to need only the declared history. Keeping the shape means
+    `index.py` calls all six the same way. The obvious use for it — citing the
+    check-in session beside each completion, the way the commitment layer does —
+    is left alone deliberately, because a completion date is not necessarily a
+    session date and guessing the link would put wrong citations in a ledger.
+
     A habit is the one card type you never finish, so the question asked of it is
     never "what happened" but "how often, against what target, and is it still
     going". None of the other layers can answer that. The raw chunks hold single
