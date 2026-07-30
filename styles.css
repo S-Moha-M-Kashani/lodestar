@@ -2603,6 +2603,21 @@ kbd {
   margin: 1px 0;
 }
 
+/* The one score that chose the architecture. It sits alone rather than in the
+   grid, and it is inked in the ledger's own red — not one of the three step
+   hues, because it grades the whole pipeline and no single stage may claim it. */
+.rag-figure-decision {
+  border-left: 3px solid var(--rule-red);
+  max-width: 300px;
+  margin: 2px 0 8px;
+}
+.rag-figure-decision .rag-figure-label { color: var(--rule-red); }
+.rag-figure-decision b { font-size: 1.6rem; }
+.rag-figure-decision .rag-bar i { background: var(--rule-red); }
+/* Why the ranking column is the one it is, next to the ranking itself. */
+.rag-basis { margin-bottom: 6px; }
+.rag-decision { font-variant-numeric: tabular-nums; }
+
 .rag-scroll { overflow-x: auto; }
 .rag-table {
   border-collapse: collapse;

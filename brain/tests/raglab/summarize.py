@@ -296,6 +296,65 @@ def commitment_layer(sessions: list[dict]) -> list[Chunk]:
     return out
 
 
+HABIT_PERIOD_FA = {'daily': 'روز', 'weekly': 'هفته', 'monthly': 'ماه',
+                   'yearly': 'سال'}
+
+
+def habit_layer(sessions: list[dict], habits: dict) -> list[Chunk]:
+    """L5: one adherence ledger per habit — the diary equivalent of the board's
+    punch card, flattened into a document.
+
+    A habit is the one card type you never finish, so the question asked of it is
+    never "what happened" but "how often, against what target, and is it still
+    going". None of the other layers can answer that. The raw chunks hold single
+    check-ins scattered over fifty sessions; the session and month summaries
+    average them away; the thread digest is chronological prose with no
+    arithmetic in it. Counting across fifty retrieved chunks is exactly what a
+    language model is worst at, and it is free to do here, once, at index time.
+
+    So the ledger states the *target* beside every tally — a bare "18 times"
+    means nothing without "3 per week" — names the periods that fell short, and
+    ends on the date of the last completion, because "am I still doing this" is
+    answered by an absence that no amount of retrieved text contains.
+
+    Additive like every other rollup: the check-in sessions stay indexed as
+    themselves, so "what did I say the week I quit" is still answerable.
+    """
+    out: list[Chunk] = []
+    for slug, habit in sorted(habits.items()):
+        history = habit.get('history') or {}
+        target = habit['count']
+        unit = HABIT_PERIOD_FA.get(habit['freq'], habit['freq'])
+        periods = sorted(history)
+        days = sorted(d for group in history.values() for d in group)
+        if not days:
+            continue
+        full = [p for p in periods if len(history[p]) >= target]
+        short = [p for p in periods if len(history[p]) < target]
+        title = (f"دفتر عادت «{habit['title_fa']}» — هدف: {target} بار در هر "
+                 f"{unit}؛ از {habit.get('started') or days[0]} تا {days[-1]}؛ "
+                 f'مجموع {len(days)} بار در {len(periods)} {unit}؛ '
+                 f'{len(full)} {unit} کامل و {len(short)} {unit} ناقص')
+        rows = [f"- {p}: {len(history[p])} از {target}"
+                f"{'  ✓' if len(history[p]) >= target else ''}"
+                f"  ({'، '.join(history[p])})" for p in periods]
+        body = '\n'.join(rows)
+        note = habit.get('note_fa', '')
+        text = '\n'.join(filter(None, [title, note, body,
+                                       f'آخرین بار: {days[-1]}']))
+        out.append(Chunk(
+            id=f'habit-{slug}', text=text, layer='habit',
+            date=days[0], span_from=date_int(days[0]), span_to=date_int(days[-1]),
+            threads=tuple(filter(None, [habit.get('thread')])),
+            # The one new metadata field, so a query can ask for one habit's
+            # ledger by name instead of hoping the slug survived embedding.
+            habit=slug,
+            # Habits are the diary's follow-through record, which is what the
+            # board exists to drive — never small talk, whatever the mood was.
+            importance=0.8))
+    return out
+
+
 def commitment_lines(sessions: list[dict]) -> list[tuple[str, str, str]]:
     """Promise-shaped sentences, found by the phrasings this diarist actually
     uses («از فردا میرم باشگاه», «قول میدم», «باید تا جمعه»).

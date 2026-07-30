@@ -4928,6 +4928,43 @@
     const caption = document.createElement('h4');
     caption.textContent = 'RAGAS';
     wrap.appendChild(caption);
+
+    // The deciding score gets its own card ahead of the table, because it is the
+    // one number that chose this architecture — and it lives in ragas.decision
+    // rather than summary.overall, so the loop above never sees it.
+    const decision = result.ragas ? result.ragas.decision : undefined;
+    const deciders = (result.ragas && result.ragas.decision_metrics) || [];
+    if (decision !== null && decision !== undefined) {
+      const measure = ragMeasure('ragas_decision');
+      const card = document.createElement('div');
+      card.className = 'rag-figure rag-figure-decision';
+      const name = document.createElement('span');
+      name.className = 'rag-figure-label';
+      name.textContent = measure.label;
+      const why = ragWhy('metric.ragas_decision', name);
+      if (why) name.appendChild(why);
+      const value = document.createElement('b');
+      value.textContent = ragNum(decision);
+      const hint = document.createElement('span');
+      hint.className = 'rag-figure-foot';
+      hint.textContent = deciders.length
+        ? `mean of ${deciders.length}: ${deciders.join(', ')}` : measure.short;
+      const bar = document.createElement('div');
+      bar.className = 'rag-bar';
+      const fill = document.createElement('i');
+      fill.style.width = `${Math.max(0, Math.min(1, decision)) * 100}%`;
+      bar.appendChild(fill);
+      card.append(name, value, hint, bar);
+      wrap.appendChild(card);
+    } else if (deciders.length) {
+      const line = document.createElement('p');
+      line.className = 'rag-note';
+      line.textContent = 'Unranked: this run did not measure all four deciding '
+        + `metrics (${deciders.join(', ')}), so it has no decision score. `
+        + 'Only a judged run with an answerer can be ranked.';
+      wrap.appendChild(line);
+    }
+
     if (Object.keys(ragas).length) {
       // RAGAS's metrics are somebody else's definitions computed by somebody
       // else's code, which is exactly why they get the same explainer as ours.
@@ -5022,8 +5059,11 @@
         item.className = 'rag-context';
         const meta = document.createElement('div');
         meta.className = 'rag-meta';
+        // A habit ledger carries no session id, so without its slug the panel
+        // shows a block of tallies with nothing saying whose they are.
         meta.textContent = `${context.chunk_id} · ${context.layer} · ${context.date}`
-          + ` · score ${ragNum(context.score)}`;
+          + ` · score ${ragNum(context.score)}`
+          + (context.habit ? ` · habit ${context.habit}` : '');
         const text = document.createElement('div');
         text.className = 'rag-context-text';
         text.dir = 'rtl';
@@ -5256,10 +5296,33 @@
 
     if (ragState.runs.length) {
       const boardTitle = document.createElement('h3');
-      boardTitle.textContent = 'Previous runs';
+      boardTitle.textContent = 'Leaderboard';
       sheet.appendChild(boardTitle);
-      const rows = ragState.runs.map((r) => {
+      // Why the ranking column is the one it is, next to the ranking. The
+      // deterministic scores are still on the row — they are what you debug
+      // with — but they do not choose, because they grade retrieval almost
+      // exclusively and would reward a config that finds the evidence and then
+      // says nothing useful about it.
+      const basis = document.createElement('p');
+      basis.className = 'rag-note rag-basis';
+      basis.textContent = 'Ranked by the RAGAS decision score — the unweighted '
+        + 'mean of faithfulness, answer relevancy, context precision and context '
+        + 'recall. Every other column is reported and none of them votes. Runs '
+        + 'that could not measure all four are unranked and sort last.';
+      sheet.appendChild(basis);
+      // Unranked rows sort to the bottom rather than being dropped: a run that
+      // could not be scored on all four is still a measurement.
+      const ranked = ragState.runs.slice().sort((a, b) => {
+        const x = a.ragas_decision, y = b.ragas_decision;
+        const xs = x === null || x === undefined, ys = y === null || y === undefined;
+        if (xs && ys) return 0;
+        if (xs) return 1;
+        if (ys) return -1;
+        return y - x;
+      });
+      const rows = ranked.map((r) => {
         const overall = r.summary.overall || {};
+        const judged = r.ragas || {};
         const open = document.createElement('button');
         open.type = 'button';
         open.className = 'btn ghost rag-open-run';
@@ -5276,13 +5339,23 @@
         const embedder = r.config.index.embedder
           + (r.config.index.embed_model
             ? '·' + r.config.index.embed_model.split('/').pop() : '');
+        const decision = document.createElement('strong');
+        decision.className = 'rag-decision';
+        decision.textContent = ragNum(r.ragas_decision);
+        // The deciding score, then its four constituents, so a row can be
+        // checked rather than trusted.
         return [open, r.config.index.chunker, embedder,
           r.config.retrieval.retriever, r.config.retrieval.reranker,
-          String(r.n_questions), ragNum(overall.headline), ragNum(overall.recall),
+          String(r.n_questions), decision,
+          ragNum(judged.faithfulness), ragNum(judged.answer_relevancy),
+          ragNum(judged.llm_context_precision_with_reference),
+          ragNum(judged.context_recall),
+          ragNum(overall.headline), ragNum(overall.recall),
           ragNum(overall.quote_recall), r.started_at];
       });
       sheet.appendChild(ragTable(['Run', 'Chunker', 'Embedder', 'Retriever',
-        'Reranker', 'n', 'Composite', 'Recall', 'Quote', 'When'], rows, 'rag-board'));
+        'Reranker', 'n', 'Decision ▼', 'Faith', 'Ans rel', 'Ctx prec',
+        'Ctx recall', 'Composite', 'Recall', 'Quote', 'When'], rows, 'rag-board'));
     }
 
     return sheet;

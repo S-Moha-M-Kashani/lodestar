@@ -244,6 +244,175 @@ def test_summary_cache_is_keyed_by_content(tmp_path, session):
     assert cache.get('extractive', edited) is None
 
 
+# --- habits: the card you repeat instead of finish -------------------------
+# The board grew a habit type — a card carrying `habitCount` repetitions per
+# `habitFreq` period and a `habitHistory` of the completions themselves. Diary
+# memory has to be able to answer questions about it, and none of the existing
+# layers can: "how many times did I go to the gym in تیر" is an aggregation over
+# fifty sessions, and "am I still doing German" is a knowledge-update question
+# whose answer is an *absence* of recent entries. So the corpus declares its
+# habits the way a board card does, and the lab indexes an adherence ledger
+# beside the raw text.
+
+HABIT_FREQS = ('daily', 'weekly', 'monthly', 'yearly')
+
+
+def habit_period(freq: str, day: str) -> str:
+    """The board's period id for a date, reimplemented from the spec rather than
+    imported — app.js is the other implementation, and a test that shares code
+    with the thing it checks cannot catch the two drifting apart."""
+    from datetime import date
+    d = date.fromisoformat(day)
+    if freq == 'yearly':
+        return f'{d.year}'
+    if freq == 'monthly':
+        return f'{d.year}-{d.month:02d}'
+    if freq == 'weekly':
+        year, week, _ = d.isocalendar()
+        return f'{year}-W{week:02d}'
+    return d.isoformat()
+
+
+def test_the_corpus_declares_its_habits_the_way_a_board_card_does(diary):
+    habits = diary['habits']
+    assert habits, 'the corpus must carry the habits the diarist tracks'
+    for slug, habit in habits.items():
+        assert habit['freq'] in HABIT_FREQS, slug
+        assert habit['count'] >= 1, slug
+        assert habit['title_fa'], slug
+        assert isinstance(habit['times'], list), slug
+        assert isinstance(habit['history'], dict), slug
+    # All four board cadences are not required, but a corpus that only ever
+    # measured weekly habits would leave the monthly and daily period arithmetic
+    # untested by every run.
+    assert {h['freq'] for h in habits.values()} >= {'daily', 'weekly', 'monthly'}
+
+
+def test_every_habit_completion_sits_in_the_period_it_is_filed_under(diary):
+    """`habitHistory` is bucketed by period id, so a date filed under the wrong
+    bucket would make every count wrong in a way no other assertion notices."""
+    for slug, habit in diary['habits'].items():
+        for period, days in habit['history'].items():
+            for day in days:
+                assert habit_period(habit['freq'], day) == period, f'{slug} {day}'
+
+
+def test_a_habit_is_never_punched_more_often_than_its_period_asks(diary):
+    """The punch strip has exactly `count` boxes, so a history with more
+    completions than that in one period could not have come from the board."""
+    for slug, habit in diary['habits'].items():
+        for period, days in habit['history'].items():
+            assert len(days) <= habit['count'], f'{slug} {period}'
+            assert len(days) == len(set(days)), f'{slug} {period} has a repeat'
+
+
+def test_the_habit_sessions_joined_the_corpus_without_disturbing_it(diary):
+    """Additive on purpose: the habit sessions were appended on dates the corpus
+    had not used, so every pre-existing session — and therefore every cached
+    summary and every earlier leaderboard row — stays exactly as it was."""
+    sessions = diary['sessions']
+    ids = [s['session_id'] for s in sessions]
+    assert len(ids) == len(set(ids)), 'a session id was reused'
+    assert ids == sorted(ids), 'the corpus must stay chronological'
+    habit_sessions = [s for s in sessions if 'habit-tracking' in s['recurring_threads']]
+    assert len(habit_sessions) >= 8
+    period = diary['meta']['period']
+    for s in habit_sessions:
+        assert period['from'] <= s['date'] <= period['to'], s['session_id']
+
+
+def test_the_habit_storyline_is_described_like_every_other_thread(diary):
+    """thread_layer builds its digest title from this description; a thread with
+    no entry gets an empty one, which reads as a bug in the digest."""
+    assert diary['threads']['habit-tracking']
+
+
+def test_habit_layer_is_a_ledger_of_the_repeated_practice(diary):
+    chunks = summarize.habit_layer(diary['sessions'], diary['habits'])
+    assert chunks
+    assert all(c.layer == 'habit' for c in chunks)
+    text = '\n'.join(c.text for c in chunks)
+    assert 'باشگاه' in text, 'the gym habit is the corpus\'s signature one'
+
+
+def test_the_habit_ledger_states_the_target_next_to_the_tally(diary):
+    """A count with no target is not an answer: "18 times" only means something
+    beside "3 per week". This is what makes "did I keep it" answerable at all."""
+    chunks = summarize.habit_layer(diary['sessions'], diary['habits'])
+    gym = next(c for c in chunks if c.metadata()['habit'] == 'gym')
+    target = diary['habits']['gym']
+    assert str(target['count']) in gym.text
+    assert target['title_fa'] in gym.text
+
+
+def test_the_habit_ledger_carries_its_slug_as_filterable_metadata(diary):
+    """The one new metadata field. Chroma filters on scalars, so it is a string,
+    and it is what lets a retrieval ask for one habit's ledger by name."""
+    chunks = summarize.habit_layer(diary['sessions'], diary['habits'])
+    slugs = {c.metadata()['habit'] for c in chunks}
+    assert slugs == set(diary['habits']), 'every habit needs a ledger'
+    for chunk in chunks:
+        assert isinstance(chunk.metadata()['habit'], str)
+
+
+def test_the_habit_ledger_spans_the_dates_it_covers(diary):
+    """span_from/span_to are what the Farsi time filter compares against, so a
+    ledger with a zero span is invisible to every scoped question."""
+    for chunk in summarize.habit_layer(diary['sessions'], diary['habits']):
+        assert chunk.span_from <= chunk.span_to
+        assert chunk.span_from > 20250000
+
+
+def test_every_chunk_reports_a_habit_field_even_when_it_has_none(session):
+    """Chroma metadata is a fixed shape per collection in practice: a field that
+    only some rows carry turns a `where` clause into a silent partial scan."""
+    chunk = chunking.chunk_session(session, IndexConfig(chunker='session'),
+                                   None, '')[0]
+    assert chunk.metadata()['habit'] == ''
+
+
+def test_habit_is_an_additive_layer_like_every_other_rollup():
+    """Raw text always stays. A habit ledger that *replaced* the sessions it
+    summarises would make "what did I say the day I quit" unanswerable."""
+    assert config.LAYERS[:5] == ('chunk', 'session', 'month', 'thread',
+                                 'commitment')
+    assert 'habit' in config.LAYERS
+
+
+def test_the_habit_layer_is_indexed_and_searchable(registry):
+    index = registry.get(IndexConfig(chunker='session', embedder='char-hash',
+                                    layers=('chunk', 'habit')))
+    assert index.stats.by_layer['habit'] >= 4
+    outcome = pipeline.retrieve(
+        index, RetrievalConfig(k=5, search_layers=('habit',), retriever='bm25'),
+        'باشگاه هفته‌ای چند بار؟', '2026-07-28')
+    assert outcome.contexts
+    assert {c.layer for c in outcome.contexts} == {'habit'}
+
+
+def test_habit_questions_cite_verbatim_evidence_like_the_rest_of_the_set(
+        diary, ground_truth):
+    """The evidence quote is what quote-recall measures survival of, so a quote
+    that is not literally in its cited message silently scores every config down."""
+    sessions = corpus.sessions_by_id(diary)
+    habit_questions = [q for q in ground_truth['questions']
+                       if q['type'] == 'habit']
+    assert len(habit_questions) >= 6
+    for question in habit_questions:
+        assert question['answer_fa'] and question['key_facts'], question['id']
+        for ev in question['evidence']:
+            messages = sessions[ev['session_id']]['messages']
+            cited = ' '.join(messages[i]['content'] for i in ev['message_indices'])
+            assert ev['quote'] in cited, f"{question['id']} {ev['session_id']}"
+
+
+def test_every_question_type_is_one_the_report_breaks_down(ground_truth):
+    """metrics.aggregate walks TYPES, so a question type missing from it is
+    dropped from the per-type table without any error — the breakdown just
+    quietly stops covering part of the set."""
+    assert {q['type'] for q in ground_truth['questions']} <= set(metrics.TYPES)
+
+
 # --- query understanding ---------------------------------------------------
 
 @pytest.mark.parametrize('question,expect_from,expect_to', [
@@ -551,6 +720,36 @@ def test_select_questions_strides_across_types(ground_truth):
     assert len({q['type'] for q in picked}) > 1, 'a limited run must stay diverse'
 
 
+def test_a_limited_run_reaches_the_end_of_the_question_set(ground_truth):
+    """Striding with `questions[::step][:limit]` silently drops a tail whenever
+    the count is not a multiple of the limit: at 112 questions and a limit of 20
+    the step is 5, `::5` yields 23, and truncating to 20 stops at index 95 — so
+    the last 16 questions could never be sampled.
+
+    That is not a rounding detail. The set is grouped by type and the newest type
+    is appended at the end, so the effect is that the most recently added
+    question type is absent from every limited run, and a sweep tuned on those
+    runs is tuned on a corpus that excludes it."""
+    questions = ground_truth['questions']
+    for limit in (5, 10, 20, 25, 40):
+        picked = evaluate.select_questions(ground_truth, limit=limit)
+        assert len(picked) == limit, limit
+        ids = [q['id'] for q in picked]
+        assert len(set(ids)) == limit, f'{limit} produced duplicates'
+        assert ids[0] == questions[0]['id'], limit
+        # The last pick is within one stride of the end, not 16 short of it.
+        stride = -(-len(questions) // limit)          # ceil
+        assert questions.index(picked[-1]) >= len(questions) - stride, limit
+
+
+def test_a_limited_run_covers_the_newest_question_type(ground_truth):
+    """The concrete consequence, asserted on the type that exposed it: habit
+    questions are last in the file, so a limit that cannot reach the end cannot
+    measure habit retrieval at all."""
+    picked = evaluate.select_questions(ground_truth, limit=20)
+    assert any(q['type'] == 'habit' for q in picked)
+
+
 def test_run_eval_rejects_searching_an_unindexed_layer(registry, ground_truth):
     cfg = LabConfig(index=IndexConfig(layers=('chunk',)),
                     retrieval=RetrievalConfig(search_layers=('chunk', 'thread')))
@@ -628,6 +827,90 @@ def test_ragas_offline_metrics_score_a_retrieval(index, ground_truth):
     assert report['n_samples'] == 3, report['notes']
     assert 'non_llm_context_recall' in report['metrics']
     assert 0.0 <= report['metrics']['non_llm_context_recall'] <= 1.0
+
+
+# --- the four metrics that decide the architecture -------------------------
+# Everything the lab measures is reported, but only four of them get a vote.
+# They are RAGAS's, they are judged, and between them they cover the two ways a
+# RAG pipeline fails: retrieval that did not fetch what was needed (context
+# precision and recall) and generation that did not stay inside what it fetched
+# (faithfulness, answer relevancy). Our own deterministic metrics are the ones
+# to *debug* with — they cannot be gamed and they never vary — but they grade
+# retrieval almost exclusively, so ranking on them picks a config that finds
+# evidence and says nothing useful about it.
+
+def test_the_deciding_metrics_are_exactly_the_four_chosen_ones():
+    from .raglab import ragas_eval
+    assert ragas_eval.DECISION_METRICS == (
+        'faithfulness', 'answer_relevancy',
+        'llm_context_precision_with_reference', 'context_recall')
+    # Everything else stays measured and reported; it simply does not vote.
+    assert set(ragas_eval.DECISION_METRICS) < set(ragas_eval.LLM_METRICS)
+    assert 'factual_correctness(mode=f1)' not in ragas_eval.DECISION_METRICS
+
+
+def test_the_decision_score_is_the_unweighted_mean_of_those_four():
+    """Unweighted on purpose: any weighting would be a claim about their relative
+    importance that this fixture cannot support, and a hidden thumb on the scale
+    is how a sweep ends up confirming whatever the author already believed."""
+    from .raglab import ragas_eval
+    score = ragas_eval.decision_score({
+        'faithfulness': 1.0, 'answer_relevancy': 0.6,
+        'llm_context_precision_with_reference': 0.4, 'context_recall': 0.0,
+        # Present, reported, and deliberately ignored by the arithmetic.
+        'factual_correctness(mode=f1)': 0.0, 'non_llm_context_recall': 1.0,
+    })
+    assert score == 0.5
+
+
+def test_the_decision_score_is_undefined_unless_all_four_are_present():
+    """A mean over whichever metrics happened to succeed is not comparable
+    between runs: an offline run would score on two metrics and outrank a judged
+    run scored on four."""
+    from .raglab import ragas_eval
+    assert ragas_eval.decision_score({'faithfulness': 1.0}) is None
+    assert ragas_eval.decision_score({}) is None
+    assert ragas_eval.decision_score(
+        {'faithfulness': 1.0, 'answer_relevancy': 1.0,
+         'llm_context_precision_with_reference': 1.0}) is None
+
+
+def test_an_offline_ragas_run_reports_no_decision_score(index, ground_truth):
+    """The offline mode cannot measure any of the four, so it must say so rather
+    than produce a number that looks comparable to a judged run's."""
+    pytest.importorskip('ragas')
+    pytest.importorskip('rapidfuzz')
+    from .raglab import ragas_eval
+    questions = [q for q in ground_truth['questions'] if q['answerable']][:2]
+    pairs = [(q, pipeline.retrieve(index, RetrievalConfig(k=5), q['question_fa'],
+                                   q['query_date'])) for q in questions]
+    report = ragas_eval.run(pairs, LAB_SETTINGS, index.embedder, mode='offline')
+    assert report['decision'] is None
+    assert report['decision_metrics'] == list(ragas_eval.DECISION_METRICS)
+
+
+def test_the_decision_score_explains_itself_like_every_other_number():
+    """It is the number the architecture was chosen by, so of everything on the
+    screen it is the one that must not be a bare figure."""
+    keys = {measure['key']: measure for measure in explain.measures()}
+    decision = keys.get('ragas_decision')
+    assert decision, 'the deciding score has no definition'
+    assert decision['formula'] and decision['library'] and decision['help']
+    for name in ('faithfulness', 'answer relevancy', 'context precision',
+                 'context recall'):
+        assert name in decision['help'].lower(), name
+    assert explain.topics()['metric.ragas_decision']
+
+
+def test_the_leaderboard_row_carries_the_deciding_score(index, ground_truth):
+    """A leaderboard that ranks on a number it does not carry cannot be checked
+    against the run it came from."""
+    result = evaluate.RunResult(
+        run_id='x', label='y', config={}, index={},
+        summary={'overall': {}, 'n_questions': 0},
+        ragas={'mode': 'llm', 'metrics': {'faithfulness': 0.8},
+               'decision': 0.75, 'decision_metrics': []})
+    assert result.brief()['ragas_decision'] == 0.75
 
 
 # --- picking a model per task ----------------------------------------------
@@ -1367,10 +1650,14 @@ def test_a_ragas_metric_carries_ragas_own_class_definition_and_formula():
 
 def test_a_judged_metric_says_which_model_judged_it():
     """A number produced by a model is a number with variance, and the reader has
-    to know which model — the same reason every stage carries its own dropdown."""
+    to know which model — the same reason every stage carries its own dropdown.
+
+    The decision score is judged too, being a mean of four judged metrics: a
+    composite must not launder its inputs' variance by being an average."""
     from .raglab import ragas_eval
+    judged = set(ragas_eval.LLM_METRICS) | {'ragas_decision'}
     for measure in ragas_eval.RAGAS_MEASURES:
-        if measure.key in ragas_eval.LLM_METRICS:
+        if measure.key in judged:
             assert 'RAGAS judge' in measure.library, measure.key
         else:
             assert 'no model' in measure.library.lower(), measure.key
@@ -1450,11 +1737,57 @@ def client():
 
 def test_options_describes_the_corpus_and_capabilities(client):
     body = client.get('/api/options').json()
-    assert body['corpus']['sessions'] == 157
-    assert body['corpus']['questions'] == 100
+    # Pinned rather than derived: the corpus is the measuring instrument, so a
+    # change to its size should have to be stated here on purpose.
+    assert body['corpus']['sessions'] == 167
+    assert body['corpus']['questions'] == 112
     assert 'semantic-drift' in body['chunkers']
     assert body['capabilities']['chroma_database'] == 'raglab-tests'
     assert 'ragas' in body['capabilities']
+
+
+def test_options_counts_the_habits_the_corpus_tracks(client):
+    """The habit ledger is only as good as the habits behind it, so how many the
+    fixture declares is part of describing the corpus."""
+    corpus_facts = client.get('/api/options').json()['corpus']
+    assert corpus_facts['habits'] == 5
+
+
+def test_options_offers_the_habit_layer_to_both_layer_pickers(client):
+    """The layer lists are served, so the habit ledger becomes indexable and
+    searchable in the panel without either frontend learning the word."""
+    body = client.get('/api/options').json()
+    assert 'habit' in body['layers']
+    assert 'habit' in body['defaults']['index']['layers']
+    assert 'habit' in body['defaults']['retrieval']['search_layers']
+
+
+def test_options_names_habit_as_a_question_type(client):
+    """The per-type breakdown is where habit retrieval either shows up or hides
+    inside the aggregation bucket."""
+    assert 'habit' in client.get('/api/options').json()['question_types']
+
+
+def test_options_explains_the_new_metadata_and_the_deciding_score(client):
+    body = client.get('/api/options').json()
+    assert body['help']['index.layers']
+    assert 'habit' in body['help']['index.layers'].lower()
+    assert body['help']['metric.ragas_decision']
+    by_key = {measure['key']: measure for measure in body['metrics']}
+    assert by_key['ragas_decision']['step'] == ''
+
+
+def test_a_retrieved_habit_ledger_reports_its_habit_to_the_panel(client):
+    """The new metadata has to reach the browser, or the context list shows a
+    chunk about the gym with nothing saying which habit it belongs to."""
+    body = client.post('/api/query', json={
+        'question': 'باشگاه هفته‌ای چند بار بود؟',
+        'index': {'chunker': 'session', 'embedder': 'char-hash',
+                  'layers': ['chunk', 'habit']},
+        'retrieval': {'search_layers': ['habit'], 'k': 4, 'retriever': 'bm25'},
+        'generation': {'answerer': 'extractive'}}).json()
+    assert body['contexts']
+    assert any(context.get('habit') for context in body['contexts'])
 
 
 def test_panel_is_served(client):
@@ -1685,3 +2018,19 @@ def test_the_standalone_panel_keeps_every_model_in_one_place():
     assert card, 'the standalone panel has no model column'
     assert 'id="embedder"' in card.group(0)
     assert 'id="embed_model"' in card.group(0)
+
+
+def test_the_standalone_panel_shows_which_habit_a_context_belongs_to():
+    """A habit ledger read cold looks like any other rollup; the slug is the only
+    thing on it that says which habit's numbers you are reading."""
+    from .raglab.server import STATIC
+    html = (STATIC / 'index.html').read_text(encoding='utf-8')
+    assert 'c.habit' in html, 'the retrieved-context list ignores the new metadata'
+
+
+def test_the_standalone_panel_ranks_the_leaderboard_by_the_deciding_score():
+    """Two numbers on one row invite ranking by the wrong one, so the panel has
+    to say which column chose the architecture."""
+    from .raglab.server import STATIC
+    html = (STATIC / 'index.html').read_text(encoding='utf-8')
+    assert 'ragas_decision' in html

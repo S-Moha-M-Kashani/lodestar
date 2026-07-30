@@ -91,11 +91,17 @@ class RunResult:
                 'started_at': self.started_at, 'notes': self.notes}
 
     def brief(self) -> dict:
-        """Leaderboard row — no per-question detail."""
+        """Leaderboard row — no per-question detail.
+
+        `ragas_decision` is carried explicitly rather than left for the frontend
+        to recompute from `ragas`: it is the number the architecture was chosen
+        by, and a leaderboard that ranks on a figure it does not store cannot be
+        checked against the run it came from."""
         return {'run_id': self.run_id, 'label': self.label,
                 'started_at': self.started_at, 'seconds': self.seconds,
                 'config': self.config, 'summary': self.summary,
                 'ragas': self.ragas.get('metrics', {}),
+                'ragas_decision': self.ragas.get('decision'),
                 'n_questions': self.summary.get('n_questions', 0)}
 
 
@@ -107,11 +113,18 @@ def select_questions(ground_truth: dict, types: list[str] | None = None,
         questions = [q for q in questions if q['type'] in set(types)]
     if difficulty:
         questions = [q for q in questions if q['difficulty'] in set(difficulty)]
-    if limit:
-        # Stride rather than truncate: the set is sorted by type, so the first N
+    if limit and limit < len(questions):
+        # Stride rather than truncate: the set is grouped by type, so the first N
         # would be twenty single-hop questions and nothing else.
-        step = max(1, len(questions) // limit)
-        questions = questions[::step][:limit]
+        #
+        # Spread across the *whole* set rather than `questions[::step][:limit]`,
+        # which drops a tail whenever the count is not a multiple of the limit —
+        # at 112 questions and a limit of 20 the step is 5, so it stopped at
+        # index 95 and the last sixteen were unreachable. Since new question
+        # types are appended, that silently excluded the newest type from every
+        # limited run.
+        total = len(questions)
+        questions = [questions[i * total // limit] for i in range(limit)]
     return questions
 
 
@@ -234,11 +247,16 @@ def list_runs(limit: int = 50) -> list[dict]:
             continue
         if 'run_id' not in data:
             continue        # not a run: never assume a directory holds only ours
+        ragas = data.get('ragas') or {}
         out.append({'run_id': data['run_id'], 'label': data.get('label', ''),
                     'started_at': data.get('started_at', ''),
                     'seconds': data.get('seconds', 0), 'config': data.get('config'),
                     'summary': data.get('summary', {}),
-                    'ragas': (data.get('ragas') or {}).get('metrics', {}),
+                    'ragas': ragas.get('metrics', {}),
+                    # Absent on every run recorded before the score existed, and
+                    # None on every run that could not measure all four — both
+                    # read as "this row was not ranked", which is the truth.
+                    'ragas_decision': ragas.get('decision'),
                     'n_questions': (data.get('summary') or {}).get('n_questions', 0)})
     return out
 

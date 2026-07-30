@@ -1225,19 +1225,19 @@ try:
             "embedders": ["ascii-hash", "char-hash", "fastembed",
                           "sentence-transformers", "openai"],
             "summarizers": ["extractive", "llm"],
-            "layers": ["chunk", "session", "month", "thread", "commitment"],
+            "layers": ["chunk", "session", "month", "thread", "commitment", "habit"],
             "retrievers": ["dense", "bm25", "hybrid-rrf"],
             "rerankers": ["none", "lexical", "cross-encoder", "llm"],
             "graders": ["none", "lexical", "llm"],
             "expansions": ["none", "neighbors", "session"],
             "answerers": ["none", "extractive", "llm"],
-            "question_types": ["single-hop", "temporal"],
+            "question_types": ["single-hop", "temporal", "habit"],
             "defaults": {
                 "index": {"chunker": "semantic-drift", "chunk_chars": 500,
                           "overlap": 100, "contextual": True, "embedder": "char-hash",
                           "embed_model": "",
                           "summarizer": "extractive", "summarizer_model": "",
-                          "layers": ["chunk", "session", "month", "thread", "commitment"]},
+                          "layers": ["chunk", "session", "month", "thread", "commitment", "habit"]},
                 "retrieval": {"retriever": "hybrid-rrf", "k": 8, "candidates": 40,
                               "search_layers": ["chunk", "session"],
                               "rollup_boost": 1.0, "time_filter": True,
@@ -1439,6 +1439,18 @@ try:
                  "library": "ragas 0.4.x Faithfulness, scored by the RAGAS judge model",
                  "help": "RAGAS breaks the answer into claims and asks whether the "
                          "retrieved context supports each one."},
+                # The one number the architecture is chosen by, so of everything
+                # on the screen it is the one that must not be a bare figure.
+                {"key": "ragas_decision", "label": "RAGAS decision score",
+                 "short": "the number the architecture was chosen by", "step": "",
+                 "formula": "mean(faithfulness, answer_relevancy, "
+                            "llm_context_precision_with_reference, context_recall)",
+                 "library": "ragas_eval.decision_score over ragas 0.4.x metrics, "
+                            "scored by the RAGAS judge model",
+                 "help": "Four judged RAGAS metrics averaged unweighted: "
+                         "faithfulness, answer relevancy, context precision and "
+                         "context recall. Everything else is reported and none "
+                         "of it votes."},
             ],
             "help": {
                 "index.chunker": "How a day of chat is cut into retrievable pieces.",
@@ -1452,7 +1464,7 @@ try:
                                      "at all, so this is the knob that decides "
                                      "whether a run measures anything.",
                 "index.summarizer": "Extractive picks real sentences; llm writes new ones.",
-                "index.layers": "Which summary rollups are stored beside raw chunks.",
+                "index.layers": "Which summary rollups are stored beside raw chunks. \"habit\" is an adherence ledger per tracked habit.",
                 "retrieval.retriever": "Vectors, keywords, or both fused.",
                 "retrieval.k": "How many contexts the answerer finally sees.",
                 "retrieval.candidates": "How deep each retriever looks first.",
@@ -1479,9 +1491,9 @@ try:
                 "model.judge": "Model that checks the key facts.",
                 "model.ragas": "Model RAGAS judges with.",
             },
-            "corpus": {"sessions": 157, "messages": 954, "from": "2025-08-02",
-                       "to": "2026-07-27", "threads": 17, "questions": 100,
-                       "query_date": "2026-07-28"},
+            "corpus": {"sessions": 167, "messages": 1002, "from": "2025-08-02",
+                       "to": "2026-07-27", "threads": 18, "habits": 5,
+                       "questions": 112, "query_date": "2026-07-28"},
             "capabilities": {"fastembed": True, "cross_encoder": False, "llm": True,
                              "sentence_transformers": True,
                              "openai_embeddings": False,
@@ -1519,9 +1531,16 @@ try:
                                                    "abstained_correctly": None,
                                                    "false_abstention": 0.0}},
                         "by_difficulty": {}, "layer_usage": {"chunk": 100}},
-            "ragas": {"mode": "offline", "n_samples": 92, "skipped": 8,
+            "ragas": {"mode": "llm", "n_samples": 92, "skipped": 8,
                       "metrics": {"non_llm_context_recall": 0.2249,
-                                  "faithfulness": 0.7431},
+                                  "faithfulness": 0.7431,
+                                  "answer_relevancy": 0.6812,
+                                  "llm_context_precision_with_reference": 0.5904,
+                                  "context_recall": 0.6653},
+                      "decision": 0.68,
+                      "decision_metrics": ["faithfulness", "answer_relevancy",
+                                           "llm_context_precision_with_reference",
+                                           "context_recall"],
                       "notes": ["offline RAGAS context metrics are "
                                 "whole-string similarity"]},
             "rows": [{"id": "q-sh-001", "type": "single-hop", "difficulty": "easy",
@@ -1535,13 +1554,52 @@ try:
             if "/api/raglab/options" in url:
                 payload = LAB_OPTIONS
             elif "/api/raglab/runs" in url:
-                payload = {"runs": []}
+                # Deliberately out of order, and one row that could not be
+                # scored on all four: the page has to rank on the decision
+                # score and push the unranked run last without dropping it.
+                def row(run_id, label, decision, headline):
+                    return {"run_id": run_id, "label": label,
+                            "started_at": "2026-07-30 12:00:00", "seconds": 40,
+                            "n_questions": 20,
+                            "config": {"index": {"chunker": "semantic-drift",
+                                                 "embedder": "sentence-transformers",
+                                                 "embed_model": "heydariAI/persian-embeddings",
+                                                 "layers": ["chunk", "habit"]},
+                                       "retrieval": {"retriever": "hybrid-rrf",
+                                                     "reranker": "lexical"},
+                                       "generation": {"answerer": "llm"}},
+                            "summary": {"overall": {"headline": headline},
+                                        "n_questions": 20},
+                            "ragas": {"faithfulness": 0.9,
+                                      "answer_relevancy": 0.7,
+                                      "llm_context_precision_with_reference": 0.6,
+                                      "context_recall": 0.8}
+                            if decision is not None else {},
+                            "ragas_decision": decision}
+                payload = {"runs": [row("run-mid", "middle", 0.55, 0.9),
+                                    row("run-none", "unranked", None, 0.99),
+                                    row("run-best", "winner", 0.75, 0.4)]}
             elif "/api/raglab/questions" in url:
                 payload = {"questions": [
                     {"id": "q-sh-001", "type": "single-hop", "difficulty": "easy",
                      "question_fa": "الان وضعیت کارم چیه؟",
                      "question_en": "What is my job situation?",
                      "answerable": True, "evidence_sessions": ["2026-05-12-a"]}]}
+            elif "/api/raglab/query" in url:
+                payload = {
+                    "question": "باشگاه هفته‌ای چند بار بود؟", "abstained": False,
+                    "answer": "هفته‌ای سه بار.", "time_scope": None,
+                    "sessions": [], "diagnostics": {"candidates_in_scope": 12,
+                                                    "dense_hits": 8,
+                                                    "bm25_hits": 8,
+                                                    "graded_out": 0,
+                                                    "queries": []},
+                    "timings": {"retrieve_ms": 4.0},
+                    "contexts": [{"chunk_id": "habit-gym", "layer": "habit",
+                                  "session_id": "", "date": "2026-05-16",
+                                  "score": 0.81, "stages": {"retrieval": 1.0},
+                                  "expanded_from": "", "habit": "gym",
+                                  "text": "دفتر عادت «باشگاه» — هدف: 3 بار در هر هفته"}]}
             elif "/api/raglab/jobs/" in url:
                 payload = {"id": "job-1", "kind": "run", "state": "done",
                            "stage": "done", "progress": 1.0, "result": LAB_RESULT,
@@ -1563,7 +1621,7 @@ try:
               and page.locator(".rag-checks input[type=checkbox]").count() >= 5)
         corpus_line = page.locator(".rag-corpus").inner_text()
         check("raglab: the corpus under test is named on the page",
-              "157 sessions" in corpus_line and "100 ground-truth questions" in corpus_line)
+              "167 sessions" in corpus_line and "112 ground-truth questions" in corpus_line)
         check("raglab: missing capabilities are shown as missing",
               page.locator(".rag-cap.off").count() >= 1
               and page.locator(".rag-cap.on").count() >= 1)
@@ -1823,6 +1881,70 @@ try:
         check("raglab: a grade's ink matches its step panel's ink",
               figure_ink == panel_ink)
         page.screenshot(path=shot("raglab-metrics.png"))
+
+        # ---- the score that picks the architecture ---------------------------
+        # Four judged RAGAS metrics, averaged, and the only number that chooses
+        # between configurations. Everything else on the page is reported and
+        # does not vote — so the page has to say which one decided, or a reader
+        # ranks on whichever figure is biggest.
+        decision_card = page.locator(".rag-figure-decision")
+        check("raglab: the deciding score gets its own figure",
+              decision_card.count() == 1
+              and "0.680" in decision_card.inner_text())
+        check("raglab: the deciding figure names the four metrics behind it",
+              all(name in decision_card.inner_text() for name in
+                  ("faithfulness", "answer_relevancy",
+                   "llm_context_precision_with_reference", "context_recall")))
+        page.locator('.rag-figure-decision .rag-why[data-topic="metric.ragas_decision"]').click()
+        page.wait_for_selector(".rag-help")
+        decision_help = page.locator(".rag-help").first.inner_text()
+        check("raglab: the deciding score explains why those four and not others",
+              "unweighted" in decision_help.lower()
+              and "none of it votes" in decision_help.lower())
+        check("raglab: the deciding score admits it carries a model's variance",
+              "RAGAS judge" in decision_help)
+        page.locator('.rag-figure-decision .rag-why[data-topic="metric.ragas_decision"]').click()
+
+        # The leaderboard ranks on it, says so, and keeps the runs it could not
+        # rank rather than hiding them.
+        board = page.locator(".rag-board")
+        check("raglab: the leaderboard says which column chose the architecture",
+              "Ranked by the RAGAS decision score"
+              in page.locator(".rag-basis").inner_text())
+        labels = [c.strip() for c in
+                  board.locator("tbody tr td:first-child").all_inner_texts()]
+        check("raglab: the leaderboard is ordered by the deciding score",
+              labels == ["winner", "middle", "unranked"])
+        check("raglab: an unrankable run is kept and shown as unranked, not dropped",
+              board.locator("tbody tr").count() == 3
+              and board.locator("tbody tr").last.inner_text().count("—") >= 5)
+        # Rendered text, so the stylesheet's uppercase comes back with it.
+        header = board.locator("thead").inner_text().lower()
+        check("raglab: the deciding score and its four parts are all on the row",
+              "decision" in header and "faith" in header and "ans rel" in header
+              and "ctx prec" in header and "ctx recall" in header)
+        check("raglab: the deterministic scores stay on the row without voting",
+              "composite" in header and "quote" in header)
+        page.screenshot(path=shot("raglab-leaderboard.png"))
+
+        # ---- the habit ledger ------------------------------------------------
+        # A habit is the card you repeat instead of finish, so the lab indexes an
+        # adherence ledger per habit beside the raw text. It carries no session
+        # id, so its slug is the only thing saying whose tallies these are.
+        check("raglab: the habit ledger is an indexable and searchable layer",
+              page.locator('.rag-checks input[type=checkbox][value="habit"]').count() == 2)
+        page.locator('.rag-panel .rag-why[data-topic="index.layers"]').click()
+        page.wait_for_selector(".rag-help")
+        check("raglab: the layers explainer covers the new habit ledger",
+              "habit" in page.locator(".rag-help").first.inner_text().lower())
+        page.locator('.rag-panel .rag-why[data-topic="index.layers"]').click()
+        page.fill("#raglab-question", "باشگاه هفته‌ای چند بار بود؟")
+        page.click("#raglab-ask")
+        page.wait_for_selector(".rag-context")
+        context_meta = page.locator(".rag-context .rag-meta").first.inner_text()
+        check("raglab: a retrieved habit ledger says which habit it belongs to",
+              "habit gym" in context_meta and "habit-gym" in context_meta)
+        page.screenshot(path=shot("raglab-habit-ledger.png"))
 
         # A chosen strategy is what a developer changes twenty times in a sitting;
         # losing it on every reload would make the page useless.

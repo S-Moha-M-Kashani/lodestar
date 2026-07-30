@@ -102,6 +102,8 @@ class LabIndex:
                                                  diary.get('threads', {})))
         if 'commitment' in cfg.layers:
             chunks.extend(summarize.commitment_layer(sessions))
+        if 'habit' in cfg.layers:
+            chunks.extend(summarize.habit_layer(sessions, diary.get('habits', {})))
 
         lengths = np.array([len(c.text) for c in chunks]) if chunks else np.array([0])
         stats.chunks = len(chunks)
