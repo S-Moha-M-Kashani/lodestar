@@ -237,7 +237,7 @@ Pick a strategy per stage and the panel grades it:
 | --- | --- |
 | Chunking | fixed 500 (what the brain ships), fixed+overlap, per-message, turn-pair, whole-session, semantic-drift (topic segmentation) — each optionally with Anthropic-style contextual headers |
 | Hierarchy | raw chunks plus, additively, session summaries, month digests, per-storyline digests, and a promise/deadline ledger; summaries extractive (offline) or LLM |
-| Embedding | `ascii-hash` (the brain's current default), `token-hash`, `char-hash` (character n-grams), or a multilingual transformer via fastembed |
+| Embedding | `ascii-hash` (the brain's current default), `token-hash`, `char-hash` (character n-grams), or a real model through one of three backends: **fastembed** (its own ONNX list), **sentence-transformers** (any HuggingFace checkpoint — the lab default is `heydariAI/persian-embeddings`, Persian-tuned; `Qwen/Qwen3-Embedding-8B` is the recommended ceiling), or **openai** (`text-embedding-3-small`/`-large`, needs `OPENAI_API_KEY`). Every option states its language coverage, its licence, and the backend that serves it; anything unavailable stays listed as NA |
 | Retrieval | dense, BM25, or hybrid with Reciprocal Rank Fusion; Farsi time expressions («آذر», «پارسال پاییز») resolved into a Chroma date range; multi-query expansion; HyDE |
 | Reranking | none, lexical, recency, "agentic" (relevance + recency + emotional importance), multilingual cross-encoder, or LLM grading |
 | Gating | a relevance threshold — what makes an honest *"I have nothing on that"* possible — plus parent/session expansion and MMR diversification |
@@ -245,6 +245,12 @@ Pick a strategy per stage and the panel grades it:
 
 Everything is reported per question *type*, because a change that lifts single-hop
 recall while destroying temporal recall is not an improvement.
+
+`npm run raglab` installs what the default embedder needs (the `local-embeddings`
+extra: sentence-transformers and torch, ~1 GB), and downloads the Persian model
+once (~2.2 GB) on the first index build. `tests/ports.test.js` checks that launcher
+against the configured default, so switching the default without switching the
+extra fails a test rather than a run.
 
 The lab is strictly test-side: it writes only to its own Chroma database
 (`lodestar-raglab`, and it refuses to start against the production one) and to a
