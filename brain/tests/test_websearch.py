@@ -20,6 +20,8 @@ def test_web_search_tool_delegates_to_provider():
     assert out[0]['url'] == 'https://x.test/leiden'
 
 
-def test_web_search_spec():
-    spec = make_search_tool(StubSearch()).spec()
-    assert spec['function']['parameters']['required'] == ['query']
+def test_web_search_schema():
+    tool = make_search_tool(StubSearch())
+    schema = tool.args_schema.model_json_schema()
+    assert schema['required'] == ['query']
+    assert 'max_results' in schema['properties']

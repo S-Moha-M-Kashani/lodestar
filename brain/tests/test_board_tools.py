@@ -59,7 +59,7 @@ def test_create_question_posts_a_proposal_not_a_board_save():
 @respx.mock
 def test_create_question_tool_description_says_it_needs_approval():
     tools = tools_by_name(BoardClient(BOARD))
-    described = tools['create_question'].spec()['function']['description'].lower()
+    described = tools['create_question'].description.lower()
     assert 'propos' in described or 'approv' in described or 'confirm' in described
 
 
@@ -110,8 +110,10 @@ def test_update_unknown_id_errors_without_writing():
     assert 'error' in tools['update_question'].run({'id': 'nope', 'type': 'task'})
 
 
-def test_tool_specs_are_openai_shaped():
-    specs = [t.spec() for t in make_board_tools(BoardClient(BOARD))]
-    names = {s['function']['name'] for s in specs}
-    assert names == {'list_questions', 'create_question', 'update_question'}
-    assert all(s['type'] == 'function' and 'parameters' in s['function'] for s in specs)
+def test_tool_schemas_are_derived_from_the_signatures():
+    # The wire format is LangChain's job now; what this file guards is that the
+    # three board tools exist and each carries a schema and a description.
+    tools = make_board_tools(BoardClient(BOARD))
+    assert {t.name for t in tools} == {'list_questions', 'create_question',
+                                       'update_question'}
+    assert all(t.args_schema is not None and t.description for t in tools)

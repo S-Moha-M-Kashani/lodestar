@@ -15,6 +15,7 @@ from . import embedding
 from . import query as query_mod
 from . import retrieval, textnorm
 from .config import LAYERS, GenerationConfig, RetrievalConfig
+from .llm import lab_chat
 from .models import Roles
 
 REFUSAL = 'تو دفترچه چیزی دربارهٔ این پیدا نکردم.'
@@ -393,10 +394,10 @@ def _llm_answer(outcome: Outcome, llm, model: str) -> str:
         label = context.session_id or context.chunk_id
         blocks.append(f'[{label} | {context.date} | {context.layer}]\n{context.text}')
     try:
-        turn = llm.chat([{'role': 'system', 'content': ANSWER_PROMPT},
-                         {'role': 'user', 'content':
-                          f"سؤال: {outcome.question}\n\nتکه‌های دفترچه:\n"
-                          + '\n\n'.join(blocks)}], model=model)
+        turn = lab_chat(llm, [{'role': 'system', 'content': ANSWER_PROMPT},
+                              {'role': 'user', 'content':
+                               f"سؤال: {outcome.question}\n\nتکه‌های دفترچه:\n"
+                               + '\n\n'.join(blocks)}], model)
         return (turn.content or '').strip() or REFUSAL
     except Exception as error:
         outcome.diagnostics['answer_error'] = str(error)[:200]

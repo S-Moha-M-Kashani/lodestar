@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 
 from . import textnorm
+from .llm import lab_chat
 
 # Jalali month → (start month/day, end month/day) in the Gregorian year that
 # contains the *start* of that month.
@@ -214,8 +215,8 @@ def hyde(llm, model: str, question: str) -> str:
     corpus. Questions and diary entries word things very differently, and that
     mismatch is what dense retrieval is worst at."""
     try:
-        turn = llm.chat([{'role': 'system', 'content': HYDE_PROMPT},
-                         {'role': 'user', 'content': question}], model=model)
+        turn = lab_chat(llm, [{'role': 'system', 'content': HYDE_PROMPT},
+                              {'role': 'user', 'content': question}], model)
         return (turn.content or '').strip() or question
     except Exception:
         return question

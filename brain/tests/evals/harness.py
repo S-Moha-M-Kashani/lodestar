@@ -6,9 +6,11 @@ import itertools
 import json
 from pathlib import Path
 
+from langchain_core.messages import AIMessage
+
 from lodestar_brain.agent.registry import build_agent
-from lodestar_brain.llm.base import AssistantTurn, ToolCall
-from lodestar_brain.llm.fake import FakeProvider
+from lodestar_brain.config import Settings
+from lodestar_brain.llm.fake import FakeChat
 from lodestar_brain.tools.board import make_board_tools
 
 SCENARIO_DIR = Path(__file__).parent / "scenarios"
@@ -60,12 +62,15 @@ class InMemoryBoard:
 
 def _turn_from_spec(spec):
     """A scenario 'turn' is either {'content': str} or
-    {'tool_calls': [{'name': str, 'arguments': {...}}]}."""
+    {'tool_calls': [{'name': str, 'arguments': {...}}]}.
+
+    The scenario JSON files are unchanged by the LangChain rewrite — that is the
+    payoff for keeping AgentStep as the brain's own type."""
     if "tool_calls" in spec:
-        calls = [ToolCall(id=f"s{i}", name=c["name"], arguments=c.get("arguments", {}))
-                 for i, c in enumerate(spec["tool_calls"])]
-        return AssistantTurn(tool_calls=calls)
-    return AssistantTurn(content=spec.get("content", ""))
+        return AIMessage(content='', tool_calls=[
+            {"name": c["name"], "args": c.get("arguments", {}), "id": f"s{i}"}
+            for i, c in enumerate(spec["tool_calls"])])
+    return AIMessage(content=spec.get("content", ""))
 
 
 def load_scenario(path):
@@ -77,8 +82,8 @@ def run_scenario(scenario):
     board = InMemoryBoard(scenario.get("board", []))
     tools = make_board_tools(board)
     script = [_turn_from_spec(t) for t in scenario["script"]]
-    llm = FakeProvider(script=script)
-    agent = build_agent("default", llm=llm, tools=tools,
+    agent = build_agent("default", settings=Settings(llm_provider='fake'),
+                        tools=tools, llm=FakeChat(script=script),
                         max_steps=scenario.get("max_steps", 8))
     result = agent.run(scenario["messages"])
     return result, board
