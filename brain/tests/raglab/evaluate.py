@@ -102,6 +102,11 @@ class RunResult:
                 'config': self.config, 'summary': self.summary,
                 'ragas': self.ragas.get('metrics', {}),
                 'ragas_decision': self.ragas.get('decision'),
+                # The error travels with the mean it qualifies. These candidates
+                # sit within 0.01 of one another, so a row without it cannot say
+                # whether it beat the row below it.
+                'ragas_decision_stderr': (self.ragas.get('decision_spread')
+                                          or {}).get('stderr'),
                 'n_questions': self.summary.get('n_questions', 0)}
 
 
@@ -262,6 +267,11 @@ def list_runs(limit: int = 50) -> list[dict]:
                     # None on every run that could not measure all four — both
                     # read as "this row was not ranked", which is the truth.
                     'ragas_decision': ragas.get('decision'),
+                    # None on every run recorded before the spread existed: those
+                    # per-question composites are not recoverable, and `± 0`
+                    # would claim more precision than the rows that measured it.
+                    'ragas_decision_stderr': (ragas.get('decision_spread')
+                                              or {}).get('stderr'),
                     'n_questions': (data.get('summary') or {}).get('n_questions', 0)})
     return out
 

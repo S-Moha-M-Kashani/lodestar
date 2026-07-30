@@ -971,8 +971,27 @@ def test_the_leaderboard_row_carries_the_deciding_score(index, ground_truth):
         run_id='x', label='y', config={}, index={},
         summary={'overall': {}, 'n_questions': 0},
         ragas={'mode': 'llm', 'metrics': {'faithfulness': 0.8},
-               'decision': 0.75, 'decision_metrics': []})
+               'decision': 0.75, 'decision_metrics': [],
+               'decision_spread': {'n': 24, 'mean': 0.75, 'stderr': 0.05}})
     assert result.brief()['ragas_decision'] == 0.75
+    # The error travels with the mean, or the row it lands in cannot say whether
+    # it beat the row below it.
+    assert result.brief()['ragas_decision_stderr'] == 0.05
+
+
+def test_a_row_recorded_before_the_spread_existed_reports_no_error(tmp_path,
+                                                                  monkeypatch):
+    """Older runs have no per-question composites to recover, so the row says
+    so — an absent error must not be rendered as `± 0`, which would claim the
+    run was measured more precisely than the ones that carry a real number."""
+    monkeypatch.setattr(evaluate, 'RUNS_DIR', tmp_path)
+    (tmp_path / '20260101-000000-abcdef.json').write_text(json.dumps({
+        'run_id': '20260101-000000-abcdef', 'label': 'old',
+        'summary': {'n_questions': 24, 'overall': {}},
+        'ragas': {'metrics': {}, 'decision': 0.6}}), encoding='utf-8')
+    row = evaluate.list_runs()[0]
+    assert row['ragas_decision'] == 0.6
+    assert row['ragas_decision_stderr'] is None
 
 
 # --- the sweep that produces the leaderboard --------------------------------
@@ -2169,3 +2188,6 @@ def test_the_standalone_panel_ranks_the_leaderboard_by_the_deciding_score():
     from .raglab.server import STATIC
     html = (STATIC / 'index.html').read_text(encoding='utf-8')
     assert 'ragas_decision' in html
+    # And by the score *with its error*: neither panel may show the mean alone,
+    # because the candidates in a sweep sit inside each other's error bars.
+    assert 'ragas_decision_stderr' in html

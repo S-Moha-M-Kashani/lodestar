@@ -1538,6 +1538,8 @@ try:
                                   "llm_context_precision_with_reference": 0.5904,
                                   "context_recall": 0.6653},
                       "decision": 0.68,
+                      "decision_spread": {"n": 24, "mean": 0.68,
+                                          "stderr": 0.0421},
                       "decision_metrics": ["faithfulness", "answer_relevancy",
                                            "llm_context_precision_with_reference",
                                            "context_recall"],
@@ -1557,8 +1559,9 @@ try:
                 # Deliberately out of order, and one row that could not be
                 # scored on all four: the page has to rank on the decision
                 # score and push the unranked run last without dropping it.
-                def row(run_id, label, decision, headline):
+                def row(run_id, label, decision, headline, stderr=None):
                     return {"run_id": run_id, "label": label,
+                            "ragas_decision_stderr": stderr,
                             "started_at": "2026-07-30 12:00:00", "seconds": 40,
                             "n_questions": 20,
                             "config": {"index": {"chunker": "semantic-drift",
@@ -1576,9 +1579,12 @@ try:
                                       "context_recall": 0.8}
                             if decision is not None else {},
                             "ragas_decision": decision}
-                payload = {"runs": [row("run-mid", "middle", 0.55, 0.9),
+                # "middle" carries an error large enough to overlap the winner,
+                # and "old" carries none at all — both have to render honestly.
+                payload = {"runs": [row("run-mid", "middle", 0.55, 0.9, 0.12),
                                     row("run-none", "unranked", None, 0.99),
-                                    row("run-best", "winner", 0.75, 0.4)]}
+                                    row("run-old", "old", 0.6, 0.5),
+                                    row("run-best", "winner", 0.75, 0.4, 0.03)]}
             elif "/api/raglab/questions" in url:
                 payload = {"questions": [
                     {"id": "q-sh-001", "type": "single-hop", "difficulty": "easy",
@@ -1903,6 +1909,12 @@ try:
               and "none of it votes" in decision_help.lower())
         check("raglab: the deciding score admits it carries a model's variance",
               "RAGAS judge" in decision_help)
+        # A ranking whose gaps are smaller than its error bars has not ranked
+        # anything, so the figure states the error beside the mean rather than
+        # leaving a reader to assume three decimal places of precision.
+        check("raglab: the deciding figure shows the error on its own mean",
+              "0.042" in decision_card.inner_text()
+              and "24" in decision_card.inner_text())
         page.locator('.rag-figure-decision .rag-why[data-topic="metric.ragas_decision"]').click()
 
         # The leaderboard ranks on it, says so, and keeps the runs it could not
@@ -1914,10 +1926,19 @@ try:
         labels = [c.strip() for c in
                   board.locator("tbody tr td:first-child").all_inner_texts()]
         check("raglab: the leaderboard is ordered by the deciding score",
-              labels == ["winner", "middle", "unranked"])
+              labels == ["winner", "old", "middle", "unranked"])
         check("raglab: an unrankable run is kept and shown as unranked, not dropped",
-              board.locator("tbody tr").count() == 3
+              board.locator("tbody tr").count() == 4
               and board.locator("tbody tr").last.inner_text().count("—") >= 5)
+        # The error on the row, next to the number it qualifies — and absent on
+        # the row that never measured one, rather than shown as ± 0.
+        # Not named `errors`: that is the console-error collector this suite
+        # checks at the very end, and shadowing it silently fails that check.
+        row_errors = [tr.locator(".rag-stderr").inner_text().strip()
+                      if tr.locator(".rag-stderr").count() else ""
+                      for tr in board.locator("tbody tr").all()]
+        check("raglab: each ranked row carries the error on its deciding score",
+              row_errors == ["± 0.030", "", "± 0.120", ""])
         # Rendered text, so the stylesheet's uppercase comes back with it.
         header = board.locator("thead").inner_text().lower()
         check("raglab: the deciding score and its four parts are all on the row",

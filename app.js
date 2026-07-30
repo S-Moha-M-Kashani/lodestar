@@ -4945,10 +4945,21 @@
       if (why) name.appendChild(why);
       const value = document.createElement('b');
       value.textContent = ragNum(decision);
+      // The error belongs beside the mean, not in a footnote: these candidates
+      // sit within 0.01 of each other, and three decimal places with no spread
+      // reads as precision the run does not have.
+      const spread = (result.ragas && result.ragas.decision_spread) || {};
+      if (spread.stderr !== null && spread.stderr !== undefined) {
+        const error = document.createElement('span');
+        error.className = 'rag-stderr';
+        error.textContent = `± ${ragNum(spread.stderr)}`;
+        value.appendChild(error);
+      }
       const hint = document.createElement('span');
       hint.className = 'rag-figure-foot';
       hint.textContent = deciders.length
         ? `mean of ${deciders.length}: ${deciders.join(', ')}` : measure.short;
+      if (spread.n) hint.textContent += ` · standard error over ${spread.n} questions`;
       const bar = document.createElement('div');
       bar.className = 'rag-bar';
       const fill = document.createElement('i');
@@ -5308,7 +5319,9 @@
       basis.textContent = 'Ranked by the RAGAS decision score — the unweighted '
         + 'mean of faithfulness, answer relevancy, context precision and context '
         + 'recall. Every other column is reported and none of them votes. Runs '
-        + 'that could not measure all four are unranked and sort last.';
+        + 'that could not measure all four are unranked and sort last. Where a '
+        + 'row shows ±, that is the standard error on its own score: two rows '
+        + 'whose intervals overlap have not been separated by this experiment.';
       sheet.appendChild(basis);
       // Unranked rows sort to the bottom rather than being dropped: a run that
       // could not be scored on all four is still a measurement.
@@ -5342,6 +5355,16 @@
         const decision = document.createElement('strong');
         decision.className = 'rag-decision';
         decision.textContent = ragNum(r.ragas_decision);
+        // Absent on runs recorded before the spread was measured, and left
+        // absent rather than shown as ± 0 — which would claim the oldest rows
+        // were the most precisely measured ones.
+        if (r.ragas_decision_stderr !== null
+            && r.ragas_decision_stderr !== undefined) {
+          const error = document.createElement('span');
+          error.className = 'rag-stderr';
+          error.textContent = `± ${ragNum(r.ragas_decision_stderr)}`;
+          decision.appendChild(error);
+        }
         // The deciding score, then its four constituents, so a row can be
         // checked rather than trusted.
         return [open, r.config.index.chunker, embedder,

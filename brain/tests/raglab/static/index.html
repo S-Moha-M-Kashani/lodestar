@@ -112,6 +112,9 @@
          margin: .4rem 0; background: #fff; }
   .ctx .meta { font-size: .7rem; color: var(--ink-soft); }
   .muted { color: var(--ink-soft); }
+  /* Attached to the score it qualifies, quieter but never dropped. */
+  .stderr { font-size: .72em; font-weight: 400; color: var(--ink-soft);
+            white-space: nowrap; }
   .note { border-left: 3px solid var(--rule-red); padding: .2rem .5rem;
           font-size: .74rem; background: #fff8f2; margin: .25rem 0; }
   progress { width: 100%; height: 6px; }
@@ -721,7 +724,10 @@ async function loadBoard() {
         q.retriever, q.reranker, (i.layers || []).join('+'), r.n_questions,
         // The deciding score first, then its four constituents, so a row can be
         // checked rather than trusted.
-        `<b>${fmt(r.ragas_decision)}</b>`,
+        // With its standard error, where there is one. Candidates in a sweep can
+        // sit inside each other's error bars, and a bare mean cannot say so.
+        `<b>${fmt(r.ragas_decision)}</b>` + (r.ragas_decision_stderr != null
+          ? ` <span class="stderr">± ${fmt(r.ragas_decision_stderr)}</span>` : ''),
         fmt(g.faithfulness), fmt(g.answer_relevancy),
         fmt(g.llm_context_precision_with_reference), fmt(g.context_recall),
         fmt(s.headline), fmt(s.recall), fmt(s.quote_recall), fmt(s.ndcg),
