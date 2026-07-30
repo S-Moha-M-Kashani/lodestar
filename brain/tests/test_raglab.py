@@ -12,7 +12,7 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from lodestar_brain.llm.fake import FakeProvider
+from lodestar_brain.llm.fake import FakeChat
 
 from .raglab import (chunking, config, corpus, embedding, evaluate, explain,
                      metrics, models, pipeline, query, retrieval, summarize,
@@ -330,7 +330,7 @@ def test_llm_grade_parser_defaults_unscored_lines_to_neutral():
         content = '1: 8\nnonsense\n3: 0'
 
     class Provider:
-        def chat(self, messages, tools=None, model=None):
+        def invoke(self, messages, **kwargs):
             return Reply()
 
     scores = retrieval.llm_scores(Provider(), 'm', 'q', ['a', 'b', 'c'])
@@ -647,7 +647,10 @@ class Recorder:
         self.reply = reply
         self.calls: list[str] = []
 
-    def chat(self, messages, tools=None, model=None):
+    def invoke(self, messages, model='', **kwargs):
+        # '' is the default because lab_chat omits the kwarg entirely for a
+        # stage with no model choice — which is what "leave it to the provider"
+        # has to look like on the wire.
         self.calls.append(model)
         return type('Turn', (), {'content': self.reply, 'tool_calls': []})()
 
@@ -761,8 +764,8 @@ def test_two_summary_models_do_not_share_cached_summaries(session, tmp_path):
     summariser. With a per-task model that key has to include the model, or
     comparing two summarisers silently compares one of them twice."""
     fallback = summarize.ExtractiveSummarizer({})
-    first = summarize.LLMSummarizer(FakeProvider(), 'a/model', fallback)
-    second = summarize.LLMSummarizer(FakeProvider(), 'b/model', fallback)
+    first = summarize.LLMSummarizer(FakeChat(), 'a/model', fallback)
+    second = summarize.LLMSummarizer(FakeChat(), 'b/model', fallback)
     assert first.name != second.name
     cache = summarize.SummaryCache(path=tmp_path / 'summaries.json')
     summarize.session_summaries([session], first, cache)
@@ -859,11 +862,21 @@ def test_the_embedding_model_catalogue_offers_models_that_speak_farsi():
                for e in entries)
 
 
+def _fastembed_serving(monkeypatch, ids):
+    """Pretend fastembed is installed and serves exactly `ids`.
+
+    Both halves have to be stubbed. Availability is an import check, the served
+    list is a separate lookup, and the catalogue honours both — so patching only
+    the list leaves these tests asserting on whether the `semantic` extra
+    happens to be installed here. The brain suite is offline by contract."""
+    monkeypatch.setattr(embedding, 'fastembed_available', lambda: True)
+    monkeypatch.setattr(embedding, 'fastembed_models', lambda: frozenset(ids))
+
+
 def test_an_english_only_model_is_offered_but_says_so(monkeypatch):
     """The brain hardwires bge-small-en today. The lab must be able to measure
     that choice, and must never let it be picked by accident."""
-    monkeypatch.setattr(embedding, 'fastembed_models',
-                        lambda: frozenset(embedding.MODEL_IDS))
+    _fastembed_serving(monkeypatch, embedding.MODEL_IDS)
     by_id = {e['id']: e for e in embedding.embed_model_catalogue(LAB_SETTINGS)}
     english = by_id['BAAI/bge-small-en-v1.5']
     assert english['farsi'] is False
@@ -874,14 +887,29 @@ def test_an_english_only_model_is_offered_but_says_so(monkeypatch):
 def test_a_model_fastembed_cannot_serve_stays_in_the_list_as_unavailable(monkeypatch):
     """Same rule as the chat models: NA says "worth trying, nobody measured it
     here", while dropping it hides the option altogether."""
-    monkeypatch.setattr(embedding, 'fastembed_models',
-                        lambda: frozenset({'intfloat/multilingual-e5-large'}))
+    _fastembed_serving(monkeypatch, {'intfloat/multilingual-e5-large'})
     entries = embedding.embed_model_catalogue(LAB_SETTINGS)
     by_id = {entry['id']: entry for entry in entries}
     assert by_id['intfloat/multilingual-e5-large']['available'] is True
     assert by_id['BAAI/bge-m3']['available'] is False
     flags = [entry['available'] for entry in entries]
     assert flags == sorted(flags, reverse=True), 'usable models come first'
+
+
+def test_fastembed_models_are_NA_until_the_semantic_extra_is_installed(monkeypatch):
+    """The mirror of the sentence-transformers case, and the reason the catalogue
+    checks the import on top of the served list: with the extra missing, every
+    fastembed model must read NA rather than promise a wheel that is not there.
+    The served list is left generous on purpose — the import check alone decides."""
+    monkeypatch.setattr(embedding, 'fastembed_models',
+                        lambda: frozenset(embedding.MODEL_IDS))
+    monkeypatch.setattr(embedding, 'fastembed_available', lambda: False)
+    absent = {e['id']: e for e in embedding.embed_model_catalogue(LAB_SETTINGS)}
+    assert absent['BAAI/bge-m3']['available'] is False
+    assert absent['BAAI/bge-small-en-v1.5']['available'] is False
+    monkeypatch.setattr(embedding, 'fastembed_available', lambda: True)
+    present = {e['id']: e for e in embedding.embed_model_catalogue(LAB_SETTINGS)}
+    assert present['BAAI/bge-m3']['available'] is True
 
 
 def test_e5_models_carry_the_prefixes_they_were_trained_with():

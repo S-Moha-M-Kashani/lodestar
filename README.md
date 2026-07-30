@@ -92,7 +92,7 @@ Every capability sits behind a small interface chosen by env vars, so each piece
 | `OPENROUTER_API_KEY` | *(empty)* | LLM access. Without it the assistant errors politely; the board is unaffected |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | Any OpenAI-compatible endpoint works (e.g. a local Ollama later) |
 | `BRAIN_MODEL` | `openai/gpt-5-nano` | Fallback when the browser sends no pick; any OpenRouter model id |
-| `BRAIN_LLM` | `openrouter` | `fake` = deterministic offline provider (tests/CI) |
+| `BRAIN_LLM` | `openrouter` | `fake` = deterministic offline chat model (tests/CI). An unrecognised value **raises at boot** — there is no silent fallback to `openrouter` |
 | `BRAIN_EMBEDDER` | `hash` | `fastembed` (semantic, needs the `semantic` extra) or `hash` (offline token buckets). No fallback mode — a missing wheel is an error, not a silent downgrade |
 | `BRAIN_MAX_STEPS` | `8` | Tool-call budget per chat turn |
 | `BRAIN_TRANSCRIBER` | `parakeet` | Voice-to-text backend. `parakeet` = local MLX model (free, offline, Apple Silicon only); `openrouter` = the omni model; `fake` = deterministic offline transcript (tests/CI). Compose pins `openrouter`, since the brain image cannot install mlx |
@@ -103,6 +103,7 @@ Every capability sits behind a small interface chosen by env vars, so each piece
 | `BRAIN_CHROMA_URL` | `http://localhost:8001` | Chroma server holding chat memory. `memory` = in-process, nothing persisted (tests/CI); empty = chat memory off |
 | `BRAIN_CHROMA_DATABASE` | paired with the board | `lodestar` for the board on `:3000`, `lodestar-test` for every other board |
 | `BRAIN_CHAT_COLLECTION` | `chat-board-<port>` | One collection per board, so recall never leaks between boards |
+| `LANGSMITH_TRACING` | *(never set)* | Deliberately not enabled and not defaulted anywhere in this repo. LangChain's tracing would upload whole conversations — marriage, health, money — to a third-party cloud. Set it yourself only if you accept that |
 
 ### Voice input
 
@@ -158,7 +159,7 @@ uv run --project brain uvicorn lodestar_brain.server:app --reload --port 9000
 
 With Compose, both services start together (`docker compose up`); put `OPENROUTER_API_KEY` in your environment or a `.env` file first. Fully offline mode — used by the tests — is `BRAIN_LLM=fake BRAIN_EMBEDDER=hash`.
 
-Swap points, each one file: the LLM provider (`brain/src/lodestar_brain/llm/`), the search provider (`tools/websearch.py`), the embedder (`rag/embedder.py`), and the agent loop itself (`agent/loop.py`).
+Swap points, each one file: the chat model (`brain/src/lodestar_brain/llm/factory.py` — add a branch, e.g. `ChatOllama`, never edit a call site), the search provider (`tools/websearch.py`), the embedder (`rag/embedder.py`), and the agent itself (`agent/runner.py`, registered in `agent/registry.py`).
 
 ## Keyboard shortcuts (with a card focused)
 

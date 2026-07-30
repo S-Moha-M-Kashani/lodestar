@@ -1,19 +1,30 @@
 """Board tools. All writes go through the Node API so the soft-delete
 durability guarantee holds. CRITICAL: PUT /api/state soft-deletes any card
 omitted from the payload — every save must send the FULL card list."""
-import httpx
+from typing import Literal
 
-from .base import Tool
+import httpx
+from langchain_core.tools import BaseTool, tool
+from pydantic import BaseModel, Field
 
 COLUMNS = ['inbox', 'in-progress', 'answered']
 TYPES = ['question', 'problem', 'task', 'idea', 'plan', 'habit']
-HABIT_FREQS = ['daily', 'weekly', 'monthly', 'yearly']
 # A habit's cadence travels with the proposal; its *history* deliberately does
 # not. There is no tool for ticking a habit — logging a repetition is the user's
 # act, and a record an agent could write into is not a record of anything.
+HABIT_FREQS = ['daily', 'weekly', 'monthly', 'yearly']
 # Categories are a user-defined registry (add/remove in the app, stored by the
 # Node server) — so 'category' is a plain string here, validated server-side:
 # an id the registry doesn't know is stored as '' (uncategorized), never an error.
+CATEGORY_HELP = ("a category id from the user's own registry (e.g. work, love, "
+                 "health — list_questions shows what's in use), or '' for "
+                 "uncategorized")
+FREQUENCY_HELP = 'habits only: which calendar period the count applies to'
+
+Column = Literal['inbox', 'in-progress', 'answered']
+CardType = Literal['question', 'problem', 'task', 'idea', 'plan', 'habit']
+Frequency = Literal['daily', 'weekly', 'monthly', 'yearly', '']
+Rank = Literal['high', 'low', '']
 
 
 class BoardClient:
@@ -53,8 +64,42 @@ def _brief(c: dict) -> dict:
             'notes': c.get('notes', '')}
 
 
-def make_board_tools(client: BoardClient) -> list[Tool]:
+class ListQuestionsArgs(BaseModel):
+    # '' has to stay legal: the old schema let the model omit the filter, and a
+    # model passing it explicitly must get the unfiltered board, not an error.
+    column_id: Literal['inbox', 'in-progress', 'answered', ''] = ''
+    search: str = Field('', description='match in title/notes/tags')
+
+
+class CreateQuestionArgs(BaseModel):
+    title: str = Field(description="the card's text")
+    notes: str = ''
+    type: CardType = 'question'
+    category: str = Field('', description=CATEGORY_HELP)
+    column_id: Column = 'inbox'
+    frequency: Frequency = Field('', description=FREQUENCY_HELP)
+    times_per_period: int = Field(1, ge=1, le=99, description=(
+        'habits only: repetitions per period '
+        '(2 with frequency "daily" means twice a day)'))
+    tags: list[str] = []
+
+
+class UpdateQuestionArgs(BaseModel):
+    id: str
+    title: str | None = None
+    notes: str | None = None
+    type: CardType | None = None
+    category: str | None = Field(None, description=CATEGORY_HELP)
+    column_id: Column | None = None
+    importance: Rank | None = None
+    urgency: Rank | None = None
+    tags: list[str] | None = None
+
+
+def make_board_tools(client: BoardClient) -> list[BaseTool]:
+    @tool('list_questions', args_schema=ListQuestionsArgs)
     def list_questions(column_id: str = '', search: str = '') -> list[dict]:
+        """List cards on the board, optionally filtered by column or free text."""
         cards = client.list_cards()
         if column_id:
             cards = [c for c in cards if c['columnId'] == column_id]
@@ -65,12 +110,18 @@ def make_board_tools(client: BoardClient) -> list[Tool]:
                      or any(q in t for t in (c.get('tags') or []))]
         return [_brief(c) for c in cards]
 
+    @tool('create_question', args_schema=CreateQuestionArgs)
     def create_question(title: str, notes: str = '', type: str = 'question',
                         category: str = '', column_id: str = 'inbox',
                         tags: list | None = None, frequency: str = '',
                         times_per_period: int = 1) -> dict:
-        """Propose a card. The user approves it before it joins the board, so
-        this does NOT put anything on the board by itself."""
+        """Propose a new card (question, problem, task, idea, plan or habit).
+
+        A habit is something repeated on a schedule — give it a frequency and
+        how many times per period. The user must approve the card before it
+        appears on the board, so tell them you have proposed it — never claim
+        it was added.
+        """
         card = {'title': title, 'notes': notes, 'type': type,
                 'category': category, 'columnId': column_id, 'tags': tags or []}
         # A cadence only means something on a habit; sending one with a question
@@ -83,11 +134,14 @@ def make_board_tools(client: BoardClient) -> list[Tool]:
         # reports a proposal instead of claiming it added something.
         return {**_brief(proposal), 'pending': True}
 
+    @tool('update_question', args_schema=UpdateQuestionArgs)
     def update_question(id: str, title: str | None = None, notes: str | None = None,
                         type: str | None = None, category: str | None = None,
                         column_id: str | None = None,
                         importance: str | None = None, urgency: str | None = None,
                         tags: list | None = None) -> dict:
+        """Update fields of an existing card (move columns, set type/category,
+        importance/urgency, tags, or append findings to notes)."""
         cards = client.list_cards()
         target = next((c for c in cards if c['id'] == id), None)
         if target is None:
@@ -101,56 +155,4 @@ def make_board_tools(client: BoardClient) -> list[Tool]:
         client.save_cards(cards)  # full list — never partial
         return _brief(target)
 
-    enum = {'column': {'type': 'string', 'enum': COLUMNS},
-            'card_type': {'type': 'string', 'enum': TYPES},
-            'frequency': {'type': 'string', 'enum': HABIT_FREQS,
-                          'description': 'habits only: which calendar period the '
-                                         'count applies to'},
-            'category': {'type': 'string',
-                         'description': "a category id from the user's own registry "
-                                        "(e.g. work, love, health — list_questions shows "
-                                        "what's in use), or '' for uncategorized"}}
-    return [
-        Tool('list_questions',
-             'List cards on the board, optionally filtered by column or free text.',
-             {'type': 'object', 'properties': {
-                 'column_id': enum['column'],
-                 'search': {'type': 'string', 'description': 'match in title/notes/tags'}},
-              'required': []},
-             list_questions),
-        Tool('create_question',
-             'Propose a new card (question, problem, task, idea, plan or habit). A '
-             'habit is something repeated on a schedule — give it a frequency and '
-             'how many times per period. The user must approve the card before it '
-             'appears on the board, so tell them you have proposed it — never claim '
-             'it was added.',
-             {'type': 'object', 'properties': {
-                 'title': {'type': 'string', 'description': "the card's text"},
-                 'notes': {'type': 'string'},
-                 'type': enum['card_type'],
-                 'category': enum['category'],
-                 'column_id': enum['column'],
-                 'frequency': enum['frequency'],
-                 'times_per_period': {
-                     'type': 'integer',
-                     'description': 'habits only: repetitions per period, 1-99 '
-                                    '(2 with frequency "daily" means twice a day)'},
-                 'tags': {'type': 'array', 'items': {'type': 'string'}}},
-              'required': ['title']},
-             create_question),
-        Tool('update_question',
-             'Update fields of an existing card (move columns, set type/category, '
-             'importance/urgency, tags, or append findings to notes).',
-             {'type': 'object', 'properties': {
-                 'id': {'type': 'string'},
-                 'title': {'type': 'string'},
-                 'notes': {'type': 'string'},
-                 'type': enum['card_type'],
-                 'category': enum['category'],
-                 'column_id': enum['column'],
-                 'importance': {'type': 'string', 'enum': ['high', 'low', '']},
-                 'urgency': {'type': 'string', 'enum': ['high', 'low', '']},
-                 'tags': {'type': 'array', 'items': {'type': 'string'}}},
-              'required': ['id']},
-             update_question),
-    ]
+    return [list_questions, create_question, update_question]
