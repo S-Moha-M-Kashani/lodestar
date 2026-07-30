@@ -1,9 +1,16 @@
 # Tooka Farsi embedder — design
 
 **Date:** 2026-07-30
-**Status:** approved, not yet implemented
+**Status:** **superseded — never implemented as written.** `PartAI/Tooka-SBERT-V2-Large` was
+not added as a `BRAIN_EMBEDDER` backend; nothing in the repo references Tooka. The Farsi
+problem this spec identifies is real and was solved differently: the RAG lab reaches Persian
+through the `sentence-transformers` backend with `heydariAI/persian-embeddings` as its default
+(`brain/tests/raglab/embedding.py`). Keep this document for the diagnosis in "Why this goes
+first" — the zero-vector analysis still holds and is asserted by
+`test_production_ascii_hash_embedder_is_blind_to_farsi`.
 **Cycle 1 of 5.** Roadmap: **this** → LangChain agent rewrite → model registry & pickers →
-factor explainers → Telegram MCP capture.
+factor explainers. The fifth cycle (Telegram MCP capture) was **abandoned** and its spec
+removed.
 
 ## Why this goes first
 

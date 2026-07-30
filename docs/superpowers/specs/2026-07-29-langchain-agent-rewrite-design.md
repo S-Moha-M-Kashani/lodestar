@@ -1,10 +1,11 @@
 # LangChain agent rewrite — design
 
 **Date:** 2026-07-29
-**Status:** approved, not yet implemented
+**Status:** implemented and merged. `agent/runner.py` is built on LangChain's `create_agent`;
+the hand-rolled `agent/loop.py` this spec describes replacing no longer exists.
 **Cycle 2 of 5.** Roadmap: Tooka Farsi embedder → **this** → model registry & pickers →
-factor explainers → Telegram MCP capture. `2026-07-29-telegram-mcp-capture-design.md` depends
-on this cycle and must not start until it is merged and green.
+factor explainers. The fifth cycle (Telegram MCP capture) was **abandoned** and its spec
+removed — Telegram and MCP are out of scope for this project.
 
 ## Why
 
