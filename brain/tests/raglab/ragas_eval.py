@@ -21,6 +21,8 @@ missing wheel must not take the panel down.
 import os
 from dataclasses import dataclass
 
+from .metrics import Measure
+
 # RAGAS posts a usage event per evaluate() call. When that endpoint is
 # unreachable the request does not fail fast — it blocks for ~150 seconds, per
 # call, regardless of how many samples are being scored. That single line was
@@ -36,6 +38,90 @@ LLM_METRICS = ('faithfulness', 'answer_relevancy', 'factual_correctness(mode=f1)
 
 INSTALL_HINT = 'npm run raglab  (it pins these: ' \
     "ragas==0.4.*, langchain-community<0.4, langchain-openai<1, rapidfuzz)"
+
+# These are RAGAS's metrics, under RAGAS's names, so the panel says whose
+# definition it is showing and which class produced the number — including, for
+# the five judged ones, that a model produced it and therefore that the number
+# moves when the model does. Same shape as metrics.MEASURES so the dashboard has
+# one idea of what a score is.
+JUDGED = ', scored by the RAGAS judge model — a model\'s verdict, so it varies'
+NO_JUDGE = ' — string distance via rapidfuzz, no model involved'
+
+RAGAS_MEASURES = (
+    Measure('non_llm_context_recall', 'Context recall (offline)',
+            'RAGAS, string distance', 'retrieval',
+            'reference quotes matched in the retrieved contexts / reference '
+            'quotes, matching by string similarity',
+            'ragas 0.4.x NonLLMContextRecall' + NO_JUDGE,
+            'RAGAS\'s context recall with the judge removed: it compares the '
+            'retrieved context to the ground truth\'s verbatim evidence quotes as '
+            'strings. Deterministic, and the RAGAS number to compare configs on — '
+            'but it compares *whole strings*, so longer chunks score lower even '
+            'when the answer is in them. Use quote recall to compare across '
+            'chunkers.'),
+    Measure('non_llm_context_precision_with_reference',
+            'Context precision (offline)', 'RAGAS, string distance', 'retrieval',
+            'mean precision@k over the retrieved contexts, a context counting as '
+            'relevant when it is similar enough to a reference quote',
+            'ragas 0.4.x NonLLMContextPrecisionWithReference' + NO_JUDGE,
+            'How much of the retrieved context matches the reference evidence, '
+            'weighted towards the top of the ranking. Same whole-string caveat as '
+            'its recall twin.'),
+    Measure('faithfulness', 'Faithfulness', 'answer supported by the context',
+            'generation',
+            'supported claims / total claims in the answer',
+            'ragas 0.4.x Faithfulness' + JUDGED,
+            'RAGAS\'s own definition: the judge breaks the generated answer into '
+            'individual claims, then checks each one against the retrieved '
+            'context. An answer is faithful when the context supports every '
+            'claim in it — so this measures invention, not correctness. A '
+            'perfectly faithful answer can still be wrong if retrieval returned '
+            'the wrong passage.'),
+    Measure('answer_relevancy', 'Answer relevancy', 'does it answer the question',
+            'generation',
+            'mean cosine similarity between the original question and n '
+            'questions the judge reverse-engineers from the answer',
+            'ragas 0.4.x ResponseRelevancy (judge + the lab\'s own embedder for '
+            'the vectors)' + JUDGED,
+            'RAGAS asks the judge to invent the questions the answer would be a '
+            'reply to, embeds them, and compares them with the real question. It '
+            'catches answers that are true and on-topic but do not actually '
+            'address what was asked. The vectors come from the embedder under '
+            'test, so no external embedding API is called.'),
+    Measure('factual_correctness(mode=f1)', 'Factual correctness',
+            'claims vs the reference answer', 'generation',
+            'F1 = 2PR/(P+R) over claims: P = claims in the answer supported by '
+            'the reference, R = claims in the reference present in the answer',
+            'ragas 0.4.x FactualCorrectness(mode=f1)' + JUDGED,
+            'Unlike faithfulness, this compares the answer to the *reference '
+            'answer* rather than to the retrieved context — so it measures being '
+            'right, not merely being grounded. Both directions are counted, which '
+            'is why it is an F1: an answer that omits half the reference loses '
+            'recall, one that adds unsupported detail loses precision.'),
+    Measure('llm_context_precision_with_reference', 'Context precision (judged)',
+            'RAGAS, judged relevance', 'retrieval',
+            'mean precision@k where the judge, not a string metric, decides '
+            'whether each retrieved context is relevant',
+            'ragas 0.4.x LLMContextPrecisionWithReference' + JUDGED,
+            'The judged twin of the offline precision metric. It is immune to the '
+            'whole-string penalty that makes the offline pair unfair to large '
+            'chunks, at the cost of a model call per context and a model\'s '
+            'variance.'),
+    Measure('context_recall', 'Context recall (judged)', 'RAGAS, judged coverage',
+            'retrieval',
+            'reference claims attributable to the retrieved context / reference '
+            'claims',
+            'ragas 0.4.x LLMContextRecall' + JUDGED,
+            'The judge splits the reference answer into claims and asks, for each '
+            'one, whether the retrieved context could support it. It answers '
+            '"was everything needed retrieved?" without depending on the exact '
+            'wording of a quote.'),
+)
+
+RAGAS_MEASURE_HELP = {
+    f'metric.{measure.key}':
+    f'{measure.help} Formula: {measure.formula}. Computed by {measure.library}.'
+    for measure in RAGAS_MEASURES}
 
 
 @dataclass
@@ -127,8 +213,12 @@ def _samples(pairs, ragas_mod, include_answers: bool,
 
 def run(pairs, settings, embedder, mode: str = 'offline',
         sample_limit: int | None = None,
-        reference_texts: dict | None = None) -> dict:
+        reference_texts: dict | None = None,
+        judge_model: str = '') -> dict:
     """Score a run with RAGAS. `pairs` is [(ground-truth question, Outcome)].
+
+    `judge_model` is the model RAGAS judges with — separate from the answerer on
+    purpose, since a model grading its own output is not evidence.
 
     Returns means per metric plus notes; never raises."""
     import warnings
@@ -168,7 +258,7 @@ def run(pairs, settings, embedder, mode: str = 'offline',
         metrics = [NonLLMContextPrecisionWithReference(), NonLLMContextRecall()]
         if mode == 'llm':
             try:
-                metrics += _llm_metrics(settings, embedder)
+                metrics += _llm_metrics(settings, embedder, judge_model)
             except Exception as error:
                 report['notes'].append(f'LLM metrics unavailable: {error}')
         try:
@@ -196,7 +286,7 @@ def run(pairs, settings, embedder, mode: str = 'offline',
     return report
 
 
-def _llm_metrics(settings, embedder):
+def _llm_metrics(settings, embedder, judge_model: str = ''):
     from langchain_openai import ChatOpenAI
     from ragas.embeddings import LangchainEmbeddingsWrapper
     from ragas.llms import LangchainLLMWrapper
@@ -204,7 +294,8 @@ def _llm_metrics(settings, embedder):
                                LLMContextPrecisionWithReference, ResponseRelevancy)
 
     judge = LangchainLLMWrapper(ChatOpenAI(
-        model=settings.llm_model, api_key=settings.openrouter_api_key,
+        model=judge_model or settings.llm_model,
+        api_key=settings.openrouter_api_key,
         base_url=settings.openrouter_base_url, timeout=90))
     vectors = LangchainEmbeddingsWrapper(_LabEmbeddings(embedder))
     return [Faithfulness(llm=judge),
