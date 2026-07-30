@@ -101,11 +101,21 @@ def line(label: str, result) -> str:
             f'quote={overall.get("quote_recall")}  {result.seconds}s')
 
 
-def sweep(limit: int, workers: int, only: list[str] | None = None) -> list[tuple]:
+def judged_settings():
+    """Settings, or exit — every run here is ranked on judged metrics.
+
+    Without a key the LLM stages fall back to the offline fake provider, which
+    answers and judges without failing. That produces a leaderboard of confident
+    meaningless numbers, so both entry points refuse rather than measure."""
     settings = load_lab_settings()
     if not settings.openrouter_api_key:
         sys.exit('OPENROUTER_API_KEY is required: the four deciding metrics are '
                  'judged, so there is nothing to rank without it')
+    return settings
+
+
+def sweep(limit: int, workers: int, only: list[str] | None = None) -> list[tuple]:
+    settings = judged_settings()
     diary = corpus.load_diary()
     ground_truth = corpus.load_ground_truth()
     registry = IndexRegistry(settings, diary)
@@ -139,7 +149,7 @@ def final(limit: int | None, workers: int, label: str) -> None:
     The winner is decided on a subset for cost; the number that goes in the
     document is measured on everything, because a per-type breakdown over two
     habit questions is not a breakdown."""
-    settings = load_lab_settings()
+    settings = judged_settings()
     diary = corpus.load_diary()
     ground_truth = corpus.load_ground_truth()
     registry = IndexRegistry(settings, diary)

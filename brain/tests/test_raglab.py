@@ -6,6 +6,7 @@ the real one-year fixture rather than a toy corpus, because the properties worth
 asserting — that a Farsi question finds its evidence session, that the current
 production embedder finds nothing at all — only exist at that scale.
 """
+import json
 import os
 from dataclasses import replace
 
@@ -16,7 +17,7 @@ from lodestar_brain.llm.fake import FakeChat
 
 from .raglab import (chunking, config, corpus, embedding, evaluate, explain,
                      metrics, models, pipeline, query, retrieval, summarize,
-                     textnorm)
+                     sweep, textnorm)
 from .raglab.config import (EMBEDDERS, GenerationConfig, IndexConfig, LabConfig,
                             LabSettings, RetrievalConfig)
 from .raglab.index import IndexRegistry, LabIndex
@@ -929,6 +930,72 @@ def test_the_leaderboard_row_carries_the_deciding_score(index, ground_truth):
         ragas={'mode': 'llm', 'metrics': {'faithfulness': 0.8},
                'decision': 0.75, 'decision_metrics': []})
     assert result.brief()['ragas_decision'] == 0.75
+
+
+# --- the sweep that produces the leaderboard --------------------------------
+# The sweep spends hours of judged model calls, so everything it can get wrong
+# silently is worth an assertion: a row that is not comparable to the others, a
+# row that cannot be ranked at all, and a row that raises after 40 minutes.
+
+def test_every_candidate_is_selected_by_a_unique_letter():
+    """`--only A F` and `--final G` select on `label.split()[0]`.
+
+    Two candidates sharing a letter means `--final` silently re-runs whichever
+    comes first — and the run it writes carries the *other* one's label."""
+    letters = [c.label.split()[0] for c in sweep.candidates()]
+    assert len(letters) == len(set(letters)), letters
+    assert all(len(letter) == 1 for letter in letters), letters
+
+
+def test_every_candidate_holds_the_embedder_and_both_models_fixed():
+    """The sweep's claim is that each row changes one thing.
+
+    The embedder decides whether anything is measurable at all on a Farsi
+    corpus, and the two models decide what the numbers mean; a row that moved
+    one of them would be incomparable to every other row while looking like a
+    knob result."""
+    for cfg in sweep.candidates():
+        assert cfg.index.embedder == sweep.EMBEDDER, cfg.label
+        assert cfg.index.embed_model == sweep.EMBED_MODEL, cfg.label
+        assert cfg.generation.model == sweep.ANSWER_MODEL, cfg.label
+        assert cfg.generation.ragas_model == sweep.JUDGE_MODEL, cfg.label
+        assert cfg.generation.model != cfg.generation.ragas_model, (
+            'a model grading its own answer is not evidence')
+
+
+def test_every_candidate_generates_an_answer_so_it_can_be_ranked():
+    """All four deciding metrics need a response. A candidate that retrieved
+    without answering would score `None`, drop to the bottom of the ranking as
+    if it had lost, and cost a full run to say nothing."""
+    assert all(c.generation.answerer == 'llm' for c in sweep.candidates())
+
+
+def test_every_candidate_validates_before_the_sweep_starts():
+    """`run_eval` raises on an invalid config. Candidate H is the eighth row, so
+    a typo there would surface after an hour of paid judging."""
+    for cfg in sweep.candidates():
+        assert cfg.validate() == [], cfg.label
+
+
+def test_no_two_candidates_are_the_same_configuration():
+    """A duplicated row costs ten minutes and reads as reproducibility."""
+    seen = {}
+    for cfg in sweep.candidates():
+        key = json.dumps(replace(cfg, label='').to_dict(), sort_keys=True)
+        assert key not in seen, f'{cfg.label} duplicates {seen.get(key)}'
+        seen[key] = cfg.label
+
+
+def test_the_final_run_refuses_to_start_without_a_judge(monkeypatch):
+    """The final run is the one whose numbers go in the document.
+
+    Without a key the LLM stages fall back to the offline fake, so it would
+    produce a full leaderboard row of meaningless scores under the winner's
+    name — the worst output of the two, because the sweep that chose it did
+    refuse."""
+    monkeypatch.setattr(sweep, 'load_lab_settings', lambda: LAB_SETTINGS)
+    with pytest.raises(SystemExit):
+        sweep.final(None, 1, 'A')
 
 
 # --- picking a model per task ----------------------------------------------
