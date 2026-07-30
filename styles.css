@@ -774,6 +774,247 @@ input, select, textarea { font: inherit; color: inherit; }
 }
 .card-cat::before { content: "▪ "; }
 
+/* ---------------------------------------------------------------------------
+   Habits — the punch card
+
+   A habit is the one card you do not finish but repeat, so it wears a punch
+   strip: one box per repetition the period asks for, stamped in the card's own
+   category ink. Colour still means category here; the ↻ type stamp stays
+   neutral like every other type.
+--------------------------------------------------------------------------- */
+
+.habit-cadence {
+  margin: 8px 0 0;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-soft);
+}
+.habit-cadence::before { content: "↻ "; opacity: 0.7; }
+
+.habit-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 7px;
+}
+
+.habit-punch {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+/* An empty box is a ruled square waiting on the quad paper; the next one to
+   fill is dashed, so the strip says where to click without a legend. */
+.punch-box {
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1;
+  color: transparent;
+  background: transparent;
+  border: 1px solid var(--card-line);
+  border-radius: 2px;
+  cursor: pointer;
+  transition: border-color 0.14s ease, background 0.14s ease;
+}
+.punch-box:hover:not(:disabled) { border-color: var(--cat, var(--ink-soft)); }
+.punch-box.next { border-style: dashed; border-color: var(--ink-soft); }
+.punch-box.done {
+  color: var(--paper);
+  background: var(--cat, var(--ink-soft));
+  border-color: transparent;
+  /* Landed askew, like a rubber stamp rather than a printed tick. */
+  transform: rotate(-4deg);
+  animation: stamp-down 0.16s ease-out;
+}
+.punch-box.done:disabled { cursor: default; opacity: 0.85; }
+.punch-box:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 2px; }
+
+@keyframes stamp-down {
+  from { transform: rotate(-14deg) scale(1.4); opacity: 0.3; }
+  to   { transform: rotate(-4deg) scale(1); opacity: 1; }
+}
+
+.punch-more {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-soft);
+  align-self: center;
+}
+
+.habit-history-toggle {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+  background: transparent;
+  border: 1px solid var(--card-line);
+  border-radius: 2px;
+  padding: 1px 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.habit-history-toggle:hover { color: var(--ink); border-color: var(--ink-soft); }
+
+/* The history run sideways: one cell per period, dotted where it was missed,
+   with the count punched into it. */
+.habit-tape {
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px dotted var(--card-line);
+}
+.tape-label,
+.tape-summary {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  color: var(--ink-soft);
+}
+.tape-label { text-transform: uppercase; margin-bottom: 5px; }
+.tape-summary { margin-top: 6px; }
+
+.tape-row {
+  display: flex;
+  gap: 2px;
+  flex-wrap: wrap;
+}
+.tape-cell {
+  width: 13px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
+  font-size: 8px;
+  border: 1px solid var(--card-line);
+  border-radius: 1px;
+}
+.tape-cell.full { background: var(--cat, var(--ink-soft)); border-color: transparent; color: var(--paper); }
+/* Half-done has to read as half-done, not as an empty cell with a number in it */
+.tape-cell.part {
+  background: color-mix(in oklab, var(--cat, var(--ink-soft)) 45%, transparent);
+  border-color: transparent;
+  color: var(--ink);
+}
+.tape-cell.miss { border-style: dotted; color: transparent; }
+.tape-cell.today { box-shadow: 0 0 0 1px var(--ink-soft); }
+
+/* --- The rail: today's habits beside the board ---------------------------- */
+
+.board.has-habit-rail {
+  grid-template-columns: repeat(3, minmax(210px, 1fr)) 200px;
+  width: min(100%, 1440px);
+}
+
+.habit-rail {
+  position: sticky;
+  top: 8px;
+  padding: 0 0 0 14px;
+  border-left: 1px dashed var(--line);
+}
+
+.habit-rail-head { margin-bottom: 10px; }
+.habit-rail-title {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.habit-rail-title::before { content: "↻ "; color: var(--ink-soft); }
+.habit-rail-sub {
+  margin: 2px 0 0;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-soft);
+}
+
+.habit-rail-row {
+  padding: 7px 0;
+  border-bottom: 1px dotted var(--card-line);
+}
+.habit-rail-row:last-child { border-bottom: 0; }
+/* Finished habits stay listed, dimmed — the rail is a day's ledger, not a
+   nag list that empties itself. */
+.habit-rail-row.done { opacity: 0.45; }
+
+.habit-rail-name {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 5px;
+}
+.habit-rail-open {
+  font-family: var(--body);
+  font-size: 12px;
+  text-align: left;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.habit-rail-open:hover { text-decoration: underline; }
+.habit-rail-row.categorized .habit-rail-open::before {
+  content: "▪ ";
+  color: var(--cat);
+}
+.habit-rail-tally {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+/* --- The reminder --------------------------------------------------------- */
+
+#habit-banner-slot:empty { display: none; }
+
+.habit-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0 0;
+  padding: 8px 12px;
+  background: var(--card);
+  border: 1px solid var(--card-line);
+  border-left: 3px solid var(--high);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+}
+.habit-banner-bell { font-size: 13px; }
+.habit-banner-text {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.habit-banner-hide {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-soft);
+  background: transparent;
+  border: 1px solid var(--card-line);
+  border-radius: 2px;
+  padding: 2px 7px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.habit-banner-hide:hover { color: var(--ink); border-color: var(--ink-soft); }
+
+/* The cadence fields, revealed by the Habit stamp */
+.habit-fields { border: 1px dashed var(--line); border-radius: var(--radius); }
+
 /* Red-pencil insertion mark while dragging */
 .drop-indicator {
   height: 2px;
@@ -1551,6 +1792,13 @@ kbd {
     flex: 0 0 285px;
     scroll-snap-align: start;
     max-height: calc(100vh - 230px);
+  }
+  /* No room for a fourth column, so the rail joins the carousel as the last
+     panel rather than squeezing the board. */
+  .habit-rail {
+    flex: 0 0 240px;
+    position: static;
+    scroll-snap-align: start;
   }
 }
 

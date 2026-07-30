@@ -10,18 +10,21 @@
   const COLUMNS = [
     { id: 'inbox', title: 'Inbox' },
     { id: 'in-progress', title: 'In Progress' },
-    { id: 'answered', title: 'Answered' },
+    // 'answered' is the id every stored card and saved board already carries;
+    // only the label changed, because the column finishes tasks and habits too.
+    { id: 'answered', title: 'Done' },
   ];
 
   // What kind of thing a card is — stamped on the card like the old priority
   // stamp, but neutral ink: colour on this board always means category.
-  const TYPES = ['question', 'problem', 'task', 'idea', 'plan'];
+  const TYPES = ['question', 'problem', 'task', 'idea', 'plan', 'habit'];
   const TYPE_META = {
     question: { glyph: '?', label: 'question' },
     problem:  { glyph: '!', label: 'problem' },
     task:     { glyph: '✓', label: 'task' },
     idea:     { glyph: '✦', label: 'idea' },
     plan:     { glyph: '→', label: 'plan' },
+    habit:    { glyph: '↻', label: 'habit' },
   };
   const TYPE_RANK = Object.fromEntries(TYPES.map((t, i) => [t, i]));
 
@@ -112,6 +115,131 @@
   const CONTROL_LABEL = { act: 'I can act', influence: 'I can influence', none: 'Out of my hands' };
 
   // --------------------------------------------------------------------------
+  // Habits — the one card type that is not finished but repeated.
+  //
+  // `habitCount` times per `habitFreq` calendar period; `habitTimes` are
+  // optional clock slots that decide when the reminder fires, never the target
+  // (which is why "2× per year" needs no clock at all). `habitHistory` maps a
+  // period id to the instants it was done. None of it is cleared when the card
+  // changes type: a mis-stamp must not cost a year of completions.
+  // --------------------------------------------------------------------------
+
+  const HABIT_FREQS = ['daily', 'weekly', 'monthly', 'yearly'];
+  const HABIT_MAX_COUNT = 99;
+  const HABIT_MAX_PERIODS = 400;
+  const HABIT_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+  const HABIT_PERIOD_RE =
+    /^\d{4}(-(0[1-9]|1[0-2])(-(0[1-9]|[12]\d|3[01]))?|-W(0[1-9]|[1-4]\d|5[0-3]))?$/;
+  // "2× per day" reads better than "2× per daily"; "0/2 today" better than
+  // "0/2 this day".
+  const HABIT_EVERY = { daily: 'day', weekly: 'week', monthly: 'month', yearly: 'year' };
+  const HABIT_NOW = { daily: 'today', weekly: 'this week', monthly: 'this month', yearly: 'this year' };
+
+  const habitFreqVal = (v) => (HABIT_FREQS.includes(v) ? v : '');
+  const habitCountVal = (v) => {
+    const n = Math.trunc(Number(v));
+    return Number.isFinite(n) ? Math.min(HABIT_MAX_COUNT, Math.max(1, n)) : 1;
+  };
+  const habitTimesVal = (v, count) => {
+    if (!Array.isArray(v)) return [];
+    const seen = new Set();
+    for (const t of v) if (typeof t === 'string' && HABIT_TIME_RE.test(t)) seen.add(t);
+    return [...seen].sort().slice(0, count);
+  };
+  function habitHistoryVal(v) {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return {};
+    const kept = [];
+    for (const [period, stamps] of Object.entries(v)) {
+      if (!HABIT_PERIOD_RE.test(period) || !Array.isArray(stamps)) continue;
+      const clean = stamps.filter((t) => Number.isFinite(t)).sort((a, b) => a - b);
+      if (clean.length) kept.push([period, clean]);
+    }
+    kept.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return Object.fromEntries(kept.slice(-HABIT_MAX_PERIODS));
+  }
+
+  const pad2 = (n) => String(n).padStart(2, '0');
+
+  /** ISO week (Monday-based; the Thursday in the week decides the year). */
+  function isoWeek(date) {
+    const t = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+    t.setUTCDate(t.getUTCDate() + 4 - (t.getUTCDay() || 7));
+    const jan1 = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+    return { year: t.getUTCFullYear(), week: Math.ceil(((t - jan1) / 86400000 + 1) / 7) };
+  }
+
+  /** The calendar period a moment falls in — local time, always. */
+  function habitPeriod(freq, date = new Date()) {
+    const y = date.getFullYear();
+    if (freq === 'yearly') return String(y);
+    if (freq === 'monthly') return `${y}-${pad2(date.getMonth() + 1)}`;
+    if (freq === 'weekly') {
+      const { year, week } = isoWeek(date);
+      return `${year}-W${pad2(week)}`;
+    }
+    return `${y}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+  }
+
+  /** The last `n` period ids, oldest first, ending with the one we are in. */
+  function habitPeriodsBack(freq, n, from = new Date()) {
+    // Monthly and yearly steps walk from the 1st, so stepping back from the
+    // 31st cannot skip a short month.
+    const byDay = freq === 'daily' || freq === 'weekly';
+    const d = new Date(from.getFullYear(), from.getMonth(), byDay ? from.getDate() : 1);
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      out.unshift(habitPeriod(freq, d));
+      if (freq === 'yearly') d.setFullYear(d.getFullYear() - 1);
+      else if (freq === 'monthly') d.setMonth(d.getMonth() - 1);
+      else if (freq === 'weekly') d.setDate(d.getDate() - 7);
+      else d.setDate(d.getDate() - 1);
+    }
+    return out;
+  }
+
+  const isHabit = (card) => card.type === 'habit' && Boolean(card.habitFreq);
+  const habitDoneIn = (card, period) => (card.habitHistory?.[period] || []).length;
+  const habitDoneNow = (card) => habitDoneIn(card, habitPeriod(card.habitFreq));
+  /** Retired: a habit parked in Done stops counting and stops reminding. */
+  const habitRetired = (card) => card.columnId === 'answered';
+  const habitDue = (card) =>
+    isHabit(card) && !habitRetired(card) && habitDoneNow(card) < card.habitCount;
+  const habitCards = () => state.cards.filter(isHabit);
+
+  const cadenceText = (card) => {
+    const base = `${card.habitCount}× per ${HABIT_EVERY[card.habitFreq]}`;
+    return card.habitTimes.length ? `${base} · ${card.habitTimes.join(', ')}` : base;
+  };
+  const habitTally = (card) =>
+    `${habitDoneNow(card)}/${card.habitCount} ${HABIT_NOW[card.habitFreq]}`;
+
+  /** Record one repetition, now. Returns false when the period is already full. */
+  function punchHabit(card) {
+    const period = habitPeriod(card.habitFreq);
+    const stamps = (card.habitHistory[period] || []).slice();
+    if (stamps.length >= card.habitCount) return false;
+    stamps.push(Date.now());
+    card.habitHistory = { ...card.habitHistory, [period]: stamps };
+    card.updatedAt = Date.now();
+    return true;
+  }
+
+  /** Take the newest repetition back — a mis-tap must be undoable, or the
+   *  history stops being a record of what actually happened. */
+  function unpunchHabit(card) {
+    const period = habitPeriod(card.habitFreq);
+    const stamps = (card.habitHistory[period] || []).slice();
+    if (!stamps.length) return false;
+    stamps.pop();
+    const next = { ...card.habitHistory };
+    if (stamps.length) next[period] = stamps;
+    else delete next[period];
+    card.habitHistory = next;
+    card.updatedAt = Date.now();
+    return true;
+  }
+
+  // --------------------------------------------------------------------------
   // State & persistence
   // --------------------------------------------------------------------------
 
@@ -123,7 +251,8 @@
     const mk = (title, columnId, type, category, tags, importance = '', urgency = '', notes = '') =>
       ({ id: uid(), columnId, title, notes, type, category, importance, urgency,
          effort: 'medium', control: 'influence', effortSrc: 'default', controlSrc: 'default',
-         deadline: '', tags, createdAt: now, updatedAt: now });
+         deadline: '', habitFreq: '', habitCount: 1, habitTimes: [], habitHistory: {},
+         tags, createdAt: now, updatedAt: now });
     // Seeds span categories, types and all four matrix quadrants, so every view
     // has something to show on a fresh board.
     return [
@@ -150,6 +279,7 @@
 
   function sanitizeCard(raw, reg = categories) {
     if (!raw || typeof raw !== 'object' || typeof raw.title !== 'string' || !raw.title.trim()) return null;
+    const habitCount = habitCountVal(raw.habitCount);
     return {
       id: typeof raw.id === 'string' && raw.id ? raw.id : uid(),
       columnId: COLUMNS.some((c) => c.id === raw.columnId) ? raw.columnId : 'inbox',
@@ -164,6 +294,10 @@
       effortSrc: srcVal(raw.effortSrc),
       controlSrc: srcVal(raw.controlSrc),
       deadline: deadlineVal(raw.deadline),
+      habitFreq: habitFreqVal(raw.habitFreq),
+      habitCount,
+      habitTimes: habitTimesVal(raw.habitTimes, habitCount),
+      habitHistory: habitHistoryVal(raw.habitHistory),
       num: Number.isInteger(raw.num) && raw.num > 0 ? raw.num : 0,
       tags: Array.isArray(raw.tags) ? raw.tags.map((t) => String(t).trim().toLowerCase()).filter(Boolean) : [],
       createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : Date.now(),
@@ -278,6 +412,10 @@
   const boardFingerprint = (cards) =>
     cards.map((c) => [c.id, c.columnId, c.title, c.notes, c.type, c.category || '', c.importance || '', c.urgency || '',
       c.effort || '', c.control || '', c.effortSrc || '', c.controlSrc || '', c.deadline || '',
+      // Habit completions belong here: a board that differs only by a punch is
+      // not "already in sync", and skipping the adopt would lose the tick.
+      c.habitFreq || '', c.habitCount || 1, (c.habitTimes || []).join('|'),
+      JSON.stringify(c.habitHistory || {}),
       c.num, (c.tags || []).join('|')].join('␟')).join('␞');
 
   function pushToServer() {
@@ -539,9 +677,15 @@
       board.appendChild(renderRagLab());
     } else {
       for (const col of COLUMNS) board.appendChild(renderColumn(col));
+      const rail = renderHabitRail();
+      if (rail) {
+        board.appendChild(rail);
+        board.classList.add('has-habit-rail');
+      }
     }
     renderCatRail();
     renderTagBar();
+    renderHabitBanner();
     $('#undo-btn').disabled = timeline.index <= 0;
 
     if (dealCards) {
@@ -635,6 +779,10 @@
         type: filters.type || 'question', category: filters.category,
         importance: '', urgency: '', deadline: '',
         effort: 'medium', control: 'influence', effortSrc: 'default', controlSrc: 'default',
+        // Captured while filtered to habits, it is a habit: once a day until
+        // the user says otherwise, rather than a habit with no cadence at all.
+        habitFreq: filters.type === 'habit' ? 'daily' : '',
+        habitCount: 1, habitTimes: [], habitHistory: {},
         num: nextNum(), tags: [], createdAt: now, updatedAt: now };
       // New captures go to the top of the Inbox
       const firstInbox = state.cards.findIndex((c) => c.columnId === 'inbox');
@@ -687,6 +835,274 @@
       chip.title = 'Deadline passed';
     }
     return chip;
+  }
+
+  // --------------------------------------------------------------------------
+  // Habit UI — the punch strip, the history tape, the rail and the reminder.
+  //
+  // The strip is the signature object: one box per repetition the period asks
+  // for, stamped in the card's own category ink. It is the count, the progress
+  // and the control at once, so there is no second widget to keep in step.
+  // --------------------------------------------------------------------------
+
+  const PUNCH_MAX_BOXES = 8;  // past this a strip stops being readable at a glance
+  const TAPE_PERIODS = { daily: 21, weekly: 12, monthly: 12, yearly: 6 };
+  const openTapes = new Set(); // card ids whose history is expanded
+
+  function punchStrip(card) {
+    const strip = document.createElement('div');
+    strip.className = 'habit-punch';
+    const done = habitDoneNow(card);
+    const shown = Math.min(card.habitCount, PUNCH_MAX_BOXES);
+
+    for (let i = 0; i < shown; i++) {
+      const stamped = i < done;
+      const box = document.createElement('button');
+      box.type = 'button';
+      box.className = 'punch-box' + (stamped ? ' done' : '') + (i === done ? ' next' : '');
+      box.textContent = stamped ? '✓' : '';
+      // Only the newest stamp can be taken back — a stack, so the history keeps
+      // matching the order things actually happened in.
+      box.disabled = stamped && i < done - 1;
+      box.title = stamped
+        ? (box.disabled ? 'Recorded' : 'Take this one back')
+        : 'Record one now';
+      box.setAttribute('aria-label',
+        `${card.title}: ${box.title.toLowerCase()} (${done} of ${card.habitCount} ${HABIT_NOW[card.habitFreq]})`);
+      box.addEventListener('click', (e) => {
+        e.stopPropagation(); // the card itself opens the edit dialog
+        const target = getCard(card.id);
+        if (!target) return;
+        const undo = i < habitDoneNow(target);
+        if (undo ? unpunchHabit(target) : punchHabit(target)) {
+          commit(`${undo ? 'Took back' : 'Recorded'} “${short(target.title)}”`);
+          announce(`${target.title}: ${habitTally(getCard(card.id))}`);
+        }
+      });
+      strip.append(box);
+    }
+
+    if (card.habitCount > shown) {
+      const more = document.createElement('span');
+      more.className = 'punch-more';
+      more.textContent = `${done}/${card.habitCount}`;
+      strip.append(more);
+    }
+    return strip;
+  }
+
+  /** The history, run sideways: one cell per past period, carrying the number
+   *  punched into it, dotted where the period was missed. */
+  function habitTape(card) {
+    const n = TAPE_PERIODS[card.habitFreq] || 21;
+    const periods = habitPeriodsBack(card.habitFreq, n);
+    const current = habitPeriod(card.habitFreq);
+
+    const wrap = document.createElement('div');
+    wrap.className = 'habit-tape';
+
+    const label = document.createElement('div');
+    label.className = 'tape-label';
+    label.textContent = `Last ${n} ${HABIT_EVERY[card.habitFreq]}s · oldest first`;
+
+    const row = document.createElement('div');
+    row.className = 'tape-row';
+    let complete = 0, run = 0, best = 0;
+    for (const period of periods) {
+      const done = habitDoneIn(card, period);
+      const full = done >= card.habitCount;
+      if (full) { complete++; best = Math.max(best, ++run); }
+      // An unfinished *current* period is not yet a broken run — the day isn't over.
+      else if (period !== current) run = 0;
+
+      const cell = document.createElement('span');
+      cell.className = 'tape-cell ' + (full ? 'full' : done ? 'part' : 'miss');
+      if (period === current) cell.classList.add('today');
+      cell.textContent = done ? String(done) : '';
+      cell.title = `${period} — ${done} of ${card.habitCount}`;
+      row.append(cell);
+    }
+
+    const summary = document.createElement('div');
+    summary.className = 'tape-summary';
+    summary.textContent = `${complete} of ${n} complete · longest run ${best}`;
+
+    wrap.append(label, row, summary);
+    return wrap;
+  }
+
+  /** Everything a habit adds to its card: the cadence in words, the strip, and
+   *  the history behind a button. */
+  function habitCardParts(card, el) {
+    const cadence = document.createElement('p');
+    cadence.className = 'habit-cadence';
+    cadence.textContent = habitRetired(card) ? `${cadenceText(card)} · retired` : cadenceText(card);
+    el.append(cadence);
+
+    const line = document.createElement('div');
+    line.className = 'habit-line';
+    if (!habitRetired(card)) line.append(punchStrip(card));
+
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'habit-history-toggle';
+    toggle.textContent = '↻ history';
+    toggle.title = 'Show what you have done';
+    toggle.setAttribute('aria-expanded', String(openTapes.has(card.id)));
+    toggle.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (openTapes.has(card.id)) openTapes.delete(card.id);
+      else openTapes.add(card.id);
+      render();
+    });
+    line.append(toggle);
+    el.append(line);
+
+    if (openTapes.has(card.id)) el.append(habitTape(card));
+  }
+
+  /** The rail: today's habits beside the board. Absent until there is one — an
+   *  empty panel would cost every non-habit user a column of space. */
+  function renderHabitRail() {
+    const habits = habitCards().filter((c) => !habitRetired(c));
+    if (!habits.length) return null;
+
+    const rail = document.createElement('aside');
+    rail.className = 'habit-rail';
+    rail.setAttribute('aria-label', 'Habits');
+
+    const head = document.createElement('div');
+    head.className = 'habit-rail-head';
+    const title = document.createElement('h2');
+    title.className = 'habit-rail-title';
+    title.textContent = 'Habits';
+    const sub = document.createElement('p');
+    sub.className = 'habit-rail-sub';
+    const due = habits.filter(habitDue).length;
+    sub.textContent = due ? `${due} due` : 'All done';
+    head.append(title, sub);
+    rail.append(head);
+
+    // Due first, finished after — a day's ledger, not a nag list.
+    for (const card of [...habits].sort((a, b) => Number(habitDue(b)) - Number(habitDue(a)))) {
+      const row = document.createElement('div');
+      row.className = 'habit-rail-row' + (habitDue(card) ? '' : ' done');
+      row.style.setProperty('--cat', catColor(card.category));
+      if (card.category) row.classList.add('categorized');
+
+      const top = document.createElement('div');
+      top.className = 'habit-rail-name';
+      const name = document.createElement('button');
+      name.type = 'button';
+      name.className = 'habit-rail-open';
+      name.textContent = card.title;
+      name.title = 'Open this card';
+      name.addEventListener('click', () => openDialog(card.id));
+      const tally = document.createElement('span');
+      tally.className = 'habit-rail-tally';
+      tally.textContent = habitTally(card);
+      top.append(name, tally);
+
+      row.append(top, punchStrip(card));
+      rail.append(row);
+    }
+    return rail;
+  }
+
+  // --- The reminder ---------------------------------------------------------
+  // A banner that says what is due, and one short bip. The bip is a bonus:
+  // browsers refuse audio before the first gesture, so the banner is the
+  // channel that always works.
+
+  const HABIT_MUTE_KEY = 'question-board:habit-mute';
+  let habitMuted = localStorage.getItem(HABIT_MUTE_KEY) === '1';
+  let habitBannerHidden = false; // dismissed for this session; a reload brings it back
+  let audioCtx = null;
+  // Keys of things already sounded, so the bip marks a change rather than
+  // repeating on every render.
+  const sounded = new Set();
+
+  /** How many repetitions the clock has asked for so far. With no slots set the
+   *  whole period is fair game, so the full target is expected from its start. */
+  function habitExpectedBy(card, at = new Date()) {
+    if (!card.habitTimes.length) return card.habitCount;
+    const now = `${pad2(at.getHours())}:${pad2(at.getMinutes())}`;
+    return card.habitTimes.filter((t) => t <= now).length;
+  }
+  const habitReminding = (card, at = new Date()) =>
+    habitDue(card) && habitDoneNow(card) < habitExpectedBy(card, at);
+
+  function bip() {
+    if (habitMuted) return;
+    try {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      const t = audioCtx.currentTime;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = 880;
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(0.07, t + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+      osc.connect(gain).connect(audioCtx.destination);
+      osc.start(t);
+      osc.stop(t + 0.2);
+    } catch {
+      // No audio device, or no user gesture yet. The banner still shows.
+    }
+  }
+
+  function renderHabitBanner() {
+    const slot = $('#habit-banner-slot');
+    if (!slot) return;
+    slot.innerHTML = '';
+    if (view !== 'board') return;
+
+    const at = new Date();
+    const due = habitCards().filter((c) => habitReminding(c, at));
+    if (!due.length) return;
+
+    // One key per habit per period per slot reached, so a passing slot time
+    // sounds again but a re-render never does.
+    for (const c of due) {
+      const key = `${c.id}@${habitPeriod(c.habitFreq)}@${habitExpectedBy(c, at)}`;
+      if (sounded.has(key)) continue;
+      sounded.add(key);
+      habitBannerHidden = false; // something new came due — show it again
+      bip();
+    }
+    if (habitBannerHidden) return;
+
+    const banner = document.createElement('div');
+    banner.className = 'habit-banner';
+
+    const bell = document.createElement('span');
+    bell.className = 'habit-banner-bell';
+    bell.textContent = '🔔';
+
+    const text = document.createElement('p');
+    text.className = 'habit-banner-text';
+    const list = due.map((c) => `${c.title} (${habitTally(c)})`).join(' · ');
+    text.textContent = `${due.length} habit${due.length > 1 ? 's' : ''} due — ${list}`;
+
+    const hide = document.createElement('button');
+    hide.type = 'button';
+    hide.className = 'habit-banner-hide';
+    hide.textContent = 'Hide';
+    hide.title = 'Hide until the next one comes due';
+    hide.addEventListener('click', () => { habitBannerHidden = true; renderHabitBanner(); });
+
+    banner.append(bell, text, hide);
+    slot.append(banner);
+  }
+
+  function syncHabitMute() {
+    const btn = $('#habit-mute');
+    if (!btn) return;
+    btn.textContent = habitMuted ? '🔇 Habit sound' : '🔊 Habit sound';
+    btn.setAttribute('aria-pressed', String(!habitMuted));
+    btn.title = habitMuted ? 'Habit reminders are silent' : 'Sound the reminder when a habit is due';
   }
 
   function cardAria(card) {
@@ -748,6 +1164,8 @@
       }
       el.append(tags);
     }
+
+    if (isHabit(card)) habitCardParts(card, el);
 
     el.addEventListener('click', () => openDialog(card.id));
     el.addEventListener('keydown', (e) => onCardKeydown(e, card.id));
@@ -3255,7 +3673,19 @@
       label.append(input, span);
       typeWrap.append(label);
     }
+    // The cadence fields only make sense for a habit, so they appear with the
+    // stamp rather than sitting empty on every other card.
+    typeWrap.addEventListener('change', syncHabitFields);
   })();
+
+  function syncHabitFields() {
+    $('#card-habit').hidden = form.elements.type.value !== 'habit';
+  }
+
+  // Forgiving on the way in, strict on the way out: "7:30" is what people type.
+  const padTime = (t) => (/^\d:\d\d$/.test(t) ? '0' + t : t);
+  const readHabitTimes = (count) => habitTimesVal(
+    $('#card-habit-times').value.split(',').map((t) => padTime(t.trim())).filter(Boolean), count);
 
   function rebuildCategoryPicker() {
     const catWrap = $('#category-picker-options');
@@ -3325,6 +3755,11 @@
     $('#card-control').value = controlVal(card.control);
     for (const radio of form.elements.type) radio.checked = radio.value === card.type;
     for (const radio of form.elements.category) radio.checked = radio.value === (card.category || '');
+    // A card being stamped Habit for the first time starts at once a day.
+    $('#card-habit-freq').value = card.habitFreq || 'daily';
+    $('#card-habit-count').value = String(card.habitCount || 1);
+    $('#card-habit-times').value = card.habitTimes.join(', ');
+    syncHabitFields();
     const fmt = (ts) => new Date(ts).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
     $('#card-meta').textContent =
       `${qLabel(card)} · in ${columnTitle(card.columnId)} · added ${fmt(card.createdAt)} · updated ${fmt(card.updatedAt)}`;
@@ -3339,6 +3774,13 @@
       card.title = $('#card-title').value.trim() || card.title;
       card.notes = $('#card-notes').value;
       card.type = typeVal(form.elements.type.value);
+      // Written only for a habit, so editing an ordinary card can never touch
+      // a cadence — or a history — it was not asked about.
+      if (card.type === 'habit') {
+        card.habitFreq = habitFreqVal($('#card-habit-freq').value) || 'daily';
+        card.habitCount = habitCountVal($('#card-habit-count').value);
+        card.habitTimes = readHabitTimes(card.habitCount);
+      }
       card.category = catVal(form.elements.category.value);
       card.importance = iuVal($('#card-importance').value);
       card.urgency = iuVal($('#card-urgency').value);
@@ -3590,13 +4032,16 @@
     {
       "title": "The card's text (required)",
       "columnId": "inbox | in-progress | answered",
-      "type": "question | problem | task | idea | plan",
+      "type": "question | problem | task | idea | plan | habit",
       "category": "one of your category ids — work, love, family, health, mind, music, travel, home, money by default  (optional)",
       "importance": "high | low  (optional — for the Matrix)",
       "urgency": "high | low  (optional — for the Matrix)",
       "effort": "low | medium | high  (optional — defaults to medium)",
       "control": "act | influence | none  (optional — defaults to influence)",
       "deadline": "YYYY-MM-DD  (optional)",
+      "habitFreq": "daily | weekly | monthly | yearly  (habits only)",
+      "habitCount": "how many times per period, 1-99  (habits only, defaults to 1)",
+      "habitTimes": ["HH:MM reminder slots (habits only, optional)"],
       "notes": "Optional free-form notes or the answer",
       "tags": ["optional", "lowercase", "tags"],
       "num": 12,
@@ -3611,6 +4056,18 @@
 
   const importDialog = $('#import-dialog');
   $('#import-schema').textContent = IMPORT_SCHEMA;
+
+  $('#habit-mute').addEventListener('click', () => {
+    habitMuted = !habitMuted;
+    localStorage.setItem(HABIT_MUTE_KEY, habitMuted ? '1' : '0');
+    syncHabitMute();
+    announce(habitMuted ? 'Habit reminders are silent' : 'Habit reminders will sound');
+  });
+  syncHabitMute();
+
+  // A slot time passing is the other moment a habit comes due, so the reminder
+  // is re-checked while the board is open, not only when it is opened.
+  setInterval(renderHabitBanner, 30_000);
 
   $('#import-btn').addEventListener('click', () => importDialog.showModal());
   $('#cancel-import').addEventListener('click', () => importDialog.close());

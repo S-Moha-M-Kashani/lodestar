@@ -35,6 +35,7 @@
           <option value="task">✓ Tasks</option>
           <option value="idea">✦ Ideas</option>
           <option value="plan">→ Plans</option>
+          <option value="habit">↻ Habits</option>
         </select>
         <select id="prio-filter" aria-label="Filter by priority">
           <option value="">All priorities</option>
@@ -51,6 +52,7 @@
             <button id="history-btn" class="menu-item" title="Board history — jump back to any state">History</button>
             <button id="export-btn" class="menu-item" title="Download the board as a JSON file">Export JSON</button>
             <button id="import-btn" class="menu-item" title="Restore the board from a JSON file">Import JSON</button>
+            <button id="habit-mute" class="menu-item" aria-pressed="false" title="Sound the reminder when a habit is due">🔊 Habit sound</button>
           </div>
         </div>
         <input id="import-input" type="file" accept="application/json,.json" hidden>
@@ -62,6 +64,7 @@
         </select>
       </div>
     </div>
+    <div id="habit-banner-slot" role="status" aria-live="polite"></div>
     <div id="cat-rail" class="cat-rail" role="group" aria-label="Filter by category" hidden></div>
     <div id="tag-bar" class="tag-bar" role="group" aria-label="Filter by tag" hidden></div>
   </header>
@@ -92,6 +95,26 @@
       <fieldset class="type-picker">
         <legend>Type</legend>
         <div id="type-picker-options" class="picker-options"></div>
+      </fieldset>
+      <fieldset id="card-habit" class="habit-fields" hidden>
+        <legend>How often</legend>
+        <div class="field-row">
+          <label class="field">Times
+            <input id="card-habit-count" type="number" min="1" max="99" step="1" value="1">
+          </label>
+          <label class="field">Per
+            <select id="card-habit-freq">
+              <option value="daily">Day</option>
+              <option value="weekly">Week</option>
+              <option value="monthly">Month</option>
+              <option value="yearly">Year</option>
+            </select>
+          </label>
+        </div>
+        <label class="field">Remind me at <span class="hint">(optional, e.g. 07:00, 21:00)</span>
+          <input id="card-habit-times" type="text" placeholder="any time">
+        </label>
+        <p class="field-hint">Leave the times empty and the habit is due from the start of the period.</p>
       </fieldset>
       <fieldset class="category-picker">
         <legend>Category</legend>

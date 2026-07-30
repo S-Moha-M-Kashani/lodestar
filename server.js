@@ -39,7 +39,7 @@ const BACKUP_ON_WRITE = process.env.LODESTAR_BACKUP_ON_WRITE !== '0';
 const BACKUP_SCRIPT = join(ROOT, 'scripts', 'backup-db.mjs');
 
 const COLUMN_IDS = ['inbox', 'in-progress', 'answered'];
-const TYPES = ['question', 'problem', 'task', 'idea', 'plan'];
+const TYPES = ['question', 'problem', 'task', 'idea', 'plan', 'habit'];
 
 // Categories are the user's own registry (id + label + oklch hue), stored in
 // their own table and editable from the app. These defaults seed an empty DB.
@@ -91,6 +91,62 @@ const deadlineVal = (v) => {
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v ? v : '';
 };
 
+// --- Habits ---------------------------------------------------------------
+// A habit repeats: habitFreq names the calendar period, habitCount is how many
+// times per period, habitTimes are optional reminder slots, and habitHistory
+// holds the completions. None of these is coupled to the card's type — someone
+// who stamps a habit as a task by mistake must find the history intact when
+// they stamp it back. Only the type decides whether anything *reads* them.
+const HABIT_FREQS = ['daily', 'weekly', 'monthly', 'yearly'];
+const HABIT_MAX_COUNT = 99;
+// ~13 months of daily periods, 400 weeks, or 400 years. A cap is needed because
+// the whole board travels in every PUT /api/state.
+const HABIT_MAX_PERIODS = 400;
+const HABIT_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+// A period id: 2026 | 2026-07 | 2026-07-30 | 2026-W31.
+const HABIT_PERIOD_RE =
+  /^\d{4}(-(0[1-9]|1[0-2])(-(0[1-9]|[12]\d|3[01]))?|-W(0[1-9]|[1-4]\d|5[0-3]))?$/;
+
+const habitFreqVal = (v) => (HABIT_FREQS.includes(v) ? v : '');
+
+const habitCountVal = (v) => {
+  const n = Math.trunc(Number(v));
+  return Number.isFinite(n) ? Math.min(HABIT_MAX_COUNT, Math.max(1, n)) : 1;
+};
+
+/** Reminder slots: real clock times, in order, no repeats, never more than the
+ *  target — a fifth slot on a 4×-a-day habit reminds you of nothing. */
+const habitTimesVal = (v, count) => {
+  if (!Array.isArray(v)) return [];
+  const seen = new Set();
+  for (const t of v) if (typeof t === 'string' && HABIT_TIME_RE.test(t)) seen.add(t);
+  return [...seen].sort().slice(0, count);
+};
+
+/** Validate the completions entry by entry rather than accepting or rejecting
+ *  the lot: one unreadable period must not cost the user the other 399. */
+function habitHistoryVal(v) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return {};
+  const kept = [];
+  for (const [period, stamps] of Object.entries(v)) {
+    if (!HABIT_PERIOD_RE.test(period) || !Array.isArray(stamps)) continue;
+    const clean = stamps.filter((t) => Number.isFinite(t)).sort((a, b) => a - b);
+    if (clean.length) kept.push([period, clean]);
+  }
+  // Period ids sort lexicographically, so the tail is the recent history.
+  kept.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return Object.fromEntries(kept.slice(-HABIT_MAX_PERIODS));
+}
+
+const safeJson = (json, fallback) => {
+  try {
+    const v = JSON.parse(json);
+    return v === null || v === undefined ? fallback : v;
+  } catch {
+    return fallback;
+  }
+};
+
 // --------------------------------------------------------------------------
 // Database
 // --------------------------------------------------------------------------
@@ -122,7 +178,11 @@ db.exec(`
     effort_src  TEXT NOT NULL DEFAULT 'default',
     control_src TEXT NOT NULL DEFAULT 'default',
     deadline    TEXT NOT NULL DEFAULT '',
-    pending     INTEGER NOT NULL DEFAULT 0
+    pending     INTEGER NOT NULL DEFAULT 0,
+    habit_freq    TEXT    NOT NULL DEFAULT '',
+    habit_count   INTEGER NOT NULL DEFAULT 1,
+    habit_times   TEXT    NOT NULL DEFAULT '[]',
+    habit_history TEXT    NOT NULL DEFAULT '{}'
   );
 `);
 
@@ -143,6 +203,10 @@ if (!columnNames.has('deadline')) db.exec("ALTER TABLE cards ADD COLUMN deadline
 // pending = 1 is a card the Assistant proposed and the user has not accepted
 // yet: stored durably, but off the board until confirmed.
 if (!columnNames.has('pending')) db.exec('ALTER TABLE cards ADD COLUMN pending INTEGER NOT NULL DEFAULT 0');
+if (!columnNames.has('habit_freq')) db.exec("ALTER TABLE cards ADD COLUMN habit_freq TEXT NOT NULL DEFAULT ''");
+if (!columnNames.has('habit_count')) db.exec('ALTER TABLE cards ADD COLUMN habit_count INTEGER NOT NULL DEFAULT 1');
+if (!columnNames.has('habit_times')) db.exec("ALTER TABLE cards ADD COLUMN habit_times TEXT NOT NULL DEFAULT '[]'");
+if (!columnNames.has('habit_history')) db.exec("ALTER TABLE cards ADD COLUMN habit_history TEXT NOT NULL DEFAULT '{}'");
 
 // The user's category registry. Seeded with the default life areas the first
 // time; from then on the client's edits (add/remove/import) are the truth.
@@ -195,6 +259,10 @@ const rowToCard = (r, catIds) => ({
   effortSrc: srcVal(r.effort_src),
   controlSrc: srcVal(r.control_src),
   deadline: deadlineVal(r.deadline),
+  habitFreq: habitFreqVal(r.habit_freq),
+  habitCount: habitCountVal(r.habit_count),
+  habitTimes: habitTimesVal(safeJson(r.habit_times, []), habitCountVal(r.habit_count)),
+  habitHistory: habitHistoryVal(safeJson(r.habit_history, {})),
   num: r.num,
   tags: safeTags(r.tags),
   createdAt: r.created_at,
@@ -240,6 +308,7 @@ function cleanCard(raw, now, catIds) {
   if (!raw || typeof raw !== 'object' || typeof raw.title !== 'string' || !raw.title.trim()) {
     return null;
   }
+  const habitCount = habitCountVal(raw.habitCount);
   return {
     id: typeof raw.id === 'string' && raw.id ? raw.id : cryptoId(),
     columnId: COLUMN_IDS.includes(raw.columnId) ? raw.columnId : 'inbox',
@@ -254,6 +323,10 @@ function cleanCard(raw, now, catIds) {
     effortSrc: srcVal(raw.effortSrc),
     controlSrc: srcVal(raw.controlSrc),
     deadline: deadlineVal(raw.deadline),
+    habitFreq: habitFreqVal(raw.habitFreq),
+    habitCount,
+    habitTimes: habitTimesVal(raw.habitTimes, habitCount),
+    habitHistory: habitHistoryVal(raw.habitHistory),
     num: Number.isInteger(raw.num) && raw.num > 0 ? raw.num : 0,
     tags: Array.isArray(raw.tags) ? raw.tags.map((t) => String(t).trim().toLowerCase()).filter(Boolean) : [],
     createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : now,
@@ -290,8 +363,9 @@ function writeBoard(cards) {
   const upsert = db.prepare(`
     INSERT INTO cards (id, column_id, title, notes, type, category, importance, urgency,
                        effort, control, effort_src, control_src, deadline,
+                       habit_freq, habit_count, habit_times, habit_history,
                        num, tags, created_at, updated_at, position, deleted_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
     ON CONFLICT(id) DO UPDATE SET
       column_id = excluded.column_id, title = excluded.title, notes = excluded.notes,
       type = excluded.type, category = excluded.category,
@@ -299,6 +373,8 @@ function writeBoard(cards) {
       effort = excluded.effort, control = excluded.control,
       effort_src = excluded.effort_src, control_src = excluded.control_src,
       deadline = excluded.deadline,
+      habit_freq = excluded.habit_freq, habit_count = excluded.habit_count,
+      habit_times = excluded.habit_times, habit_history = excluded.habit_history,
       num = excluded.num, tags = excluded.tags,
       created_at = excluded.created_at, updated_at = excluded.updated_at, position = excluded.position,
       deleted_at = NULL
@@ -318,6 +394,7 @@ function writeBoard(cards) {
     clean.forEach((c, i) =>
       upsert.run(c.id, c.columnId, c.title, c.notes, c.type, c.category, c.importance, c.urgency,
         c.effort, c.control, c.effortSrc, c.controlSrc, c.deadline,
+        c.habitFreq, c.habitCount, JSON.stringify(c.habitTimes), JSON.stringify(c.habitHistory),
         c.num, JSON.stringify(c.tags), c.createdAt, c.updatedAt, i));
     db.exec('COMMIT');
   } catch (err) {
@@ -341,11 +418,14 @@ function writeProposal(raw) {
   db.prepare(`
     INSERT INTO cards (id, column_id, title, notes, type, category, importance, urgency,
                        effort, control, effort_src, control_src, deadline,
+                       habit_freq, habit_count, habit_times, habit_history,
                        num, tags, created_at, updated_at, position, deleted_at, pending)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1)
   `).run(card.id, card.columnId, card.title, card.notes, card.type, card.category,
     card.importance, card.urgency, card.effort, card.control, card.effortSrc,
     card.controlSrc, card.deadline,
+    card.habitFreq, card.habitCount,
+    JSON.stringify(card.habitTimes), JSON.stringify(card.habitHistory),
     // num stays 0: a ledger number is earned at confirmation, so a rejected
     // proposal never burns one.
     0, JSON.stringify(card.tags), card.createdAt, card.updatedAt, 0);

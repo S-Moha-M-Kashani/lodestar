@@ -8,16 +8,22 @@ from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
 COLUMNS = ['inbox', 'in-progress', 'answered']
-TYPES = ['question', 'problem', 'task', 'idea', 'plan']
+TYPES = ['question', 'problem', 'task', 'idea', 'plan', 'habit']
+# A habit's cadence travels with the proposal; its *history* deliberately does
+# not. There is no tool for ticking a habit — logging a repetition is the user's
+# act, and a record an agent could write into is not a record of anything.
+HABIT_FREQS = ['daily', 'weekly', 'monthly', 'yearly']
 # Categories are a user-defined registry (add/remove in the app, stored by the
 # Node server) — so 'category' is a plain string here, validated server-side:
 # an id the registry doesn't know is stored as '' (uncategorized), never an error.
 CATEGORY_HELP = ("a category id from the user's own registry (e.g. work, love, "
                  "health — list_questions shows what's in use), or '' for "
                  "uncategorized")
+FREQUENCY_HELP = 'habits only: which calendar period the count applies to'
 
 Column = Literal['inbox', 'in-progress', 'answered']
-CardType = Literal['question', 'problem', 'task', 'idea', 'plan']
+CardType = Literal['question', 'problem', 'task', 'idea', 'plan', 'habit']
+Frequency = Literal['daily', 'weekly', 'monthly', 'yearly', '']
 Rank = Literal['high', 'low', '']
 
 
@@ -71,6 +77,10 @@ class CreateQuestionArgs(BaseModel):
     type: CardType = 'question'
     category: str = Field('', description=CATEGORY_HELP)
     column_id: Column = 'inbox'
+    frequency: Frequency = Field('', description=FREQUENCY_HELP)
+    times_per_period: int = Field(1, ge=1, le=99, description=(
+        'habits only: repetitions per period '
+        '(2 with frequency "daily" means twice a day)'))
     tags: list[str] = []
 
 
@@ -103,13 +113,23 @@ def make_board_tools(client: BoardClient) -> list[BaseTool]:
     @tool('create_question', args_schema=CreateQuestionArgs)
     def create_question(title: str, notes: str = '', type: str = 'question',
                         category: str = '', column_id: str = 'inbox',
-                        tags: list | None = None) -> dict:
-        """Propose a new card (question, problem, task, idea or plan). The user
-        must approve it before it appears on the board, so tell them you have
-        proposed it — never claim it was added."""
-        proposal = client.create_proposal(
-            {'title': title, 'notes': notes, 'type': type,
-             'category': category, 'columnId': column_id, 'tags': tags or []})
+                        tags: list | None = None, frequency: str = '',
+                        times_per_period: int = 1) -> dict:
+        """Propose a new card (question, problem, task, idea, plan or habit).
+
+        A habit is something repeated on a schedule — give it a frequency and
+        how many times per period. The user must approve the card before it
+        appears on the board, so tell them you have proposed it — never claim
+        it was added.
+        """
+        card = {'title': title, 'notes': notes, 'type': type,
+                'category': category, 'columnId': column_id, 'tags': tags or []}
+        # A cadence only means something on a habit; sending one with a question
+        # would leave a dormant "2× per day" on a card nobody repeats.
+        if type == 'habit':
+            card['habitFreq'] = frequency or 'daily'
+            card['habitCount'] = times_per_period
+        proposal = client.create_proposal(card)
         # `pending` tells the model the card is not on the board yet, so it
         # reports a proposal instead of claiming it added something.
         return {**_brief(proposal), 'pending': True}

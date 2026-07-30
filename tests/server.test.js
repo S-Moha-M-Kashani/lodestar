@@ -373,6 +373,266 @@ test('deadline survives soft-delete and restore', async () => {
   } finally { await s.stop(); }
 });
 
+// ---- Habits --------------------------------------------------------------
+// A habit is a card you repeat: a target per calendar period, optional reminder
+// slots, and the completions themselves. The completions are the only card field
+// the user cannot retype from memory, so the server's job is to store them
+// exactly and never scrub them by accident.
+
+// Shared with the backup tests further down — a whole-board save is the only
+// way a card reaches the server, habit or not.
+const putCards = (base, cards) => fetch(base + '/api/state', {
+  method: 'PUT', headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ version: 1, cards }),
+});
+
+test('PUT /api/state round-trips the habit fields', async () => {
+  const s = await startServer();
+  try {
+    const put = await putCards(s.base, [{
+      id: 'h1', columnId: 'inbox', title: 'Meditate', type: 'habit',
+      habitFreq: 'daily', habitCount: 2, habitTimes: ['07:00', '21:00'],
+      habitHistory: { '2026-07-30': [1785431613000] },
+    }]);
+    assert.equal(put.status, 200);
+    const echoed = (await put.json()).cards.find((c) => c.id === 'h1');
+    assert.equal(echoed.type, 'habit');
+    assert.equal(echoed.habitFreq, 'daily');
+    assert.equal(echoed.habitCount, 2);
+    assert.deepEqual(echoed.habitTimes, ['07:00', '21:00']);
+    assert.deepEqual(echoed.habitHistory, { '2026-07-30': [1785431613000] });
+    // Survives a fresh read, not just the PUT echo.
+    const state = await (await fetch(s.base + '/api/state')).json();
+    const stored = state.cards.find((c) => c.id === 'h1');
+    assert.deepEqual(stored.habitHistory, { '2026-07-30': [1785431613000] });
+    assert.deepEqual(stored.habitTimes, ['07:00', '21:00']);
+  } finally { await s.stop(); }
+});
+
+test('a card that says nothing about habits gets the habit defaults', async () => {
+  const s = await startServer();
+  try {
+    const body = await (await putCards(s.base, [
+      { id: 'plain', columnId: 'inbox', title: 'Just a question' },
+    ])).json();
+    const card = body.cards[0];
+    assert.equal(card.habitFreq, '');
+    assert.equal(card.habitCount, 1);
+    assert.deepEqual(card.habitTimes, []);
+    assert.deepEqual(card.habitHistory, {});
+  } finally { await s.stop(); }
+});
+
+test('habit is an accepted card type', async () => {
+  const s = await startServer();
+  try {
+    const body = await (await putCards(s.base, [
+      { id: 'h', columnId: 'inbox', title: 'Push-ups', type: 'habit' },
+      { id: 'x', columnId: 'inbox', title: 'Nonsense type', type: 'sandwich' },
+    ])).json();
+    assert.equal(body.cards.find((c) => c.id === 'h').type, 'habit');
+    assert.equal(body.cards.find((c) => c.id === 'x').type, 'question');
+  } finally { await s.stop(); }
+});
+
+test('an unrecognized frequency is scrubbed to empty', async () => {
+  const s = await startServer();
+  try {
+    const bads = ['fortnightly', 'DAILY', 'hourly', 7, null, {}, []];
+    const cards = bads.map((habitFreq, i) =>
+      ({ id: `f${i}`, columnId: 'inbox', title: `Freq ${i}`, type: 'habit', habitFreq }));
+    const body = await (await putCards(s.base, cards)).json();
+    for (const c of body.cards) assert.equal(c.habitFreq, '', `habitFreq of ${c.id} not scrubbed`);
+  } finally { await s.stop(); }
+});
+
+test('every real frequency is kept', async () => {
+  const s = await startServer();
+  try {
+    const freqs = ['daily', 'weekly', 'monthly', 'yearly'];
+    const cards = freqs.map((habitFreq, i) =>
+      ({ id: `ok${i}`, columnId: 'inbox', title: habitFreq, type: 'habit', habitFreq }));
+    const body = await (await putCards(s.base, cards)).json();
+    assert.deepEqual(body.cards.map((c) => c.habitFreq).sort(), [...freqs].sort());
+  } finally { await s.stop(); }
+});
+
+test('habitCount is clamped to 1..99 and always a whole number', async () => {
+  const s = await startServer();
+  try {
+    const cases = [[0, 1], [-4, 1], [500, 99], [2.7, 2], ['3', 3], [NaN, 1], [null, 1], ['x', 1]];
+    const cards = cases.map(([habitCount], i) =>
+      ({ id: `n${i}`, columnId: 'inbox', title: `Count ${i}`, type: 'habit', habitCount }));
+    const body = await (await putCards(s.base, cards)).json();
+    cases.forEach(([input, want], i) => {
+      const got = body.cards.find((c) => c.id === `n${i}`).habitCount;
+      assert.equal(got, want, `habitCount ${JSON.stringify(input)} became ${got}, wanted ${want}`);
+    });
+  } finally { await s.stop(); }
+});
+
+test('habitTimes are normalized: valid, sorted, deduped, and never more than the target', async () => {
+  const s = await startServer();
+  try {
+    const body = await (await putCards(s.base, [{
+      id: 't1', columnId: 'inbox', title: 'Times', type: 'habit',
+      habitFreq: 'daily', habitCount: 2,
+      // out of order, a duplicate, an unpadded hour, an impossible clock time,
+      // a non-string — and one more than the target allows.
+      habitTimes: ['21:00', '07:00', '07:00', '7:30', '25:99', 12, '13:15'],
+    }])).json();
+    assert.deepEqual(body.cards[0].habitTimes, ['07:00', '13:15']);
+  } finally { await s.stop(); }
+});
+
+test('a malformed habit history is replaced with an empty one', async () => {
+  const s = await startServer();
+  try {
+    const bads = ['nope', 42, null, [], [1, 2, 3]];
+    const cards = bads.map((habitHistory, i) =>
+      ({ id: `bh${i}`, columnId: 'inbox', title: `Bad history ${i}`, type: 'habit', habitHistory }));
+    const body = await (await putCards(s.base, cards)).json();
+    for (const c of body.cards) {
+      assert.deepEqual(c.habitHistory, {}, `habitHistory of ${c.id} not scrubbed`);
+    }
+  } finally { await s.stop(); }
+});
+
+test('history entries that are not period→timestamps are dropped, the good ones kept', async () => {
+  const s = await startServer();
+  try {
+    const body = await (await putCards(s.base, [{
+      id: 'mix', columnId: 'inbox', title: 'Mixed history', type: 'habit', habitFreq: 'daily',
+      habitHistory: {
+        '2026-07-30': [1785431613000, 1785461613000],
+        '2026-W31': [1785431613000],       // a real weekly period id
+        '2026-07': [1785431613000],        // a real monthly period id
+        '2026': [1785431613000],           // a real yearly period id
+        'yesterday': [1785431613000],      // not a period id
+        '2026-07-29': 'twice',             // not a list
+        '2026-07-28': ['noon', null, 1785345213000], // one usable stamp among junk
+      },
+    }])).json();
+    const history = body.cards[0].habitHistory;
+    assert.deepEqual(history['2026-07-30'], [1785431613000, 1785461613000]);
+    assert.deepEqual(history['2026-W31'], [1785431613000]);
+    assert.deepEqual(history['2026-07'], [1785431613000]);
+    assert.deepEqual(history['2026'], [1785431613000]);
+    assert.equal('yesterday' in history, false);
+    assert.equal('2026-07-29' in history, false);
+    assert.deepEqual(history['2026-07-28'], [1785345213000]);
+  } finally { await s.stop(); }
+});
+
+test('history keeps the newest 400 periods so one habit cannot bloat every save', async () => {
+  const s = await startServer();
+  try {
+    // 405 consecutive days. Period ids sort lexicographically, so "newest" is
+    // simply the largest keys.
+    const days = [];
+    for (let i = 0; i < 405; i++) {
+      days.push(new Date(Date.UTC(2025, 0, 1) + i * 86400000).toISOString().slice(0, 10));
+    }
+    const habitHistory = Object.fromEntries(days.map((d, i) => [d, [1_700_000_000_000 + i]]));
+    const body = await (await putCards(s.base, [{
+      id: 'long', columnId: 'inbox', title: 'Long runner', type: 'habit',
+      habitFreq: 'daily', habitHistory,
+    }])).json();
+    const kept = Object.keys(body.cards[0].habitHistory).sort();
+    assert.equal(kept.length, 400);
+    assert.deepEqual(kept, days.slice(-400), 'the oldest 5 periods should be the ones dropped');
+  } finally { await s.stop(); }
+});
+
+test('habit history is not tied to the card type — retyping a card never erases it', async () => {
+  const s = await startServer();
+  try {
+    // Someone stamps a habit as a task by mistake. A year of completions must
+    // still be there when they stamp it back.
+    const history = { '2026-07-30': [1785431613000] };
+    await putCards(s.base, [{
+      id: 'flip', columnId: 'inbox', title: 'Meditate', type: 'habit',
+      habitFreq: 'daily', habitCount: 2, habitHistory: history,
+    }]);
+    const asTask = await (await putCards(s.base, [{
+      id: 'flip', columnId: 'inbox', title: 'Meditate', type: 'task',
+      habitFreq: 'daily', habitCount: 2, habitHistory: history,
+    }])).json();
+    assert.equal(asTask.cards[0].type, 'task');
+    assert.deepEqual(asTask.cards[0].habitHistory, history);
+    assert.equal(asTask.cards[0].habitFreq, 'daily');
+    assert.equal(asTask.cards[0].habitCount, 2);
+  } finally { await s.stop(); }
+});
+
+test('habit history survives soft-delete and restore', async () => {
+  const s = await startServer();
+  try {
+    const history = { '2026-07-30': [1785431613000, 1785461613000] };
+    await putCards(s.base, [{
+      id: 'hd', columnId: 'inbox', title: 'Push-ups', type: 'habit',
+      habitFreq: 'daily', habitCount: 3, habitHistory: history,
+    }]);
+    await putCards(s.base, []); // soft-delete into the Trash
+    const trash = await (await fetch(s.base + '/api/trash')).json();
+    const trashed = trash.cards.find((c) => c.id === 'hd');
+    assert.deepEqual(trashed.habitHistory, history);
+    assert.equal(trashed.habitCount, 3);
+  } finally { await s.stop(); }
+});
+
+test('a legacy database gains the habit columns with their defaults', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'qboard-habit-migrate-'));
+  const dbPath = join(dir, 'board.db');
+  const seed = new DatabaseSync(dbPath);
+  seed.exec(`CREATE TABLE cards (
+    id TEXT PRIMARY KEY, column_id TEXT NOT NULL, title TEXT NOT NULL,
+    notes TEXT NOT NULL DEFAULT '', priority TEXT NOT NULL DEFAULT 'medium',
+    num INTEGER NOT NULL DEFAULT 0, tags TEXT NOT NULL DEFAULT '[]',
+    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0
+  )`);
+  seed.prepare(`INSERT INTO cards (id, column_id, title, created_at, updated_at)
+                VALUES ('before-habits', 'inbox', 'Older than habits', 1, 1)`).run();
+  seed.close();
+
+  const s = await startServer({ env: { BOARD_DB: dbPath } });
+  try {
+    const state = await (await fetch(s.base + '/api/state')).json();
+    const card = state.cards.find((c) => c.id === 'before-habits');
+    assert.ok(card, 'the pre-habit card survived migration');
+    assert.equal(card.habitFreq, '');
+    assert.equal(card.habitCount, 1);
+    assert.deepEqual(card.habitTimes, []);
+    assert.deepEqual(card.habitHistory, {});
+  } finally { await s.stop(); }
+});
+
+test('a proposal can carry habit fields through the confirmation gate', async () => {
+  const s = await startServer();
+  try {
+    const res = await fetch(s.base + '/api/proposals', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        title: 'Stretch every morning', type: 'habit',
+        habitFreq: 'daily', habitCount: 1, habitTimes: ['08:00'],
+      }),
+    });
+    assert.equal(res.status, 200);
+    const proposal = await res.json();
+    assert.equal(proposal.type, 'habit');
+    assert.equal(proposal.habitFreq, 'daily');
+    assert.deepEqual(proposal.habitTimes, ['08:00']);
+
+    const confirm = await fetch(`${s.base}/api/proposals/${proposal.id}/confirm`, { method: 'POST' });
+    assert.equal(confirm.status, 200);
+    const state = await (await fetch(s.base + '/api/state')).json();
+    const live = state.cards.find((c) => c.id === proposal.id);
+    assert.equal(live.habitFreq, 'daily');
+    assert.deepEqual(live.habitTimes, ['08:00']);
+  } finally { await s.stop(); }
+});
+
 // ---- Voice transcription proxy ------------------------------------------
 // The browser records audio and posts base64 WAV; the Node proxy must hand it
 // to the brain untouched (the OpenRouter key lives only there).
@@ -498,13 +758,6 @@ async function waitForSnapshots(dir, n, timeoutMs = 8000) {
 
 // Give a backup that should NOT happen enough time to prove it didn't.
 const settle = (ms = 1200) => new Promise((r) => setTimeout(r, ms));
-
-const putCards = (base, cards) =>
-  fetch(base + '/api/state', {
-    method: 'PUT',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ version: 1, cards }),
-  });
 
 test('PUT with a never-before-seen card triggers one backup', async () => {
   const bk = backupSandbox();

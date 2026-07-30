@@ -15,7 +15,7 @@ import numpy as np
 
 from lodestar_brain.rag.chat_memory import make_recall_tool
 from lodestar_brain.rag.index import LeidenIndex, make_retrieve_tool
-from lodestar_brain.tools.board import COLUMNS, TYPES, make_board_tools
+from lodestar_brain.tools.board import COLUMNS, HABIT_FREQS, TYPES, make_board_tools
 from lodestar_brain.tools.websearch import make_search_tool
 
 EXPECTED = {'list_questions', 'create_question', 'update_question',
@@ -85,11 +85,22 @@ def test_the_column_enum_is_the_boards_three_columns():
     assert _enum(tools['update_question'], 'column_id') == COLUMNS
 
 
-def test_the_card_type_enum_is_the_boards_five_types():
+def test_the_card_type_enum_is_the_boards_six_types():
     tools = tools_by_name()
-    assert TYPES == ['question', 'problem', 'task', 'idea', 'plan']
+    assert TYPES == ['question', 'problem', 'task', 'idea', 'plan', 'habit']
     assert _enum(tools['create_question'], 'type') == TYPES
     assert _enum(tools['update_question'], 'type') == TYPES
+
+
+def test_a_habits_cadence_is_offered_where_the_card_is_made():
+    tools = tools_by_name()
+    # '' is the sixth option: every non-habit card leaves the frequency unset.
+    assert _enum(tools['create_question'], 'frequency') == HABIT_FREQS + ['']
+    fields = tools['create_question'].args_schema.model_json_schema()['properties']
+    assert 'times_per_period' in fields
+    # The cadence is set when the card is made, not edited afterwards, so
+    # update_question deliberately does not carry it.
+    assert 'frequency' not in tools['update_question'].args_schema.model_json_schema()['properties']
 
 
 def test_importance_and_urgency_keep_their_three_way_enum():
