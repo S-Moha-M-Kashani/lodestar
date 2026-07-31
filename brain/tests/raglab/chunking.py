@@ -1,5 +1,5 @@
 """Chunking strategies for spoken diary text, plus the metadata every chunk
-carries into Chroma.
+carries into the index.
 
 The corpus is what makes this hard: a voice session rambles, switches topic
 mid-message («... حالا اینا رو ولش کن، امروز مهسا...»), and the thing worth
@@ -65,7 +65,7 @@ class Chunk:
                                 # metrics can measure the body alone
 
     def metadata(self) -> dict:
-        """Flat, Chroma-safe. Lists become space-joined strings: Chroma can only
+        """Flat and filterable. Lists become space-joined strings: the store can only
         filter on scalars, and a JSON blob would not be filterable either — the
         fields we actually filter on (span_from/span_to/layer/session_id/habit)
         are scalars by design.

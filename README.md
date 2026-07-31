@@ -265,7 +265,7 @@ Pick a strategy per stage and the panel grades it:
 | Hierarchy | raw chunks plus, additively, session summaries, month digests, per-storyline digests, and a promise/deadline ledger; summaries extractive (offline) or LLM |
 | Embedding | **OpenRouter Qwen3-Embedding-8B** is the lab default: Text → embedding (route: OpenRouter API). Local alternatives remain fastembed and sentence-transformers (including Persian-tuned `heydariAI/persian-embeddings`); OpenAI embeddings remain optional. |
 | Reranking | **Cohere Rerank 4 Fast** is the lab default: Query + text → relevance score (route: OpenRouter API). Local lexical, recency, cross-encoder, and Ollama LLM alternatives remain available. |
-| Retrieval | dense, BM25, or hybrid with Reciprocal Rank Fusion; Farsi time expressions («آذر», «پارسال پاییز») resolved into a Chroma date range; multi-query expansion; HyDE |
+| Retrieval | dense, BM25, or hybrid with Reciprocal Rank Fusion; Farsi time expressions («آذر», «پارسال پاییز») resolved into a metadata date range; multi-query expansion; HyDE |
 | Reranking | none, lexical, recency, "agentic" (relevance + recency + emotional importance), multilingual cross-encoder, or LLM grading |
 | Gating | a relevance threshold — what makes an honest *"I have nothing on that"* possible — plus parent/session expansion and MMR diversification |
 | Scoring | recall/precision/MRR/nDCG@k over evidence sessions, verbatim **quote recall**, latest-state recall for facts that changed, abstention accuracy, and **RAGAS** — its non-LLM context metrics offline, its judged metrics (faithfulness, relevancy, factual correctness) with an API key |
@@ -307,11 +307,16 @@ a tie rather than a win, and runs that recorded only *how many* questions they
 scored get no rank numbers at all — two runs of 24 questions may be two different
 24.
 
-The lab is strictly test-side: it writes only to its own Chroma database
-(`lodestar-raglab`, and it refuses to start against the production one) and to a
-git-ignored `.runs/` folder, and no production module imports it — the board knows
-nothing about it beyond a proxy prefix. Its own tests are part of the brain suite
-(`npm run test:raglab`), and the page is covered by the e2e suite.
+The lab is strictly test-side, and its experiments are **ephemeral by
+construction**: the index lives in process memory and is discarded when the lab
+stops, so there is no database to start first and no state a later run can inherit
+from an earlier one. The only thing it writes is **one JSON file per run** in a
+git-ignored `.runs/` folder — the config, the metrics, and the per-question detail
+needed to reopen the result. It used to keep its vectors in a Chroma database of its
+own, guarded by a check that refused the production one; having no such setting is
+the stronger version of that guard. No production module imports the lab — the board
+knows nothing about it beyond a proxy prefix. Its own tests are part of the brain
+suite (`npm run test:raglab`), and the page is covered by the e2e suite.
 
 ## What the RAG lab measured
 
@@ -365,7 +370,7 @@ been.**
  │ RETRIEVE   multi-query expansion                                  │
  │            hybrid BM25 + dense ─► RRF (k0 = 60)                   │
  │            40 candidates across all 6 layers                      │
- │            Farsi time expressions → Chroma date ranges            │
+ │            Farsi time expressions → metadata date ranges          │
  └────────────────────────────────┬──────────────────────────────────┘
                                   ▼
  ┌───────────────────────────────────────────────────────────────────┐
@@ -390,8 +395,8 @@ been.**
  │      answer relevancy   0.4886  ◄─┴─ the gap, and the bottleneck  │
  └───────────────────────────────────────────────────────────────────┘
 
-     Chunks and vectors live in Chroma :8001 — one collection per
-     index configuration, named by its fingerprint.
+     Chunks and vectors live in the lab process — one in-memory index
+     per configuration, named by its fingerprint, discarded on exit.
 
      Nothing in the eight-candidate sweep ever changed the bottom box.
 ```

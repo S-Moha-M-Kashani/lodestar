@@ -1,7 +1,7 @@
 """Tests for the RAG Lab (brain/tests/raglab).
 
-Fully offline: Chroma runs in-process (`memory`), embeddings are the lab's
-hash embedders, and no test touches an LLM. The integration tests run against
+Fully offline by construction: the lab's index is process memory, embeddings are
+its hash embedders, and no test touches an LLM. The integration tests run against
 the real one-year fixture rather than a toy corpus, because the properties worth
 asserting — that a Farsi question finds its evidence session, that the current
 production embedder finds nothing at all — only exist at that scale.
@@ -9,6 +9,7 @@ production embedder finds nothing at all — only exist at that scale.
 import json
 import os
 import re
+import socket
 import threading
 import time
 from dataclasses import replace
@@ -21,13 +22,12 @@ from lodestar_brain.llm.fake import FakeChat
 
 from .raglab import (chunking, config, corpus, embedding, evaluate, explain,
                      leaderboard, metrics, models, pipeline, query, ragas_eval,
-                     retrieval, summarize, sweep, textnorm)
+                     retrieval, store, summarize, sweep, textnorm)
 from .raglab.config import (EMBEDDERS, RERANKERS, GenerationConfig, IndexConfig,
                             LabConfig, LabSettings, RetrievalConfig)
 from .raglab.index import IndexRegistry, LabIndex
 
-LAB_SETTINGS = LabSettings(chroma_url='memory', chroma_database='raglab-tests',
-                           openrouter_api_key='', llm_provider='fake')
+LAB_SETTINGS = LabSettings(openrouter_api_key='', llm_provider='fake')
 RAGLAB_DIR = Path(__file__).resolve().parent / 'raglab'
 REPO_ROOT = RAGLAB_DIR.parents[2]
 
@@ -241,14 +241,56 @@ def test_commitment_layer_captures_the_recurring_promise(diary):
     assert 'باشگاه' in text, 'the gym promise is the corpus\'s signature commitment'
 
 
-def test_summary_cache_is_keyed_by_content(tmp_path, session):
-    cache = summarize.SummaryCache(tmp_path / 'cache.json')
+def test_summary_cache_is_keyed_by_content(session):
+    cache = summarize.SummaryCache()
     cache.put('extractive', session, 'خلاصه')
-    cache.flush()
-    assert summarize.SummaryCache(tmp_path / 'cache.json').get('extractive', session) \
-        == 'خلاصه'
+    assert cache.get('extractive', session) == 'خلاصه'
     edited = dict(session, messages=[dict(session['messages'][0], content='عوض شد')])
     assert cache.get('extractive', edited) is None
+
+
+def test_the_summary_cache_does_not_outlive_its_owner(session):
+    """It used to be a file under .runs/cache/. A summary is model output about
+    experimental data — derived, and rebuildable — so it now lives for the
+    process that made it and no longer. A second cache starts empty because
+    there is nothing on disk for it to read."""
+    cache = summarize.SummaryCache()
+    cache.put('extractive', session, 'خلاصه')
+    assert summarize.SummaryCache().get('extractive', session) is None
+
+
+def test_the_summariser_module_writes_nothing():
+    """The absence *is* the assertion: this module held the one derived cache the
+    lab wrote automatically, and the cheapest way for it to come back is a
+    `flush()` that quietly grows a path again."""
+    source = (RAGLAB_DIR / 'summarize.py').read_text(encoding='utf-8')
+    for forbidden in ('write_text', 'mkdir', 'open('):
+        assert forbidden not in source, forbidden
+
+
+def test_summaries_are_reused_across_builds_in_one_process(diary, monkeypatch):
+    """What the disk cache was actually for: an LLM summariser is one call per
+    session, and switching chunker rebuilds every chunk while changing no
+    summary. The registry owns that reuse now, so it is bounded by the process."""
+    calls: list[str] = []
+
+    class CountingSummarizer(summarize.ExtractiveSummarizer):
+        name = 'counting'
+
+        def session(self, session_dict):
+            calls.append(session_dict['session_id'])
+            return super().session(session_dict)
+
+    sessions = diary['sessions'][:3]
+    counting = CountingSummarizer(summarize.build_idf(sessions))
+    monkeypatch.setattr(summarize, 'ExtractiveSummarizer', lambda _idf: counting)
+    registry = IndexRegistry(LAB_SETTINGS, {'sessions': sessions, 'threads': {},
+                                            'habits': {}})
+    base = {'embedder': 'ascii-hash', 'layers': ('session',)}
+    registry.get(IndexConfig(chunker='fixed', **base))
+    assert len(calls) == len(sessions), calls
+    registry.get(IndexConfig(chunker='message', **base))
+    assert len(calls) == len(sessions), 'the second build re-summarised the corpus'
 
 
 # --- habits: the card you repeat instead of finish -------------------------
@@ -561,7 +603,177 @@ def test_aggregate_reports_per_type_and_a_headline():
     assert summary['layer_usage'] == {'chunk': 1}
 
 
-# --- index and pipeline (integration, in-process Chroma) -------------------
+# --- the ephemeral vector store --------------------------------------------
+# An experiment's vectors, contexts and answers live for the process and no
+# longer: the lab owns a store in memory instead of a Chroma database, and its
+# only durable output is the JSON run file. These tests are that boundary. They
+# exist because the persistence came back as one import line the first time.
+
+def test_memory_store_ranks_by_cosine_distance():
+    """Chroma's contract, because LabIndex.dense reads it: `distances`, not
+    similarities, so the caller's `1 - d` keeps meaning what it meant."""
+    vectors = store.MemoryVectors('raglab-test')
+    vectors.upsert(ids=['near', 'orthogonal', 'opposite'],
+                   documents=['a', 'b', 'c'],
+                   embeddings=[[1.0, 0.0], [0.0, 1.0], [-1.0, 0.0]],
+                   metadatas=[{'layer': 'chunk'}] * 3)
+    res = vectors.query(query_embeddings=[[1.0, 0.0]], n_results=3)
+    assert res['ids'][0] == ['near', 'orthogonal', 'opposite']
+    assert res['distances'][0] == pytest.approx([0.0, 1.0, 2.0], abs=1e-6)
+    assert res['documents'][0][0] == 'a'
+    assert res['metadatas'][0][0] == {'layer': 'chunk'}
+
+
+def test_memory_store_answers_several_query_vectors_at_once():
+    """Multi-query expansion sends one row per variant and merges the results,
+    so a store that silently answered only the first would score expansion as
+    doing nothing."""
+    vectors = store.MemoryVectors('raglab-test')
+    vectors.upsert(ids=['x', 'y'], documents=['a', 'b'],
+                   embeddings=[[1.0, 0.0], [0.0, 1.0]], metadatas=[{}, {}])
+    res = vectors.query(query_embeddings=[[1.0, 0.0], [0.0, 1.0]], n_results=1)
+    assert res['ids'] == [['x'], ['y']]
+
+
+def test_memory_store_upsert_replaces_a_record_instead_of_duplicating_it():
+    """Chunk ids are deterministic, so a rebuild writes the same ids again."""
+    vectors = store.MemoryVectors('raglab-test')
+    vectors.upsert(ids=['a'], documents=['first'], embeddings=[[1.0, 0.0]],
+                   metadatas=[{'layer': 'chunk'}])
+    vectors.upsert(ids=['a'], documents=['second'], embeddings=[[0.0, 1.0]],
+                   metadatas=[{'layer': 'session'}])
+    assert vectors.count() == 1
+    res = vectors.query(query_embeddings=[[0.0, 1.0]], n_results=1)
+    assert res['documents'][0] == ['second']
+    assert res['metadatas'][0] == [{'layer': 'session'}]
+
+
+def test_memory_store_applies_the_where_clause_the_lab_actually_builds():
+    """The filter is the one place a hand-rolled store could quietly differ from
+    Chroma, so it is asserted against `query.where_clause` itself rather than a
+    hand-written dict — an overlap test on the dates plus a layer set."""
+    vectors = store.MemoryVectors('raglab-test')
+    vectors.upsert(
+        ids=['in-scope', 'too-early', 'wrong-layer'],
+        documents=['keep', 'drop', 'drop'],
+        embeddings=[[1.0, 0.0]] * 3,
+        metadatas=[{'layer': 'chunk', 'span_from': 20251201, 'span_to': 20251201},
+                   {'layer': 'chunk', 'span_from': 20250101, 'span_to': 20250101},
+                   {'layer': 'month', 'span_from': 20251201, 'span_to': 20251201}])
+    where = query.where_clause(query.TimeScope(20251122, 20251221, 'آذر', 'jalali'),
+                              ('chunk',), config.LAYERS)
+    res = vectors.query(query_embeddings=[[1.0, 0.0]], n_results=3, where=where)
+    assert res['ids'][0] == ['in-scope']
+
+
+def test_memory_store_keeps_a_rollup_that_merely_overlaps_the_scope():
+    """The same property `where_clause` documents: a thread rollup spans twelve
+    months, and containment rather than overlap would filter out exactly the
+    summary layer a scoped question needs."""
+    vectors = store.MemoryVectors('raglab-test')
+    vectors.upsert(ids=['thread'], documents=['a year of it'],
+                   embeddings=[[1.0, 0.0]],
+                   metadatas=[{'layer': 'thread', 'span_from': 20250801,
+                               'span_to': 20260720}])
+    where = query.where_clause(query.TimeScope(20251122, 20251221, 'آذر', 'jalali'),
+                              config.LAYERS, config.LAYERS)
+    res = vectors.query(query_embeddings=[[1.0, 0.0]], n_results=3, where=where)
+    assert res['ids'][0] == ['thread']
+
+
+def test_memory_store_does_not_match_a_metadata_key_a_record_lacks():
+    """Chroma's semantics, and the reason `Chunk.metadata()` carries `habit` on
+    every chunk: a record missing the filtered key is excluded, never kept."""
+    vectors = store.MemoryVectors('raglab-test')
+    vectors.upsert(ids=['has', 'lacks'], documents=['a', 'b'],
+                   embeddings=[[1.0, 0.0], [1.0, 0.0]],
+                   metadatas=[{'habit': 'gym'}, {}])
+    res = vectors.query(query_embeddings=[[1.0, 0.0]], n_results=2,
+                        where={'habit': 'gym'})
+    assert res['ids'][0] == ['has']
+
+
+def test_memory_store_never_returns_more_than_it_holds():
+    vectors = store.MemoryVectors('raglab-test')
+    vectors.upsert(ids=['a'], documents=['one'], embeddings=[[1.0, 0.0]],
+                   metadatas=[{}])
+    assert vectors.query(query_embeddings=[[1.0, 0.0]], n_results=8)['ids'] == [['a']]
+    empty = store.MemoryVectors('raglab-empty')
+    assert empty.count() == 0
+    assert empty.query(query_embeddings=[[1.0, 0.0]], n_results=5)['ids'] == [[]]
+
+
+def test_memory_store_returns_stored_vectors_in_the_order_asked_for():
+    """`LabIndex.vectors_for` reads vectors back for MMR rather than re-embedding
+    them, and it zips the result against the ids it asked for."""
+    vectors = store.MemoryVectors('raglab-test')
+    vectors.upsert(ids=['a', 'b'], documents=['x', 'y'],
+                   embeddings=[[1.0, 0.0], [0.0, 1.0]], metadatas=[{}, {}])
+    got = vectors.get(ids=['b', 'a'], include=['embeddings'])
+    assert got['ids'] == ['b', 'a']
+    assert np.allclose(got['embeddings'][0], [0.0, 1.0])
+    assert np.allclose(got['embeddings'][1], [1.0, 0.0])
+
+
+def test_memory_store_get_skips_an_id_it_does_not_hold():
+    """A silent partial result, exactly like Chroma's: the caller pairs ids with
+    vectors by name, so a placeholder row would be a wrong vector."""
+    vectors = store.MemoryVectors('raglab-test')
+    vectors.upsert(ids=['a'], documents=['x'], embeddings=[[1.0, 0.0]],
+                   metadatas=[{}])
+    assert vectors.get(ids=['a', 'missing'], include=['embeddings'])['ids'] == ['a']
+
+
+def test_the_index_holds_its_vectors_in_process_memory(index):
+    """Asserted on the type: 'there is no database' is not observable from a
+    query that succeeds."""
+    assert isinstance(index.store, store.MemoryVectors)
+    assert index.store.count() == index.stats.chunks
+
+
+def test_no_lab_module_imports_a_vector_database_client():
+    """chromadb is production's dependency, not the lab's — and neither is
+    production's ChromaChatMemory. This is the line that would bring the
+    persistence back: it is one import, and it looks harmless."""
+    offenders = []
+    for path in sorted(RAGLAB_DIR.glob('*.py')):
+        for line in path.read_text(encoding='utf-8').splitlines():
+            stripped = line.strip()
+            if not stripped.startswith(('import ', 'from ')):
+                continue
+            if 'chromadb' in stripped or 'ChromaChatMemory' in stripped:
+                offenders.append(f'{path.name}: {stripped}')
+    assert offenders == []
+
+
+def test_a_fresh_lab_process_rebuilds_its_index(diary):
+    """Nothing outlives the registry. A second one over the same config has to
+    build again rather than find a collection waiting for it, which is what
+    'ephemeral' means in a test."""
+    cfg = IndexConfig(chunker='session', embedder='token-hash', layers=('chunk',))
+    first = IndexRegistry(LAB_SETTINGS, diary).get(cfg)
+    second = IndexRegistry(LAB_SETTINGS, diary).get(cfg)
+    assert second is not first and second.store is not first.store
+    assert not first.stats.reused and not second.stats.reused
+    assert second.stats.chunks == first.stats.chunks
+    assert second.store.count() == second.stats.chunks
+
+
+def test_building_an_index_opens_no_socket(diary, monkeypatch):
+    """The strongest form of the boundary: with nothing to talk to, a build must
+    not be able to reach anything. The offline embedders download nothing, so a
+    connection here could only be a store trying to persist."""
+    def refuse(*_args, **_kwargs):
+        raise AssertionError('the lab opened a network connection while building')
+
+    monkeypatch.setattr(socket.socket, 'connect', refuse)
+    monkeypatch.setattr(socket.socket, 'connect_ex', refuse)
+    built = IndexRegistry(LAB_SETTINGS, diary).get(
+        IndexConfig(embedder='ascii-hash', layers=('session',)))
+    assert built.stats.chunks == len(diary['sessions'])
+
+
+# --- index and pipeline (integration, in-process memory) -------------------
 
 def test_index_builds_every_layer(index, diary):
     stats = index.stats
@@ -573,9 +785,14 @@ def test_index_builds_every_layer(index, diary):
 
 
 def test_index_is_reused_for_the_same_fingerprint(registry):
-    cfg = IndexConfig(chunker='message', embedder='token-hash', layers=('chunk',))
+    """`reused` used to mean "Chroma already held the right number of records" —
+    the one form of reuse that can no longer happen. It now reports the only one
+    left: this process built the index earlier and still has it."""
+    cfg = IndexConfig(chunker='turn-pair', embedder='token-hash', layers=('chunk',))
     first = registry.get(cfg)
+    assert not first.stats.reused
     assert registry.get(cfg) is first
+    assert first.stats.reused
     assert first.stats.collection == cfg.collection()
 
 
@@ -703,6 +920,30 @@ def test_ascii_hash_baseline_retrieves_worse_than_char_hash(registry, ground_tru
 
 # --- evaluation harness ----------------------------------------------------
 
+def test_a_run_writes_one_json_file_and_nothing_else(registry, ground_truth,
+                                                     tmp_path, monkeypatch):
+    """The whole artifact policy in one assertion. A run's index, contexts and
+    answers are experimental data and die with the process; the single thing that
+    outlives it is one strict-JSON file holding the config, the metrics and the
+    per-question detail needed to reopen the result.
+
+    `rglob` rather than `glob`, because the way this rule broke before was a
+    subdirectory — `.runs/cache/` — appearing beside the runs."""
+    monkeypatch.setattr(evaluate, 'RUNS_DIR', tmp_path)
+    cfg = LabConfig(index=IndexConfig(chunker='session', embedder='char-hash',
+                                      layers=('chunk',)),
+                    retrieval=RetrievalConfig(search_layers=('chunk',), k=4),
+                    generation=GenerationConfig(answerer='extractive'))
+    result = evaluate.run_eval(registry, ground_truth, cfg, LAB_SETTINGS,
+                               limit=2, ragas_mode='off')
+    assert [p.name for p in tmp_path.rglob('*')] == [f'{result.run_id}.json']
+    saved = json.loads((tmp_path / f'{result.run_id}.json').read_text(
+        encoding='utf-8'), parse_constant=lambda literal: pytest.fail(
+            f'{literal} is not JSON a strict parser accepts'))
+    assert saved['run_id'] == result.run_id
+    assert saved['config'] and saved['summary'] and saved['rows']
+
+
 def test_run_eval_scores_a_slice_end_to_end(registry, ground_truth, tmp_path,
                                             monkeypatch):
     monkeypatch.setattr(evaluate, 'RUNS_DIR', tmp_path)
@@ -793,9 +1034,22 @@ def test_config_round_trips_through_the_panel_payload():
     assert LabConfig.from_dict(cfg.to_dict()).to_dict() == cfg.to_dict()
 
 
-def test_lab_refuses_the_production_chroma_database():
-    with pytest.raises(ValueError, match='production'):
+def test_the_lab_names_no_vector_database_at_all():
+    """The guard used to be "refuse the production database". Having no such
+    setting is the stronger version of it: a database the lab cannot name is one
+    it cannot be pointed at by a typo, an old shell, or a copied command."""
+    settings = LabSettings()
+    assert [f for f in vars(settings) if 'chroma' in f or 'database' in f] == []
+    with pytest.raises(TypeError):
         LabSettings(chroma_database='lodestar')
+
+
+def test_the_lab_ignores_a_leftover_chroma_environment(monkeypatch):
+    """The board's Chroma stack runs whenever a board does, and a shell that ran
+    the old lab commands still exports these. Neither may reach the lab."""
+    monkeypatch.setenv('RAGLAB_CHROMA_DATABASE', 'lodestar')
+    monkeypatch.setenv('BRAIN_CHROMA_URL', 'http://localhost:8001')
+    assert 'lodestar' not in repr(config.load_lab_settings())
 
 
 # --- RAGAS bridge ----------------------------------------------------------
@@ -1202,7 +1456,7 @@ def test_the_summary_model_names_the_collection_only_when_llm_summaries_are_on()
     assert llm.fingerprint() != replace(llm, summarizer_model='sum/model').fingerprint()
 
 
-def test_two_summary_models_do_not_share_cached_summaries(session, tmp_path):
+def test_two_summary_models_do_not_share_cached_summaries(session):
     """The cache is what makes the hierarchy affordable, and it is keyed by
     summariser. With a per-task model that key has to include the model, or
     comparing two summarisers silently compares one of them twice."""
@@ -1210,14 +1464,15 @@ def test_two_summary_models_do_not_share_cached_summaries(session, tmp_path):
     first = summarize.LLMSummarizer(FakeChat(), 'a/model', fallback)
     second = summarize.LLMSummarizer(FakeChat(), 'b/model', fallback)
     assert first.name != second.name
-    cache = summarize.SummaryCache(path=tmp_path / 'summaries.json')
+    cache = summarize.SummaryCache()
     summarize.session_summaries([session], first, cache)
     assert cache.get(first.name, session) is not None
     assert cache.get(second.name, session) is None
 
 
-def test_the_index_summarises_with_the_chosen_model(monkeypatch, tmp_path, diary):
-    monkeypatch.setattr(summarize, 'RUNS_DIR', tmp_path)
+def test_the_index_summarises_with_the_chosen_model(monkeypatch, diary):
+    # No RUNS_DIR redirect: a build writes nothing at all now, which the
+    # surrounding tests assert directly.
     seen: list[str] = []
     real = summarize.LLMSummarizer
 
@@ -2046,8 +2301,6 @@ def test_the_export_never_invents_the_context_text(ground_truth, tmp_path):
 
 @pytest.fixture(scope='module')
 def client():
-    os.environ['BRAIN_CHROMA_URL'] = 'memory'
-    os.environ['RAGLAB_CHROMA_DATABASE'] = 'raglab-tests'
     from fastapi.testclient import TestClient
 
     from .raglab.server import create_app
@@ -2061,8 +2314,37 @@ def test_options_describes_the_corpus_and_capabilities(client):
     assert body['corpus']['sessions'] == 167
     assert body['corpus']['questions'] == 112
     assert 'semantic-drift' in body['chunkers']
-    assert body['capabilities']['chroma_database'] == 'raglab-tests'
     assert 'ragas' in body['capabilities']
+
+
+def test_options_advertises_no_vector_database(client):
+    """The panel used to carry a `chroma <db> @ <url>` badge, which is now a
+    claim about a service that is not involved. It is replaced by a positive
+    statement rather than an absence, because the panel does have to say where an
+    experiment's vectors live and where its one durable artifact lands."""
+    caps = client.get('/api/options').json()['capabilities']
+    assert [key for key in caps if 'chroma' in key] == []
+    assert caps['storage'] == {'index': 'memory',
+                               'runs': 'brain/tests/raglab/.runs'}
+
+
+def test_health_says_the_lab_depends_on_no_service(client):
+    body = client.get('/api/health').json()
+    assert body['ok'] and body['storage'] == 'memory'
+    assert [key for key in body if 'chroma' in key or key == 'database'] == []
+
+
+def test_a_build_starts_without_any_service_running(client):
+    """`/api/index` used to answer 503 unless a Chroma heartbeat came back. With
+    the index in process memory there is nothing that can be down, so the job
+    starts — and the gate that could refuse it is gone rather than passing."""
+    from .raglab import server as lab_server
+
+    assert not hasattr(lab_server, 'require_chroma')
+    body = client.post('/api/index', json={
+        'index': {'chunker': 'session', 'embedder': 'ascii-hash',
+                  'layers': ['session']}}).json()
+    assert body['job_id']
 
 
 def test_options_counts_the_habits_the_corpus_tracks(client):
@@ -2572,8 +2854,7 @@ def test_choosing_the_local_backend_is_enough_to_get_a_local_default_model():
     the default model stayed a remote slug, so `provider_problems` refused every
     run for a model the user never chose — a default that cannot run is a broken
     default, not a strict one."""
-    local = LabSettings(chroma_url='memory', chroma_database='raglab-tests',
-                        llm_provider='ollama')
+    local = LabSettings(llm_provider='ollama')
     assert local.llm_model in {m.id for m in models.OLLAMA_MODELS}, local.llm_model
     assert not models.provider_problems(LabConfig(), local)
 
@@ -2581,8 +2862,7 @@ def test_choosing_the_local_backend_is_enough_to_get_a_local_default_model():
 def test_an_explicit_model_is_never_replaced_by_the_provider_default():
     """The resolution is for the *unset* case only. Overwriting a stated model
     would mean a run labelled with one model was scored by another."""
-    local = LabSettings(chroma_url='memory', chroma_database='raglab-tests',
-                        llm_provider='ollama', llm_model='gemma4:e2b')
+    local = LabSettings(llm_provider='ollama', llm_model='gemma4:e2b')
     assert local.llm_model == 'gemma4:e2b'
 
 

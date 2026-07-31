@@ -18,7 +18,7 @@ def load_ground_truth(path: Path = GROUND_TRUTH_PATH) -> dict:
 
 
 def date_int(date: str) -> int:
-    """'2026-03-10' -> 20260310. Chroma metadata filters compare numbers, not
+    """'2026-03-10' -> 20260310. Metadata filters compare numbers, not
     date strings, so every chunk carries this and time filters use $gte/$lte."""
     return int(date.replace('-', ''))
 
