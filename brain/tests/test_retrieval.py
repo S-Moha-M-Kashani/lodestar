@@ -6,19 +6,24 @@ model-backed embedders are exercised through their `factory` seam, so the
 prefix behaviour is tested without a 2 GB checkpoint.
 """
 import re
+import time
 from datetime import date, datetime, timezone
+from uuid import uuid4
 
 import pytest
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
+from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.retrievers import BaseRetriever
 
 from lodestar_brain import retrieval
 from lodestar_brain.llm.fake import FakeChat
 
-# A fixed instant, so the expected date int is readable rather than arithmetic.
+# Fixed instants, so the expected date ints are readable rather than arithmetic.
 MADE_ON = int(datetime(2026, 3, 10, 9, 30, tzinfo=timezone.utc).timestamp() * 1000)
+LONG_AGO = int(datetime(2024, 7, 1, tzinfo=timezone.utc).timestamp() * 1000)
 
 
 def card(id, title, notes='', tags=None, category=''):
@@ -65,6 +70,46 @@ class StubEncoder:
 
     def get_embedding_dimension(self):
         return 2
+
+
+class ScriptedChat(BaseChatModel):
+    """A chat model that answers with `reply`, optionally slowly or not at all,
+    and records what it was asked. Enough to test a gate without a provider."""
+    reply: str = ''
+    delay: float = 0.0
+    fail: bool = False
+    calls: int = 0
+    seen: str = ''
+
+    @property
+    def _llm_type(self) -> str:
+        return 'scripted'
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        self.calls += 1
+        self.seen = '\n'.join(str(message.content) for message in messages)
+        if self.delay:
+            time.sleep(self.delay)
+        if self.fail:
+            raise RuntimeError('the provider fell over')
+        return ChatResult(generations=[
+            ChatGeneration(message=AIMessage(content=self.reply))])
+
+
+class CountingEmbeddings(Embeddings):
+    """The lexical embedder, counting how many documents it was asked to embed —
+    which is what the card index's fingerprint exists to keep down."""
+
+    def __init__(self):
+        self.inner = retrieval.LexicalHashEmbeddings()
+        self.documents = 0
+
+    def embed_documents(self, texts):
+        self.documents += len(texts)
+        return self.inner.embed_documents(texts)
+
+    def embed_query(self, text):
+        return self.inner.embed_query(text)
 
 
 # This is a unit test.
@@ -292,3 +337,89 @@ def test_expansion_reaches_the_words_the_corpus_actually_uses():
     llm = FakeChat(script=[AIMessage(content='dispute with wife\ntax fine')])
     expanded = retrieval.multi_query(fixed(['d1']), llm)
     assert [doc.id for doc in expanded.invoke('anything')] == ['d1']
+
+
+# This is a unit test.
+def test_the_relevance_gate_asks_once_and_drops_what_the_model_rejects():
+    docs = [BY_ID['d1'], BY_ID['d2'], BY_ID['d3']]
+    llm = ScriptedChat(reply='1: 9\n2: 0\n3: 8')
+    assert [doc.id for doc in retrieval.relevance_gate(llm, 'مالیات', docs)] \
+        == ['d1', 'd3']
+    # One call for the whole batch, not one per candidate. Every candidate is in
+    # that one prompt — a gate that costs k calls per question is the row the
+    # lab's OpenRouter credit never reached.
+    assert llm.calls == 1
+    for doc in docs:
+        assert doc.page_content[:15] in llm.seen
+    # Every failure mode is a no-op rather than an empty context: an unparsed
+    # line means "no opinion" (0.5), which clears the 0.4 threshold. A malformed
+    # reply must not be able to silently delete the evidence.
+    assert len(retrieval.relevance_gate(ScriptedChat(reply='I cannot help'),
+                                        'مالیات', docs)) == 3
+    assert len(retrieval.relevance_gate(ScriptedChat(fail=True), 'مالیات', docs)) == 3
+    idle = ScriptedChat(reply='1: 9')
+    assert retrieval.relevance_gate(idle, 'مالیات', []) == []
+    assert idle.calls == 0
+
+
+# This is a unit test.
+def test_the_gate_abandons_a_call_that_blows_its_latency_budget():
+    docs = [BY_ID['d1'], BY_ID['d2']]
+    slow = ScriptedChat(reply='1: 0\n2: 0', delay=2.0)
+    start = time.perf_counter()
+    kept = retrieval.relevance_gate(slow, 'مالیات', docs, budget_s=0.05)
+    # The gate is an optimisation that measured a *tie* with no gate at all, so
+    # a slow model costs the gate, never the answer.
+    assert time.perf_counter() - start < 1.0
+    assert [doc.id for doc in kept] == ['d1', 'd2']
+
+
+# This is a unit test.
+def test_the_card_index_re_embeds_only_when_the_board_changed():
+    cards = [card('c1', 'Renew the visa'), card('c2', 'Book the dentist')]
+    embeddings = CountingEmbeddings()
+    index = retrieval.CardIndex(embeddings)
+    index.build(cards)
+    assert embeddings.documents == 2
+    index.build(list(cards))          # the same board, a different list object
+    assert embeddings.documents == 2  # a per-tool-call rebuild costs nothing
+    # An edit is a different board even at the same length: the fingerprint
+    # covers what gets indexed, not how many rows there are.
+    index.build([dict(cards[0], title='Renew the visa urgently'), cards[1]])
+    assert embeddings.documents == 4
+    index.build([cards[1]])
+    assert embeddings.documents == 5
+    assert [doc.id for doc in index.search('dentist')] == ['c2']
+
+
+# This is a unit test.
+def test_the_card_index_search_runs_the_whole_pipeline():
+    cards = [card('c1', 'Renew the visa', notes='appointment at the embassy'),
+             card('c2', 'Book the dentist'),
+             dict(card('c3', 'Old thing'), createdAt=LONG_AGO, updatedAt=LONG_AGO)]
+    index = retrieval.CardIndex(retrieval.LexicalHashEmbeddings())
+    index.build(cards)
+    assert [doc.id for doc in index.search('visa embassy')][0] == 'c1'
+    # The question's own time language filters before ranking, so a card outside
+    # the window cannot win on relevance.
+    scoped = index.search('what did I do in 2024', today=date(2026, 3, 10))
+    assert {doc.id for doc in scoped} == {'c3'}
+    # The gate only runs when a model is handed over, and when it rejects
+    # everything the caller gets nothing — which is how an honest "no" happens.
+    assert index.search('visa', llm=ScriptedChat(reply='1: 0\n2: 0\n3: 0')) == []
+
+
+# This is an integration test: it runs a real Chroma client, in process.
+def test_the_chat_store_records_a_snippet_and_recalls_it():
+    store = retrieval.ChatStore(retrieval.MEMORY_URL,
+                                retrieval.LexicalHashEmbeddings(),
+                                collection=f'chat-test-{uuid4().hex}')
+    assert store.search('مالیات') == []   # an empty store is not an error
+    store.record(['رفتم اداره مالیات و جریمه رو دادم', 'صبح دویدم و حالم خوب بود'],
+                 metadata={'source': 'chat', 'tags': ['money', 'admin']})
+    hits = store.search('مالیات', k=1)
+    assert len(hits) == 1
+    assert 'مالیات' in hits[0]['text']
+    assert hits[0]['metadata']['tags'] == 'money admin'   # flattened on the way in
+    assert 0.0 <= hits[0]['score'] <= 1.0
+    store.drop()

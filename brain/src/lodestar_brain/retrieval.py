@@ -29,15 +29,19 @@ accept these objects without adapters.
 import hashlib
 import json
 import re
+import threading
+import urllib.request
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlparse
 
 import numpy as np
 from langchain_classic.retrievers import EnsembleRetriever, MultiQueryRetriever
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.retrievers import BaseRetriever
+from langchain_core.vectorstores import InMemoryVectorStore
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from rank_bm25 import BM25Okapi
 
@@ -704,6 +708,258 @@ def lexical_rerank(query: str, documents: list[Document], idf: dict,
     return [candidates[int(i)] for i in np.argsort(-final)[:k]]
 
 
+# --- the relevance gate -----------------------------------------------------
+
+# The measured threshold from the lab's candidate F. A context must be graded at
+# least this useful to reach the answerer.
+GRADE_THRESHOLD = 0.4
+# Half marks means "the model expressed no opinion", and it deliberately clears
+# the threshold: a reply that could not be parsed must degrade to the ungated
+# pipeline — which measured a tie with the gated one — rather than silently
+# emptying the context.
+NO_OPINION = 0.5
+# How long the user waits for the gate before it is abandoned. One constant, not
+# the local/remote pair in llm/factory.py, and for the opposite reason: a
+# timeout protects the model's right to finish a call the answer depends on,
+# while this bounds the wait for a stage that measured no quality gain at all.
+# A loaded local model therefore loses its gate instead of costing 90 seconds.
+GATE_BUDGET = 20.0
+GATE_MAX_CHARS = 700
+
+GATE_PROMPT = (
+    'You score how useful each numbered excerpt is for answering a question '
+    'about the user\'s own notes and journal. The text may be Persian or '
+    'English. Reply with one line per excerpt in the form '
+    '"<number>: <score 0-10>" and nothing else. 0 means irrelevant, 10 means it '
+    'directly contains the answer.')
+
+
+def _within_budget(budget_s: float, work):
+    """Run `work`, and give up waiting for it after `budget_s`.
+
+    The thread is a daemon and is never joined: an abandoned provider call must
+    not hold up process exit, and the model's own timeout is what actually ends
+    it. Returns None if the budget was blown or the call raised — both of which
+    the caller reads as "no opinion"."""
+    box: dict = {}
+
+    def run():
+        try:
+            box['value'] = work()
+        except Exception:
+            pass   # a failed gate is a no-op gate; the caller defaults to 0.5
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    thread.join(budget_s)
+    return box.get('value')
+
+
+def relevance_scores(llm, query: str, texts: list[str],
+                     budget_s: float = GATE_BUDGET) -> list[float]:
+    """Grade every candidate in **one** call.
+
+    One call per candidate would be more accurate and would also multiply a
+    question's cost by k — the difference between a gate that ships and a gate
+    that is only ever measured once. Anything the reply does not score keeps
+    NO_OPINION."""
+    if not texts:
+        return []
+    listing = '\n\n'.join(f'[{i + 1}] {text[:GATE_MAX_CHARS]}'
+                          for i, text in enumerate(texts))
+    reply = _within_budget(budget_s, lambda: llm.invoke(
+        [('system', GATE_PROMPT),
+         ('user', f'Question: {query}\n\n{listing}')]))
+    scores = [NO_OPINION] * len(texts)
+    for line in str(getattr(reply, 'content', '') or '').splitlines():
+        match = re.match(r'\s*\[?(\d+)\]?\s*[:.\-]\s*(\d+(?:\.\d+)?)', line)
+        if match:
+            index, value = int(match.group(1)) - 1, float(match.group(2))
+            if 0 <= index < len(texts):
+                scores[index] = min(10.0, value) / 10.0
+    return scores
+
+
+def relevance_gate(llm, query: str, documents: list[Document],
+                   threshold: float = GRADE_THRESHOLD,
+                   budget_s: float = GATE_BUDGET) -> list[Document]:
+    """Candidate F's one addition after retrieval: drop the contexts a model
+    says do not help. An empty result is the honest answer — without a gate every
+    question gets an answer, including the ones the board cannot support."""
+    scores = relevance_scores(llm, query, [doc.page_content for doc in documents],
+                              budget_s)
+    return [doc for doc, score in zip(documents, scores) if score >= threshold]
+
+
+# --- the board's index ------------------------------------------------------
+
+
+def rrf_fuse(rankings: list[list[Document]], c: int = RRF_K) -> list[Document]:
+    """The same fusion `EnsembleRetriever` applies between retrievers, applied
+    across query variants — which it cannot do, because it takes one query."""
+    scores: dict[str, float] = {}
+    seen: dict[str, Document] = {}
+    for ranking in rankings:
+        for rank, doc in enumerate(ranking, start=1):
+            key = doc.id or doc.page_content
+            seen.setdefault(key, doc)
+            scores[key] = scores.get(key, 0.0) + 1.0 / (c + rank)
+    return [seen[key] for key in sorted(scores, key=lambda key: -scores[key])]
+
+
+def _fingerprint(documents: list[Document]) -> str:
+    """Identify a board by what would be indexed from it. Not the card count and
+    not `updatedAt`: the point is that the fingerprint changes exactly when the
+    embeddings would, so an unchanged board is never paid for twice."""
+    digest = hashlib.blake2b(digest_size=16)
+    for doc in documents:
+        digest.update(doc.page_content.encode())
+        digest.update(repr(sorted(doc.metadata.items())).encode())
+        digest.update(b'\x00')
+    return digest.hexdigest()
+
+
+class CardIndex:
+    """The board, embedded in this process and rebuilt when it changes.
+
+    Deliberately not a Chroma collection. SQLite is the record for cards and
+    this index is derived from `/api/state`, so persisting it would add a service
+    dependency for a throwaway artifact plus a stale-row deletion problem. The
+    fingerprint is what makes a rebuild-per-tool-call affordable: without it the
+    board would be re-embedded on every question, which is free with hashing and
+    very much not free with a real encoder."""
+
+    def __init__(self, embeddings: Embeddings):
+        self.embeddings = embeddings
+        self.documents: list[Document] = []
+        self.store: InMemoryVectorStore | None = None
+        self.bm25 = RankBM25Retriever.from_documents([], k=CANDIDATES)
+        self.fingerprint = ''
+
+    def build(self, cards: list[dict]) -> bool:
+        """Index the board unless this exact board is already indexed. Returns
+        whether anything was rebuilt."""
+        documents = [card_document(card) for card in cards]
+        fingerprint = _fingerprint(documents)
+        if self.store is not None and fingerprint == self.fingerprint:
+            return False
+        store = InMemoryVectorStore(self.embeddings)
+        if documents:
+            store.add_documents(documents)
+        self.documents, self.store, self.fingerprint = documents, store, fingerprint
+        # Tokenised once here rather than per search: `search` copies this
+        # retriever to attach a time scope, which reuses the same index.
+        self.bm25 = RankBM25Retriever.from_documents(documents, k=CANDIDATES)
+        return True
+
+    def search(self, query: str, k: int = TOP_K, today: date | None = None,
+               llm=None, time_filter: bool = True) -> list[Document]:
+        """The chosen architecture, end to end: resolve the time language,
+        expand the query, retrieve both ways, fuse, rerank, and — when a model is
+        given — gate."""
+        if not self.documents or self.store is None:
+            return []
+        scope = resolve_time_scope(query, today) if time_filter else None
+        search_kwargs: dict = {'k': CANDIDATES}
+        if scope is not None:
+            search_kwargs['filter'] = lambda doc: scope.matches(doc.metadata)
+        hybrid = hybrid_retriever(
+            self.store.as_retriever(search_kwargs=search_kwargs),
+            self.bm25.model_copy(update={'scope': scope}))
+        fused = rrf_fuse([hybrid.invoke(variant)
+                          for variant in expand_queries(query)])
+        ranked = lexical_rerank(query, fused, self.bm25.idf, k=k)
+        return relevance_gate(llm, query, ranked) if llm is not None else ranked
+
+
+# --- chat memory ------------------------------------------------------------
+
+# Sentinel url selecting an in-process client: no server, no disk, no network.
+MEMORY_URL = 'memory'
+
+
+def parse_chroma_url(url: str) -> tuple[str, int, bool]:
+    """Split a Chroma url into the (host, port, ssl) HttpClient wants."""
+    parsed = urlparse(url)
+    ssl = parsed.scheme == 'https'
+    return parsed.hostname, parsed.port or (443 if ssl else 80), ssl
+
+
+def ensure_database(url: str, database: str,
+                    tenant: str = 'default_tenant') -> None:
+    """Create the database if it is missing. Chroma auto-creates collections but
+    not databases, so a fresh server would otherwise fail on the first record.
+    Idempotent: an existing database answers with an HTTP error we ignore, so
+    brains racing on startup are harmless. A *connection* failure propagates —
+    the caller decides whether to degrade."""
+    endpoint = f'{url.rstrip("/")}/api/v2/tenants/{tenant}/databases'
+    request = urllib.request.Request(
+        endpoint, data=json.dumps({'name': database}).encode(),
+        headers={'Content-Type': 'application/json'}, method='POST')
+    try:
+        urllib.request.urlopen(request, timeout=5)
+    except urllib.error.HTTPError:
+        pass   # already exists
+
+
+class ChatStore:
+    """Per-board chat memory in Chroma, through langchain-chroma.
+
+    Chroma rather than an in-process index — unlike `CardIndex` — because the
+    transcript is stored nowhere else: losing it is losing the data, not losing a
+    cache. It runs as a *service* shared by every board, brain and test, so real
+    and non-real memory are separated by **database**, not by collection."""
+
+    def __init__(self, url: str, embeddings: Embeddings, collection: str = 'chat',
+                 database: str = 'lodestar'):
+        import chromadb   # local import: heavy, and only needed when memory is on
+        from langchain_chroma import Chroma
+        settings = chromadb.Settings(anonymized_telemetry=False)
+        if url == MEMORY_URL:
+            client = chromadb.EphemeralClient(settings=settings)
+        else:
+            host, port, ssl = parse_chroma_url(url)
+            ensure_database(url, database)
+            client = chromadb.HttpClient(host=host, port=port, ssl=ssl,
+                                         database=database, settings=settings)
+        self.url, self.database = url, database
+        self.collection_name = collection
+        self.client = client
+        # Cosine, stated: the default is L2, and a relevance score of 1 - distance
+        # only means what it says if the space is cosine.
+        self.store = Chroma(client=client, collection_name=collection,
+                            embedding_function=embeddings,
+                            collection_metadata={'hnsw:space': 'cosine'})
+
+    def record(self, texts: list[str], metadata: dict | None = None) -> None:
+        """Chunk and store. Chunking lives here rather than at the call site so
+        one place decides how a transcript is cut."""
+        chunks = [chunk for text in texts for chunk in split_text(text)]
+        if not chunks:
+            return
+        payload = {'created_day': _to_int(datetime.now(timezone.utc).date())}
+        payload |= flatten_metadata(metadata or {})
+        self.store.add_texts(chunks, metadatas=[dict(payload)] * len(chunks))
+
+    def search(self, text: str, k: int = 5,
+               scope: TimeScope | None = None) -> list[dict]:
+        if self.count() == 0:
+            return []   # an empty store is a normal state, not a failed query
+        hits = self.store.similarity_search_with_relevance_scores(
+            text, k=min(k, self.count()),
+            filter=where_clause(scope, fields=('created_day',)))
+        return [{'text': doc.page_content, 'score': round(float(score), 4),
+                 'metadata': dict(doc.metadata)} for doc, score in hits]
+
+    def count(self) -> int:
+        return self.client.get_collection(self.collection_name).count()
+
+    def drop(self) -> None:
+        """Delete this collection. For tests cleaning up after themselves —
+        never wired to anything a user can reach."""
+        self.client.delete_collection(self.collection_name)
+
+
 """Alternatives considered
 
 **1. "Why are the embedders yours? LangChain ships a wrapper for all three."**
@@ -886,4 +1142,80 @@ already the place to put it. Recorded honestly: at candidate F's depth of 20 the
 a first-placed one, because min-max normalisation puts both extremes at 0 and 1
 on each axis. That is inherited from the lab rather than chosen here, and it is
 the reason the reranker moves the middle of the list and not its ends.
+
+**6. "Why is the relevance gate yours? LangChain has document compressors for
+exactly this."**
+
+*Short answer.* Because LangChain's LLM filter calls the model once per
+document, and it fails closed. This one is a single batched call that fails
+open.
+
+*Why the obvious option fails.* `LLMChainFilter` asks the model, per document,
+whether it is relevant. At k=8 that is eight requests for one question — the
+cost that kept an LLM gate out of the lab's sweep until it could be run against
+a local model, and it is per *question*, so it multiplies through every eval. The
+second problem is the default direction of failure: its boolean output parser
+treats an unparseable answer as "not relevant", so a model that replies in prose
+deletes the evidence. Here an unparsed line is NO_OPINION at 0.5, which clears
+the 0.4 threshold on purpose — the worst a broken gate can do is nothing, and
+"nothing" is the ungated pipeline that measured a tie with this one.
+
+*Why not the framework.* `EmbeddingsFilter` *is* free and is the compressor that
+needs no model — but it thresholds embedding similarity, which is more of what
+dense retrieval already did. It cannot express the distinction the gate exists
+for: on topic, and still not an answer. `ContextualCompressionRetriever` remains
+the right seam to hang this on, as noted under question 5.
+
+*The libraries that would do it.* `LLMChainFilter` — the greenfield pick if
+per-question cost were not the constraint, and the more accurate of the two by
+construction, since each document gets the model's whole attention. Cohere's
+rerank API — one call, a relevance score per document, closest in shape to this
+function; a paid third-party service that would see the journal. FlashRank — a
+local cross-encoder, small and fast, English.
+
+*Why not adopted, and what would change it.* Batching, and the fail-open
+default. Two things would change it: a provider where per-document calls are
+cheap enough to stop mattering, or — more usefully — a measurement, because the
+batched listing's accuracy cost against per-document grading has never been
+measured. The lab can run both over the same 30 questions with the same judge;
+if per-document wins by more than the decision score's spread, the cost argument
+has to be re-made rather than assumed.
+
+**7. "Why is the board's index in memory when chat memory is in Chroma?"**
+
+*Short answer.* Because one is derived and the other is the record. Cards live in
+SQLite and this index is rebuilt from `/api/state`; a transcript exists nowhere
+but the store.
+
+*Why one store for both fails.* A Chroma collection of cards has to be kept in
+step with a board that changes constantly, which means deleting stale vectors on
+every save — and a vector for a card deleted from SQLite does not raise, it just
+keeps being retrieved, so the agent recommends a card that no longer exists. It
+would also make `find_related` depend on a running service to answer a question
+about data the brain already has in hand.
+
+*Why not the framework.* This one is barely ours: `InMemoryVectorStore` is
+LangChain's, `langchain_chroma.Chroma` backs the chat store, and what is written
+here is the fingerprint plus the assembly. The fingerprint is the part with no
+framework equivalent — LangChain has no notion of "this corpus is the corpus I
+already indexed".
+
+*The libraries that would do it.* Chroma for both, with an explicit delete pass —
+one code path, at the cost above. FAISS via `langchain-community` — fast and
+persistable, with the same stale-row duty. Qdrant or Weaviate — real typed
+metadata and server-side filtering, which would also fix the tag-joining
+compromise under question 2; another service to run. `sqlite-vec` — genuinely the
+most attractive on paper, since the board is already SQLite and the index would
+travel with the data; it is ruled out by an invariant rather than by
+performance, because the brain must never touch SQLite directly (all its writes
+go through the Node API, which is what keeps the durability promise true for
+agent edits).
+
+*Why not adopted, and what would change it.* Board size, and it is measurable
+rather than arguable: brute-force cosine over a few hundred short cards is
+microseconds, and the fingerprint means an unchanged board costs nothing at all.
+The crossover is when a fingerprint *miss* — re-embedding the whole board with a
+real encoder — costs more than an incremental upsert would. On the order of tens
+of thousands of cards, and the way to know is to time `build` on a real board,
+not to reason about it.
 """
