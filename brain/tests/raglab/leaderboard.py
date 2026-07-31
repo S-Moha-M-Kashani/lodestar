@@ -63,7 +63,14 @@ class Group:
         return f'{self.n_questions} questions' + (f', {balance}' if balance else '')
 
     @property
+    def newest(self) -> str:
+        """The latest `started_at` on any row. Timestamps are zero-padded, so
+        lexical order is chronological order."""
+        return max((r.get('started_at', '') for r in self.rows), default='')
+
+    @property
     def judge(self) -> str:
+        """Reads after "judged by", so every branch has to be a noun phrase."""
         if self.judge_model:
             return f'{self.judge_model} via {self.judge_provider or "?"}'
         # A row carrying a decision score was judged by *something* — the runs
@@ -71,7 +78,7 @@ class Group:
         # would be a claim, and the wrong one; not knowing is the fact.
         if any(r.get('ragas_decision') is not None for r in self.rows):
             return 'a judge that was not recorded'
-        return 'nothing judged on these rows'
+        return 'no judge — nothing on these rows was judged'
 
 
 def _key(row: dict) -> tuple:
@@ -112,12 +119,17 @@ def group(rows: list[dict]) -> list[Group]:
     for found in groups.values():
         found.rows.sort(key=lambda r: (r.get('ragas_decision') is None,
                                        -(r.get('ragas_decision') or 0.0)))
-    # Biggest, most-recent groups first: the group carrying the live decision is
-    # the one being read, and a reader should not have to scroll past six
-    # abandoned ones to reach it.
-    return sorted(groups.values(),
-                  key=lambda g: (-g.n_questions, -len(g.rows),
-                                 g.judge_model))
+    # Rankable groups first, then the merely listed ones. A reader opens this for
+    # the live decision, and sorting by question count put the 100-question group
+    # of unrecorded samples — which cannot be ranked at all — above the 30-question
+    # group that decides something. Within each class: most recent first, since the
+    # newest sample is the one still in use.
+    #
+    # Two stable passes rather than one key, because the date wants descending
+    # order and the flags ascending, and a string cannot be negated.
+    by_date = sorted(groups.values(), key=lambda g: g.newest, reverse=True)
+    return sorted(by_date, key=lambda g: (not _sample_recorded(g),
+                                          verdict(g) in ('unknown', 'unranked')))
 
 
 def verdict(found: Group) -> str:

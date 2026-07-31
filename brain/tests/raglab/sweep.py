@@ -36,7 +36,7 @@ import sys
 import time
 from dataclasses import replace
 
-from . import corpus, ragas_eval
+from . import corpus, leaderboard, ragas_eval
 from .config import (BALANCES, GenerationConfig, IndexConfig, LabConfig,
                      RetrievalConfig, RUNS_DIR, load_lab_settings)
 from .evaluate import run_eval
@@ -243,7 +243,59 @@ def sweep(limit: int, workers: int, only: list[str] | None = None,
           f'({", ".join(ragas_eval.DECISION_METRICS)}) ===')
     for value, label, result in ranked:
         print('   ' + line(label, result))
+    # A sorted list is read as a result. Whether the top row actually beat the one
+    # below it is a different question, and it has to be answered here rather than
+    # left to whoever reads the ordering.
+    for note in ranking_verdict([replace_label(result, label)
+                                 for _, label, result in ranked]):
+        print(note)
     return ranked
+
+
+def replace_label(result, label: str) -> dict:
+    """A leaderboard row from a run, carrying the candidate's letter.
+
+    `brief()` drops the question ids (they would swamp a rendered row) but the
+    comparability grouping needs them, so they are put back from `selection`."""
+    row = result.brief()
+    row['label'] = label
+    row['selection'] = dict(result.selection)
+    row['judge'] = (result.ragas or {}).get('judge') or {}
+    return row
+
+
+def ranking_verdict(rows: list[dict]) -> list[str]:
+    """Whether the ordering above is a result, in words.
+
+    Measured, and the reason this function exists: F scored 0.7375 against A's
+    0.7222 on identical questions, and printing F at the top of a list headed
+    "ranked by the decision score" reads as a win. The combined error was 0.0477 —
+    three times the lead. `leaderboard` already refused to call that; the sweep
+    that produced the rows has to refuse in the same terms, or the first thing
+    anyone reads is the conclusion the analysis rejects."""
+    out = []
+    for found in leaderboard.group(rows):
+        call = leaderboard.verdict(found)
+        measured = [r for r in found.rows if r.get('ragas_decision') is not None]
+        head = f'   {found.sample} · judged by {found.judge}'
+        if call == 'tie':
+            best, second = measured[0], measured[1]
+            lead = best['ragas_decision'] - second['ragas_decision']
+            errors = (best['ragas_decision_stderr'] ** 2
+                      + second['ragas_decision_stderr'] ** 2) ** 0.5
+            out.append(f'{head}\n   No winner: {best["label"]} leads '
+                       f'{second["label"]} by {lead:.4f}, inside the combined '
+                       f'error of {errors:.4f} — these rows do not separate.')
+        elif call == 'unknown':
+            out.append(f'{head}\n   No winner: no measured error on these rows, so '
+                       'a lead cannot be told from noise.')
+        elif call == 'unranked':
+            out.append(f'{head}\n   One judged row only — nothing to compare it '
+                       'against.')
+        else:
+            out.append(f'{head}\n   Winner: {call}, by more than the combined '
+                       'error of the top two rows.')
+    return out
 
 
 def final(limit: int | None, workers: int, label: str,

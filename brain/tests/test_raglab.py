@@ -2871,6 +2871,32 @@ def _row(run_id, label, decision, ids, judge, stderr=None):
                           'question_ids': ids}}
 
 
+def test_the_sweeps_own_ranking_applies_the_same_error_test():
+    """Measured, and it is why this exists: F scored 0.7375 against A's 0.7222 on
+    identical questions, and the sweep printed F on top of a list headed "ranked
+    by the decision score" — a win, by presentation. The combined error was
+    0.0477, three times the lead. The leaderboard refused to call it; the sweep
+    that produced the rows must refuse too, or the first thing anyone reads is the
+    conclusion the analysis rejects."""
+    judge = {'model': 'gemma4:e2b', 'provider': 'ollama'}
+    ids = ['q1', 'q2']
+    lines = sweep.ranking_verdict([
+        _row('r2', 'F llm relevance gate', 0.7375, ids, judge, stderr=0.0333),
+        _row('r1', 'A baseline', 0.7222, ids, judge, stderr=0.0341)])
+    text = '\n'.join(lines)
+    assert 'do not separate' in text or 'No winner' in text, text
+    assert '0.0477' in text or '0.048' in text, 'the error it was judged against'
+
+
+def test_the_sweeps_ranking_names_a_winner_when_there_is_one():
+    judge = {'model': 'gemma4:e2b', 'provider': 'ollama'}
+    ids = ['q1', 'q2']
+    text = '\n'.join(sweep.ranking_verdict([
+        _row('r2', 'F', 0.90, ids, judge, stderr=0.01),
+        _row('r1', 'A', 0.50, ids, judge, stderr=0.01)]))
+    assert 'F' in text and 'Winner' in text
+
+
 def test_rows_that_scored_different_questions_are_not_ranked_together():
     """The failure this exists to stop: F measured on 30 balanced questions read
     as beating A measured on 24 strided ones, when neither number bears on the
@@ -2966,6 +2992,29 @@ def test_a_group_with_no_measured_error_cannot_claim_a_winner():
         _row('r2', 'F', 0.72, ids, judge, stderr=None),
     ])
     assert leaderboard.verdict(group) == 'unknown'
+
+
+def test_the_group_that_decides_something_is_printed_first():
+    """Sorting by question count put a 100-question group of unrecorded samples —
+    which cannot be ranked at all — above the 30-question group that decides the
+    architecture. A reader opens this for the live decision."""
+    judge = {'model': 'gemma4:e2b', 'provider': 'ollama'}
+    stale = _row('r0', 'old 100q', 0.61, [], judge)
+    stale['selection'], stale['n_questions'] = {}, 100
+    stale['started_at'] = '2026-07-29 10:00:00'
+    live_rows = [_row('r1', 'F', 0.90, ['q1', 'q2'], judge, stderr=0.01),
+                 _row('r2', 'A', 0.50, ['q1', 'q2'], judge, stderr=0.01)]
+    groups = leaderboard.group([stale] + live_rows)
+    assert leaderboard.verdict(groups[0]) == 'F', [g.sample for g in groups]
+
+
+def test_every_judge_label_reads_as_a_noun_after_judged_by():
+    judge = {'model': '', 'provider': ''}
+    unjudged, = leaderboard.group([_row('r1', 'retrieval only', None,
+                                        ['q1'], judge)])
+    text = leaderboard.markdown([unjudged])
+    assert 'judged by nothing judged' not in text, text
+    assert 'judged by no judge —' in text
 
 
 def test_the_markdown_names_the_sample_and_the_judge_on_every_group():
