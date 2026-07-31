@@ -173,7 +173,7 @@ test('compose pins the brain embedder to the one its image installs', () => {
     `the composed brain does not pin BRAIN_EMBEDDER to fastembed (got ` +
       `${pinned ?? 'nothing'}). The Dockerfile installs the 'semantic' extra so ` +
       `the real embedder is available; unpinned, the container would fall to the ` +
-      `hash embedder and Leiden RAG would silently run on token overlap.`,
+      `hash embedder and card retrieval would silently run on token overlap.`,
   );
 });
 

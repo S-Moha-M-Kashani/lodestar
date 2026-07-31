@@ -868,54 +868,6 @@ def rrf_fuse(rankings: list[list[Document]], c: int = RRF_K) -> list[Document]:
     return [seen[key] for key in sorted(scores, key=lambda key: -scores[key])]
 
 
-K_NEIGHBORS = 3     # edges per card in the similarity graph
-MIN_SIMILARITY = 0.15
-
-
-def communities(vectors: np.ndarray, k_neighbors: int = K_NEIGHBORS,
-                min_similarity: float = MIN_SIMILARITY) -> list[int]:
-    """Leiden community detection over a kNN similarity graph of the cards.
-
-    This answers a different question from retrieval, and is judged differently:
-    "these cards belong together" is a product feature — surface connections,
-    spot duplicates — not a relevance score. It is deliberately *not* attached to
-    ranked search results, because a community id riding along on a hit
-    conflates the two claims.
-
-    Returns one label per vector, in the same order. With no edge clearing the
-    threshold every card is its own community, which is the honest answer for a
-    board of unrelated cards rather than one big group."""
-    import igraph as ig
-    import leidenalg
-    count = len(vectors)
-    if count == 0:
-        return []
-    similarity = vectors @ vectors.T
-    edges: list[tuple[int, int]] = []
-    weights: list[float] = []
-    seen: set[tuple[int, int]] = set()
-    for i in range(count):
-        picked = 0
-        for j in np.argsort(-similarity[i]):
-            j = int(j)
-            if j == i:
-                continue
-            if similarity[i][j] < min_similarity or picked >= k_neighbors:
-                break
-            edge = (min(i, j), max(i, j))
-            if edge not in seen:
-                seen.add(edge)
-                edges.append(edge)
-                weights.append(float(similarity[i][j]))
-            picked += 1
-    if not edges:
-        return list(range(count))
-    partition = leidenalg.find_partition(
-        ig.Graph(n=count, edges=edges), leidenalg.ModularityVertexPartition,
-        weights=weights, seed=0)   # seeded: the same board must group the same way
-    return list(partition.membership)
-
-
 def _fingerprint(documents: list[Document]) -> str:
     """Identify a board by what would be indexed from it. Not the card count and
     not `updatedAt`: the point is that the fingerprint changes exactly when the
@@ -944,7 +896,6 @@ class CardIndex:
         self.store: InMemoryVectorStore | None = None
         self.bm25 = RankBM25Retriever.from_documents([], k=CANDIDATES)
         self.fingerprint = ''
-        self._membership: list[int] | None = None
 
     def build(self, cards: list[dict]) -> bool:
         """Index the board unless this exact board is already indexed. Returns
@@ -960,25 +911,7 @@ class CardIndex:
         # Tokenised once here rather than per search: `search` copies this
         # retriever to attach a time scope, which reuses the same index.
         self.bm25 = RankBM25Retriever.from_documents(documents, k=CANDIDATES)
-        self._membership = None
         return True
-
-    def vectors(self) -> np.ndarray:
-        """The embeddings the store already holds, so nothing is embedded twice.
-        `InMemoryVectorStore` keeps them in a plain dict keyed by document id."""
-        if self.store is None or not self.documents:
-            return np.zeros((0, 1), dtype=np.float32)
-        return np.array([self.store.store[doc.id]['vector']
-                         for doc in self.documents], dtype=np.float32)
-
-    def communities(self) -> list[int]:
-        """One community label per card, in `self.documents` order. Cached for
-        the life of the index: clustering is cheap, but asking twice for the same
-        board should not cost twice, and two different answers for one board
-        would look like the themes moved."""
-        if self._membership is None:
-            self._membership = communities(self.vectors())
-        return self._membership
 
     def search(self, query: str, k: int = TOP_K, today: date | None = None,
                llm=None, threshold: float = GRADE_THRESHOLD,

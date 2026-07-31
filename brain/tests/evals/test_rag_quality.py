@@ -45,27 +45,3 @@ def test_top_result_is_from_expected_cluster():
         top = index.search(q["text"], k=q["k"])[0]
         assert label_of[top.metadata["id"]] == q["expected_cluster"], (
             f"top hit for {q['text']!r} was {top.metadata['id']}")
-
-
-@pytest.mark.eval
-def test_themes_separate_the_two_topics():
-    _, cards, label_of = _load()
-    index = CardIndex(LexicalHashEmbeddings())
-    index.build(cards)
-    # Grouping is a product feature, so the bar is the product's: the two
-    # subjects must not collapse into one theme, and cards of one subject must
-    # not be scattered one-per-group either.
-    theme_of = dict(zip((d.metadata["id"] for d in index.documents),
-                        index.communities()))
-    themes = {label: {theme_of[c["id"]] for c in items}
-              for label, items in _by_cluster(cards, label_of).items()}
-    labels = list(themes)
-    assert not (themes[labels[0]] & themes[labels[1]]), \
-        f"the two subjects share a theme: {themes}"
-
-
-def _by_cluster(cards, label_of):
-    out: dict = {}
-    for card in cards:
-        out.setdefault(label_of[card["id"]], []).append(card)
-    return out

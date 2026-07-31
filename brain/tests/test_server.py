@@ -320,14 +320,10 @@ def test_rag_reindex_says_whether_it_had_to_rebuild():
     # The same board again is not re-embedded. That is the fingerprint, and it
     # is what makes a rebuild-per-tool-call affordable with a real encoder.
     assert client.post('/rag/reindex').json() == {'cards': 2, 'rebuilt': False}
-    # Communities survive the migration, over the new index's own vectors: a
-    # theme grouping is a product feature (surface connections, spot
-    # duplicates), not a retrieval score, so it is not judged by nDCG.
-    res = client.get('/rag/communities')
-    assert res.status_code == 200
-    groups = res.json()['communities']
-    assert groups and all(set(group) == {'id', 'size', 'cards'}
-                          for group in groups)
+    # Community detection was removed on 2026-08-01, to be revisited. The route
+    # 404s rather than answering [] — an empty list reads as "no themes found",
+    # which is a claim about the board rather than about the feature.
+    assert client.get('/rag/communities').status_code == 404
 
 
 # --- which models this brain can serve --------------------------------------

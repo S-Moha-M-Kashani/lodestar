@@ -13,8 +13,7 @@ from .config import Settings, load_settings
 from .llm.factory import make_chat_model, served_models
 from .retrieval import CardIndex, ChatStore, gate_llm, make_embeddings
 from .tools.board import BoardClient, make_board_tools
-from .tools.retrieve import (make_group_tool, make_recall_tool,
-                             make_retrieve_tool)
+from .tools.retrieve import make_recall_tool, make_retrieve_tool
 from .tools.websearch import DdgsSearch, make_search_tool
 from .voice import make_transcriber
 from .voice.base import TranscriptionError
@@ -57,12 +56,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # its own. `gate_llm` is where BRAIN_GRADER is validated: an unknown value
     # raises at boot rather than leaving the gate quietly switched off.
     grader = gate_llm(settings.grader, make_chat_model(settings))
-    group_cards = make_group_tool(index, board)
     tools = [*make_board_tools(board),
              make_search_tool(DdgsSearch()),
              make_retrieve_tool(index, board, llm=grader,
-                                threshold=settings.grade_threshold),
-             group_cards]
+                                threshold=settings.grade_threshold)]
     memory = None
     if settings.chroma_url:
         try:
@@ -136,12 +133,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         changed since the last one — the fingerprint, made observable."""
         cards = board.list_cards()
         return {'cards': len(cards), 'rebuilt': index.build(cards)}
-
-    @app.get('/rag/communities')
-    def communities() -> dict:
-        """The board grouped by theme. Same shape as the tool the agent calls,
-        so a future themes panel needs no second implementation."""
-        return {'communities': group_cards.invoke({'min_size': 1})}
 
     @app.post('/rag/recall')
     def recall(body: RecallBody) -> dict:

@@ -1,20 +1,15 @@
-"""The three retrieval tools, as the agent sees them.
+"""The two retrieval tools, as the agent sees them.
 
 `tools/retrieve.py` is deliberately thin: the pipeline lives in `retrieval.py`
 and these wrappers decide only what the model is told. That contract is what
 these tests hold — the shape of a result, not the quality of a ranking.
-
-`find_related` and `group_cards` are kept apart on purpose. "This card answers
-your query" and "these cards belong together" are two different claims, and
-riding a community id along on every ranked hit conflated them.
 """
 import httpx
 import respx
 
 from lodestar_brain.retrieval import CardIndex, LexicalHashEmbeddings
 from lodestar_brain.tools.board import BoardClient
-from lodestar_brain.tools.retrieve import (make_group_tool, make_recall_tool,
-                                           make_retrieve_tool)
+from lodestar_brain.tools.retrieve import make_recall_tool, make_retrieve_tool
 
 
 def card(id, title, tags=None):
@@ -23,7 +18,7 @@ def card(id, title, tags=None):
             'num': 1, 'tags': tags or [], 'createdAt': 1, 'updatedAt': 1}
 
 
-# Two lexically distinct themes, the same fixture the Leiden tests used.
+# Two lexically distinct subjects, so a ranking has something to get wrong.
 CARDS = [
     card('k1', 'How to scale kubernetes pods under load?', ['infra']),
     card('k2', 'Best kubernetes pod autoscaling strategy?', ['infra']),
@@ -63,8 +58,8 @@ def test_find_related_ranks_the_board_and_claims_no_score():
     assert {hit['card']['id'] for hit in hits} <= {'k1', 'k2', 'k3'}
     assert [hit['rank'] for hit in hits] == list(range(1, len(hits) + 1))
     # RRF exposes no fused score, so a number invented from a rank would mean
-    # nothing. The community id lives on `group_cards` now, so a reader that
-    # still expects it here fails instead of filing every card under one theme.
+    # nothing. `community` is asserted absent because it used to be here: a
+    # reader still expecting it fails loudly instead of reading None as a theme.
     assert 'score' not in hits[0] and 'community' not in hits[0]
     # The brief is built from the board rows the tool just read, not from index
     # metadata: tags are a list there, and space-joining them so a store can
@@ -76,24 +71,6 @@ def test_find_related_ranks_the_board_and_claims_no_score():
     route.mock(return_value=board_state(CARDS + [card('n1', 'kubernetes notes')]))
     assert 'n1' in {hit['card']['id']
                     for hit in tool.run({'text': 'kubernetes notes', 'k': 3})}
-
-
-# This is a unit test.
-@respx.mock
-def test_group_cards_finds_the_themes_without_being_asked_a_question():
-    respx.get('http://board.test/api/state').mock(return_value=board_state(CARDS))
-    tool = make_group_tool(*index_and_board())
-    groups = tool.run({'min_size': 2})
-    theme = {c['id']: group['id'] for group in groups for c in group['cards']}
-    assert theme['k1'] == theme['k2'] == theme['k3']
-    assert theme['h1'] == theme['h2'] == theme['h3']
-    assert theme['k1'] != theme['h1']
-    assert all(group['size'] == len(group['cards']) >= 2 for group in groups)
-    # Clustering reuses the vectors the index already paid for, so asking twice
-    # costs one embedding pass, not two.
-    index, board = index_and_board()
-    index.build(CARDS)
-    assert index.communities() == index.communities()
 
 
 # This is a unit test.
