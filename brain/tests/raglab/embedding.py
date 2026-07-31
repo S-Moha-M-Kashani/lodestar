@@ -34,7 +34,7 @@ import numpy as np
 
 from lodestar_brain.rag.embedder import HashEmbedder, _normalize
 
-from . import textnorm
+from lodestar_brain import textnorm
 
 TOKEN_DIM = 512
 CHAR_DIM = 1024

@@ -32,7 +32,7 @@ import numpy as np
 
 from lodestar_brain.rag.chat_memory import chunk_text
 
-from . import textnorm
+from lodestar_brain import textnorm
 from .corpus import date_int, session_text
 
 # Phrases the diarist actually uses when he abandons one subject for another.

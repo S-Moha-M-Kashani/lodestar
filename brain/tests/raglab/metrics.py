@@ -23,7 +23,7 @@ import math
 from collections import defaultdict
 from dataclasses import dataclass
 
-from . import textnorm
+from lodestar_brain import textnorm
 from .corpus import evidence_sessions
 
 TYPES = ('single-hop', 'temporal', 'multi-hop', 'aggregation', 'knowledge-update',

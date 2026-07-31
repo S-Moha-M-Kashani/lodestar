@@ -1,12 +1,17 @@
 """Persian text normalisation and tokenisation.
 
-The corpus is colloquial Farsi typed by a human: Arabic ي/ك mixed with Persian
-ی/ک, half-spaces present or missing («می خوام» vs «می‌خوام»), Persian and ASCII
-digits, stray diacritics. Two chunks that a reader would call identical must
-tokenise identically or BM25 and every lexical metric silently under-counts.
+Retrieval's BM25 half, the lexical reranker and the time filter are all built on
+this tokeniser, and so is the RAG lab — which imports this module rather than
+keeping its own copy, so the configuration the lab measures and the one
+production ships cannot drift apart.
 
-Nothing here is Farsi-only: Latin words (اپلای written as "apply", "CV") survive
-untouched, which matters because the diarist code-switches constantly.
+The text is colloquial Farsi typed by a human: Arabic ي/ك mixed with Persian
+ی/ک, half-spaces present or missing («می خوام» vs «می‌خوام»), Persian and ASCII
+digits, stray diacritics. Two texts that a reader would call identical must
+tokenise identically or BM25 and every lexical score silently under-counts.
+
+Nothing here is Farsi-only: Latin words ("apply", "CV") survive untouched, which
+matters because the user code-switches constantly.
 """
 import re
 import unicodedata

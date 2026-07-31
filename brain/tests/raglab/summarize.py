@@ -34,7 +34,7 @@ import math
 import re
 from collections import defaultdict
 
-from . import textnorm
+from lodestar_brain import textnorm
 from .chunking import Chunk, importance_of
 from .corpus import date_int
 from .llm import lab_chat

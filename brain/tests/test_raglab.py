@@ -20,9 +20,11 @@ import pytest
 
 from lodestar_brain.llm.fake import FakeChat
 
+from lodestar_brain import textnorm
+
 from .raglab import (chunking, config, corpus, embedding, evaluate, explain,
                      leaderboard, metrics, models, pipeline, query, ragas_eval,
-                     retrieval, store, summarize, sweep, textnorm)
+                     retrieval, store, summarize, sweep)
 from .raglab.config import (EMBEDDERS, RERANKERS, GenerationConfig, IndexConfig,
                             LabConfig, LabSettings, RetrievalConfig)
 from .raglab.index import IndexRegistry, LabIndex

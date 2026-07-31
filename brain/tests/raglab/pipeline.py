@@ -10,10 +10,11 @@ import time
 from dataclasses import dataclass, field
 
 import numpy as np
+from lodestar_brain import textnorm
 
 from . import embedding
 from . import query as query_mod
-from . import retrieval, textnorm
+from . import retrieval
 from .config import LAYERS, GenerationConfig, RetrievalConfig
 from .llm import lab_chat
 from .models import Roles

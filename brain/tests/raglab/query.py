@@ -16,7 +16,7 @@ import re
 from dataclasses import dataclass
 from datetime import date, timedelta
 
-from . import textnorm
+from lodestar_brain import textnorm
 from .llm import lab_chat
 
 # Jalali month → (start month/day, end month/day) in the Gregorian year that
