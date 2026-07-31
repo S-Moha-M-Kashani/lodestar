@@ -88,3 +88,64 @@ def sentences(text: str) -> list[str]:
     text = normalize(text)
     parts = re.split(r'(?<=[.!?؟…])\s+|\n+|(?:\s+(?:و بعدش|خلاصه|راستی)\s+)', text)
     return [p.strip() for p in parts if p and p.strip()]
+
+
+"""Alternatives considered — "why did you write your own tokeniser?"
+
+**Short answer.** Because no framework owns this job, and the one library that
+does would have invalidated 31 measured experiments. Normalisation here serves
+only the *lexical* retrieval path — BM25, the reranker's IDF term coverage, the
+time filter's phrase matching. The dense path never calls it: a
+sentence-transformers model tokenises internally with its own subword
+vocabulary.
+
+**Why the obvious option fails.** The naive tokeniser is `text.split()`, and it
+is wrong for Persian in a way that is silent. «می‌خوام» (zero-width non-joiner)
+and «می خوام» (space) are the same word typed two ways; split on whitespace and
+they become different BM25 terms, so a query matches half the documents it
+should and no error is raised. The same holds for Arabic ي/ك against Persian
+ی/ک, and for Persian ۱۲۳ against ASCII 123.
+
+**Why not Unicode normalisation alone.** `unicodedata.normalize('NFKC', ...)`
+is used here, but it is not sufficient and it is worth knowing why in an
+interview: U+064A ARABIC YEH and U+06CC FARSI YEH are *distinct letters*, not
+compatibility variants, so NFKC leaves them apart. Folding them is a
+search-time decision — deliberately lossy, correct for retrieval, wrong for
+display. `_LETTER_FOLD` is that decision written down.
+
+**Why not LangChain.** It has no normaliser or tokeniser at all. The proof is
+in its own `BM25Retriever`, which exposes a `preprocess_func` parameter with a
+non-language-aware default: the framework's position is that tokenising is the
+caller's job. Chunking (`RecursiveCharacterTextSplitter`), fusion
+(`EnsembleRetriever`) and query expansion (`MultiQueryRetriever`) *are* taken
+from LangChain in this codebase. This is not one of those seams.
+
+**The libraries that would do it.**
+
+- `hazm` — the standard Persian NLP toolkit: `Normalizer`, `word_tokenize`,
+  `Lemmatizer`, POS tagging, and a curated stopword list. The right answer for
+  a greenfield project. Pulls `nltk` and a model directory.
+- `parsivar` — comparable scope, less actively maintained.
+- `spaCy`'s `fa` language class — a tokeniser and stopwords, but no trained
+  Persian pipeline, so it buys little over this module.
+- Hugging Face `tokenizers` — subword, which is the wrong *unit* for BM25:
+  IDF over word-pieces changes what "a term" means and makes rare-literal
+  recall worse, which is the one thing BM25 is here for.
+
+**Why they were not adopted.** Two reasons, and the first is decisive.
+
+1. Every BM25 score, IDF weight and lexical rerank in the lab's 31 runs was
+   produced by this tokeniser. Replacing it changes those numbers, so old rows
+   stop being comparable to new ones — the failure this project guards hardest
+   against. A tokeniser swap is an experiment to *measure*, not a refactor.
+2. `tokens()` emits a half-spaced compound both joined and split, on purpose,
+   because the corpus contains both spellings. A conventional normaliser picks
+   one and the other stops matching. That is a recall choice specific to this
+   text, not a bug to standardise away.
+
+**What would change the decision.** A lab run with the tokeniser as the only
+varied knob, scored on recall and quote recall over
+`fixtures/diary_year_fa.json`. If `hazm`'s lemmatiser beats character 4-grams
+on morphological overlap, adopt it — and re-run the baseline so the leaderboard
+stays internally comparable rather than mixing two tokenisers.
+"""
