@@ -6,12 +6,16 @@ model-backed embedders are exercised through their `factory` seam, so the
 prefix behaviour is tested without a 2 GB checkpoint.
 """
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pytest
+from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
+from langchain_core.messages import AIMessage
+from langchain_core.retrievers import BaseRetriever
 
 from lodestar_brain import retrieval
+from lodestar_brain.llm.fake import FakeChat
 
 # A fixed instant, so the expected date int is readable rather than arithmetic.
 MADE_ON = int(datetime(2026, 3, 10, 9, 30, tzinfo=timezone.utc).timestamp() * 1000)
@@ -26,6 +30,26 @@ def card(id, title, notes='', tags=None, category=''):
 
 def dot(a, b):
     return sum(x * y for x, y in zip(a, b))
+
+
+FA_DOCS = [
+    Document(id='d1', page_content='رفتم اداره مالیات و جریمه رو پرداخت کردم'),
+    Document(id='d2', page_content='با مهسا دعوامون شد سر خرید خونه'),
+    Document(id='d3', page_content='صبح دویدم و حالم بهتر شد'),
+    Document(id='d4', page_content='می‌خوام برم سفر شمال'),
+]
+BY_ID = {doc.id: doc for doc in FA_DOCS}
+
+
+def fixed(ids):
+    """A retriever that always answers with these documents, in this order.
+    Fusion is what is under test, so the halves being fused are made boring."""
+
+    class Fixed(BaseRetriever):
+        def _get_relevant_documents(self, query, *, run_manager=None):
+            return [BY_ID[id] for id in ids]
+
+    return Fixed()
 
 
 class StubEncoder:
@@ -150,3 +174,121 @@ def test_metadata_stays_filterable_when_a_value_is_not_a_scalar():
     assert flat['usage_json'] == '{"tokens": 12}'
     assert flat['layer'] == 'chat' and flat['k'] == 3
     assert retrieval.flatten_metadata({}) == {}
+
+
+# This is a unit test.
+def test_bm25_finds_the_rare_literal_a_dense_search_smooths_away():
+    bm25 = retrieval.RankBM25Retriever.from_documents(FA_DOCS, k=2)
+    # EnsembleRetriever cannot tell ours from langchain-community's, which is
+    # the whole reason not to depend on a package that announces its sunset.
+    assert isinstance(bm25, BaseRetriever)
+    hits = bm25.invoke('مالیات')
+    assert [doc.id for doc in hits][0] == 'd1'
+    assert len(hits) <= 2
+    # Tokenised by ours, not by str.split: «می‌خوام» and «می خوام» are one word,
+    # and a whitespace tokeniser makes them two postings that never meet.
+    assert bm25.invoke('می خوام')[0].id == 'd4'
+    assert retrieval.RankBM25Retriever.from_documents([]).invoke('anything') == []
+
+
+# This is a unit test.
+def test_hybrid_fusion_rewards_agreement_over_one_strong_vote():
+    hybrid = retrieval.hybrid_retriever(fixed(['d1', 'd2', 'd3']),
+                                        fixed(['d4', 'd2', 'd1']))
+    assert hybrid.weights == [0.5, 0.5]   # neither half is worth more
+    fused = [doc.id for doc in hybrid.invoke('anything')]
+    # d2 is second on both lists, d3 and d4 top only one. RRF sums reciprocal
+    # ranks, so two mid votes beat one first place — which is why it needs no
+    # score calibration between a cosine and a BM25 score.
+    assert set(fused[:2]) == {'d1', 'd2'}
+    assert fused.index('d2') < fused.index('d4')
+    # And the real BM25 half plugs into it unchanged.
+    with_bm25 = retrieval.hybrid_retriever(
+        fixed(['d3']), retrieval.RankBM25Retriever.from_documents(FA_DOCS))
+    assert 'd1' in {doc.id for doc in with_bm25.invoke('مالیات')}
+
+
+# This is a unit test.
+def test_the_lexical_rerank_promotes_the_document_that_covers_the_question():
+    idf = retrieval.RankBM25Retriever.from_documents(FA_DOCS).idf
+    question = 'جریمه مالیات چقدر شد؟'
+    order = ['d3', 'd4', 'd1', 'd2']
+    ranked = retrieval.lexical_rerank(question, [BY_ID[id] for id in order], idf,
+                                      k=4)
+    assert [doc.id for doc in ranked][0] == 'd1'   # the only one that covers it
+    # A question of nothing but interrogatives has no informative words to
+    # cover, so coverage is zero rather than an accident of stopword overlap.
+    assert retrieval.coverage('چی شد؟', FA_DOCS[0].page_content, idf) == 0.0
+    # Only the first RERANK_DEPTH candidates are read — the reranker is the
+    # expensive stage, and what it never sees keeps no place in the result.
+    padding = [Document(id=f'x{i}', page_content='حالم خوب بود')
+               for i in range(retrieval.RERANK_DEPTH)]
+    deep = retrieval.lexical_rerank(question, padding + [BY_ID['d1']], idf, k=3)
+    assert 'd1' not in {doc.id for doc in deep}
+
+
+# This is a unit test.
+def test_time_language_resolves_to_a_date_range():
+    today = date(2026, 3, 10)
+
+    def scope(question):
+        return retrieval.resolve_time_scope(question, today)
+
+    # Farsi, ported from the lab verbatim: «آذر» means the آذر that has already
+    # happened, and the Jalali month is mapped to its Gregorian window.
+    assert (scope('آذر چی شد؟').from_int, scope('آذر چی شد؟').to_int) \
+        == (20251122, 20251221)
+    # پارسال is Nowruz-to-Nowruz, so on 10 March 2026 it is still Persian year
+    # 1404 and «پارسال تابستون» is the summer of 2024, not 2025.
+    assert (scope('پارسال تابستون چطور بود').from_int,
+            scope('پارسال تابستون چطور بود').to_int) == (20240622, 20240922)
+    assert scope('دیروز').from_int == scope('دیروز').to_int == 20260309
+
+    # English is new and unmeasured, and deliberately not a mirror: "last
+    # summer" means the most recent summer, where «پارسال تابستون» shifts a
+    # further year because the Persian year has not turned yet.
+    assert (scope('how was last summer').from_int,
+            scope('how was last summer').to_int) == (20250622, 20250922)
+    assert (scope('what did I do last month').from_int,
+            scope('what did I do last month').to_int) == (20260201, 20260228)
+    assert (scope('anything from 2024').from_int,
+            scope('anything from 2024').to_int) == (20240101, 20241231)
+    assert scope('what should I work on') is None
+
+
+# This is a unit test.
+def test_a_time_scope_filters_both_stores_by_the_same_rule():
+    scope = retrieval.resolve_time_scope('anything from 2025', date(2026, 3, 10))
+    # BM25 and the in-memory card index filter in Python; Chroma filters with a
+    # where dict. Both come from the one scope: if they could disagree, hybrid
+    # fusion would silently compare two different candidate pools.
+    inside = {'created_day': 20250701, 'updated_day': 20250701}
+    touched = {'created_day': 20241231, 'updated_day': 20250101}
+    outside = {'created_day': 20240101, 'updated_day': 20240102}
+    assert scope.matches(inside) and scope.matches(touched)
+    assert not scope.matches(outside)
+    assert retrieval.where_clause(scope) == {'$or': [
+        {'$and': [{'created_day': {'$gte': 20250101}},
+                  {'created_day': {'$lte': 20251231}}]},
+        {'$and': [{'updated_day': {'$gte': 20250101}},
+                  {'updated_day': {'$lte': 20251231}}]}]}
+    # One date field needs no $or — the chat store records a single date.
+    assert retrieval.where_clause(scope, fields=('created_day',)) == {
+        '$and': [{'created_day': {'$gte': 20250101}},
+                 {'created_day': {'$lte': 20251231}}]}
+    assert retrieval.where_clause(None) is None
+
+
+# This is a unit test.
+def test_expansion_reaches_the_words_the_corpus_actually_uses():
+    question = 'دعوا با همسرم سر مالیات چی شد؟'
+    variants = retrieval.expand_queries(question)
+    assert variants[0] == question          # the question itself always leads
+    assert any('مهسا' in variant for variant in variants)
+    assert len(variants) == len(set(variants))
+    assert retrieval.expand_queries('renew the visa') == ['renew the visa']
+    # The LLM-backed alternative is LangChain's, wired to the chat model rather
+    # than reimplemented. It is a seam, so it only has to answer.
+    llm = FakeChat(script=[AIMessage(content='dispute with wife\ntax fine')])
+    expanded = retrieval.multi_query(fixed(['d1']), llm)
+    assert [doc.id for doc in expanded.invoke('anything')] == ['d1']

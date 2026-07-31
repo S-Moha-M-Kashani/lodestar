@@ -28,12 +28,18 @@ accept these objects without adapters.
 """
 import hashlib
 import json
-from datetime import datetime, timezone
+import re
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
+from typing import Any
 
 import numpy as np
+from langchain_classic.retrievers import EnsembleRetriever, MultiQueryRetriever
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
+from langchain_core.retrievers import BaseRetriever
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from rank_bm25 import BM25Okapi
 
 from . import textnorm
 
@@ -324,6 +330,380 @@ def card_document(card: dict) -> Document:
                     metadata=metadata)
 
 
+# --- query understanding ----------------------------------------------------
+
+# The date fields `card_document` writes. A card matches a time scope if it was
+# either created or last touched inside it.
+DATE_FIELDS = ('created_day', 'updated_day')
+
+# Jalali month → (start month/day, end month/day) in the Gregorian year holding
+# the *start* of that month. Mapped directly rather than through a Jalali
+# conversion library: the mapping drifts by a day across the years a board
+# spans, and the brain's dependency budget is worth more than that day.
+JALALI_MONTHS = {
+    'فروردین': ((3, 21), (4, 20)), 'اردیبهشت': ((4, 21), (5, 21)),
+    'خرداد': ((5, 22), (6, 21)), 'تیر': ((6, 22), (7, 22)),
+    'مرداد': ((7, 23), (8, 22)), 'شهریور': ((8, 23), (9, 22)),
+    'مهر': ((9, 23), (10, 22)), 'آبان': ((10, 23), (11, 21)),
+    'آذر': ((11, 22), (12, 21)), 'دی': ((12, 22), (1, 20)),
+    'بهمن': ((1, 21), (2, 19)), 'اسفند': ((2, 20), (3, 20)),
+}
+SEASONS = {
+    'بهار': ((3, 21), (6, 21)), 'تابستان': ((6, 22), (9, 22)),
+    'تابستون': ((6, 22), (9, 22)), 'پاییز': ((9, 23), (12, 21)),
+    'زمستان': ((12, 22), (3, 20)), 'زمستون': ((12, 22), (3, 20)),
+}
+# The English half is new and unmeasured — the lab's corpus is Farsi — and it is
+# deliberately not a mirror. «پارسال تابستون» shifts a further year because the
+# Persian year turns at Nowruz, while "last summer" means the most recent one.
+ENGLISH_SEASONS = {'spring': ((3, 21), (6, 21)), 'summer': ((6, 22), (9, 22)),
+                   'autumn': ((9, 23), (12, 21)), 'fall': ((9, 23), (12, 21)),
+                   'winter': ((12, 22), (3, 20))}
+LAST_YEAR = ('پارسال', 'سال پیش', 'سال گذشته', 'سال قبل')
+
+# Paraphrases a board genuinely alternates between, for deterministic query
+# expansion: cheap recall for the lexical half, which otherwise misses «همسرم»
+# on a board that only ever writes «مهسا».
+SYNONYMS = {
+    'همسرم': ('مهسا',), 'زنم': ('مهسا',), 'مهسا': ('همسرم',),
+    'مادرم': ('مامان',), 'مامان': ('مادرم',), 'پدرم': ('بابا',),
+    'شغل': ('کار', 'جاب'), 'کار': ('شغل',), 'استخدام': ('آفر', 'قبول'),
+    'بحث': ('دعوا',), 'دعوا': ('بحث', 'قهر'),
+    'مالیات': ('اداره مالیات', 'جریمه'), 'ورزش': ('باشگاه',),
+    'اپلای': ('درخواست', 'رزومه'), 'ریجکت': ('جواب رد', 'قبول نشدم'),
+    'خونه': ('آپارتمان', 'اجاره'), 'خواب': ('بیخوابی', 'بی خوابی'),
+}
+# Interrogatives only. Ordinary English stopwords are deliberately absent: this
+# set strips the *asking* from a question so the lexical half scores content
+# words, and dropping 'the' from "renew the visa" would change the phrase a
+# BM25 query is trying to match.
+QUESTION_WORDS = frozenset("""
+چی چه چرا چطور چگونه کجا کِی کی چند چقدر آیا بگو بهم راجب درباره درمورد هست بود
+شد کردم دادم گفتم میشه کدوم کدام حالم وضعیت
+what when where why how who whom which did does was were tell about
+""".split())
+
+
+def _searchable(names: dict) -> dict:
+    """Match on normalised text but report the properly spelled name: a question
+    typed «اذر» must resolve, while the label shown back must not look folded."""
+    out: dict = {}
+    for name, window in names.items():
+        out.setdefault(textnorm.normalize(name), (name, window))
+    return out
+
+
+_MONTHS = _searchable(JALALI_MONTHS)
+_SEASONS = _searchable(SEASONS)
+
+
+@dataclass(frozen=True)
+class TimeScope:
+    """A resolved date range, as the two ints the metadata carries."""
+    from_int: int
+    to_int: int
+    label: str
+    kind: str
+
+    def matches(self, metadata: dict, fields: tuple[str, ...] = DATE_FIELDS) -> bool:
+        """The in-process half of the filter, used by BM25 and the card index.
+        `where_clause` is the store's half, and both are derived from this one
+        object: if the two could drift, hybrid fusion would compare two
+        different candidate pools and call the result a ranking."""
+        return any(self.from_int <= (metadata.get(field) or 0) <= self.to_int
+                   for field in fields)
+
+    def as_dict(self) -> dict:
+        return {'from': _to_iso(self.from_int), 'to': _to_iso(self.to_int),
+                'label': self.label, 'kind': self.kind}
+
+
+def _to_int(day: date) -> int:
+    return day.year * 10000 + day.month * 100 + day.day
+
+
+def _to_iso(value: int) -> str:
+    return f'{value // 10000:04d}-{(value // 100) % 100:02d}-{value % 100:02d}'
+
+
+def _window(anchor: date, start: tuple[int, int],
+            end: tuple[int, int]) -> tuple[date, date]:
+    """The [start, end] window whose start precedes `anchor` — the one that has
+    already happened. Handles windows crossing new year (دی, زمستان)."""
+    first = date(anchor.year, *start)
+    last = date(anchor.year + (1 if end < start else 0), *end)
+    if first > anchor:
+        first, last = date(first.year - 1, *start), date(last.year - 1, *end)
+    return first, last
+
+
+def _scope(first: date, last: date, label: str, kind: str) -> TimeScope:
+    return TimeScope(_to_int(first), _to_int(last), label, kind)
+
+
+def _previous_month(anchor: date) -> tuple[date, date]:
+    end = anchor.replace(day=1) - timedelta(days=1)
+    return end.replace(day=1), end
+
+
+def resolve_time_scope(question: str, today: date | None = None) -> TimeScope | None:
+    """A date range from the question's own time language, or None when it has
+    none. Time words are the most selective filter available — a board holds a
+    year of similar cards, and a date range cuts the pool before ranking starts.
+
+    Returns the most recent matching window at or before `today`: «آذر» means
+    the آذر that has already happened."""
+    anchor = today or datetime.now(timezone.utc).date()
+    text = textnorm.normalize(question)
+    words = set(textnorm.tokens(text, drop_stopwords=False))
+    shift_year = any(phrase in text for phrase in LAST_YEAR)
+
+    def shifted(start, end, years=1):
+        first, last = _window(anchor, start, end)
+        return (date(first.year - years, *start), date(last.year - years, *end))
+
+    for key, (label, (start, end)) in _SEASONS.items():
+        if key in text:
+            first, last = shifted(start, end) if shift_year else _window(anchor, start, end)
+            return _scope(first, last,
+                          f'{label}{" پارسال" if shift_year else ""}', 'season')
+    for key, (label, (start, end)) in _MONTHS.items():
+        if key in words:
+            first, last = shifted(start, end) if shift_year else _window(anchor, start, end)
+            return _scope(first, last, label, 'jalali-month')
+    if 'نوروز' in text or 'عید' in words:
+        start, end = (3, 18), (4, 4)
+        first, last = shifted(start, end) if shift_year else _window(anchor, start, end)
+        return _scope(first, last, 'نوروز', 'holiday')
+
+    months_back = re.search(r'(\d+)\s*ماه\s*(?:پیش|قبل|گذشته|اخیر)', text)
+    if months_back:
+        span = int(months_back.group(1)) * 30
+        return _scope(anchor - timedelta(days=span), anchor,
+                      f'{span} روز اخیر', 'relative')
+    if re.search(r'(هفته|هفتهٔ)\s*(پیش|قبل|گذشته)', text):
+        return _scope(anchor - timedelta(days=10), anchor, 'هفته گذشته', 'relative')
+    if re.search(r'ماه\s*(پیش|قبل|گذشته)', text):
+        return _scope(*_previous_month(anchor), 'ماه گذشته', 'relative')
+    if 'دیروز' in words:
+        return _scope(anchor - timedelta(days=1), anchor - timedelta(days=1),
+                      'دیروز', 'relative')
+    if any(phrase in text for phrase in ('اخیرا', 'این چند وقت', 'این روزا',
+                                         'این مدت')):
+        return _scope(anchor - timedelta(days=60), anchor, 'اخیرا', 'relative')
+    if shift_year:
+        # پارسال is Nowruz to Nowruz, not January to January.
+        return _scope(date(anchor.year - 1, 3, 21), date(anchor.year, 3, 20),
+                      'پارسال', 'relative')
+
+    english = _english_scope(text.lower(), anchor)
+    if english:
+        return english
+    explicit = re.search(r'\b(20\d\d)\b', text)
+    if explicit:
+        year = int(explicit.group(1))
+        return TimeScope(year * 10000 + 101, year * 10000 + 1231, str(year),
+                         'gregorian-year')
+    return None
+
+
+def _english_scope(text: str, anchor: date) -> TimeScope | None:
+    """The English half. Same rule as the Farsi one — the most recent window
+    that has already happened — with one guard: bare 'fall' is a verb often
+    enough that it needs a determiner, and a false positive on a time filter
+    *removes* good candidates, which is worse than missing the filter."""
+    for name, (start, end) in ENGLISH_SEASONS.items():
+        pattern = (r'\b(?:last|this|in|during)\s+(?:the\s+)?fall\b'
+                   if name == 'fall' else rf'\b{name}\b')
+        if re.search(pattern, text):
+            return _scope(*_window(anchor, start, end), name, 'season')
+    if re.search(r'\byesterday\b', text):
+        return _scope(anchor - timedelta(days=1), anchor - timedelta(days=1),
+                      'yesterday', 'relative')
+    months_back = re.search(r'\b(\d+)\s+months?\s+ago\b', text)
+    if months_back:
+        span = int(months_back.group(1)) * 30
+        return _scope(anchor - timedelta(days=span), anchor,
+                      f'last {span} days', 'relative')
+    if re.search(r'\blast\s+week\b', text):
+        return _scope(anchor - timedelta(days=10), anchor, 'last week', 'relative')
+    if re.search(r'\blast\s+month\b', text):
+        return _scope(*_previous_month(anchor), 'last month', 'relative')
+    if re.search(r'\blast\s+year\b', text):
+        # Unlike پارسال: an English year runs January to January.
+        year = anchor.year - 1
+        return TimeScope(year * 10000 + 101, year * 10000 + 1231, 'last year',
+                         'relative')
+    if re.search(r'\b(recently|lately)\b', text):
+        return _scope(anchor - timedelta(days=60), anchor, 'recently', 'relative')
+    return None
+
+
+def where_clause(scope: TimeScope | None,
+                 fields: tuple[str, ...] = DATE_FIELDS) -> dict | None:
+    """The store's half of the filter, in Chroma's operator dialect. One clause
+    per date field, OR'd: a card created before the window but updated inside it
+    is a card the window is about."""
+    if scope is None:
+        return None
+    clauses = [{'$and': [{field: {'$gte': scope.from_int}},
+                         {field: {'$lte': scope.to_int}}]} for field in fields]
+    return clauses[0] if len(clauses) == 1 else {'$or': clauses}
+
+
+def keyword_query(question: str) -> str:
+    """Strip the asking, keep the subject, so lexical retrieval scores content
+    words rather than 'how' and 'what'."""
+    kept = [token for token in textnorm.tokens(question)
+            if token not in QUESTION_WORDS]
+    return ' '.join(kept) or question
+
+
+def expand_queries(question: str) -> list[str]:
+    """Deterministic multi-query expansion: the question, its keyword form, and
+    one synonym-substituted variant. No model, so it can always be on — and the
+    question itself always leads, so nothing is retrieved *instead* of it."""
+    variants = [question]
+    keywords = keyword_query(question)
+    if keywords != question:
+        variants.append(keywords)
+    swapped: list[str] = []
+    for token in textnorm.tokens(question):
+        swapped.extend(SYNONYMS.get(token, ()))
+    if swapped:
+        variants.append(f"{keywords} {' '.join(dict.fromkeys(swapped))}")
+    return list(dict.fromkeys(variants))
+
+
+def multi_query(base: BaseRetriever, llm) -> BaseRetriever:
+    """The model-backed alternative to `expand_queries`, taken from LangChain
+    rather than reimplemented. It writes the paraphrases a fixed synonym table
+    cannot know, at one LLM call per question."""
+    return MultiQueryRetriever.from_llm(retriever=base, llm=llm)
+
+
+# --- retrievers -------------------------------------------------------------
+
+TOP_K = 8           # contexts handed to the answerer
+CANDIDATES = 40     # depth taken from each half before fusion
+RRF_K = 60          # the constant in 1/(k + rank)
+RERANK_DEPTH = 20   # how many candidates the reranker actually reads
+
+
+class RankBM25Retriever(BaseRetriever):
+    """Okapi BM25 over Persian-normalised tokens, as a plain `BaseRetriever`.
+
+    BM25 is the only stage that reliably finds a rare literal — a company name,
+    «آذر», an amount — which dense retrieval smooths away. It is here rather
+    than imported because `langchain_community.BM25Retriever` is itself a thin
+    wrapper over the same `rank_bm25`, in a package that announces on import
+    that it is no longer maintained. `EnsembleRetriever` cannot tell them apart.
+    """
+    documents: list[Document] = []
+    bm25: Any = None
+    k: int = TOP_K
+    scope: Any = None   # a TimeScope, or None for no date filter
+
+    @classmethod
+    def from_documents(cls, documents, k: int = TOP_K,
+                       scope: 'TimeScope | None' = None) -> 'RankBM25Retriever':
+        docs = list(documents)
+        # BM25Okapi divides by the average document length, so an empty corpus
+        # is not a degenerate index — it is a ZeroDivisionError.
+        corpus = [textnorm.tokens(doc.page_content) for doc in docs]
+        return cls(documents=docs, k=k, scope=scope,
+                   bm25=BM25Okapi(corpus) if docs else None)
+
+    @property
+    def idf(self) -> dict:
+        """Term weights, for the lexical reranker. Same corpus statistics as the
+        retrieval it is reranking, so the two cannot disagree about what a rare
+        word is."""
+        return getattr(self.bm25, 'idf', {}) or {}
+
+    def _get_relevant_documents(self, query: str, *, run_manager=None) -> list[Document]:
+        if self.bm25 is None:
+            return []
+        scores = self.bm25.get_scores(textnorm.tokens(query))
+        out: list[Document] = []
+        for i in sorted(range(len(scores)), key=lambda i: -scores[i]):
+            if scores[i] <= 0:
+                break   # no shared term: a zero-score document is not a hit
+            doc = self.documents[i]
+            if self.scope is not None and not self.scope.matches(doc.metadata):
+                continue
+            out.append(doc)
+            if len(out) >= self.k:
+                break
+        return out
+
+
+def hybrid_retriever(dense: BaseRetriever, lexical: BaseRetriever,
+                     weights: tuple[float, float] = (0.5, 0.5)) -> EnsembleRetriever:
+    """Reciprocal Rank Fusion of the dense and lexical halves.
+
+    Scores never enter the formula — only ranks — so a cosine and a BM25 score
+    combine without calibration, and a half returning nonsense degrades the
+    result instead of destroying it. Equal weights because the lab measured no
+    reason to prefer one: they fail on different questions, not by different
+    amounts."""
+    return EnsembleRetriever(retrievers=[dense, lexical],
+                             weights=list(weights), c=RRF_K)
+
+
+# --- reranking --------------------------------------------------------------
+
+
+def _minmax(values: np.ndarray) -> np.ndarray:
+    """To [0,1], so coverage and position can be mixed. An all-equal set maps to
+    0.5 rather than to 0 or 1, which would invent a ranking out of a tie."""
+    if values.size == 0:
+        return values
+    low, high = float(values.min()), float(values.max())
+    if high - low < 1e-9:
+        return np.full_like(values, 0.5)
+    return (values - low) / (high - low)
+
+
+def coverage(query: str, text: str, idf: dict) -> float:
+    """IDF-weighted term coverage: what share of the question's informative
+    words this text actually contains. Bounded to [0,1], so it can be
+    thresholded — a raw BM25 score cannot, since its scale depends on the
+    corpus."""
+    terms = {token for token in textnorm.tokens(query)
+             if token not in QUESTION_WORDS}
+    if not terms:
+        return 0.0
+    present = set(textnorm.tokens(text))
+    weights = {term: idf.get(term, 1.0) for term in terms}
+    total = sum(weights.values()) or 1.0
+    return float(sum(w for term, w in weights.items() if term in present) / total)
+
+
+def lexical_rerank(query: str, documents: list[Document], idf: dict,
+                   k: int = TOP_K, depth: int = RERANK_DEPTH) -> list[Document]:
+    """Re-order what fusion got roughly right, half on position and half on
+    term coverage.
+
+    Position stands in for relevance because `EnsembleRetriever` returns fused
+    order and discards the fused score. The lab blended the normalised score
+    instead; ranks are a monotone re-expression of it, so recall over the depth
+    is untouched and only the ordering inside the cut moves. Documents past
+    `depth` are dropped rather than kept below the reranked ones: the reranker
+    is the expensive stage, and a candidate it never read has no measured claim
+    to a place."""
+    candidates = list(documents)[:max(depth, k)]
+    if not candidates:
+        return []
+    n = len(candidates)
+    position = np.array([1.0 - i / (n - 1) if n > 1 else 1.0 for i in range(n)],
+                        dtype=np.float32)
+    scores = np.array([coverage(query, doc.page_content, idf)
+                       for doc in candidates], dtype=np.float32)
+    final = 0.5 * position + 0.5 * _minmax(scores)
+    return [candidates[int(i)] for i in np.argsort(-final)[:k]]
+
+
 """Alternatives considered
 
 **1. "Why are the embedders yours? LangChain ships a wrapper for all three."**
@@ -408,4 +788,102 @@ are single words, and the board's tag input does not encourage otherwise. If
 tags become phrases, the fix is not this function — it is moving the chat store
 off Chroma to something with a real array type, and that is a Session-5-sized
 argument, not a helper.
+
+**3. "Why is BM25 yours? `langchain-community` has a `BM25Retriever`."**
+
+*Short answer.* The ranking function is not ours — `rank_bm25` computes it. What
+is ours is the twenty lines that make it a `BaseRetriever` and hand it the
+Persian tokeniser, which is exactly what `langchain_community.BM25Retriever`
+also is, on top of a package that announces on import that it is unmaintained.
+
+*Why the obvious option fails.* Two things, and the second is the expensive one.
+`from langchain_community.retrievers import BM25Retriever` prints a
+sunset/no-longer-maintained `DeprecationWarning` — a dependency the project
+would be adopting as it is being retired. And its `preprocess_func` defaults to
+whitespace splitting, so «می‌خوام» and «می خوام» become two postings that never
+meet: a query matches half the cards it should and nothing raises. The parameter
+existing at all is the framework saying tokenising is the caller's job — the
+same evidence `textnorm`'s own note cites.
+
+*The libraries that would do it.* `langchain-community`'s wrapper, with
+`preprocess_func=textnorm.tokens` passed at every construction site — the
+smallest diff, if the sunset warning were acceptable. Beyond that the honest
+alternatives are not libraries but services: Elasticsearch or OpenSearch (a real
+inverted index, incremental updates, an analyzer chain — and a JVM to run),
+Tantivy via `tantivy-py` (fast, Rust, no Persian analyzer), or Postgres
+full-text search (no Persian dictionary ships with it).
+
+*Why not adopted, and what would change it.* An in-process index is rebuilt from
+`/api/state` on every tool call, which is affordable because a personal board is
+hundreds of cards. What would change the decision is that number: at the point
+where rebuilding costs more than a round trip to a service — call it tens of
+thousands of cards, and the way to know is to measure the rebuild, not to guess
+— the answer becomes an index that persists and updates incrementally, and
+`rank_bm25` cannot do either.
+
+**4. "Why is the time filter yours? `dateparser` exists, and it speaks Farsi."**
+
+*Short answer.* Because a retrieval filter needs a *range* and a date parser
+returns a *point*, and because half of what has to be understood here
+(«پارسال پاییز», «این چند وقت») is not a date at all.
+
+*Why the obvious option fails.* `dateparser` genuinely handles Jalali dates and
+Persian relative expressions, so this is not a coverage argument. It is a shape
+argument: «آذر» has to become 2025-11-22 … 2025-12-21, and a parser that returns
+one datetime leaves the caller to invent the granularity. Get that wrong and the
+filter is a single-day window over a month-long question, which does not error —
+it silently returns nothing and reads as "retrieval is broken".
+
+*Why not the framework.* LangChain has `SelfQueryRetriever`, which asks an LLM
+to write the metadata filter. That is the framework's answer to this problem and
+it is a real one — but it costs a model call per query, it can emit a filter over
+fields that do not exist, and a wrong filter deletes evidence before ranking
+sees it. A deterministic resolver is testable and free; the seams where the
+framework is taken as it comes are listed under question 1.
+
+*The libraries that would do it.* `dateparser` — the pick for absolute dates in
+many formats, and worth adopting for that branch alone if a board starts
+collecting them. `jdatetime` or `khayyam` — correct Jalali arithmetic, no
+language understanding, which would replace the hard-coded month table and
+nothing else. Facebook's `duckling` — best-in-class range extraction and it
+returns grain, so it solves the actual problem; it is a JVM service, which is
+the wrong deployment shape for a local-first single-user app. spaCy `DATE`
+entities — no trained Persian pipeline.
+
+*Why not adopted, and what would change it.* The month table drifts by about a
+day against a true Jalali conversion across the years a board spans, which is
+inside the tolerance of a filter whose windows are 30 days wide — and
+`jdatetime` would fix only that day. `duckling` is the one that would genuinely
+be better, and what would change the decision is deployment: if the brain ever
+runs beside other services anyway, its grain-aware ranges beat this module's
+hand-written branches, and the English half — new, unmeasured, written for this
+board rather than for a corpus — is the first thing it should replace.
+
+**5. "Why is the reranker yours? LangChain has rerankers."**
+
+*Short answer.* LangChain's rerankers all need a model. This one is free, and
+the measured pipeline uses it.
+
+*Why the obvious option fails.* `CrossEncoderReranker` and Cohere's reranker
+score a (query, document) pair with a trained model — better, and the lab has
+`cross-encoder` as a switchable option precisely so that is measurable. The cost
+is a download or an API bill on every query, and for the Persian half of this
+corpus the strongest cross-encoders available are English-only, which returns
+confident numbers that measure nothing. IDF term coverage is deterministic,
+costs nothing, and is bounded to [0,1] so it can also be thresholded.
+
+*Why not the framework.* `ContextualCompressionRetriever` plus a
+`DocumentCompressor` is the right *seam* for this, and nothing here prevents
+`lexical_rerank` being wrapped as one later; the function is written to be
+callable, not to be a class. What the framework does not have is a
+deterministic lexical reranker to put inside it.
+
+*Why not adopted, and what would change it.* A measurement: a lab run varying
+only the reranker, with a Persian-capable cross-encoder against `lexical`, on the
+same 30 questions. If it wins on LLM context precision, the compressor seam is
+already the place to put it. Recorded honestly: at candidate F's depth of 20 the
+50/50 blend of position and coverage cannot promote a last-placed candidate past
+a first-placed one, because min-max normalisation puts both extremes at 0 and 1
+on each axis. That is inherited from the lab rather than chosen here, and it is
+the reason the reranker moves the middle of the list and not its ends.
 """
