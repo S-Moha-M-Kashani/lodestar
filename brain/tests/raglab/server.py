@@ -48,13 +48,18 @@ class Jobs:
             job_id = uuid.uuid4().hex[:10]
             self.jobs[job_id] = {'id': job_id, 'kind': kind, 'state': 'running',
                                  'stage': 'starting', 'progress': 0.0,
+                                 'detail': '',
                                  'result': None, 'error': None}
             self.current = job_id
 
-        def report(stage: str, fraction: float) -> None:
+        def report(stage: str, fraction: float, detail: str = '') -> None:
             job = self.jobs[job_id]
             job['stage'] = stage
             job['progress'] = round(min(1.0, max(0.0, fraction)), 3)
+            # "question 16/30 · hard" beside the fraction, because a judged run on
+            # a local model spends hours inside one stage and a bar that only
+            # moves at stage boundaries looks like a hang.
+            job['detail'] = detail
 
         def run() -> None:
             job = self.jobs[job_id]

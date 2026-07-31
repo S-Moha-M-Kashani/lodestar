@@ -9,7 +9,9 @@ production embedder finds nothing at all — only exist at that scale.
 import json
 import os
 import re
+import time
 from dataclasses import replace
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -17,14 +19,16 @@ import pytest
 from lodestar_brain.llm.fake import FakeChat
 
 from .raglab import (chunking, config, corpus, embedding, evaluate, explain,
-                     metrics, models, pipeline, query, retrieval, summarize,
-                     sweep, textnorm)
+                     metrics, models, pipeline, query, ragas_eval, retrieval,
+                     summarize, sweep, textnorm)
 from .raglab.config import (EMBEDDERS, GenerationConfig, IndexConfig, LabConfig,
                             LabSettings, RetrievalConfig)
 from .raglab.index import IndexRegistry, LabIndex
 
 LAB_SETTINGS = LabSettings(chroma_url='memory', chroma_database='raglab-tests',
                            openrouter_api_key='')
+RAGLAB_DIR = Path(__file__).resolve().parent / 'raglab'
+REPO_ROOT = RAGLAB_DIR.parents[2]
 
 
 # --- fixtures --------------------------------------------------------------
@@ -2528,6 +2532,53 @@ def test_the_sweep_can_be_pointed_at_a_local_pairing():
         assert cfg.generation.ragas_model == sweep.JUDGE_MODEL, cfg.label
 
 
+def test_each_provider_names_its_own_pairing_and_never_crosses_them():
+    """A slug only means something to the backend that serves it, so the default
+    pairing is per provider. Crossing them is the failure `provider_problems`
+    exists to stop, and a default must not be the thing that trips it."""
+    for provider, pair in sweep.PAIRINGS.items():
+        assert pair['answerer'] != pair['judge'], provider
+        served = (models.OLLAMA_MODELS if provider == 'ollama'
+                  else models.CHAT_MODELS)
+        slugs = {m.id for m in served}
+        assert pair['answerer'] in slugs, (provider, pair)
+        assert pair['judge'] in slugs, (provider, pair)
+
+
+def test_choosing_the_local_backend_is_enough_to_get_a_local_default_model():
+    """`RAGLAB_LLM=ollama` on its own has to produce a runnable lab. It did not:
+    the default model stayed a remote slug, so `provider_problems` refused every
+    run for a model the user never chose — a default that cannot run is a broken
+    default, not a strict one."""
+    local = LabSettings(chroma_url='memory', chroma_database='raglab-tests',
+                        llm_provider='ollama')
+    assert local.llm_model in {m.id for m in models.OLLAMA_MODELS}, local.llm_model
+    assert not models.provider_problems(LabConfig(), local)
+
+
+def test_an_explicit_model_is_never_replaced_by_the_provider_default():
+    """The resolution is for the *unset* case only. Overwriting a stated model
+    would mean a run labelled with one model was scored by another."""
+    local = LabSettings(chroma_url='memory', chroma_database='raglab-tests',
+                        llm_provider='ollama', llm_model='gemma4:e2b')
+    assert local.llm_model == 'gemma4:e2b'
+
+
+def test_every_provider_has_a_default_model_it_can_actually_serve():
+    for provider, model in config.PROVIDER_MODELS.items():
+        served = (models.OLLAMA_MODELS if provider == 'ollama'
+                  else models.CHAT_MODELS)
+        assert model in {m.id for m in served}, (provider, model)
+
+
+def test_the_local_pairing_is_the_one_that_was_screened():
+    """The judge is part of the apparatus, so the default judge has to be a model
+    `.screens/` has a row for — a default nobody screened is judge-shopping with
+    extra steps."""
+    assert sweep.PAIRINGS['ollama'] == {'answerer': '4skl/gemma4-e2b-mtp',
+                                        'judge': 'gemma4:e2b'}
+
+
 def test_the_sweep_refuses_a_judge_that_grades_its_own_answers(monkeypatch,
                                                               tmp_path):
     monkeypatch.setattr(sweep, 'ANSWER_MODEL', 'gemma4:e2b')
@@ -2659,12 +2710,119 @@ def test_a_run_saves_the_questions_it_was_measured_on(registry, ground_truth):
     assert 'question_ids' not in result.brief()['selection']
 
 
-def test_the_sweep_measures_every_candidate_on_the_same_balanced_49():
+def test_the_sweep_measures_every_candidate_on_the_same_balanced_30():
     """The sample is a property of the sweep, not of the invocation: a row
     measured on a different sample is a different measurement."""
-    assert sweep.SWEEP_LIMIT == 49
+    assert sweep.SWEEP_LIMIT == 30
     assert sweep.SWEEP_BALANCE == 'difficulty'
     assert sweep.SWEEP_BALANCE in config.BALANCES
+
+
+def test_the_sweep_sample_is_exactly_ten_of_each_band(ground_truth):
+    """30 divides by three, so this sample needs no remainder rule at all — the
+    bands are equal rather than merely as-equal-as-possible."""
+    picked = evaluate.select_questions(ground_truth, limit=sweep.SWEEP_LIMIT,
+                                       balance=sweep.SWEEP_BALANCE)
+    counts = {name: sum(1 for q in picked if q['difficulty'] == name)
+              for name in config.DIFFICULTIES}
+    assert counts == {'easy': 10, 'medium': 10, 'hard': 10}, counts
+
+
+# --- progress: a run that reports nothing is indistinguishable from a hang ---
+# With a local judge the judged phase is hours, not minutes, so every phase has
+# to say where it is. The callback carries a human detail beside the fraction
+# because "0.92" for two hours tells the reader nothing about what is happening.
+
+PROGRESS_CFG = LabConfig(index=IndexConfig(chunker='message', embedder='char-hash'),
+                         generation=GenerationConfig(answerer='extractive'),
+                         label='progress')
+
+
+def test_progress_reports_which_question_it_is_on(registry, ground_truth,
+                                                  tmp_path, monkeypatch):
+    monkeypatch.setattr(evaluate, 'RUNS_DIR', tmp_path)
+    seen = []
+    evaluate.run_eval(registry, ground_truth, PROGRESS_CFG, LAB_SETTINGS,
+                      limit=4, balance='difficulty', ragas_mode='off',
+                      progress=lambda stage, fraction, detail='': seen.append(
+                          (stage, round(fraction, 3), detail)))
+    scoring = [row for row in seen if row[0] == 'scoring']
+    assert len(scoring) == 4, seen
+    # The count is the point: "question 3/4" is checkable against the sample the
+    # row itself records, where a bare fraction is not.
+    assert scoring[2][2].startswith('question 3/4'), scoring
+    assert scoring[-1][2].startswith('question 4/4'), scoring
+    # And the band, because a slow phase on hard questions is a different fact
+    # from a slow phase overall.
+    assert any(band in scoring[0][2] for band in config.DIFFICULTIES), scoring
+
+
+def test_a_two_argument_progress_callback_still_works(registry, ground_truth,
+                                                      tmp_path, monkeypatch):
+    """The detail is additive. The panel's reporter predates it, and a run must
+    not fail because its caller does not want the third argument."""
+    monkeypatch.setattr(evaluate, 'RUNS_DIR', tmp_path)
+    seen = []
+    evaluate.run_eval(registry, ground_truth, PROGRESS_CFG, LAB_SETTINGS,
+                      limit=2, ragas_mode='off',
+                      progress=lambda stage, fraction: seen.append(stage))
+    assert 'scoring' in seen and 'done' in seen
+
+
+def test_the_judged_phase_reports_calls_as_they_land():
+    """The judged phase is the whole wall clock on a local judge. RAGAS scores a
+    batch, so without a per-call hook the bar sits at one number for hours."""
+    watch = ragas_eval.JudgeWatch(total=6)
+    seen = []
+    watch.progress = lambda stage, fraction, detail='': seen.append(detail)
+    watch.on_llm_end(None)
+    watch.on_llm_end(None)
+    assert 'judge call 2' in seen[-1]
+    assert '~6' in seen[-1], 'the estimate is marked as one, not stated as fact'
+    # A judge that makes more calls than estimated must not report >100%.
+    for _ in range(20):
+        watch.on_llm_end(None)
+    assert watch.fraction() <= 1.0
+
+
+def test_the_job_carries_the_detail_to_whoever_is_polling():
+    """The panel polls a job dict, so the detail has to be a field on it — a
+    progress line only the terminal sees leaves the two UIs looking hung."""
+    from .raglab.server import Jobs
+    jobs = Jobs()
+    captured = {}
+
+    def target(report):
+        report('scoring', 0.5, 'question 16/30 · hard')
+        captured['snapshot'] = dict(jobs.jobs[jobs.current])
+        return {'ok': True}
+
+    job_id = jobs.start('run', target)
+    while jobs.jobs[job_id]['state'] == 'running':
+        time.sleep(0.01)
+    assert captured['snapshot']['detail'] == 'question 16/30 · hard'
+    assert captured['snapshot']['stage'] == 'scoring'
+    # Present from the start, so a poll landing before the first report reads a
+    # blank rather than undefined.
+    assert 'detail' in jobs.jobs[job_id]
+
+
+def test_both_frontends_read_the_progress_detail():
+    """Neither UI may quietly stop showing it: a judged local run spends hours in
+    one stage, and the detail is the only thing that moves."""
+    panel = (RAGLAB_DIR / 'static' / 'index.html').read_text(encoding='utf-8')
+    board = (REPO_ROOT / 'app.js').read_text(encoding='utf-8')
+    assert 'job.detail' in panel
+    assert '.job.detail' in board
+
+
+def test_the_expected_judge_call_count_scales_with_k():
+    """Context precision asks one verdict per retrieved chunk, so k is what
+    drives the bill — the estimate has to know that or it is decoration."""
+    at_k5 = ragas_eval.expected_judge_calls(n_samples=10, k=5)
+    at_k12 = ragas_eval.expected_judge_calls(n_samples=10, k=12)
+    assert at_k12 > at_k5
+    assert at_k12 - at_k5 == 10 * 7, (at_k5, at_k12)
 
 
 def test_the_balance_control_is_explained_like_every_other_knob():

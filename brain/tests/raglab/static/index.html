@@ -562,8 +562,13 @@ async function poll(jobId, onDone) {
   const box = $('jobBox');
   const tick = async () => {
     const job = await api('/api/jobs/' + jobId);
+    // The detail ("question 16/30 · hard", "judge call 137 of ~420") is the part
+    // that distinguishes a slow stage from a stuck one, and on a local judge one
+    // stage is hours.
     box.innerHTML = `<div class="muted">${job.kind}: ${job.stage} ` +
-      `${Math.round(job.progress * 100)}%</div><progress value="${job.progress}" max="1"></progress>`;
+      `${Math.round(job.progress * 100)}%` +
+      `${job.detail ? ' · ' + job.detail : ''}</div>` +
+      `<progress value="${job.progress}" max="1"></progress>`;
     if (job.state === 'running') { setTimeout(tick, 700); return; }
     if (job.state === 'error') {
       box.innerHTML = `<div class="note"><b>${job.error}</b><pre style="white-space:pre-wrap;font-size:.7rem">${job.traceback || ''}</pre></div>`;

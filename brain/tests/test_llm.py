@@ -86,6 +86,22 @@ def test_factory_honours_the_per_request_model_override_on_ollama():
     assert llm.model_name == 'qwen3.5:2b'
 
 
+def test_choosing_the_local_backend_is_enough_to_get_a_local_default_model():
+    # BRAIN_LLM=ollama on its own has to produce a working brain. The remote
+    # default slug is not something the daemon can load, so every chat turn
+    # failed with 404 for a model the user never chose.
+    from lodestar_brain.config import PROVIDER_MODELS, load_settings
+    settings = load_settings({'BRAIN_LLM': 'ollama'})
+    assert settings.model == PROVIDER_MODELS['ollama']
+    assert make_chat_model(settings).model_name == PROVIDER_MODELS['ollama']
+
+
+def test_an_explicit_brain_model_survives_the_provider_default():
+    from lodestar_brain.config import load_settings
+    settings = load_settings({'BRAIN_LLM': 'ollama', 'BRAIN_MODEL': 'gemma4:e2b'})
+    assert settings.model == 'gemma4:e2b'
+
+
 def test_factory_raises_on_unknown_provider():
     # No auto modes (CLAUDE.md): a typo must not silently become openrouter,
     # which is what the old create_app branch did.

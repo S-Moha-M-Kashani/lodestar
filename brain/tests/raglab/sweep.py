@@ -19,10 +19,11 @@ To run it on models on this machine instead of a paid API — which is the only 
 the expensive candidates get measured at all, since F's relevance gate is *k* LLM
 calls per question:
 
-    RAGLAB_LLM=ollama \\
-    RAGLAB_SWEEP_ANSWER_MODEL=gemma4:e2b \\
-    RAGLAB_SWEEP_JUDGE_MODEL=qwen3.5:2b \\
-    npm run raglab:sweep -- --workers 2
+    RAGLAB_LLM=ollama npm run raglab:sweep -- --workers 2
+
+`RAGLAB_LLM` is enough: the answerer/judge pins default per provider (`PAIRINGS`),
+because a slug only means something to the backend that serves it. Override either
+one with `RAGLAB_SWEEP_ANSWER_MODEL` / `RAGLAB_SWEEP_JUDGE_MODEL`.
 
 Screen the judge first (`npm run raglab:judgescreen`). A judge that answers the
 same way to every claim scores every candidate identically, and the sweep cannot
@@ -52,22 +53,42 @@ EMBED_MODEL = 'heydariAI/persian-embeddings'
 # its own output is not evidence, and RAGAS's four judged metrics are the whole
 # basis of the ranking here.
 #
-# Overridable so a local pairing can be named without editing this file, which is
-# what makes the expensive candidates measurable: F's per-chunk gate is k calls
-# per question on top of the run. The rule the override must keep is the one
-# above — two different models, and the *stronger* one judging. With Ollama that
-# is currently gemma4:e2b answering and a small fast model judging, because the
-# judge is ~276 calls to the answerer's 49.
-ANSWER_MODEL = os.environ.get('RAGLAB_SWEEP_ANSWER_MODEL', 'openai/gpt-5-nano')
-JUDGE_MODEL = os.environ.get('RAGLAB_SWEEP_JUDGE_MODEL', 'openai/gpt-5-mini')
+# One pairing per provider, because a model slug only means something to the
+# backend that serves it: `openai/gpt-5-nano` is not a thing Ollama can load, and
+# a default that crosses the two would trip `models.provider_problems` on every
+# local run. The local pair is a small fast model answering and a bigger one
+# judging — the right way round, since the judge is the expensive side (~12 calls
+# per question against the answerer's 1) and the side the whole ranking rests on.
+PAIRINGS = {'openrouter': {'answerer': 'openai/gpt-5-nano',
+                           'judge': 'openai/gpt-5-mini'},
+            # Measured, and it decided this pairing: `deepseek-r1:8b` is the more
+            # independent judge but it is a *reasoning* model — ~2065 output
+            # tokens per verdict against gemma's ~534, so 67s per call against
+            # 8.7s, which is 8.9 hours per candidate against 1.2. At that price
+            # the sweep does not finish, and a sweep that does not finish ranks
+            # nothing. The cost of this choice is stated rather than hidden: the
+            # answerer and the judge are the same family, so their agreement is
+            # weaker evidence than two unrelated models would give, and that
+            # belongs on the row (`report['judge']` carries both).
+            'ollama': {'answerer': '4skl/gemma4-e2b-mtp',
+                       'judge': 'gemma4:e2b'},
+            'fake': {'answerer': 'openai/gpt-5-nano',
+                     'judge': 'openai/gpt-5-mini'}}
 
-# Every candidate is measured on the same 49 questions, balanced across the three
-# difficulty bands (17 easy / 16 medium / 16 hard — 49 does not divide by three,
-# so the remainder goes to the earlier bands; `--limit 51` gives exactly 17 each).
-# The full 112 stay available for a final run, but a candidate sweep pays the
-# judged cost per row, and a sample skewed toward medium — which is 57 of the 112
-# — measures the medium pipeline and reports it as the pipeline.
-SWEEP_LIMIT = 49
+# Which provider the pins default to is read at import, so the env that chooses
+# the backend also chooses the pairing. Still individually overridable, because a
+# screened judge is a per-machine fact.
+_PAIR = PAIRINGS.get(os.environ.get('RAGLAB_LLM', '') or 'openrouter',
+                     PAIRINGS['openrouter'])
+ANSWER_MODEL = os.environ.get('RAGLAB_SWEEP_ANSWER_MODEL', _PAIR['answerer'])
+JUDGE_MODEL = os.environ.get('RAGLAB_SWEEP_JUDGE_MODEL', _PAIR['judge'])
+
+# Every candidate is measured on the same 30 questions — 10 easy, 10 medium, 10
+# hard. The full 112 stay available for a final run, but a candidate sweep pays
+# the judged cost per row, and a sample skewed toward medium (57 of the 112, so
+# about half of any stride) measures the medium pipeline and reports it as the
+# pipeline. 30 divides by three, so this sample needs no remainder rule at all.
+SWEEP_LIMIT = 30
 SWEEP_BALANCE = 'difficulty'
 
 BASE = LabConfig(
@@ -154,6 +175,36 @@ def judged_settings():
     return settings
 
 
+BAR_WIDTH = 28
+
+
+def bar(label: str, stage: str, fraction: float, detail: str,
+        started: float) -> str:
+    """One line, rewritten in place: where this candidate is and how long it has
+    been there.
+
+    Elapsed is on it because the fraction alone cannot tell a slow phase from a
+    stuck one — on a local judge a single call is a minute, so a bar that has not
+    moved for two is normal and one that has not moved for twenty is not."""
+    filled = int(round(BAR_WIDTH * min(1.0, max(0.0, fraction))))
+    mins, secs = divmod(int(time.time() - started), 60)
+    tail = f' · {detail}' if detail else ''
+    return (f'\r  {label[:18]:18} [{"█" * filled}{"·" * (BAR_WIDTH - filled)}] '
+            f'{fraction * 100:5.1f}% {mins:>3}m{secs:02d}s  {stage}{tail}')
+
+
+def live(label: str, started: float, stream=sys.stdout):
+    """A progress callback that rewrites one terminal line.
+
+    Padded to a fixed width and flushed per update: without the padding a short
+    detail leaves the tail of a longer one behind it, which reads as a stale
+    number rather than as a redraw artefact."""
+    def report(stage: str, fraction: float, detail: str = '') -> None:
+        stream.write(f'{bar(label, stage, fraction, detail, started):<118}')
+        stream.flush()
+    return report
+
+
 def sweep(limit: int, workers: int, only: list[str] | None = None,
           balance: str = SWEEP_BALANCE) -> list[tuple]:
     settings = judged_settings()
@@ -165,14 +216,23 @@ def sweep(limit: int, workers: int, only: list[str] | None = None,
               if not only or c.label.split()[0] in only]
     print(f'{len(picked)} candidates · {limit} questions each ({balance}) · '
           f'{workers} workers · {settings.provider} · judge {JUDGE_MODEL} · '
-          f'answerer {ANSWER_MODEL}\n')
+          f'answerer {ANSWER_MODEL}')
+    # What this is going to cost, before it starts rather than after. Context
+    # precision is one judge call per retrieved chunk, so k moves this more than
+    # anything else on the row.
+    per_row = ragas_eval.expected_judge_calls(limit, BASE.retrieval.k)
+    print(f'~{per_row} judge calls per candidate, ~{per_row * len(picked)} in '
+          f'total — an estimate: RAGAS retries malformed output\n')
     scored = []
     for i, cfg in enumerate(picked, start=1):
         started = time.time()
+        stage = cfg.label.split()[0]
         print(f'[{i}/{len(picked)}] {cfg.label} …', flush=True)
         result = run_eval(registry, ground_truth, cfg, settings, limit=limit,
                           balance=balance, ragas_mode='llm', ragas_limit=limit,
-                          workers=workers)
+                          workers=workers,
+                          progress=live(f'Stage {stage}', started))
+        print()                              # close the rewritten bar line
         scored.append((score(result), cfg.label, result))
         print('   ' + line(cfg.label, result))
         print(f'   run {result.run_id} · {round(time.time() - started)}s\n',
@@ -200,11 +260,14 @@ def final(limit: int | None, workers: int, label: str,
     cfg = next(c for c in candidates() if c.label.split()[0] == label)
     cfg = replace(cfg, label=f'WINNER {cfg.label} · full set')
     n = limit or len(ground_truth['questions'])
+    started = time.time()
     print(f'final run: {cfg.label} over {n} questions, {workers} workers',
           flush=True)
     result = run_eval(registry, ground_truth, cfg, settings, limit=limit,
                       balance=balance, ragas_mode='llm', ragas_limit=limit,
-                      workers=workers)
+                      workers=workers,
+                      progress=live(f'Final {label}', started))
+    print()
     print(line(cfg.label, result))
     print(f'run {result.run_id}')
     print(json.dumps({'decision': score(result),

@@ -5347,8 +5347,12 @@
       progress.className = 'rag-progress';
       const label = document.createElement('span');
       label.className = 'rag-meta';
+      // The detail ("question 16/30 · hard", "judge call 137 of ~420") is what
+      // makes a judged run readable: on a local model one stage is hours, so a
+      // percentage that only moves at stage boundaries looks like a hang.
       label.textContent = `${ragState.job.kind}: ${ragState.job.stage} `
-        + `${Math.round((ragState.job.progress || 0) * 100)}%`;
+        + `${Math.round((ragState.job.progress || 0) * 100)}%`
+        + (ragState.job.detail ? ` · ${ragState.job.detail}` : '');
       const track = document.createElement('div');
       track.className = 'rag-bar';
       const fill = document.createElement('i');

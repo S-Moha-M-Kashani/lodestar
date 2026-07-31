@@ -28,6 +28,15 @@ FORBIDDEN_DATABASES = ('lodestar',)
 # rather than quietly measuring the other one.
 LLM_PROVIDERS = ('', 'openrouter', 'ollama', 'fake')
 
+# The default chat model per backend, because a slug only means something to the
+# backend that serves it. The local default is the model the judge screen has a
+# row for (`.screens/`) — a default nobody screened is judge-shopping with extra
+# steps. 'fake' keeps the remote slug: it ignores the model entirely, and changing
+# it would make the offline runs' notes disagree with every earlier one.
+PROVIDER_MODELS = {'openrouter': 'openai/gpt-5-nano',
+                   'ollama': '4skl/gemma4-e2b-mtp',
+                   'fake': 'openai/gpt-5-nano'}
+
 
 def load_env_file(path: Path | None = None) -> None:
     """Read repo-root .env into the environment without overriding what is
@@ -56,7 +65,12 @@ class LabSettings:
     # question) measurable without buying credit.
     llm_provider: str = ''
     ollama_base_url: str = 'http://localhost:11434/v1'
-    llm_model: str = 'openai/gpt-5-nano'
+    # '' = the provider's own default (PROVIDER_MODELS), resolved in __post_init__
+    # so every reader sees a concrete slug. It has to follow the provider: a
+    # remote slug left standing under RAGLAB_LLM=ollama made
+    # `models.provider_problems` refuse every run, for a model the user never
+    # picked. A default that cannot run is a broken default, not a strict one.
+    llm_model: str = ''
     fastembed_model: str = 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'
     # Its own key, deliberately not the OpenRouter one: OpenRouter serves no
     # /embeddings endpoint, so the chat key cannot stand in here. Absent means the
@@ -77,6 +91,11 @@ class LabSettings:
             raise ValueError(
                 f'unknown RAGLAB_LLM {self.llm_provider!r}; expected one of '
                 + ', '.join(repr(name) for name in LLM_PROVIDERS))
+        # Only when unset: overwriting a stated model would mean a run labelled
+        # with one model had been scored by another, which is the one artefact
+        # this lab must never produce.
+        if not self.llm_model:
+            object.__setattr__(self, 'llm_model', PROVIDER_MODELS[self.provider])
 
     @property
     def provider(self) -> str:
@@ -110,7 +129,7 @@ def load_lab_settings(env: dict | None = None) -> LabSettings:
         llm_provider=env.get('RAGLAB_LLM', ''),
         ollama_base_url=env.get('RAGLAB_OLLAMA_BASE_URL',
                                 'http://localhost:11434/v1'),
-        llm_model=env.get('RAGLAB_MODEL', 'openai/gpt-5-nano'),
+        llm_model=env.get('RAGLAB_MODEL', ''),
         fastembed_model=env.get(
             'RAGLAB_FASTEMBED_MODEL',
             'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'),

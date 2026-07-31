@@ -6,6 +6,7 @@ write a JSON file. Runs are kept on disk so the panel can show a leaderboard
 across sessions; nothing here writes anywhere near board.db or the brain's own
 Chroma database.
 """
+import inspect
 import json
 import re
 import time
@@ -231,6 +232,33 @@ def selection_note(questions: list[dict], limit: int | None,
             'question_ids': [question['id'] for question in questions]}
 
 
+def _question_note(done: int, questions: list[dict], difficulty: str) -> str:
+    """"question 16/30 · hard". The band is there because a phase that is slow on
+    hard questions is a different fact from one that is slow throughout."""
+    return f'question {done}/{len(questions)} · {difficulty}'
+
+
+def _reporter(progress):
+    """Adapt a progress callback to `(stage, fraction, detail)` whether or not it
+    accepts the detail.
+
+    Arity is inspected once rather than caught per call: a `TypeError` swallowed
+    around a user callback would also swallow a real error raised *inside* it, and
+    a progress bar that hides exceptions is worse than no progress bar."""
+    if progress is None:
+        return lambda stage, fraction, detail='': None
+    try:
+        params = inspect.signature(progress).parameters
+        takes_detail = (len(params) >= 3
+                        or any(p.kind is p.VAR_POSITIONAL or p.kind is p.VAR_KEYWORD
+                               for p in params.values()))
+    except (TypeError, ValueError):         # a builtin or a C callable
+        takes_detail = False
+    if takes_detail:
+        return lambda stage, fraction, detail='': progress(stage, fraction, detail)
+    return lambda stage, fraction, detail='': progress(stage, fraction)
+
+
 def run_eval(registry: IndexRegistry, ground_truth: dict, cfg: LabConfig,
              settings: LabSettings, *, types: list[str] | None = None,
              limit: int | None = None, difficulty: list[str] | None = None,
@@ -247,7 +275,11 @@ def run_eval(registry: IndexRegistry, ground_truth: dict, cfg: LabConfig,
     clock = time.localtime(started)
     started_at = time.strftime('%Y-%m-%d %H:%M:%S', clock)
     run_id = time.strftime('%Y%m%d-%H%M%S', clock) + '-' + cfg.index.fingerprint()[:6]
-    report = lambda stage, fraction: progress(stage, fraction) if progress else None
+    # The detail is what makes a long phase readable — "question 16/30 · hard"
+    # rather than "0.66". It is passed positionally to a caller that wants it and
+    # dropped for one that does not, because the panel's reporter predates it and
+    # a run must not fail on its progress bar.
+    report = _reporter(progress)
 
     index = registry.get(cfg.index, progress=lambda stage, f: report(stage, f * 0.4))
     questions = select_questions(ground_truth, types, limit, difficulty, balance)
@@ -296,18 +328,22 @@ def run_eval(registry: IndexRegistry, ground_truth: dict, cfg: LabConfig,
             done_count = 0
             slots: list = [None] * len(questions)
             for future in as_completed(futures):
-                slots[futures[future]] = future.result()
+                landed = futures[future]
+                slots[landed] = future.result()
                 done_count += 1
-                report('scoring', 0.4 + 0.5 * done_count / len(questions))
+                report('scoring', 0.4 + 0.5 * done_count / len(questions),
+                       _question_note(done_count, questions,
+                                      questions[landed]['difficulty']))
         results = [row for row in slots if row is not None]
     else:
         for i, question in enumerate(questions):
             results.append(handle(question))
-            report('scoring', 0.4 + 0.5 * (i + 1) / len(questions))
+            report('scoring', 0.4 + 0.5 * (i + 1) / len(questions),
+                   _question_note(i + 1, questions, question['difficulty']))
     for question, outcome, row in results:
         pairs.append((question, outcome))
         rows.append(json_safe(row))
-    report('ragas', 0.92)
+    report('ragas', 0.92, 'judging')
 
     summary = metrics.aggregate(rows)
     ragas_report: dict = {}
@@ -317,8 +353,9 @@ def run_eval(registry: IndexRegistry, ground_truth: dict, cfg: LabConfig,
         ragas_report = ragas_eval.run(pairs, settings, index.embedder,
                                       mode=ragas_mode, sample_limit=ragas_limit,
                                       reference_texts=references,
-                                      judge_model=roles.ragas)
-    report('done', 1.0)
+                                      judge_model=roles.ragas,
+                                      progress=report, k=cfg.retrieval.k)
+    report('done', 1.0, 'done')
     result = RunResult(run_id=run_id, label=cfg.label or cfg.index.chunker,
                        config=cfg.to_dict(),
                        index={'collection': index.stats.collection,
