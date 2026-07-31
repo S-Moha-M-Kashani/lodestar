@@ -360,6 +360,12 @@ def test_the_relevance_gate_asks_once_and_drops_what_the_model_rejects():
     idle = ScriptedChat(reply='1: 9')
     assert retrieval.relevance_gate(idle, 'مالیات', []) == []
     assert idle.calls == 0
+    # The gate is a named seam like every other in the brain: 'none' turns it
+    # off, and an unknown value raises rather than silently disabling it.
+    assert retrieval.gate_llm('llm', llm) is llm
+    assert retrieval.gate_llm('none', llm) is None
+    with pytest.raises(ValueError):
+        retrieval.gate_llm('lexical', llm)
 
 
 # This is a unit test.
@@ -422,4 +428,30 @@ def test_the_chat_store_records_a_snippet_and_recalls_it():
     assert 'مالیات' in hits[0]['text']
     assert hits[0]['metadata']['tags'] == 'money admin'   # flattened on the way in
     assert 0.0 <= hits[0]['score'] <= 1.0
+    store.record([f'یادداشت شماره {i} دربارهٔ مالیات' for i in range(5)])
+    assert len(store.search('مالیات', k=3)) == 3   # k is a cap, not a hint
+    before = store.count()
+    store.record(['   ', ''])
+    assert store.count() == before   # blank text is not a memory
     store.drop()
+
+
+# This is an integration test: a real Chroma client, in process, and no disk.
+def test_the_memory_url_never_touches_disk_or_a_server(tmp_path, monkeypatch):
+    # Regression: a path-based client accepts 'memory' as a *relative
+    # directory* and silently persists there, so every "offline" assertion
+    # would pass while writing a chroma.sqlite3 into the repo root.
+    monkeypatch.chdir(tmp_path)
+    store = retrieval.ChatStore(retrieval.MEMORY_URL,
+                                retrieval.LexicalHashEmbeddings(),
+                                collection='chat-nodisk')
+    store.record(['this must live in process only'])
+    assert store.search('in process', k=1)
+    assert list(tmp_path.iterdir()) == [], \
+        f"'memory' was written to disk as {[p.name for p in tmp_path.iterdir()]}"
+    # Construction must not need a live server for the resolved target to be
+    # inspectable, or a misconfigured url is invisible until the first record.
+    assert retrieval.parse_chroma_url('http://localhost:8001') \
+        == ('localhost', 8001, False)
+    assert retrieval.parse_chroma_url('https://chroma.internal') \
+        == ('chroma.internal', 443, True)

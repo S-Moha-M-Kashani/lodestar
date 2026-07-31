@@ -28,13 +28,39 @@ the prefixes belong to the model entry and retrieval goes through
 `query_vectors()` rather than calling `embed()` on a question.
 """
 import hashlib
+import re
 from dataclasses import dataclass
 
 import numpy as np
 
-from lodestar_brain.rag.embedder import HashEmbedder, _normalize
+import numpy as np  # noqa: F811  (already imported above; kept beside its use)
 
 from lodestar_brain import textnorm
+
+ASCII_DIM = 128
+
+
+def _normalize(vectors: np.ndarray) -> np.ndarray:
+    """Cosine similarity is only cosine if the vectors are unit length."""
+    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    return vectors / norms
+
+
+class HashEmbedder:
+    """The embedder the brain used to ship, kept **verbatim** as the lab's
+    baseline. It moved here when production adopted a real encoder: the lab has
+    to be able to measure what was shipped, and every run in `.runs/` scored
+    against this exact tokeniser — `[a-z0-9]+`, which finds no tokens at all in
+    a Farsi sentence and embeds it as the zero vector."""
+
+    def embed(self, texts: list[str]) -> np.ndarray:
+        out = np.zeros((len(texts), ASCII_DIM), dtype=np.float32)
+        for i, text in enumerate(texts):
+            for token in re.findall(r'[a-z0-9]+', text.lower()):
+                digest = int(hashlib.md5(token.encode()).hexdigest(), 16)
+                out[i, digest % ASCII_DIM] += 1.0
+        return _normalize(out)
 
 TOKEN_DIM = 512
 CHAR_DIM = 1024

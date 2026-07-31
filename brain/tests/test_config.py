@@ -6,10 +6,17 @@ def test_defaults():
     assert s.openrouter_base_url == 'https://openrouter.ai/api/v1'
     assert s.llm_provider == 'ollama'
     # No 'auto' anywhere: a mode that silently degrades hides which backend is
-    # actually running. 'hash' is the honest default because fastembed is an
-    # optional extra — a machine without it must say so, not quietly downgrade.
-    # The composed brain pins BRAIN_EMBEDDER=fastembed (compose.test.js).
-    assert s.embedder == 'hash'
+    # actually running. The default is the *measured* embedder, because the
+    # embedder is the architecture — hash embedding scored ~0.01 recall on the
+    # Farsi corpus against 0.617 for this one, a ~60× effect, where no other
+    # sweep knob was worth 2%. It costs the 'local-embeddings' extra and a
+    # ~2.2 GB download on first boot; 'fake' is the offline-test value.
+    assert s.embedder == 'sentence-transformers'
+    assert s.embed_model == ''        # '' = that backend's own default
+    # Candidate F's one change after retrieval, at the threshold the lab
+    # measured. It follows the main chat model, so it costs no second setting.
+    assert s.grader == 'llm'
+    assert s.grade_threshold == 0.4
     assert s.board_api_url == 'http://127.0.0.1:3000'
     assert s.max_agent_steps == 8
     # Likewise explicit: the local, free, private backend is the default, and
@@ -54,7 +61,10 @@ def test_env_overrides():
         'OPENROUTER_API_KEY': 'sk-test',
         'BRAIN_MODEL': 'anthropic/claude-sonnet-4.5',
         'BRAIN_LLM': 'fake',
-        'BRAIN_EMBEDDER': 'hash',
+        'BRAIN_EMBEDDER': 'fake',
+        'BRAIN_EMBED_MODEL': 'intfloat/multilingual-e5-small',
+        'BRAIN_GRADER': 'none',
+        'BRAIN_GRADE_THRESHOLD': '0.6',
         'BOARD_API_URL': 'http://board.test',
         'BRAIN_MAX_STEPS': '3',
         'BRAIN_TRANSCRIBER': 'fake',
@@ -66,7 +76,10 @@ def test_env_overrides():
     assert s.openrouter_api_key == 'sk-test'
     assert s.model == 'anthropic/claude-sonnet-4.5'
     assert s.llm_provider == 'fake'
-    assert s.embedder == 'hash'
+    assert s.embedder == 'fake'
+    assert s.embed_model == 'intfloat/multilingual-e5-small'
+    assert s.grader == 'none'
+    assert s.grade_threshold == 0.6
     assert s.board_api_url == 'http://board.test'
     assert s.max_agent_steps == 3
     assert s.transcriber == 'fake'

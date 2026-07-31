@@ -149,7 +149,7 @@ def test_every_chunker_produces_unique_ids_and_nonempty_text(session):
 def test_fixed_chunker_matches_the_production_packing(session):
     """The baseline has to *be* the baseline: same greedy 500-char packing the
     brain ships, or the comparison is against a straw man."""
-    from lodestar_brain.rag.chat_memory import chunk_text
+    from .raglab.chunking import chunk_text
     cfg = IndexConfig(chunker='fixed', chunk_chars=500, contextual=False)
     ours = chunking.chunk_session(session, cfg, embedding.make_embedder('char-hash'))
     theirs = chunk_text(corpus.session_text(session), 500)
@@ -735,15 +735,15 @@ def test_the_index_holds_its_vectors_in_process_memory(index):
 
 def test_no_lab_module_imports_a_vector_database_client():
     """chromadb is production's dependency, not the lab's — and neither is
-    production's ChromaChatMemory. This is the line that would bring the
-    persistence back: it is one import, and it looks harmless."""
+    production's ChatStore. This is the line that would bring the persistence
+    back: it is one import, and it looks harmless."""
     offenders = []
     for path in sorted(RAGLAB_DIR.glob('*.py')):
         for line in path.read_text(encoding='utf-8').splitlines():
             stripped = line.strip()
             if not stripped.startswith(('import ', 'from ')):
                 continue
-            if 'chromadb' in stripped or 'ChromaChatMemory' in stripped:
+            if 'chromadb' in stripped or 'ChatStore' in stripped:
                 offenders.append(f'{path.name}: {stripped}')
     assert offenders == []
 

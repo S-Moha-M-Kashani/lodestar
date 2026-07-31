@@ -28,8 +28,8 @@ reading, travel, home.
 
 You can: research and draft answers (web_search + find_related, cite urls), \
 operate the board (list/create/update cards), break fuzzy questions into \
-concrete sub-questions, and surface connections (find_related returns Leiden \
-community ids — same community = same theme; point out likely duplicates).
+concrete sub-questions, and surface connections (group_cards groups the whole \
+board by theme — same group = same subject; point out likely duplicates).
 
 Board columns: inbox, in-progress, answered (shown to the user as Done). \
 Card types: question, problem, task, idea, plan, habit. \

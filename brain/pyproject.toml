@@ -1,7 +1,7 @@
 [project]
 name = "lodestar-brain"
 version = "0.1.0"
-description = "Lodestar brain — agent, tools, and Leiden GraphRAG service"
+description = "Lodestar brain — agent, hybrid retrieval, and theme grouping"
 requires-python = ">=3.13"
 dependencies = [
   "fastapi>=0.115",

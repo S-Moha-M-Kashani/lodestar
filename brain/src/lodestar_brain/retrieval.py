@@ -119,14 +119,41 @@ class LexicalHashEmbeddings(Embeddings):
 
 
 class _PrefixedEmbeddings(Embeddings):
-    """Shared halves of the two model backends: the prefixes and the shape."""
+    """Shared halves of the two model backends: the prefixes and the shape.
+
+    **The weights load on first use, not on construction.** Two reasons, and
+    both were failures rather than preferences: `server.py` builds its app at
+    import time, so an eager load made merely importing the module require the
+    optional extra; and a 2.2 GB download inside `create_app` blocks /health
+    until it finishes, which reads as a hung container. What *is* checked
+    eagerly is that the backend can be imported at all — cheap, offline, and
+    enough to keep the no-auto-modes promise that a misconfigured brain fails at
+    boot instead of on someone's first question."""
 
     def __init__(self, model_name: str, query_prefix: str = '',
-                 passage_prefix: str = '', batch_size: int = 32):
+                 passage_prefix: str = '', batch_size: int = 32, factory=None):
         self.model_name = model_name
         self.query_prefix = query_prefix
         self.passage_prefix = passage_prefix
         self.batch_size = batch_size
+        self._factory = factory or self._default_factory
+        self._model = None
+        if factory is None:
+            self._check_installed()
+
+    @property
+    def model(self):
+        if self._model is None:
+            self._model = self._factory(self.model_name)
+        return self._model
+
+    @staticmethod
+    def _default_factory(model_name):
+        raise NotImplementedError
+
+    @staticmethod
+    def _check_installed() -> None:
+        raise NotImplementedError
 
     def _encode(self, texts: list[str]) -> np.ndarray:
         raise NotImplementedError
@@ -157,15 +184,24 @@ class SentenceTransformerEmbeddings(_PrefixedEmbeddings):
     `factory` exists so the prefix behaviour is testable without a 2 GB
     download; production leaves it alone."""
 
-    def __init__(self, model_name: str, query_prefix: str = '',
-                 passage_prefix: str = '', batch_size: int = 32, factory=None):
-        super().__init__(model_name, query_prefix, passage_prefix, batch_size)
-        self.model = (factory or _sentence_transformer)(model_name)
+    _default_factory = staticmethod(_sentence_transformer)
+
+    @staticmethod
+    def _check_installed() -> None:
+        try:
+            import sentence_transformers  # noqa: F401
+        except ImportError as exc:
+            raise ValueError(
+                "embedder 'sentence-transformers' needs the 'local-embeddings' "
+                'extra: uv sync --extra local-embeddings') from exc
+
+    @property
+    def dim(self) -> int:
         # Renamed in sentence-transformers 5; ask for the new name and fall back,
-        # rather than emitting a deprecation warning on every boot.
+        # rather than emitting a deprecation warning on every load.
         dimension = (getattr(self.model, 'get_embedding_dimension', None)
                      or self.model.get_sentence_embedding_dimension)
-        self.dim = int(dimension())
+        return int(dimension())
 
     def _encode(self, texts: list[str]) -> np.ndarray:
         vectors = self.model.encode(texts, batch_size=self.batch_size,
@@ -183,11 +219,19 @@ class FastEmbedEmbeddings(_PrefixedEmbeddings):
     """fastembed's short ONNX list: a smaller download and no torch, at the cost
     of only reaching the models it happens to serve."""
 
-    def __init__(self, model_name: str, query_prefix: str = '',
-                 passage_prefix: str = '', batch_size: int = 64, factory=None):
-        super().__init__(model_name, query_prefix, passage_prefix, batch_size)
-        self.model = (factory or _text_embedding)(model_name)
-        self.dim = len(next(iter(self.model.embed(['probe']))))
+    _default_factory = staticmethod(_text_embedding)
+
+    @staticmethod
+    def _check_installed() -> None:
+        try:
+            import fastembed  # noqa: F401
+        except ImportError as exc:
+            raise ValueError("embedder 'fastembed' needs the 'semantic' extra: "
+                             'uv sync --extra semantic') from exc
+
+    @property
+    def dim(self) -> int:
+        return len(next(iter(self.model.embed(['probe']))))
 
     def _encode(self, texts: list[str]) -> np.ndarray:
         vectors = list(self.model.embed(texts, batch_size=self.batch_size))
@@ -791,6 +835,23 @@ def relevance_gate(llm, query: str, documents: list[Document],
     return [doc for doc, score in zip(documents, scores) if score >= threshold]
 
 
+GRADERS = ('llm', 'none')
+
+
+def gate_llm(kind: str, llm):
+    """The model the gate should use, or None when the gate is off.
+
+    The seam rule applied to BRAIN_GRADER: a new grader is a branch here, never
+    an edited call site, and an unknown value raises at boot rather than
+    silently leaving the gate switched off."""
+    if kind == 'none':
+        return None
+    if kind == 'llm':
+        return llm
+    raise ValueError(f'unknown grader: {kind!r}; expected '
+                     f'{" or ".join(repr(k) for k in GRADERS)}')
+
+
 # --- the board's index ------------------------------------------------------
 
 
@@ -805,6 +866,54 @@ def rrf_fuse(rankings: list[list[Document]], c: int = RRF_K) -> list[Document]:
             seen.setdefault(key, doc)
             scores[key] = scores.get(key, 0.0) + 1.0 / (c + rank)
     return [seen[key] for key in sorted(scores, key=lambda key: -scores[key])]
+
+
+K_NEIGHBORS = 3     # edges per card in the similarity graph
+MIN_SIMILARITY = 0.15
+
+
+def communities(vectors: np.ndarray, k_neighbors: int = K_NEIGHBORS,
+                min_similarity: float = MIN_SIMILARITY) -> list[int]:
+    """Leiden community detection over a kNN similarity graph of the cards.
+
+    This answers a different question from retrieval, and is judged differently:
+    "these cards belong together" is a product feature — surface connections,
+    spot duplicates — not a relevance score. It is deliberately *not* attached to
+    ranked search results, because a community id riding along on a hit
+    conflates the two claims.
+
+    Returns one label per vector, in the same order. With no edge clearing the
+    threshold every card is its own community, which is the honest answer for a
+    board of unrelated cards rather than one big group."""
+    import igraph as ig
+    import leidenalg
+    count = len(vectors)
+    if count == 0:
+        return []
+    similarity = vectors @ vectors.T
+    edges: list[tuple[int, int]] = []
+    weights: list[float] = []
+    seen: set[tuple[int, int]] = set()
+    for i in range(count):
+        picked = 0
+        for j in np.argsort(-similarity[i]):
+            j = int(j)
+            if j == i:
+                continue
+            if similarity[i][j] < min_similarity or picked >= k_neighbors:
+                break
+            edge = (min(i, j), max(i, j))
+            if edge not in seen:
+                seen.add(edge)
+                edges.append(edge)
+                weights.append(float(similarity[i][j]))
+            picked += 1
+    if not edges:
+        return list(range(count))
+    partition = leidenalg.find_partition(
+        ig.Graph(n=count, edges=edges), leidenalg.ModularityVertexPartition,
+        weights=weights, seed=0)   # seeded: the same board must group the same way
+    return list(partition.membership)
 
 
 def _fingerprint(documents: list[Document]) -> str:
@@ -835,6 +944,7 @@ class CardIndex:
         self.store: InMemoryVectorStore | None = None
         self.bm25 = RankBM25Retriever.from_documents([], k=CANDIDATES)
         self.fingerprint = ''
+        self._membership: list[int] | None = None
 
     def build(self, cards: list[dict]) -> bool:
         """Index the board unless this exact board is already indexed. Returns
@@ -850,10 +960,29 @@ class CardIndex:
         # Tokenised once here rather than per search: `search` copies this
         # retriever to attach a time scope, which reuses the same index.
         self.bm25 = RankBM25Retriever.from_documents(documents, k=CANDIDATES)
+        self._membership = None
         return True
 
+    def vectors(self) -> np.ndarray:
+        """The embeddings the store already holds, so nothing is embedded twice.
+        `InMemoryVectorStore` keeps them in a plain dict keyed by document id."""
+        if self.store is None or not self.documents:
+            return np.zeros((0, 1), dtype=np.float32)
+        return np.array([self.store.store[doc.id]['vector']
+                         for doc in self.documents], dtype=np.float32)
+
+    def communities(self) -> list[int]:
+        """One community label per card, in `self.documents` order. Cached for
+        the life of the index: clustering is cheap, but asking twice for the same
+        board should not cost twice, and two different answers for one board
+        would look like the themes moved."""
+        if self._membership is None:
+            self._membership = communities(self.vectors())
+        return self._membership
+
     def search(self, query: str, k: int = TOP_K, today: date | None = None,
-               llm=None, time_filter: bool = True) -> list[Document]:
+               llm=None, threshold: float = GRADE_THRESHOLD,
+               time_filter: bool = True) -> list[Document]:
         """The chosen architecture, end to end: resolve the time language,
         expand the query, retrieve both ways, fuse, rerank, and — when a model is
         given — gate."""
@@ -869,7 +998,9 @@ class CardIndex:
         fused = rrf_fuse([hybrid.invoke(variant)
                           for variant in expand_queries(query)])
         ranked = lexical_rerank(query, fused, self.bm25.idf, k=k)
-        return relevance_gate(llm, query, ranked) if llm is not None else ranked
+        if llm is None:
+            return ranked
+        return relevance_gate(llm, query, ranked, threshold)
 
 
 # --- chat memory ------------------------------------------------------------

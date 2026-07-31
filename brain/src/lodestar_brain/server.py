@@ -10,11 +10,11 @@ from pydantic import BaseModel
 
 from .agent.registry import build_agent
 from .config import Settings, load_settings
-from .llm.factory import served_models
-from .rag.chat_memory import ChromaChatMemory, chunk_text, make_recall_tool
-from .rag.embedder import make_embedder
-from .rag.index import LeidenIndex, make_retrieve_tool
+from .llm.factory import make_chat_model, served_models
+from .retrieval import CardIndex, ChatStore, gate_llm, make_embeddings
 from .tools.board import BoardClient, make_board_tools
+from .tools.retrieve import (make_group_tool, make_recall_tool,
+                             make_retrieve_tool)
 from .tools.websearch import DdgsSearch, make_search_tool
 from .voice import make_transcriber
 from .voice.base import TranscriptionError
@@ -50,23 +50,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or load_settings()
 
     board = BoardClient(settings.board_api_url)
-    embedder = make_embedder(settings.embedder)
-    index = LeidenIndex(embedder)
+    embeddings = make_embeddings(settings.embedder, settings,
+                                 settings.embed_model)
+    index = CardIndex(embeddings)
+    # The gate grades with the same model that answers, so it needs no model of
+    # its own. `gate_llm` is where BRAIN_GRADER is validated: an unknown value
+    # raises at boot rather than leaving the gate quietly switched off.
+    grader = gate_llm(settings.grader, make_chat_model(settings))
+    group_cards = make_group_tool(index, board)
     tools = [*make_board_tools(board),
              make_search_tool(DdgsSearch()),
-             make_retrieve_tool(index, board)]
+             make_retrieve_tool(index, board, llm=grader,
+                                threshold=settings.grade_threshold),
+             group_cards]
     memory = None
     if settings.chroma_url:
         try:
-            memory = ChromaChatMemory(settings.chroma_url, embedder,
-                                      collection=settings.chat_collection,
-                                      database=settings.chroma_database)
+            memory = ChatStore(settings.chroma_url, embeddings,
+                               collection=settings.chat_collection,
+                               database=settings.chroma_database)
             tools.append(make_recall_tool(memory))
         except Exception as exc:
             # Chroma is optional infrastructure: the agent, board tools, web
-            # search and Leiden RAG all work without it. Taking the whole brain
-            # down because a container is stopped would be the worse failure —
-            # so log loudly and serve on with recall unavailable.
+            # search and card retrieval all work without it. Taking the whole
+            # brain down because a container is stopped would be the worse
+            # failure — so log loudly and serve on with recall unavailable.
             memory = None
             logging.getLogger(__name__).warning(
                 'chat memory disabled: Chroma at %s is unreachable (%s)',
@@ -99,8 +107,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if memory is not None:
             last_user = next((m.get('content', '') for m in reversed(body.messages)
                               if m.get('role') == 'user'), '')
-            memory.record(chunk_text(last_user), metadata={'role': 'user'})
-            memory.record(chunk_text(result.reply), metadata={'role': 'assistant'})
+            memory.record([last_user], metadata={'role': 'user'})
+            memory.record([result.reply], metadata={'role': 'assistant'})
         return {'reply': result.reply,
                 'mutated': any(s.tool in MUTATING_TOOLS for s in result.steps),
                 'proposed': any(s.tool in PROPOSING_TOOLS for s in result.steps),
@@ -124,13 +132,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post('/rag/reindex')
     def reindex() -> dict:
+        """Rebuild the card index. `rebuilt` is false when the board has not
+        changed since the last one — the fingerprint, made observable."""
         cards = board.list_cards()
-        index.build(cards)
-        return {'cards': len(cards), 'communities': len(set(index.membership))}
+        return {'cards': len(cards), 'rebuilt': index.build(cards)}
 
     @app.get('/rag/communities')
     def communities() -> dict:
-        return {'communities': index.communities()}
+        """The board grouped by theme. Same shape as the tool the agent calls,
+        so a future themes panel needs no second implementation."""
+        return {'communities': group_cards.invoke({'min_size': 1})}
 
     @app.post('/rag/recall')
     def recall(body: RecallBody) -> dict:
@@ -141,4 +152,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     return app
 
 
-app = create_app()
+def __getattr__(name: str):
+    """Build the app when `app` is *asked for*, not when this module is imported.
+
+    `uvicorn lodestar_brain.server:app` resolves the name with getattr, so the
+    run command is unchanged — but importing the module for `create_app` no
+    longer boots a brain. That mattered the moment the default embedder became a
+    real model: a plain `import lodestar_brain.server` demanded the
+    local-embeddings extra, so the offline test suite could not even collect.
+    Constructing a service as an import side effect was always the bug; a
+    dependency-free default was just hiding it."""
+    if name == 'app':
+        globals()['app'] = create_app()
+        return globals()['app']
+    raise AttributeError(f'module {__name__!r} has no attribute {name!r}')

@@ -30,9 +30,26 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from lodestar_brain.rag.chat_memory import chunk_text
-
 from lodestar_brain import textnorm
+
+
+def chunk_text(text: str, max_chars: int = 500) -> list[str]:
+    """The greedy word packing the brain used to chunk chat with, kept
+    **verbatim** as the `fixed` baseline. Production now uses LangChain's
+    recursive splitter; this stays because every `fixed` row in `.runs/` was
+    measured against this exact packing, and a baseline that quietly changed
+    would make old rows incomparable rather than merely old."""
+    chunks: list[str] = []
+    current = ''
+    for word in text.split():
+        if current and len(current) + 1 + len(word) > max_chars:
+            chunks.append(current)
+            current = word
+        else:
+            current = f'{current} {word}' if current else word
+    if current:
+        chunks.append(current)
+    return chunks
 from .corpus import date_int, session_text
 
 # Phrases the diarist actually uses when he abandons one subject for another.

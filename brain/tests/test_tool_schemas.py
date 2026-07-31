@@ -7,24 +7,18 @@ makes that drift impossible; these assertions are what keeps the *names* and
 *enums* from drifting instead, the way the CSS class names are pinned for the
 e2e suite.
 
-Tools are built straight from the four factories with fakes, so all six are
+Tools are built straight from the factories with fakes, so all seven are
 present regardless of whether Chroma is configured — in create_app, recall_chat
 is conditional on it.
 """
-import numpy as np
-
-from lodestar_brain.rag.chat_memory import make_recall_tool
-from lodestar_brain.rag.index import LeidenIndex, make_retrieve_tool
+from lodestar_brain.retrieval import CardIndex, LexicalHashEmbeddings
 from lodestar_brain.tools.board import COLUMNS, HABIT_FREQS, TYPES, make_board_tools
+from lodestar_brain.tools.retrieve import (make_group_tool, make_recall_tool,
+                                           make_retrieve_tool)
 from lodestar_brain.tools.websearch import make_search_tool
 
 EXPECTED = {'list_questions', 'create_question', 'update_question',
-            'web_search', 'find_related', 'recall_chat'}
-
-
-class FakeEmbedder:
-    def embed(self, texts):
-        return np.zeros((len(texts), 3))
+            'web_search', 'find_related', 'group_cards', 'recall_chat'}
 
 
 class FakeSearch:
@@ -40,9 +34,10 @@ class FakeMemory:
 def tools_by_name():
     # The clients are None on purpose: building a tool must not talk to
     # anything, and nothing here calls one.
-    index = LeidenIndex(FakeEmbedder())
+    index = CardIndex(LexicalHashEmbeddings())
     tools = [*make_board_tools(None), make_search_tool(FakeSearch()),
-             make_retrieve_tool(index, None), make_recall_tool(FakeMemory())]
+             make_retrieve_tool(index, None), make_group_tool(index, None),
+             make_recall_tool(FakeMemory())]
     return {t.name: t for t in tools}
 
 
@@ -64,7 +59,7 @@ def _enum(tool, field):
     raise AssertionError(f'no enum on {field}')
 
 
-def test_the_six_tool_names_are_exactly_these():
+def test_the_seven_tool_names_are_exactly_these():
     assert set(tools_by_name()) == EXPECTED
 
 
