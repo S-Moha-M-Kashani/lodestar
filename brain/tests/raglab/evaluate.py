@@ -410,6 +410,15 @@ def list_runs(limit: int = 50) -> list[dict]:
                     # would claim more precision than the rows that measured it.
                     'ragas_decision_stderr': (ragas.get('decision_spread')
                                               or {}).get('stderr'),
+                    # Which sample and which judge. `brief()` has carried these
+                    # since the sweep started recording them and this list did
+                    # not, so the panel's own leaderboard could not tell an
+                    # incomparable row from a comparable one — which is the single
+                    # mistake a leaderboard exists to prevent. The question ids
+                    # stay in, unlike `brief()`: grouping needs them, and this
+                    # list is read by code rather than rendered.
+                    'selection': data.get('selection') or {},
+                    'judge': ragas.get('judge') or {},
                     'n_questions': (data.get('summary') or {}).get('n_questions', 0)})
     return out
 
