@@ -1492,7 +1492,23 @@
   // always renders and never needs the network.
 
   const EMBED_DIM = 128;
-  const cardText = (card) => `${card.title} ${card.notes}`.trim();
+
+  // What a card *is*, as text: its own words plus the labels it was filed
+  // under. The labels are part of the meaning — two cards that read alike but
+  // sit in different life areas are not the same thought, and on title+notes
+  // alone they landed on the same dot. The labels lead because the sentence is
+  // truncated from the tail: a long note must never be able to push a card's
+  // category out of its own vector. `catLabel` gives the word the user chose
+  // ("Health"), not the id, since that is what an embedding model can read —
+  // and renaming a category changes this text, which re-keys the caches below
+  // and re-embeds the card, exactly as it should.
+  const cardText = (card) => [
+    (card.tags || []).join(' '),
+    catLabel(card.category),
+    card.type,
+    card.title,
+    card.notes,
+  ].filter(Boolean).join(' ').trim();
 
   function textHash(s) {
     let h = 2166136261;
