@@ -9,6 +9,7 @@ production embedder finds nothing at all — only exist at that scale.
 import json
 import os
 import re
+import socket
 import threading
 import time
 from dataclasses import replace
@@ -21,7 +22,7 @@ from lodestar_brain.llm.fake import FakeChat
 
 from .raglab import (chunking, config, corpus, embedding, evaluate, explain,
                      leaderboard, metrics, models, pipeline, query, ragas_eval,
-                     retrieval, summarize, sweep, textnorm)
+                     retrieval, store, summarize, sweep, textnorm)
 from .raglab.config import (EMBEDDERS, RERANKERS, GenerationConfig, IndexConfig,
                             LabConfig, LabSettings, RetrievalConfig)
 from .raglab.index import IndexRegistry, LabIndex
@@ -561,7 +562,177 @@ def test_aggregate_reports_per_type_and_a_headline():
     assert summary['layer_usage'] == {'chunk': 1}
 
 
-# --- index and pipeline (integration, in-process Chroma) -------------------
+# --- the ephemeral vector store --------------------------------------------
+# An experiment's vectors, contexts and answers live for the process and no
+# longer: the lab owns a store in memory instead of a Chroma database, and its
+# only durable output is the JSON run file. These tests are that boundary. They
+# exist because the persistence came back as one import line the first time.
+
+def test_memory_store_ranks_by_cosine_distance():
+    """Chroma's contract, because LabIndex.dense reads it: `distances`, not
+    similarities, so the caller's `1 - d` keeps meaning what it meant."""
+    vectors = store.MemoryVectors('raglab-test')
+    vectors.upsert(ids=['near', 'orthogonal', 'opposite'],
+                   documents=['a', 'b', 'c'],
+                   embeddings=[[1.0, 0.0], [0.0, 1.0], [-1.0, 0.0]],
+                   metadatas=[{'layer': 'chunk'}] * 3)
+    res = vectors.query(query_embeddings=[[1.0, 0.0]], n_results=3)
+    assert res['ids'][0] == ['near', 'orthogonal', 'opposite']
+    assert res['distances'][0] == pytest.approx([0.0, 1.0, 2.0], abs=1e-6)
+    assert res['documents'][0][0] == 'a'
+    assert res['metadatas'][0][0] == {'layer': 'chunk'}
+
+
+def test_memory_store_answers_several_query_vectors_at_once():
+    """Multi-query expansion sends one row per variant and merges the results,
+    so a store that silently answered only the first would score expansion as
+    doing nothing."""
+    vectors = store.MemoryVectors('raglab-test')
+    vectors.upsert(ids=['x', 'y'], documents=['a', 'b'],
+                   embeddings=[[1.0, 0.0], [0.0, 1.0]], metadatas=[{}, {}])
+    res = vectors.query(query_embeddings=[[1.0, 0.0], [0.0, 1.0]], n_results=1)
+    assert res['ids'] == [['x'], ['y']]
+
+
+def test_memory_store_upsert_replaces_a_record_instead_of_duplicating_it():
+    """Chunk ids are deterministic, so a rebuild writes the same ids again."""
+    vectors = store.MemoryVectors('raglab-test')
+    vectors.upsert(ids=['a'], documents=['first'], embeddings=[[1.0, 0.0]],
+                   metadatas=[{'layer': 'chunk'}])
+    vectors.upsert(ids=['a'], documents=['second'], embeddings=[[0.0, 1.0]],
+                   metadatas=[{'layer': 'session'}])
+    assert vectors.count() == 1
+    res = vectors.query(query_embeddings=[[0.0, 1.0]], n_results=1)
+    assert res['documents'][0] == ['second']
+    assert res['metadatas'][0] == [{'layer': 'session'}]
+
+
+def test_memory_store_applies_the_where_clause_the_lab_actually_builds():
+    """The filter is the one place a hand-rolled store could quietly differ from
+    Chroma, so it is asserted against `query.where_clause` itself rather than a
+    hand-written dict — an overlap test on the dates plus a layer set."""
+    vectors = store.MemoryVectors('raglab-test')
+    vectors.upsert(
+        ids=['in-scope', 'too-early', 'wrong-layer'],
+        documents=['keep', 'drop', 'drop'],
+        embeddings=[[1.0, 0.0]] * 3,
+        metadatas=[{'layer': 'chunk', 'span_from': 20251201, 'span_to': 20251201},
+                   {'layer': 'chunk', 'span_from': 20250101, 'span_to': 20250101},
+                   {'layer': 'month', 'span_from': 20251201, 'span_to': 20251201}])
+    where = query.where_clause(query.TimeScope(20251122, 20251221, 'آذر', 'jalali'),
+                              ('chunk',), config.LAYERS)
+    res = vectors.query(query_embeddings=[[1.0, 0.0]], n_results=3, where=where)
+    assert res['ids'][0] == ['in-scope']
+
+
+def test_memory_store_keeps_a_rollup_that_merely_overlaps_the_scope():
+    """The same property `where_clause` documents: a thread rollup spans twelve
+    months, and containment rather than overlap would filter out exactly the
+    summary layer a scoped question needs."""
+    vectors = store.MemoryVectors('raglab-test')
+    vectors.upsert(ids=['thread'], documents=['a year of it'],
+                   embeddings=[[1.0, 0.0]],
+                   metadatas=[{'layer': 'thread', 'span_from': 20250801,
+                               'span_to': 20260720}])
+    where = query.where_clause(query.TimeScope(20251122, 20251221, 'آذر', 'jalali'),
+                              config.LAYERS, config.LAYERS)
+    res = vectors.query(query_embeddings=[[1.0, 0.0]], n_results=3, where=where)
+    assert res['ids'][0] == ['thread']
+
+
+def test_memory_store_does_not_match_a_metadata_key_a_record_lacks():
+    """Chroma's semantics, and the reason `Chunk.metadata()` carries `habit` on
+    every chunk: a record missing the filtered key is excluded, never kept."""
+    vectors = store.MemoryVectors('raglab-test')
+    vectors.upsert(ids=['has', 'lacks'], documents=['a', 'b'],
+                   embeddings=[[1.0, 0.0], [1.0, 0.0]],
+                   metadatas=[{'habit': 'gym'}, {}])
+    res = vectors.query(query_embeddings=[[1.0, 0.0]], n_results=2,
+                        where={'habit': 'gym'})
+    assert res['ids'][0] == ['has']
+
+
+def test_memory_store_never_returns_more_than_it_holds():
+    vectors = store.MemoryVectors('raglab-test')
+    vectors.upsert(ids=['a'], documents=['one'], embeddings=[[1.0, 0.0]],
+                   metadatas=[{}])
+    assert vectors.query(query_embeddings=[[1.0, 0.0]], n_results=8)['ids'] == [['a']]
+    empty = store.MemoryVectors('raglab-empty')
+    assert empty.count() == 0
+    assert empty.query(query_embeddings=[[1.0, 0.0]], n_results=5)['ids'] == [[]]
+
+
+def test_memory_store_returns_stored_vectors_in_the_order_asked_for():
+    """`LabIndex.vectors_for` reads vectors back for MMR rather than re-embedding
+    them, and it zips the result against the ids it asked for."""
+    vectors = store.MemoryVectors('raglab-test')
+    vectors.upsert(ids=['a', 'b'], documents=['x', 'y'],
+                   embeddings=[[1.0, 0.0], [0.0, 1.0]], metadatas=[{}, {}])
+    got = vectors.get(ids=['b', 'a'], include=['embeddings'])
+    assert got['ids'] == ['b', 'a']
+    assert np.allclose(got['embeddings'][0], [0.0, 1.0])
+    assert np.allclose(got['embeddings'][1], [1.0, 0.0])
+
+
+def test_memory_store_get_skips_an_id_it_does_not_hold():
+    """A silent partial result, exactly like Chroma's: the caller pairs ids with
+    vectors by name, so a placeholder row would be a wrong vector."""
+    vectors = store.MemoryVectors('raglab-test')
+    vectors.upsert(ids=['a'], documents=['x'], embeddings=[[1.0, 0.0]],
+                   metadatas=[{}])
+    assert vectors.get(ids=['a', 'missing'], include=['embeddings'])['ids'] == ['a']
+
+
+def test_the_index_holds_its_vectors_in_process_memory(index):
+    """Asserted on the type: 'there is no database' is not observable from a
+    query that succeeds."""
+    assert isinstance(index.store, store.MemoryVectors)
+    assert index.store.count() == index.stats.chunks
+
+
+def test_no_lab_module_imports_a_vector_database_client():
+    """chromadb is production's dependency, not the lab's — and neither is
+    production's ChromaChatMemory. This is the line that would bring the
+    persistence back: it is one import, and it looks harmless."""
+    offenders = []
+    for path in sorted(RAGLAB_DIR.glob('*.py')):
+        for line in path.read_text(encoding='utf-8').splitlines():
+            stripped = line.strip()
+            if not stripped.startswith(('import ', 'from ')):
+                continue
+            if 'chromadb' in stripped or 'ChromaChatMemory' in stripped:
+                offenders.append(f'{path.name}: {stripped}')
+    assert offenders == []
+
+
+def test_a_fresh_lab_process_rebuilds_its_index(diary):
+    """Nothing outlives the registry. A second one over the same config has to
+    build again rather than find a collection waiting for it, which is what
+    'ephemeral' means in a test."""
+    cfg = IndexConfig(chunker='session', embedder='token-hash', layers=('chunk',))
+    first = IndexRegistry(LAB_SETTINGS, diary).get(cfg)
+    second = IndexRegistry(LAB_SETTINGS, diary).get(cfg)
+    assert second is not first and second.store is not first.store
+    assert not first.stats.reused and not second.stats.reused
+    assert second.stats.chunks == first.stats.chunks
+    assert second.store.count() == second.stats.chunks
+
+
+def test_building_an_index_opens_no_socket(diary, monkeypatch):
+    """The strongest form of the boundary: with nothing to talk to, a build must
+    not be able to reach anything. The offline embedders download nothing, so a
+    connection here could only be a store trying to persist."""
+    def refuse(*_args, **_kwargs):
+        raise AssertionError('the lab opened a network connection while building')
+
+    monkeypatch.setattr(socket.socket, 'connect', refuse)
+    monkeypatch.setattr(socket.socket, 'connect_ex', refuse)
+    built = IndexRegistry(LAB_SETTINGS, diary).get(
+        IndexConfig(embedder='ascii-hash', layers=('session',)))
+    assert built.stats.chunks == len(diary['sessions'])
+
+
+# --- index and pipeline (integration, in-process memory) -------------------
 
 def test_index_builds_every_layer(index, diary):
     stats = index.stats
@@ -573,9 +744,14 @@ def test_index_builds_every_layer(index, diary):
 
 
 def test_index_is_reused_for_the_same_fingerprint(registry):
-    cfg = IndexConfig(chunker='message', embedder='token-hash', layers=('chunk',))
+    """`reused` used to mean "Chroma already held the right number of records" —
+    the one form of reuse that can no longer happen. It now reports the only one
+    left: this process built the index earlier and still has it."""
+    cfg = IndexConfig(chunker='turn-pair', embedder='token-hash', layers=('chunk',))
     first = registry.get(cfg)
+    assert not first.stats.reused
     assert registry.get(cfg) is first
+    assert first.stats.reused
     assert first.stats.collection == cfg.collection()
 
 

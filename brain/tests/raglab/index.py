@@ -1,25 +1,29 @@
 """Building and holding one indexed configuration.
 
-A LabIndex is the pair (Chroma collection, in-memory chunk table). Chroma owns
-the vectors; the chunk table owns the text, which BM25, parent expansion and
-every lexical metric need. Both are keyed by deterministic chunk ids, so a
-rebuild upserts over the previous one instead of duplicating it, and a lab
-restart can reload an index from Chroma without re-embedding a thing.
+A LabIndex is the pair (vector store, chunk table), both in process memory. The
+store owns the vectors; the chunk table owns the text, which BM25, parent
+expansion and every lexical metric need. Both are keyed by deterministic chunk
+ids, so a rebuild upserts over the previous one instead of duplicating it.
 
-The collection name is IndexConfig.fingerprint(), so switching a chunker in the
-panel builds a *new* collection and leaves the old one intact — sweeping back and
-forth between two strategies costs one build each, not one per switch.
+**Nothing here survives the process.** An index is experimental data: it is
+built to produce a number, and the number is what gets written down (one JSON
+file per run). A store that outlived a restart would mostly serve to hand a
+later run rows that some earlier, differently-configured build left behind.
+
+The store's name is IndexConfig.fingerprint(), so switching a chunker in the
+panel builds a *new* index and leaves the old one held by the registry — sweeping
+back and forth between two strategies costs one build each, not one per switch,
+for as long as the process lives.
 """
 import time
 from dataclasses import dataclass, field
 
 import numpy as np
 
-from lodestar_brain.rag.chat_memory import ChromaChatMemory
-
 from . import embedding, summarize
 from .chunking import Chunk, chunk_session
 from .config import IndexConfig, LabSettings
+from .store import MemoryVectors
 
 BATCH = 200
 
@@ -33,13 +37,15 @@ class IndexStats:
     p95_chars: int = 0
     embed_dim: int = 0
     build_seconds: float = 0.0
+    # Set by IndexRegistry, not by build(): "this process already had it", the
+    # only reuse there is now that no store outlives the process.
     reused: bool = False
     summarizer_failures: int = 0
     notes: list = field(default_factory=list)
 
 
 class LabIndex:
-    def __init__(self, cfg: IndexConfig, embedder, store: ChromaChatMemory,
+    def __init__(self, cfg: IndexConfig, embedder, store: MemoryVectors,
                  chunks: list[Chunk], stats: IndexStats):
         self.cfg = cfg
         self.embedder = embedder
@@ -57,16 +63,17 @@ class LabIndex:
 
     @classmethod
     def build(cls, cfg: IndexConfig, diary: dict, settings: LabSettings,
-              progress=None, force: bool = False) -> 'LabIndex':
+              progress=None) -> 'LabIndex':
+        """Always a full build. There is no `force`: nothing persists, so every
+        call embeds the corpus into a store of its own. Skipping the work is the
+        registry's decision, not this one's."""
         started = time.time()
         cfg = cfg.normalized()
         stats = IndexStats(collection=cfg.collection())
         note = stats.notes.append
         embedder = embedding.make_embedder(cfg.embedder, settings, cfg.embed_model)
         stats.embed_dim = getattr(embedder, 'dim', 0)
-        store = ChromaChatMemory(settings.chroma_url, embedder,
-                                 collection=cfg.collection(),
-                                 database=settings.chroma_database)
+        store = MemoryVectors(cfg.collection())
 
         sessions = diary['sessions']
         if progress:
@@ -112,33 +119,22 @@ class LabIndex:
         for chunk in chunks:
             stats.by_layer[chunk.layer] = stats.by_layer.get(chunk.layer, 0) + 1
 
-        existing = store.collection.count()
-        if existing == len(chunks) and not force:
-            stats.reused = True
-            note(f'reused an existing collection with {existing} records')
-        else:
-            if existing and existing != len(chunks):
-                # Stale rows from an interrupted build would answer queries with
-                # chunks the current config never produced.
-                store.client.delete_collection(cfg.collection())
-                store.collection = store.client.get_or_create_collection(
-                    cfg.collection(), metadata={'hnsw:space': 'cosine'},
-                    embedding_function=None)
-                note(f'dropped {existing} stale records before rebuilding')
-            for start in range(0, len(chunks), BATCH):
-                batch = chunks[start:start + BATCH]
-                vectors = embedder.embed([c.text for c in batch])
-                if not np.any(vectors):
-                    note('WARNING: this embedder produced all-zero vectors for '
-                         'part of the corpus — it cannot represent this text')
-                store.collection.upsert(
-                    ids=[c.id for c in batch],
-                    documents=[c.text for c in batch],
-                    embeddings=[v.tolist() for v in vectors],
-                    metadatas=[c.metadata() for c in batch])
-                if progress:
-                    done = (start + len(batch)) / max(1, len(chunks))
-                    progress('embedding', 0.5 + 0.5 * done)
+        # A fresh store every build, so there are no stale rows to detect: the
+        # only reuse left is the registry handing back an index this process
+        # already holds, which it records on the stats itself.
+        for start in range(0, len(chunks), BATCH):
+            batch = chunks[start:start + BATCH]
+            vectors = embedder.embed([c.text for c in batch])
+            if not np.any(vectors):
+                note('WARNING: this embedder produced all-zero vectors for '
+                     'part of the corpus — it cannot represent this text')
+            store.upsert(ids=[c.id for c in batch],
+                         documents=[c.text for c in batch],
+                         embeddings=list(vectors),
+                         metadatas=[c.metadata() for c in batch])
+            if progress:
+                done = (start + len(batch)) / max(1, len(chunks))
+                progress('embedding', 0.5 + 0.5 * done)
 
         stats.build_seconds = round(time.time() - started, 2)
         return cls(cfg, embedder, store, chunks, stats)
@@ -155,11 +151,11 @@ class LabIndex:
     def dense(self, query_vectors: np.ndarray, k: int,
               where: dict | None = None) -> list[tuple[str, float]]:
         """Nearest chunks for one or more query vectors, merged by best score."""
-        count = self.store.collection.count()
+        count = self.store.count()
         if not count:
             return []
-        res = self.store.collection.query(
-            query_embeddings=[v.tolist() for v in np.atleast_2d(query_vectors)],
+        res = self.store.query(
+            query_embeddings=np.atleast_2d(query_vectors),
             n_results=min(k, count), where=where or None)
         best: dict[str, float] = {}
         for ids, distances in zip(res['ids'], res['distances']):
@@ -170,11 +166,11 @@ class LabIndex:
         return sorted(best.items(), key=lambda kv: -kv[1])
 
     def vectors_for(self, chunk_ids: list[str]) -> np.ndarray:
-        """Stored vectors, for MMR. Read back from Chroma rather than
+        """Stored vectors, for MMR. Read back from the store rather than
         re-embedded, so a slow embedder is not re-run per query."""
         if not chunk_ids:
             return np.zeros((0, 1), dtype=np.float32)
-        got = self.store.collection.get(ids=chunk_ids, include=['embeddings'])
+        got = self.store.get(ids=chunk_ids, include=['embeddings'])
         order = {cid: i for i, cid in enumerate(got['ids'])}
         stacked = np.array(got['embeddings'], dtype=np.float32)
         return np.array([stacked[order[cid]] for cid in chunk_ids
@@ -200,9 +196,10 @@ from .llm import lab_llm as _lab_llm  # noqa: E402  (kept beside its callers)
 
 
 class IndexRegistry:
-    """Process-lifetime cache of built indexes, keyed by fingerprint. Chroma
-    keeps the vectors between restarts; this keeps the chunk table and BM25
-    statistics, which are what make a sweep of retrieval settings instant."""
+    """Process-lifetime cache of built indexes, keyed by fingerprint. It holds
+    the vectors, the chunk table and the BM25 statistics — which together are
+    what make a sweep of retrieval settings instant — and it is now the *only*
+    thing that does: when the process ends, so does every index it built."""
 
     def __init__(self, settings: LabSettings, diary: dict):
         self.settings = settings
@@ -213,7 +210,11 @@ class IndexRegistry:
         key = cfg.normalized().fingerprint()
         if force or key not in self._indexes:
             self._indexes[key] = LabIndex.build(cfg, self.diary, self.settings,
-                                                progress=progress, force=force)
+                                                progress=progress)
+        else:
+            # The one form of reuse that still exists, reported where the panel
+            # already looked for it: this process built it and still has it.
+            self._indexes[key].stats.reused = True
         return self._indexes[key]
 
     def known(self) -> list[dict]:
