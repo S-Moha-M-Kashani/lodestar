@@ -166,7 +166,8 @@ def resolve_time_scope(question: str, query_date: str) -> TimeScope | None:
 
 def where_clause(scope: TimeScope | None, layers: tuple[str, ...],
                  all_layers: tuple[str, ...]) -> dict | None:
-    """Chroma filter for a time scope and a layer selection.
+    """Store filter for a time scope and a layer selection, in the operator
+    dialect `store.matches` implements.
 
     The date test is an *overlap* test, not containment: a thread rollup spans
     twelve months, and requiring span_from >= scope.from would throw away

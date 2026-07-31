@@ -1559,8 +1559,12 @@ try:
                              "llm_model": "openai/gpt-5-nano",
                              "ragas": {"installed": True, "llm_ready": False,
                                        "version": "0.4.3", "notes": []},
-                             "chroma_database": "lodestar-raglab",
-                             "chroma_url": "http://localhost:8001"},
+                             # The lab keeps no database: its index is process
+                             # memory, and the one durable artifact is the JSON
+                             # run. The panel says so instead of badging a
+                             # service that is not involved.
+                             "storage": {"index": "memory",
+                                         "runs": "brain/tests/raglab/.runs"}},
             "indexes": [],
         }
         # Exactly how the service composes metric help (metrics.MEASURE_HELP):
@@ -1704,6 +1708,15 @@ try:
         check("raglab: missing capabilities are shown as missing",
               page.locator(".rag-cap.off").count() >= 1
               and page.locator(".rag-cap.on").count() >= 1)
+        # An experiment is not a record. The page has to say where a run's index
+        # lives — and that it is thrown away — rather than name a database, which
+        # would imply the next run can find what this one built.
+        caps_text = page.locator(".rag-caps").inner_text()
+        check("raglab: the page says the index is in memory and where runs land",
+              "index in memory" in caps_text
+              and "brain/tests/raglab/.runs" in caps_text)
+        check("raglab: the page names no vector database",
+              "chroma" not in caps_text.lower())
 
         # Model choice per task. Seven stages can call a model and they want
         # different things from one, so none of them is hard-coded; the licence is

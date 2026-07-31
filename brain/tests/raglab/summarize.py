@@ -19,18 +19,23 @@ kept beside the original costs only storage.
 
 Two summarizers: `extractive` is deterministic, offline, and free (salience by
 corpus IDF), so CI can measure the hierarchy's value without a network call.
-`llm` is the real thing, cached on disk because 157 sessions × every sweep would
-otherwise be the dominant cost of the lab.
+`llm` is the real thing, and its output is cached for the life of the process —
+157 sessions × every sweep would otherwise be the dominant cost of the lab, and
+switching a chunker changes every chunk while changing no summary.
+
+**The cache is memory, not a file.** A summary is model output about
+experimental data: derived, rebuildable, and worth nothing to anyone after the
+run it fed. On disk it was also unattributable — a file with no record of which
+model wrote which entry, silently feeding entries into later runs that never
+asked for them. The cost of that decision is honest and worth stating: a fresh
+process with `summarizer='llm'` pays for the corpus again.
 """
-import json
 import math
 import re
 from collections import defaultdict
-from pathlib import Path
 
 from . import textnorm
 from .chunking import Chunk, importance_of
-from .config import RUNS_DIR
 from .corpus import date_int
 from .llm import lab_chat
 
@@ -130,20 +135,17 @@ class LLMSummarizer:
 
 
 class SummaryCache:
-    """Disk cache keyed by summarizer + session id + a hash of the session text,
-    so editing the fixture invalidates exactly the entries it changed."""
+    """In-memory cache keyed by summarizer + session id + a hash of the session
+    text, so a corpus edit invalidates exactly the entries it changed and two
+    summarizers never read each other's work.
 
-    def __init__(self, path: Path | None = None):
-        # Under .runs/cache/, not .runs/ itself: the run listing globs *.json
-        # there, and a cache file sitting beside the runs is not a run.
-        self.path = path or RUNS_DIR / 'cache' / 'summary-cache.json'
+    Owned by whoever wants the reuse — `IndexRegistry` holds one for its
+    process, so a sweep of chunkers summarises the corpus once. A build handed no
+    cache simply summarises what it needs; each session is summarised once per
+    build either way."""
+
+    def __init__(self):
         self.data: dict[str, str] = {}
-        if self.path.exists():
-            try:
-                self.data = json.loads(self.path.read_text(encoding='utf-8'))
-            except Exception:
-                self.data = {}
-        self.dirty = False
 
     @staticmethod
     def key(summarizer_name: str, session: dict) -> str:
@@ -157,15 +159,6 @@ class SummaryCache:
 
     def put(self, summarizer_name: str, session: dict, summary: str) -> None:
         self.data[self.key(summarizer_name, session)] = summary
-        self.dirty = True
-
-    def flush(self) -> None:
-        if not self.dirty:
-            return
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self.data, ensure_ascii=False),
-                             encoding='utf-8')
-        self.dirty = False
 
 
 def session_summaries(sessions: list[dict], summarizer,
@@ -181,8 +174,6 @@ def session_summaries(sessions: list[dict], summarizer,
         out[session['session_id']] = cached
         if progress and i % 10 == 0:
             progress(i, len(sessions))
-    if cache:
-        cache.flush()
     return out
 
 

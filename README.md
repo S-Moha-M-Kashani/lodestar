@@ -15,7 +15,7 @@ The design is a "question ledger": quad-ruled engineering paper, cards as ruled 
 - **Importance & urgency**: set each to High or Low on a card to place it on the **Matrix**
 - **Deadlines and automatic priority**: give a card an ISO date and it carries a deadline chip that turns red once overdue. Priority is **derived**, never stored — P1 urgent & important, P2 urgent, P3 important, P4 neither — so it can never disagree with the two judgements behind it; the toolbar filters by it
 - **Matrix — four lenses on the same cards**: importance is always the vertical axis, and the picker swaps what it is crossed with — **Eisenhower** (urgency; Answer now / Schedule / Delegate / Drop, urgent on the left), **Leverage** (effort — where a little work moves a lot), **Serenity** (control — what deserves action, and what you are allowed to put down), and **Follow-through** (time since a card was last touched)
-- **Overview map**: every question is plotted by meaning — its text is embedded and reduced to two axes, so questions that read alike sit close together. Toggle the projection between **PCA** (fast, stable global axes) and **t-SNE** (local neighbourhoods, so clusters of related thoughts pull together); t-SNE is seeded, so the same cards always land in the same spots. Embeddings come from a HuggingFace model ([Transformers.js](https://huggingface.co/docs/transformers.js), `Xenova/all-MiniLM-L6-v2`) loaded on demand from a CDN — **no login or API key needed**; the ~30 MB model downloads once and is cached by the browser. When it's still loading or the browser is offline, the map falls back to a keyword-overlap layout, so it always renders with no network. Hover a dot for details, click to open the full editor, and the tag/type/category/search filters apply just like the board. Dots are inked in their category's colour, so the map reads by life area.
+- **Overview map**: every question is plotted by meaning — it is embedded and reduced to two axes, so questions that read alike sit close together. What gets embedded is **the whole card as you filed it**: its tags, its category, its type, its title and its notes. The labels are part of the meaning, not decoration — two cards with the same words under *Health* and under *Work* are not the same thought, and on title and notes alone they landed on the same dot. Labels come first in the sentence, because the model truncates from the tail and a long note must never be able to push a card's category out of its own vector; the category contributes the name you gave it, so renaming an area re-embeds the cards in it. Toggle the projection between **PCA** (fast, stable global axes) and **t-SNE** (local neighbourhoods, so clusters of related thoughts pull together); t-SNE is seeded, so the same cards always land in the same spots. Embeddings come from a HuggingFace model ([Transformers.js](https://huggingface.co/docs/transformers.js), `Xenova/all-MiniLM-L6-v2`) loaded on demand from a CDN — **no login or API key needed**; the ~30 MB model downloads once and is cached by the browser. When it's still loading or the browser is offline, the map falls back to a keyword-overlap layout, so it always renders with no network. Hover a dot for details, click to open the full editor, and the tag/type/category/search filters apply just like the board. Dots are inked in their category's colour, so the map reads by life area.
 - **Areas view**: one small-multiples tile per life area plus an attention wheel whose spoke length is open-question mass, answering "which part of my life is starved?" at a glance. Click a tile to focus that area and open a category-aware detail panel — cooling-off (the 30-day rule), learning progress, serenity check, and what has been longest untouched
 - **Review view**: GTD's weekly review as a screen — stat tiles (inbox, answered this week, new this week, open in total), week-over-week drift per area, the neglect list (important cards untouched for over a month), and three old thoughts resurfaced on purpose. The picks are seeded on the date and pinned for the day, so acting on one never reshuffles the others
 - **Quick capture**: write anything into the Inbox and press Enter
@@ -265,7 +265,7 @@ Pick a strategy per stage and the panel grades it:
 | Hierarchy | raw chunks plus, additively, session summaries, month digests, per-storyline digests, and a promise/deadline ledger; summaries extractive (offline) or LLM |
 | Embedding | **OpenRouter Qwen3-Embedding-8B** is the lab default: Text → embedding (route: OpenRouter API). Local alternatives remain fastembed and sentence-transformers (including Persian-tuned `heydariAI/persian-embeddings`); OpenAI embeddings remain optional. |
 | Reranking | **Cohere Rerank 4 Fast** is the lab default: Query + text → relevance score (route: OpenRouter API). Local lexical, recency, cross-encoder, and Ollama LLM alternatives remain available. |
-| Retrieval | dense, BM25, or hybrid with Reciprocal Rank Fusion; Farsi time expressions («آذر», «پارسال پاییز») resolved into a Chroma date range; multi-query expansion; HyDE |
+| Retrieval | dense, BM25, or hybrid with Reciprocal Rank Fusion; Farsi time expressions («آذر», «پارسال پاییز») resolved into a metadata date range; multi-query expansion; HyDE |
 | Reranking | none, lexical, recency, "agentic" (relevance + recency + emotional importance), multilingual cross-encoder, or LLM grading |
 | Gating | a relevance threshold — what makes an honest *"I have nothing on that"* possible — plus parent/session expansion and MMR diversification |
 | Scoring | recall/precision/MRR/nDCG@k over evidence sessions, verbatim **quote recall**, latest-state recall for facts that changed, abstention accuracy, and **RAGAS** — its non-LLM context metrics offline, its judged metrics (faithfulness, relevancy, factual correctness) with an API key |
@@ -307,11 +307,16 @@ a tie rather than a win, and runs that recorded only *how many* questions they
 scored get no rank numbers at all — two runs of 24 questions may be two different
 24.
 
-The lab is strictly test-side: it writes only to its own Chroma database
-(`lodestar-raglab`, and it refuses to start against the production one) and to a
-git-ignored `.runs/` folder, and no production module imports it — the board knows
-nothing about it beyond a proxy prefix. Its own tests are part of the brain suite
-(`npm run test:raglab`), and the page is covered by the e2e suite.
+The lab is strictly test-side, and its experiments are **ephemeral by
+construction**: the index lives in process memory and is discarded when the lab
+stops, so there is no database to start first and no state a later run can inherit
+from an earlier one. The only thing it writes is **one JSON file per run** in a
+git-ignored `.runs/` folder — the config, the metrics, and the per-question detail
+needed to reopen the result. It used to keep its vectors in a Chroma database of its
+own, guarded by a check that refused the production one; having no such setting is
+the stronger version of that guard. No production module imports the lab — the board
+knows nothing about it beyond a proxy prefix. Its own tests are part of the brain
+suite (`npm run test:raglab`), and the page is covered by the e2e suite.
 
 ## What the RAG lab measured
 
@@ -365,7 +370,7 @@ been.**
  │ RETRIEVE   multi-query expansion                                  │
  │            hybrid BM25 + dense ─► RRF (k0 = 60)                   │
  │            40 candidates across all 6 layers                      │
- │            Farsi time expressions → Chroma date ranges            │
+ │            Farsi time expressions → metadata date ranges          │
  └────────────────────────────────┬──────────────────────────────────┘
                                   ▼
  ┌───────────────────────────────────────────────────────────────────┐
@@ -390,8 +395,8 @@ been.**
  │      answer relevancy   0.4886  ◄─┴─ the gap, and the bottleneck  │
  └───────────────────────────────────────────────────────────────────┘
 
-     Chunks and vectors live in Chroma :8001 — one collection per
-     index configuration, named by its fingerprint.
+     Chunks and vectors live in the lab process — one in-memory index
+     per configuration, named by its fingerprint, discarded on exit.
 
      Nothing in the eight-candidate sweep ever changed the bottom box.
 ```

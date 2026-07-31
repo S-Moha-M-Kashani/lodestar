@@ -2,20 +2,20 @@
 
 Binds :9002, in the 9000 block with the brains — never a board port, because the
 lab's primary surface is a page *inside* the board (Assistant → "RAG test lab"),
-which proxies /api/raglab/* here. It reads two JSON fixtures and writes only to
-its own Chroma database and its own .runs directory. The standalone panel at /
-remains for running the lab on its own.
+which proxies /api/raglab/* here. It reads two JSON fixtures, holds its indexes
+in memory, and writes exactly one thing: a JSON file per run in .runs/. The
+standalone panel at / remains for running the lab on its own.
+
+**It depends on no service.** There is nothing to start first and nothing that
+can be down, which is why no route probes anything before creating a job.
 
 Runs are jobs, not requests: building a fastembed index over 157 sessions and
 scoring 100 questions takes longer than any sensible HTTP timeout, so POST /run
 returns a job id and the panel polls it. One job at a time — concurrent runs
-would fight over the same collection and produce numbers neither of them
-describes.
+would fight over the same index and produce numbers neither of them describes.
 """
 import threading
 import traceback
-import urllib.error
-import urllib.request
 import uuid
 import inspect
 from pathlib import Path
@@ -26,8 +26,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from . import (embedding, evaluate, explain, metrics, models, pipeline,
                ragas_eval, retrieval)
 from .config import (ANSWERERS, BALANCES, CHUNKERS, DIFFICULTIES, EMBEDDERS,
-                     EXPANSIONS, GRADERS, LAYERS, RERANKERS, RETRIEVERS, STEPS,
-                     SUMMARIZERS, LabConfig, load_lab_settings)
+                     EXPANSIONS, GRADERS, LAYERS, RERANKERS, RETRIEVERS, ROOT,
+                     RUNS_DIR, STEPS, SUMMARIZERS, LabConfig, load_lab_settings)
 from .corpus import load_diary, load_ground_truth
 from .index import IndexRegistry, _lab_llm
 
@@ -36,27 +36,6 @@ STATIC = Path(__file__).resolve().parent / 'static'
 
 class JobCancelled(Exception):
     """A cooperative stop requested from the RAG Lab panel."""
-
-
-def require_chroma(settings) -> None:
-    """Fail before creating a job when the vector service cannot be reached.
-
-    A build used to become a background job before its first Chroma call.  That
-    made the panel briefly say "running", even when nothing could possibly
-    build.  The heartbeat is read-only and makes that dependency explicit.
-    """
-    if settings.chroma_url == 'memory':
-        return
-    endpoint = f'{settings.chroma_url.rstrip("/")}/api/v2/heartbeat'
-    try:
-        with urllib.request.urlopen(endpoint, timeout=3):
-            pass
-    except (urllib.error.URLError, TimeoutError, OSError) as error:
-        raise HTTPException(
-            503,
-            f'Chroma is unavailable at {settings.chroma_url}. Start the local '
-            f'Chroma server on port 8001, then try again. ({error})',
-        ) from error
 
 
 class Jobs:
@@ -222,15 +201,19 @@ def create_app() -> FastAPI:
                 'llm_model': settings.llm_model,
                 'ollama_base_url': settings.ollama_base_url,
                 'ragas': ragas_eval.availability(settings).as_dict(),
-                'chroma_url': settings.chroma_url,
-                'chroma_database': settings.chroma_database,
+                # Where an experiment lives and where its one durable artifact
+                # lands. Stated positively because the panel used to badge a
+                # Chroma database here: a reader needs to know the index is
+                # thrown away with the process, not merely that no service is
+                # named.
+                'storage': {'index': 'memory',
+                            'runs': str(RUNS_DIR.relative_to(ROOT))},
             },
             'indexes': registry.known(),
         }
 
     @app.post('/api/index')
     def build_index(payload: dict):
-        require_chroma(settings)
         cfg = LabConfig.from_dict(payload)
         force = bool(payload.get('force'))
 
@@ -249,7 +232,6 @@ def create_app() -> FastAPI:
 
     @app.post('/api/run')
     def start_run(payload: dict):
-        require_chroma(settings)
         cfg = LabConfig.from_dict(payload)
         problems = cfg.validate() + models.provider_problems(cfg, settings)
         if problems:
@@ -296,7 +278,6 @@ def create_app() -> FastAPI:
     def ad_hoc_query(payload: dict):
         """Run one question through the current settings and return every stage.
         The fastest way to understand *why* a config scores the way it does."""
-        require_chroma(settings)
         cfg = LabConfig.from_dict(payload)
         question = (payload.get('question') or '').strip()
         if not question:
@@ -326,8 +307,8 @@ def create_app() -> FastAPI:
 
     @app.get('/api/health')
     def health():
-        return {'ok': True, 'chroma': settings.chroma_url,
-                'database': settings.chroma_database}
+        # No dependency to report: the lab is up or it is not running.
+        return {'ok': True, 'storage': 'memory'}
 
     @app.exception_handler(ValueError)
     def value_error(_request, error: ValueError):

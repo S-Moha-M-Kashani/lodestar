@@ -155,11 +155,18 @@ test('lab traffic and assistant traffic go to different upstreams', () => {
   assert.match(server, /assistant unavailable/);
 });
 
-test('the RAG lab writes to its own Chroma database', () => {
-  const m = scripts.raglab.match(/RAGLAB_CHROMA_DATABASE=([\w-]+)/);
-  assert.ok(m, 'the raglab script must pin RAGLAB_CHROMA_DATABASE');
-  assert.notEqual(m[1], 'lodestar', 'that is production chat memory');
-  assert.notEqual(m[1], 'lodestar-test', "that is the test board's chat memory");
+test('no RAG lab command names a vector database', () => {
+  // The lab's experiments are ephemeral: the index is process memory and the
+  // only thing written down is the JSON run. So there is no database to pin —
+  // and pinning one again would be the persistence coming back, one typo away
+  // from the chat memory a sweep would rebuild forty times.
+  for (const [name, script] of Object.entries(scripts)) {
+    if (!name.startsWith('raglab')) continue;
+    assert.ok(
+      !/CHROMA/.test(script),
+      `the "${name}" script still names a Chroma database: ${script}`,
+    );
+  }
 });
 
 test("the Node proxy's default AGENT_URL matches the brain's port", () => {

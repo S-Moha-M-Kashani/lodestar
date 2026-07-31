@@ -552,7 +552,9 @@ async function boot() {
                              : 'no LLM backend — set OPENROUTER_API_KEY or RAGLAB_LLM=ollama'),
     badge(caps.ragas.installed, `ragas ${caps.ragas.installed ? caps.ragas.version : 'missing'}`),
     badge(caps.ragas.llm_ready, `ragas LLM metrics ${caps.ragas.llm_ready ? 'ready' : 'off'}`),
-    `<span class="badge">chroma ${caps.chroma_database} @ ${caps.chroma_url}</span>`,
+    // Not a service badge: the index is process memory and is discarded with
+    // the lab, so what a reader needs is where the run JSON lands.
+    `<span class="badge">index in memory · runs → ${caps.storage.runs}</span>`,
   ].join('');
   if (caps.ragas.notes.length) {
     $('notes').innerHTML = caps.ragas.notes.map((n) => `<div class="note">${n}</div>`).join('');
