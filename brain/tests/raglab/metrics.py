@@ -307,7 +307,6 @@ def score_question(question: dict, outcome, k: int) -> dict:
         'context_chars': len(context_text),
         'abstained': outcome.abstained,
         'time_scope': outcome.time_scope,
-        'layers': sorted({c.layer for c in outcome.contexts}),
         'latency_ms': round(sum(outcome.timings.values()), 1),
     }
     if answerable:
@@ -379,13 +378,8 @@ def aggregate(rows: list[dict]) -> dict:
             by_difficulty[level] = {'n': len(subset),
                                     'recall': _mean([r['recall'] for r in subset
                                                      if 'recall' in r])}
-    layer_usage: dict[str, int] = defaultdict(int)
-    for row in rows:
-        for layer in row.get('layers', []):
-            layer_usage[layer] += 1
     overall['headline'] = _headline(overall)
     return {'overall': overall, 'by_type': by_type, 'by_difficulty': by_difficulty,
-            'layer_usage': dict(sorted(layer_usage.items(), key=lambda kv: -kv[1])),
             'n_questions': len(rows)}
 
 

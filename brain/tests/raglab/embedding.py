@@ -389,8 +389,8 @@ EMBED_MODELS = (
     # that merely includes Farsi. Its own card recommends sentence-transformers
     # first, and ships modules.json + 1_Pooling, so ST applies the mean pooling
     # the authors trained with instead of us guessing one. 1024 dims and a
-    # 514-position encoder, so the session/month/thread rollups get truncated —
-    # worth remembering when reading a rollup score.
+    # 514-position encoder, so a whole-session chunk gets truncated — worth
+    # remembering when reading a session-chunker score.
     EmbedModel(DEFAULT_LOCAL, 'persian-embeddings (heydariAI)', FARSI_TUNED,
                True, 'open', 1024,
                'the lab default: fine-tuned on Persian specifically rather than '

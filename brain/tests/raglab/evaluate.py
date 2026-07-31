@@ -303,8 +303,7 @@ def run_eval(registry: IndexRegistry, ground_truth: dict, cfg: LabConfig,
     if not settings.llm_ready and (cfg.generation.answerer == 'llm'
                                             or cfg.retrieval.reranker == 'llm'
                                             or cfg.retrieval.grader == 'llm'
-                                            or cfg.retrieval.hyde
-                                            or cfg.index.summarizer == 'llm'):
+                                            or cfg.retrieval.hyde):
         notes.append('no OPENROUTER_API_KEY: LLM stages fell back to the offline '
                      'fake provider, so their numbers are meaningless')
 
@@ -368,7 +367,6 @@ def run_eval(registry: IndexRegistry, ground_truth: dict, cfg: LabConfig,
                        config=cfg.to_dict(),
                        index={'collection': index.stats.collection,
                               'chunks': index.stats.chunks,
-                              'by_layer': index.stats.by_layer,
                               'avg_chars': index.stats.avg_chars,
                               'p95_chars': index.stats.p95_chars,
                               'embed_dim': index.stats.embed_dim,

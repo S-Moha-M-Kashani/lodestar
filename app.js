@@ -4516,23 +4516,18 @@
     // index ink, because that is the step it decides.
     { group: 'index', key: 'embedder', label: 'Embedder', kind: 'embedder', panel: 'models' },
     { group: 'index', key: 'embed_model', label: 'Embedding model', kind: 'embed-model', when: 'Embedder = fastembed, sentence-transformers or openai', panel: 'models' },
-    { group: 'index', key: 'summarizer', label: 'Summaries', kind: 'select', from: 'summarizers' },
     { group: 'index', key: 'contextual', label: 'Contextual chunk headers', kind: 'check' },
-    { group: 'index', key: 'layers', label: 'Indexed layers', kind: 'checks', from: 'layers' },
     { group: 'retrieval', key: 'retriever', label: 'Retriever', kind: 'select', from: 'retrievers' },
     { group: 'retrieval', key: 'k', label: 'Contexts (k)', kind: 'number', min: 1, max: 40, step: 1 },
     { group: 'retrieval', key: 'candidates', label: 'Candidates', kind: 'number', min: 5, max: 200, step: 5 },
     { group: 'retrieval', key: 'reranker', label: 'Reranker', kind: 'select', from: 'rerankers' },
     { group: 'retrieval', key: 'rerank_depth', label: 'Rerank depth', kind: 'number', min: 5, max: 100, step: 5 },
     { group: 'retrieval', key: 'mmr_lambda', label: 'MMR λ (1 = off)', kind: 'number', min: 0.1, max: 1, step: 0.05 },
-    { group: 'retrieval', key: 'rollup_boost', label: 'Rollup boost', kind: 'number', min: 0.5, max: 2, step: 0.05 },
     { group: 'retrieval', key: 'grader', label: 'Relevance gate', kind: 'select', from: 'graders' },
     { group: 'retrieval', key: 'grade_threshold', label: 'Gate threshold', kind: 'number', min: 0, max: 1, step: 0.05 },
-    { group: 'retrieval', key: 'parent_expansion', label: 'Parent expansion', kind: 'select', from: 'expansions' },
     { group: 'retrieval', key: 'time_filter', label: 'Farsi time-scope filter', kind: 'check' },
     { group: 'retrieval', key: 'multi_query', label: 'Multi-query expansion', kind: 'check' },
     { group: 'retrieval', key: 'hyde', label: 'HyDE (needs a model)', kind: 'check' },
-    { group: 'retrieval', key: 'search_layers', label: 'Searched layers', kind: 'checks', from: 'layers' },
     { group: 'generation', key: 'answerer', label: 'Answerer', kind: 'select', from: 'answerers' },
     { group: 'generation', key: 'key_facts_judge', label: 'LLM key-facts judge', kind: 'check' },
   ];
@@ -5439,9 +5434,7 @@
       const info = ragState.indexInfo;
       const line = document.createElement('p');
       line.className = 'rag-meta';
-      const layers = Object.entries(info.by_layer)
-        .map(([layer, n]) => `${layer} ${n}`).join(', ');
-      line.textContent = `${info.collection}: ${info.chunks} chunks (${layers}) · `
+      line.textContent = `${info.collection}: ${info.chunks} chunks · `
         + `avg ${info.avg_chars} chars · dim ${info.embed_dim} · ${info.build_seconds}s`
         + (info.reused ? ' · reused' : '');
       sheet.appendChild(line);

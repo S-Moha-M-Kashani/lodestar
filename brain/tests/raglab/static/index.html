@@ -142,10 +142,6 @@
       <li><b>Semantic chunking pays in quote recall, not session recall</b> — better
         boundaries change what is <i>inside</i> the chunk (quote recall 0.471 → 0.489,
         precision 0.191 → 0.243, pattern questions 0.11 → 0.26).</li>
-      <li><b>Rollups must be conditional, not boosted globally.</b> Adding all four
-        summary layers raises quote recall and precision but costs session recall at
-        fixed k, and a blanket <code>rollup_boost</code> of 1.3 makes it worse (0.513 →
-        0.477 headline).</li>
       <li><b>Only an LLM gate can abstain honestly.</b> The lexical gate needs a 0.6
         threshold to refuse 6 of 8 unanswerable questions, and there it wrongly refuses
         52% of answerable ones. The LLM gate at 0.4 refuses 5 of 8 with 3% false
@@ -170,9 +166,6 @@
       <div><label>Overlap</label><input type="number" id="overlap" min="0" max="800" step="20"></div>
     </div>
     <label>Summarizer (hierarchy)</label>
-    <select id="summarizer"></select>
-    <label>Indexed layers</label>
-    <div class="checks" id="layers"></div>
     <div class="checks" style="margin-top:.5rem">
       <label><input type="checkbox" id="contextual"> contextual chunk headers</label>
     </div>
@@ -191,8 +184,6 @@
       <div><label>k (contexts)</label><input type="number" id="k" min="1" max="40"></div>
       <div><label>Candidates</label><input type="number" id="candidates" min="5" max="200" step="5"></div>
     </div>
-    <label>Search layers</label>
-    <div class="checks" id="search_layers"></div>
     <label>Reranker</label>
     <select id="reranker"></select>
     <div class="inline">
@@ -201,13 +192,11 @@
     </div>
     <div class="inline">
       <div><label>MMR λ (1 = off)</label><input type="number" id="mmr_lambda" min="0.1" max="1" step="0.05"></div>
-      <div><label>Rollup boost</label><input type="number" id="rollup_boost" min="0.5" max="2" step="0.05"></div>
     </div>
     <label>Relevance grader (enables abstention)</label>
     <select id="grader"></select>
     <div class="inline">
       <div><label>Grade threshold</label><input type="number" id="grade_threshold" min="0" max="1" step="0.05"></div>
-      <div><label>Parent expansion</label><select id="parent_expansion"></select></div>
     </div>
     <div class="checks" style="margin-top:.5rem">
       <label><input type="checkbox" id="time_filter"> Farsi time-scope filter</label>
@@ -430,19 +419,6 @@ function selected(host) {
   return [...host.querySelectorAll('input:checked')].map((el) => el.value);
 }
 
-function syncSearchLayers() {
-  // A retrieval layer cannot exist unless it was included in the index. Keep
-  // the two pickers coherent instead of making Run evaluation fail later with
-  // "searching layers that were never indexed".
-  const indexed = new Set(selected($('layers')));
-  for (const input of $('search_layers').querySelectorAll('input')) {
-    const available = indexed.has(input.value);
-    input.disabled = !available;
-    if (!available) input.checked = false;
-    input.parentElement.classList.toggle('muted', !available);
-  }
-}
-
 async function api(path, body) {
   const res = await fetch(path, body ? {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -460,19 +436,15 @@ function readConfig() {
       chunker: $('chunker').value, chunk_chars: +$('chunk_chars').value,
       overlap: +$('overlap').value, contextual: $('contextual').checked,
       embedder: $('embedder').value, embed_model: $('embed_model').value,
-      summarizer: $('summarizer').value,
-      layers: selected($('layers')),
     },
     retrieval: {
       retriever: $('retriever').value, k: +$('k').value,
-      candidates: +$('candidates').value, search_layers: selected($('search_layers')),
-      rollup_boost: +$('rollup_boost').value, time_filter: $('time_filter').checked,
+      candidates: +$('candidates').value, time_filter: $('time_filter').checked,
       multi_query: $('multi_query').checked, hyde: $('hyde').checked,
       mmr_lambda: +$('mmr_lambda').value, reranker: $('reranker').value,
       rerank_depth: +$('rerank_depth').value,
       recency_half_life_days: +$('recency_half_life_days').value,
       grader: $('grader').value, grade_threshold: +$('grade_threshold').value,
-      parent_expansion: $('parent_expansion').value,
     },
     generation: {
       answerer: $('answerer').value, key_facts_judge: $('key_facts_judge').checked,
@@ -492,10 +464,8 @@ function applyDefaults(d) {
   $('overlap').value = d.index.overlap; $('contextual').checked = d.index.contextual;
   $('embedder').value = d.index.embedder;
   $('embed_model').value = d.index.embed_model || '';
-  $('summarizer').value = d.index.summarizer;
   $('retriever').value = d.retrieval.retriever; $('k').value = d.retrieval.k;
   $('candidates').value = d.retrieval.candidates;
-  $('rollup_boost').value = d.retrieval.rollup_boost;
   $('time_filter').checked = d.retrieval.time_filter;
   $('multi_query').checked = d.retrieval.multi_query;
   $('hyde').checked = d.retrieval.hyde;
@@ -505,7 +475,6 @@ function applyDefaults(d) {
   $('recency_half_life_days').value = d.retrieval.recency_half_life_days;
   $('grader').value = d.retrieval.grader;
   $('grade_threshold').value = d.retrieval.grade_threshold;
-  $('parent_expansion').value = d.retrieval.parent_expansion;
   $('answerer').value = d.generation.answerer;
   $('key_facts_judge').checked = d.generation.key_facts_judge;
   for (const select of document.querySelectorAll('.rag-model')) {
@@ -519,16 +488,10 @@ async function boot() {
   const o = OPTIONS;
   fill($('chunker'), o.chunkers, CHUNKER_HELP);
   fillEmbedders();
-  fill($('summarizer'), o.summarizers);
   fill($('retriever'), o.retrievers);
   fill($('reranker'), o.rerankers);
   fill($('grader'), o.graders);
-  fill($('parent_expansion'), o.expansions);
   fill($('answerer'), o.answerers);
-  checkboxes($('layers'), o.layers, o.defaults.index.layers);
-  checkboxes($('search_layers'), o.layers, o.defaults.retrieval.search_layers);
-  $('layers').addEventListener('change', syncSearchLayers);
-  syncSearchLayers();
   checkboxes($('types'), o.question_types, []);
   fillModels();
   applyDefaults(o.defaults);
@@ -572,7 +535,7 @@ async function boot() {
 function renderIndexes(indexes) {
   if (!indexes.length) { $('indexInfo').textContent = 'no index built in this session yet'; return; }
   $('indexInfo').innerHTML = indexes.map((i) =>
-    `${i.collection}: ${i.chunks} chunks (${Object.entries(i.by_layer).map(([k, v]) => k + ' ' + v).join(', ')})`
+    `${i.collection}: ${i.chunks} chunks`
   ).join('<br>');
 }
 
@@ -701,10 +664,10 @@ function renderResult(result) {
       .map(([k, v]) => [k, v.n, fmt(v.recall)]));
 
   $('rows').innerHTML = table(
-    ['id', 'type', 'diff', 'recall', 'quote', 'ndcg', 'ctx', 'abst', 'layers', 'ms'],
+    ['id', 'type', 'diff', 'recall', 'quote', 'ndcg', 'ctx', 'abst', 'ms'],
     result.rows.map((row) => [row.id, row.type, row.difficulty,
       fmt(row.recall, 2), fmt(row.quote_recall, 2), fmt(row.ndcg, 2),
-      row.n_contexts, row.abstained ? 'yes' : '', (row.layers || []).join('+'),
+      row.n_contexts, row.abstained ? 'yes' : '',
       Math.round(row.latency_ms)]));
 }
 
@@ -731,7 +694,6 @@ $('ask').onclick = async () => {
       out.contexts.map((c) => `<div class="ctx">
           <div class="meta">${c.chunk_id} · ${c.layer} · ${c.date} · score ${fmt(c.score)} ·
             ${Object.entries(c.stages).map(([k, v]) => k + ' ' + fmt(v, 2)).join(' · ')}
-            ${c.habit ? ' · habit ' + c.habit : ''}
             ${c.expanded_from ? ' · expanded from ' + c.expanded_from : ''}</div>
           <div class="fa">${escapeHtml(c.text).replace(/\n/g, '<br>')}</div></div>`).join('');
   } catch (e) { $('queryOut').innerHTML = `<div class="note">${e.message}</div>`; }
@@ -756,7 +718,7 @@ async function loadBoard() {
     return y - x;
   });
   $('board').innerHTML = table(
-    ['run', 'label', 'chunker', 'embedder', 'retriever', 'reranker', 'layers',
+    ['run', 'label', 'chunker', 'embedder', 'retriever', 'reranker',
       'n', 'ragas_decision ▼', 'faith', 'ans rel', 'ctx prec', 'ctx recall',
       'headline', 'recall', 'quote', 'nDCG', 'abstain', 's'],
     ranked.map((r) => {
@@ -767,7 +729,7 @@ async function loadBoard() {
         // The model, not just the kind: two "fastembed" rows can be two entirely
         // different representations, and the row has to say which one it was.
         i.embedder + (i.embed_model ? '·' + i.embed_model.split('/').pop() : ''),
-        q.retriever, q.reranker, (i.layers || []).join('+'), r.n_questions,
+        q.retriever, q.reranker, r.n_questions,
         // The deciding score first, then its four constituents, so a row can be
         // checked rather than trusted.
         // With its standard error, where there is one. Candidates in a sweep can

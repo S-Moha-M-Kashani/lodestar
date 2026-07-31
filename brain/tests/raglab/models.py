@@ -126,12 +126,6 @@ class ModelRole:
 
 
 ROLES = (
-    ModelRole('summarize', 'Summaries', 'index.summarizer_model',
-              'Writes the session, month and thread summaries the rollup layers '
-              'are made of. It runs once per session, so this is the one role '
-              'where cost dominates — and the only one that changes what is '
-              'stored, so switching it builds a new collection.',
-              'Summaries = llm'),
     ModelRole('expand', 'Query rewriting (HyDE)', 'retrieval.expansion_model',
               'Invents a plausible diary answer and searches with that instead '
               'of the question, on the theory that an answer looks more like the '
@@ -176,7 +170,6 @@ ROLE_HELP = {f'model.{role.key}': role.help for role in ROLES}
 class Roles:
     """The model each stage will actually ask for. '' means "whatever the
     provider defaults to", which is how RAGLAB_MODEL keeps working."""
-    summarize: str = ''
     expand: str = ''
     rerank: str = ''
     grade: str = ''

@@ -104,8 +104,8 @@ def difficulty_rates(rows: list[dict]) -> list[dict]:
 
 
 def type_rates(rows: list[dict]) -> list[dict]:
-    """The same table by question type, which is where a layer earns its keep:
-    the habit ledger can only show up as habit-typed questions improving."""
+    """The same table by question type: an aggregate hides a change that helps
+    one kind of question and hurts another."""
     out = []
     for name in dict.fromkeys(row.get('type') for row in rows):
         group = [row for row in rows if row.get('type') == name]
@@ -172,7 +172,6 @@ def question_page(run: dict, question: dict, row: dict) -> str:
         '',
         f"{row.get('n_contexts', '—')} chunks · "
         f"{row.get('context_chars', '—')} characters · "
-        f"layers {', '.join(row.get('layers') or []) or '—'} · "
         f"{_num(row.get('latency_ms'), 1)} ms",
         '',
     ]
@@ -182,7 +181,7 @@ def question_page(run: dict, question: dict, row: dict) -> str:
         parts += [f"{i}. `{session}`{'  ✓' if session in gold else ''}"
                   for i, session in enumerate(retrieved, start=1)]
     else:
-        parts += ['No session-bearing chunk was retrieved. Rollup layers carry '
+        parts += ['No session-bearing chunk was retrieved. Chunks carry '
                   'no session id, so a ledger or a digest can be the whole '
                   'context and leave this list empty.']
     parts += ['',

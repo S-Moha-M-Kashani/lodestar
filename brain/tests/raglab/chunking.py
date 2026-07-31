@@ -23,8 +23,8 @@ Orthogonal to all six: `contextual`. Anthropic's contextual-retrieval result
 (chunks prefixed with a short situating header retrieve markedly better) applies
 directly here, because a diary chunk read cold has no date, no mood, and no
 subject — «بلاخره جواب داد» is meaningless until you know it is about the tax
-office, in January. The header is built from metadata plus the session summary,
-so it costs no LLM call.
+office, in January. The header is built from metadata alone, so it costs no LLM
+call and no summary.
 """
 from dataclasses import dataclass, field
 
@@ -62,7 +62,6 @@ SHIFT_MARKERS = ('ولش کن', 'بذریم', 'بگذریم', 'راستی', 'ی�
 class Chunk:
     id: str
     text: str
-    layer: str                  # chunk | session | month | thread | commitment | habit
     session_id: str = ''
     date: str = ''
     span_from: int = 0          # date_int; equals span_to for leaf chunks
@@ -75,30 +74,23 @@ class Chunk:
     importance: float = 0.0
     topics: tuple[str, ...] = ()
     threads: tuple[str, ...] = ()
-    habit: str = ''             # the habit slug a ledger chunk belongs to
     msg_start: int = -1
     msg_end: int = -1
     prefix: str = ''            # the contextual header, kept separately so
                                 # metrics can measure the body alone
 
     def metadata(self) -> dict:
-        """Flat and filterable. Lists become space-joined strings: the store can only
-        filter on scalars, and a JSON blob would not be filterable either — the
-        fields we actually filter on (span_from/span_to/layer/session_id/habit)
-        are scalars by design.
-
-        `habit` is present on every chunk, empty on the ones that belong to no
-        habit: a field only some rows carry turns a `where` clause into a silent
-        partial scan, which reads as a retrieval bug rather than a schema one.
-        """
+        """Flat and filterable. Lists become space-joined strings: the store can
+        only filter on scalars, and a JSON blob would not be filterable either —
+        the fields we actually filter on (span_from/span_to/session_id) are
+        scalars by design."""
         return {
-            'layer': self.layer, 'session_id': self.session_id, 'date': self.date,
+            'session_id': self.session_id, 'date': self.date,
             'span_from': self.span_from, 'span_to': self.span_to,
             'time': self.time, 'source': self.source, 'mood': self.mood,
             'valence': self.valence, 'arousal': self.arousal,
             'importance': self.importance,
             'topics': ' '.join(self.topics), 'threads': ' '.join(self.threads),
-            'habit': self.habit,
             'msg_start': self.msg_start, 'msg_end': self.msg_end,
             'chars': len(self.text),
         }
@@ -124,9 +116,9 @@ def _speaker(role: str) -> str:
     return 'کاربر' if role == 'user' else 'دستیار'
 
 
-def _base(session: dict, layer: str = 'chunk') -> dict:
+def _base(session: dict) -> dict:
     di = date_int(session['date'])
-    return dict(layer=layer, session_id=session['session_id'], date=session['date'],
+    return dict(session_id=session['session_id'], date=session['date'],
                 span_from=di, span_to=di, time=session['time'],
                 source=session['source'], mood=session['mood']['label'],
                 valence=session['mood']['valence'], arousal=session['mood']['arousal'],
@@ -135,16 +127,13 @@ def _base(session: dict, layer: str = 'chunk') -> dict:
                 threads=tuple(session['recurring_threads']))
 
 
-def contextual_prefix(session: dict, summary: str = '') -> str:
+def contextual_prefix(session: dict) -> str:
     """A two-line header naming when this was said, how it felt, and what the
     session was about. Deliberately short: it is duplicated into every chunk of
     the session, so anything longer starts to dominate the embedding."""
     threads = '، '.join(session['recurring_threads']) or '—'
     head = (f"[{session['date']} | حال: {session['mood']['label']} | "
             f"موضوع: {'، '.join(session['topics']) or '—'} | رشته: {threads}]")
-    gist = textnorm.sentences(summary)
-    if gist:
-        head += f"\n(خلاصه‌ی این نشست: {gist[0]})"
     return head + '\n'
 
 
@@ -206,10 +195,10 @@ def _semantic_segments(session: dict, embedder, max_chars: int) -> list[list[int
     return segments
 
 
-def chunk_session(session: dict, cfg, embedder, summary: str = '') -> list[Chunk]:
-    """One session → leaf chunks, per the configured strategy."""
+def chunk_session(session: dict, cfg, embedder) -> list[Chunk]:
+    """One session → chunks, per the configured strategy."""
     base = _base(session)
-    prefix = contextual_prefix(session, summary) if cfg.contextual else ''
+    prefix = contextual_prefix(session) if cfg.contextual else ''
     messages = session['messages']
     out: list[Chunk] = []
 

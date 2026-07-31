@@ -24,7 +24,7 @@ from lodestar_brain import textnorm
 
 from .raglab import (chunking, config, corpus, embedding, evaluate, explain,
                      leaderboard, metrics, models, pipeline, query, ragas_eval,
-                     retrieval, store, summarize, sweep)
+                     retrieval, store, sweep)
 from .raglab.config import (EMBEDDERS, RERANKERS, GenerationConfig, IndexConfig,
                             LabConfig, LabSettings, RetrievalConfig)
 from .raglab.index import IndexRegistry, LabIndex
@@ -140,7 +140,7 @@ def test_every_chunker_produces_unique_ids_and_nonempty_text(session):
     for chunker in ('fixed', 'fixed-overlap', 'message', 'turn-pair', 'session',
                     'semantic-drift'):
         cfg = IndexConfig(chunker=chunker, embedder='char-hash')
-        chunks = chunking.chunk_session(session, cfg, embedder, 'خلاصه تستی')
+        chunks = chunking.chunk_session(session, cfg, embedder)
         assert chunks, chunker
         assert len({c.id for c in chunks}) == len(chunks), chunker
         assert all(c.text.strip() for c in chunks), chunker
@@ -158,8 +158,7 @@ def test_fixed_chunker_matches_the_production_packing(session):
 
 def test_contextual_prefix_situates_the_chunk(session):
     cfg = IndexConfig(chunker='message', contextual=True)
-    chunk = chunking.chunk_session(session, cfg, embedding.make_embedder('char-hash'),
-                                   'خلاصه‌ی نشست برای تست.')[0]
+    chunk = chunking.chunk_session(session, cfg, embedding.make_embedder('char-hash'))[0]
     assert session['date'] in chunk.prefix
     assert session['mood']['label'] in chunk.prefix
     assert chunk.body and not chunk.body.startswith('[')
@@ -206,94 +205,6 @@ def test_importance_rises_with_emotional_intensity():
 
 
 # --- summary hierarchy -----------------------------------------------------
-
-def test_extractive_session_summary_is_shorter_and_uses_user_words(session):
-    summarizer = summarize.ExtractiveSummarizer(summarize.build_idf([session]))
-    summary = summarizer.session(session)
-    assert summary
-    assert len(summary) < len(corpus.session_text(session))
-
-
-def test_month_layer_spans_exactly_its_month(diary):
-    summaries = {s['session_id']: s['messages'][0]['content'][:120]
-                 for s in diary['sessions']}
-    months = summarize.month_layer(diary['sessions'], summaries)
-    assert len(months) == len({s['date'][:7] for s in diary['sessions']})
-    for chunk in months:
-        month = chunk.id.removeprefix('month-')
-        assert str(chunk.span_from).startswith(month.replace('-', ''))
-        assert chunk.span_from <= chunk.span_to
-
-
-def test_thread_layer_is_windowed_and_chronological(diary):
-    summaries = {s['session_id']: s['messages'][0]['content'][:120]
-                 for s in diary['sessions']}
-    threads = summarize.thread_layer(diary['sessions'], summaries, diary['threads'])
-    assert threads
-    job = [c for c in threads if c.id.startswith('thread-job-search')]
-    assert len(job) > 1, 'the busiest thread must be split into windows'
-    assert [c.span_from for c in job] == sorted(c.span_from for c in job)
-    assert all(c.threads == ('job-search',) for c in job)
-
-
-def test_commitment_layer_captures_the_recurring_promise(diary):
-    chunks = summarize.commitment_layer(diary['sessions'])
-    assert chunks
-    text = '\n'.join(c.text for c in chunks)
-    assert 'باشگاه' in text, 'the gym promise is the corpus\'s signature commitment'
-
-
-def test_summary_cache_is_keyed_by_content(session):
-    cache = summarize.SummaryCache()
-    cache.put('extractive', session, 'خلاصه')
-    assert cache.get('extractive', session) == 'خلاصه'
-    edited = dict(session, messages=[dict(session['messages'][0], content='عوض شد')])
-    assert cache.get('extractive', edited) is None
-
-
-def test_the_summary_cache_does_not_outlive_its_owner(session):
-    """It used to be a file under .runs/cache/. A summary is model output about
-    experimental data — derived, and rebuildable — so it now lives for the
-    process that made it and no longer. A second cache starts empty because
-    there is nothing on disk for it to read."""
-    cache = summarize.SummaryCache()
-    cache.put('extractive', session, 'خلاصه')
-    assert summarize.SummaryCache().get('extractive', session) is None
-
-
-def test_the_summariser_module_writes_nothing():
-    """The absence *is* the assertion: this module held the one derived cache the
-    lab wrote automatically, and the cheapest way for it to come back is a
-    `flush()` that quietly grows a path again."""
-    source = (RAGLAB_DIR / 'summarize.py').read_text(encoding='utf-8')
-    for forbidden in ('write_text', 'mkdir', 'open('):
-        assert forbidden not in source, forbidden
-
-
-def test_summaries_are_reused_across_builds_in_one_process(diary, monkeypatch):
-    """What the disk cache was actually for: an LLM summariser is one call per
-    session, and switching chunker rebuilds every chunk while changing no
-    summary. The registry owns that reuse now, so it is bounded by the process."""
-    calls: list[str] = []
-
-    class CountingSummarizer(summarize.ExtractiveSummarizer):
-        name = 'counting'
-
-        def session(self, session_dict):
-            calls.append(session_dict['session_id'])
-            return super().session(session_dict)
-
-    sessions = diary['sessions'][:3]
-    counting = CountingSummarizer(summarize.build_idf(sessions))
-    monkeypatch.setattr(summarize, 'ExtractiveSummarizer', lambda _idf: counting)
-    registry = IndexRegistry(LAB_SETTINGS, {'sessions': sessions, 'threads': {},
-                                            'habits': {}})
-    base = {'embedder': 'ascii-hash', 'layers': ('session',)}
-    registry.get(IndexConfig(chunker='fixed', **base))
-    assert len(calls) == len(sessions), calls
-    registry.get(IndexConfig(chunker='message', **base))
-    assert len(calls) == len(sessions), 'the second build re-summarised the corpus'
-
 
 # --- habits: the card you repeat instead of finish -------------------------
 # The board grew a habit type — a card carrying `habitCount` repetitions per
@@ -378,67 +289,12 @@ def test_the_habit_storyline_is_described_like_every_other_thread(diary):
     assert diary['threads']['habit-tracking']
 
 
-def test_habit_layer_is_a_ledger_of_the_repeated_practice(diary):
-    chunks = summarize.habit_layer(diary['sessions'], diary['habits'])
-    assert chunks
-    assert all(c.layer == 'habit' for c in chunks)
-    text = '\n'.join(c.text for c in chunks)
-    assert 'باشگاه' in text, 'the gym habit is the corpus\'s signature one'
-
-
-def test_the_habit_ledger_states_the_target_next_to_the_tally(diary):
-    """A count with no target is not an answer: "18 times" only means something
-    beside "3 per week". This is what makes "did I keep it" answerable at all."""
-    chunks = summarize.habit_layer(diary['sessions'], diary['habits'])
-    gym = next(c for c in chunks if c.metadata()['habit'] == 'gym')
-    target = diary['habits']['gym']
-    assert str(target['count']) in gym.text
-    assert target['title_fa'] in gym.text
-
-
-def test_the_habit_ledger_carries_its_slug_as_filterable_metadata(diary):
-    """The one new metadata field. Chroma filters on scalars, so it is a string,
-    and it is what lets a retrieval ask for one habit's ledger by name."""
-    chunks = summarize.habit_layer(diary['sessions'], diary['habits'])
-    slugs = {c.metadata()['habit'] for c in chunks}
-    assert slugs == set(diary['habits']), 'every habit needs a ledger'
-    for chunk in chunks:
-        assert isinstance(chunk.metadata()['habit'], str)
-
-
-def test_the_habit_ledger_spans_the_dates_it_covers(diary):
-    """span_from/span_to are what the Farsi time filter compares against, so a
-    ledger with a zero span is invisible to every scoped question."""
-    for chunk in summarize.habit_layer(diary['sessions'], diary['habits']):
-        assert chunk.span_from <= chunk.span_to
-        assert chunk.span_from > 20250000
-
-
 def test_every_chunk_reports_a_habit_field_even_when_it_has_none(session):
     """Chroma metadata is a fixed shape per collection in practice: a field that
     only some rows carry turns a `where` clause into a silent partial scan."""
     chunk = chunking.chunk_session(session, IndexConfig(chunker='session'),
-                                   None, '')[0]
-    assert chunk.metadata()['habit'] == ''
-
-
-def test_habit_is_an_additive_layer_like_every_other_rollup():
-    """Raw text always stays. A habit ledger that *replaced* the sessions it
-    summarises would make "what did I say the day I quit" unanswerable."""
-    assert config.LAYERS[:5] == ('chunk', 'session', 'month', 'thread',
-                                 'commitment')
-    assert 'habit' in config.LAYERS
-
-
-def test_the_habit_layer_is_indexed_and_searchable(registry):
-    index = registry.get(IndexConfig(chunker='session', embedder='char-hash',
-                                    layers=('chunk', 'habit')))
-    assert index.stats.by_layer['habit'] >= 4
-    outcome = pipeline.retrieve(
-        index, RetrievalConfig(k=5, search_layers=('habit',), retriever='bm25'),
-        'باشگاه هفته‌ای چند بار؟', '2026-07-28')
-    assert outcome.contexts
-    assert {c.layer for c in outcome.contexts} == {'habit'}
+                                   None)[0]
+    assert chunk.metadata()['session_id'] == session['session_id']
 
 
 def test_habit_questions_cite_verbatim_evidence_like_the_rest_of_the_set(
@@ -487,14 +343,13 @@ def test_relative_month_scope_is_the_previous_calendar_month():
 
 
 def test_where_clause_overlaps_rather_than_contains():
-    """A thread rollup spans a year; requiring containment would filter out
-    exactly the layer that answers a scoped question."""
+    """A chunk whose span straddles the edge of the window is kept: a scope asks
+    about a period, it does not claim the evidence sits entirely inside it."""
     scope = query.TimeScope(20260101, 20260131, 'دی', 'jalali-month')
-    clause = query.where_clause(scope, ('chunk', 'thread'),
-                                ('chunk', 'session', 'month', 'thread'))
+    clause = query.where_clause(scope)
     assert clause['$and'][0] == {'span_from': {'$lte': 20260131}}
     assert clause['$and'][1] == {'span_to': {'$gte': 20260101}}
-    assert {'layer': {'$in': ['chunk', 'thread']}} in clause['$and']
+    assert query.where_clause(None) is None
 
 
 def test_expansion_adds_a_synonym_variant():
@@ -602,7 +457,6 @@ def test_aggregate_reports_per_type_and_a_headline():
     assert summary['n_questions'] == 2
     assert summary['by_type']['single-hop']['recall'] == 1.0
     assert 0 < summary['overall']['headline'] <= 1.0
-    assert summary['layer_usage'] == {'chunk': 1}
 
 
 # --- the ephemeral vector store --------------------------------------------
@@ -653,32 +507,29 @@ def test_memory_store_upsert_replaces_a_record_instead_of_duplicating_it():
 def test_memory_store_applies_the_where_clause_the_lab_actually_builds():
     """The filter is the one place a hand-rolled store could quietly differ from
     Chroma, so it is asserted against `query.where_clause` itself rather than a
-    hand-written dict — an overlap test on the dates plus a layer set."""
+    hand-written dict."""
     vectors = store.MemoryVectors('raglab-test')
     vectors.upsert(
-        ids=['in-scope', 'too-early', 'wrong-layer'],
+        ids=['in-scope', 'too-early', 'too-late'],
         documents=['keep', 'drop', 'drop'],
         embeddings=[[1.0, 0.0]] * 3,
-        metadatas=[{'layer': 'chunk', 'span_from': 20251201, 'span_to': 20251201},
-                   {'layer': 'chunk', 'span_from': 20250101, 'span_to': 20250101},
-                   {'layer': 'month', 'span_from': 20251201, 'span_to': 20251201}])
-    where = query.where_clause(query.TimeScope(20251122, 20251221, 'آذر', 'jalali'),
-                              ('chunk',), config.LAYERS)
+        metadatas=[{'span_from': 20251201, 'span_to': 20251201},
+                   {'span_from': 20250101, 'span_to': 20250101},
+                   {'span_from': 20260301, 'span_to': 20260301}])
+    where = query.where_clause(query.TimeScope(20251122, 20251221, 'آذر', 'jalali'))
     res = vectors.query(query_embeddings=[[1.0, 0.0]], n_results=3, where=where)
     assert res['ids'][0] == ['in-scope']
 
 
-def test_memory_store_keeps_a_rollup_that_merely_overlaps_the_scope():
-    """The same property `where_clause` documents: a thread rollup spans twelve
-    months, and containment rather than overlap would filter out exactly the
-    summary layer a scoped question needs."""
+def test_memory_store_keeps_a_chunk_that_merely_overlaps_the_scope():
+    """The same property `where_clause` documents: a chunk spanning a wide range
+    is kept when it overlaps the window, because containment would drop exactly
+    the evidence a scoped question is reaching for."""
     vectors = store.MemoryVectors('raglab-test')
     vectors.upsert(ids=['thread'], documents=['a year of it'],
                    embeddings=[[1.0, 0.0]],
-                   metadatas=[{'layer': 'thread', 'span_from': 20250801,
-                               'span_to': 20260720}])
-    where = query.where_clause(query.TimeScope(20251122, 20251221, 'آذر', 'jalali'),
-                              config.LAYERS, config.LAYERS)
+                   metadatas=[{'span_from': 20250801, 'span_to': 20260720}])
+    where = query.where_clause(query.TimeScope(20251122, 20251221, 'آذر', 'jalali'))
     res = vectors.query(query_embeddings=[[1.0, 0.0]], n_results=3, where=where)
     assert res['ids'][0] == ['thread']
 
@@ -752,7 +603,7 @@ def test_a_fresh_lab_process_rebuilds_its_index(diary):
     """Nothing outlives the registry. A second one over the same config has to
     build again rather than find a collection waiting for it, which is what
     'ephemeral' means in a test."""
-    cfg = IndexConfig(chunker='session', embedder='token-hash', layers=('chunk',))
+    cfg = IndexConfig(chunker='session', embedder='token-hash')
     first = IndexRegistry(LAB_SETTINGS, diary).get(cfg)
     second = IndexRegistry(LAB_SETTINGS, diary).get(cfg)
     assert second is not first and second.store is not first.store
@@ -771,26 +622,17 @@ def test_building_an_index_opens_no_socket(diary, monkeypatch):
     monkeypatch.setattr(socket.socket, 'connect', refuse)
     monkeypatch.setattr(socket.socket, 'connect_ex', refuse)
     built = IndexRegistry(LAB_SETTINGS, diary).get(
-        IndexConfig(embedder='ascii-hash', layers=('session',)))
+        IndexConfig(chunker='session', embedder='ascii-hash'))
     assert built.stats.chunks == len(diary['sessions'])
 
 
 # --- index and pipeline (integration, in-process memory) -------------------
 
-def test_index_builds_every_layer(index, diary):
-    stats = index.stats
-    assert stats.chunks > len(diary['sessions'])
-    for layer in ('chunk', 'session', 'month', 'thread', 'commitment'):
-        assert stats.by_layer.get(layer), layer
-    assert stats.by_layer['month'] == 12
-    assert stats.embed_dim == embedding.CHAR_DIM
-
-
 def test_index_is_reused_for_the_same_fingerprint(registry):
     """`reused` used to mean "Chroma already held the right number of records" —
     the one form of reuse that can no longer happen. It now reports the only one
     left: this process built the index earlier and still has it."""
-    cfg = IndexConfig(chunker='turn-pair', embedder='token-hash', layers=('chunk',))
+    cfg = IndexConfig(chunker='turn-pair', embedder='token-hash')
     first = registry.get(cfg)
     assert not first.stats.reused
     assert registry.get(cfg) is first
@@ -830,8 +672,7 @@ def test_time_filter_narrows_the_candidate_pool(index, ground_truth):
     assert with_filter.time_scope is not None
     assert (with_filter.diagnostics['candidates_in_scope']
             < without.diagnostics['candidates_in_scope'])
-    dates = [corpus.date_int(c.date) for c in with_filter.contexts
-             if c.layer == 'chunk']
+    dates = [corpus.date_int(c.date) for c in with_filter.contexts]
     assert dates and all(20251122 <= d <= 20251221 for d in dates), dates
 
 
@@ -868,37 +709,6 @@ def test_quoting_the_diarist_saying_i_dont_know_is_not_an_abstention():
     assert pipeline.reads_as_refusal('چیزی در این مورد ذکر نشده.', 'llm')
 
 
-def test_parent_expansion_adds_neighbouring_chunks(index):
-    question = 'دعوا با مهسا سر کارهای خونه'
-    plain = pipeline.retrieve(index, RetrievalConfig(parent_expansion='none'),
-                              question, '2026-07-28')
-    expanded = pipeline.retrieve(index, RetrievalConfig(parent_expansion='session'),
-                                 question, '2026-07-28')
-    assert len(expanded.contexts) > len(plain.contexts)
-    assert any(c.expanded_from for c in expanded.contexts)
-
-
-def test_rollup_layers_are_reachable_when_searched_alone(index):
-    cfg = RetrievalConfig(search_layers=('thread',), k=5, time_filter=False)
-    outcome = pipeline.retrieve(index, cfg, 'چند بار قول دادم برم باشگاه؟',
-                                '2026-07-28')
-    assert outcome.contexts
-    assert {c.layer for c in outcome.contexts} == {'thread'}
-
-
-def test_rollup_boost_promotes_summary_layers_into_the_context(index):
-    """The boost has to act on the fused scores, not on the survivors of the
-    candidate cut: leaf chunks outnumber rollups twenty to one, so a summary that
-    did not already make the cut can only be promoted before it."""
-    question = 'چند بار قول دادم برم باشگاه و نرفتم؟'
-    plain = pipeline.retrieve(index, RetrievalConfig(rollup_boost=1.0, k=6),
-                              question, '2026-07-28')
-    boosted = pipeline.retrieve(index, RetrievalConfig(rollup_boost=3.0, k=6),
-                                question, '2026-07-28')
-    rollups = lambda o: sum(1 for c in o.contexts if c.layer != 'chunk')
-    assert rollups(boosted) > rollups(plain)
-
-
 def test_ascii_hash_baseline_retrieves_worse_than_char_hash(registry, ground_truth):
     """The lab's headline comparison, asserted: the production embedder cannot
     represent this corpus, so it must lose to a Unicode-aware one."""
@@ -908,7 +718,7 @@ def test_ascii_hash_baseline_retrieves_worse_than_char_hash(registry, ground_tru
 
     def rate(embedder_name):
         index = registry.get(IndexConfig(chunker='fixed', embedder=embedder_name,
-                                         contextual=False, layers=('chunk',)))
+                                         contextual=False))
         total = 0.0
         for question in questions:
             outcome = pipeline.retrieve(index, cfg, question['question_fa'],
@@ -932,9 +742,8 @@ def test_a_run_writes_one_json_file_and_nothing_else(registry, ground_truth,
     `rglob` rather than `glob`, because the way this rule broke before was a
     subdirectory — `.runs/cache/` — appearing beside the runs."""
     monkeypatch.setattr(evaluate, 'RUNS_DIR', tmp_path)
-    cfg = LabConfig(index=IndexConfig(chunker='session', embedder='char-hash',
-                                      layers=('chunk',)),
-                    retrieval=RetrievalConfig(search_layers=('chunk',), k=4),
+    cfg = LabConfig(index=IndexConfig(chunker='session', embedder='char-hash'),
+                    retrieval=RetrievalConfig(k=4),
                     generation=GenerationConfig(answerer='extractive'))
     result = evaluate.run_eval(registry, ground_truth, cfg, LAB_SETTINGS,
                                limit=2, ragas_mode='off')
@@ -950,9 +759,8 @@ def test_run_eval_scores_a_slice_end_to_end(registry, ground_truth, tmp_path,
                                             monkeypatch):
     monkeypatch.setattr(evaluate, 'RUNS_DIR', tmp_path)
     cfg = LabConfig(index=IndexConfig(chunker='message', embedder='char-hash',
-                                      contextual=True, layers=('chunk', 'session')),
-                    retrieval=RetrievalConfig(search_layers=('chunk', 'session'),
-                                              k=6, reranker='lexical'),
+                                      contextual=True),
+                    retrieval=RetrievalConfig(k=6, reranker='lexical'),
                     generation=GenerationConfig(answerer='extractive'),
                     label='test-slice')
     result = evaluate.run_eval(registry, ground_truth, cfg, LAB_SETTINGS,
@@ -972,9 +780,8 @@ def test_started_at_is_when_the_run_started(registry, ground_truth, tmp_path,
     experiment began; a field named for the start that actually holds the finish
     turns a 10-minute run into a timeline nobody can reconstruct."""
     monkeypatch.setattr(evaluate, 'RUNS_DIR', tmp_path)
-    cfg = LabConfig(index=IndexConfig(chunker='session', embedder='char-hash',
-                                      layers=('chunk',)),
-                    retrieval=RetrievalConfig(search_layers=('chunk',), k=4),
+    cfg = LabConfig(index=IndexConfig(chunker='session', embedder='char-hash'),
+                    retrieval=RetrievalConfig(k=4),
                     generation=GenerationConfig(answerer='extractive'))
     result = evaluate.run_eval(registry, ground_truth, cfg, LAB_SETTINGS,
                                limit=2, ragas_mode='off')
@@ -1016,14 +823,6 @@ def test_a_limited_run_covers_the_newest_question_type(ground_truth):
     measure habit retrieval at all."""
     picked = evaluate.select_questions(ground_truth, limit=20)
     assert any(q['type'] == 'habit' for q in picked)
-
-
-def test_run_eval_rejects_searching_an_unindexed_layer(registry, ground_truth):
-    cfg = LabConfig(index=IndexConfig(layers=('chunk',)),
-                    retrieval=RetrievalConfig(search_layers=('chunk', 'thread')))
-    with pytest.raises(ValueError, match='never indexed'):
-        evaluate.run_eval(registry, ground_truth, cfg, LAB_SETTINGS, limit=2,
-                          ragas_mode='off')
 
 
 def test_config_round_trips_through_the_panel_payload():
@@ -1356,7 +1155,7 @@ class Recorder:
 
 def test_every_llm_stage_has_a_role_in_the_registry():
     assert {role.key for role in models.ROLES} == {
-        'summarize', 'expand', 'rerank', 'grade', 'answer', 'judge', 'ragas'}
+        'expand', 'rerank', 'grade', 'answer', 'judge', 'ragas'}
 
 
 def test_every_model_role_points_at_a_real_config_field():
@@ -1394,21 +1193,20 @@ def test_the_configured_model_is_always_offered_even_if_it_is_not_in_the_registr
 def test_a_blank_role_falls_back_to_the_lab_default_model():
     settings = replace(LAB_SETTINGS, llm_model='lab/default')
     roles = models.resolve(LabConfig(), settings)
-    assert roles.answer == 'lab/default' and roles.summarize == 'lab/default'
+    assert roles.answer == 'lab/default' and roles.grade == 'lab/default'
     assert roles.ragas == 'lab/default' and roles.judge == 'lab/default'
 
 
 def test_each_role_round_trips_from_the_panels_json():
     cfg = LabConfig.from_dict({
-        'index': {'summarizer': 'llm', 'summarizer_model': 'sum/model'},
         'retrieval': {'reranker_model': 'rerank/model', 'grader_model': 'grade/model',
                       'expansion_model': 'hyde/model'},
         'generation': {'model': 'answer/model', 'judge_model': 'judge/model',
                        'ragas_model': 'ragas/model'}})
     roles = models.resolve(cfg, LAB_SETTINGS)
-    assert (roles.summarize, roles.rerank, roles.grade, roles.expand, roles.answer,
+    assert (roles.rerank, roles.grade, roles.expand, roles.answer,
             roles.judge, roles.ragas) == (
-        'sum/model', 'rerank/model', 'grade/model', 'hyde/model', 'answer/model',
+        'rerank/model', 'grade/model', 'hyde/model', 'answer/model',
         'judge/model', 'ragas/model')
 
 
@@ -1445,49 +1243,6 @@ def test_the_key_facts_judge_uses_the_judge_model():
                                      {'key_facts': ['he went to the gym']}, 'رفتم')
     assert provider.calls == ['judge/model']
     assert score == pytest.approx(1.0)
-
-
-def test_the_summary_model_names_the_collection_only_when_llm_summaries_are_on():
-    """Switching a model nobody is calling must not invalidate an index — the
-    fingerprint has to describe what was actually written, or every unrelated
-    change costs a rebuild of 157 sessions."""
-    extractive = IndexConfig(summarizer='extractive')
-    assert extractive.fingerprint() == \
-        replace(extractive, summarizer_model='sum/model').fingerprint()
-    llm = IndexConfig(summarizer='llm')
-    assert llm.fingerprint() != replace(llm, summarizer_model='sum/model').fingerprint()
-
-
-def test_two_summary_models_do_not_share_cached_summaries(session):
-    """The cache is what makes the hierarchy affordable, and it is keyed by
-    summariser. With a per-task model that key has to include the model, or
-    comparing two summarisers silently compares one of them twice."""
-    fallback = summarize.ExtractiveSummarizer({})
-    first = summarize.LLMSummarizer(FakeChat(), 'a/model', fallback)
-    second = summarize.LLMSummarizer(FakeChat(), 'b/model', fallback)
-    assert first.name != second.name
-    cache = summarize.SummaryCache()
-    summarize.session_summaries([session], first, cache)
-    assert cache.get(first.name, session) is not None
-    assert cache.get(second.name, session) is None
-
-
-def test_the_index_summarises_with_the_chosen_model(monkeypatch, diary):
-    # No RUNS_DIR redirect: a build writes nothing at all now, which the
-    # surrounding tests assert directly.
-    seen: list[str] = []
-    real = summarize.LLMSummarizer
-
-    def spy(llm, model, fallback):
-        seen.append(model)
-        return real(llm, model, fallback)
-
-    monkeypatch.setattr(summarize, 'LLMSummarizer', spy)
-    cfg = IndexConfig(embedder='ascii-hash', layers=('session',), summarizer='llm',
-                      summarizer_model='sum/model')
-    LabIndex.build(cfg, {'sessions': diary['sessions'][:2], 'threads': {}},
-                   LAB_SETTINGS)
-    assert seen == ['sum/model']
 
 
 def test_every_configuration_factor_has_an_explainer():
@@ -1726,7 +1481,7 @@ def test_the_index_builds_with_the_embedding_model_from_its_config(monkeypatch,
 
     monkeypatch.setattr(index_module.embedding, 'make_embedder', spy)
     cfg = IndexConfig(chunker='session', embedder='fastembed',
-                      embed_model='BAAI/bge-m3', layers=('session',))
+                      embed_model='BAAI/bge-m3')
     LabIndex.build(cfg, {'sessions': diary['sessions'][:2], 'threads': {}},
                    LAB_SETTINGS)
     assert seen == [('fastembed', 'BAAI/bge-m3')]
@@ -1744,8 +1499,8 @@ def test_a_run_records_which_languages_its_embedder_can_represent(
     result, and three days later nothing on the row says so."""
     monkeypatch.setattr(evaluate, 'RUNS_DIR', tmp_path)
     cfg = LabConfig(index=IndexConfig(chunker='fixed', embedder='ascii-hash',
-                                      contextual=False, layers=('chunk',)),
-                    retrieval=RetrievalConfig(search_layers=('chunk',), k=4),
+                                      contextual=False),
+                    retrieval=RetrievalConfig(k=4),
                     generation=GenerationConfig(answerer='none'))
     result = evaluate.run_eval(registry, ground_truth, cfg, LAB_SETTINGS,
                                limit=2, ragas_mode='off')
@@ -2152,8 +1907,10 @@ def test_every_model_role_says_which_step_it_serves():
 
 def test_every_step_owns_at_least_one_model():
     """Each colour has to mean something in the models panel — a step with no
-    model in it is a legend entry pointing at nothing."""
-    served = {role.step for role in models.ROLES}
+    model in it is a legend entry pointing at nothing. The index step owns the
+    *embedder*: not a chat role, but a model all the same, and it wears the index
+    ink in the same right-hand column."""
+    served = {role.step for role in models.ROLES} | {'index'}
     assert served == {step.key for step in config.STEPS}
 
 
@@ -2356,15 +2113,6 @@ def test_options_counts_the_habits_the_corpus_tracks(client):
     assert corpus_facts['habits'] == 5
 
 
-def test_options_offers_the_habit_layer_to_both_layer_pickers(client):
-    """The layer lists are served, so the habit ledger becomes indexable and
-    searchable in the panel without either frontend learning the word."""
-    body = client.get('/api/options').json()
-    assert 'habit' in body['layers']
-    assert 'habit' in body['defaults']['index']['layers']
-    assert 'habit' in body['defaults']['retrieval']['search_layers']
-
-
 def test_options_names_habit_as_a_question_type(client):
     """The per-type breakdown is where habit retrieval either shows up or hides
     inside the aggregation bucket."""
@@ -2373,24 +2121,9 @@ def test_options_names_habit_as_a_question_type(client):
 
 def test_options_explains_the_new_metadata_and_the_deciding_score(client):
     body = client.get('/api/options').json()
-    assert body['help']['index.layers']
-    assert 'habit' in body['help']['index.layers'].lower()
     assert body['help']['metric.ragas_decision']
     by_key = {measure['key']: measure for measure in body['metrics']}
     assert by_key['ragas_decision']['step'] == ''
-
-
-def test_a_retrieved_habit_ledger_reports_its_habit_to_the_panel(client):
-    """The new metadata has to reach the browser, or the context list shows a
-    chunk about the gym with nothing saying which habit it belongs to."""
-    body = client.post('/api/query', json={
-        'question': 'باشگاه هفته‌ای چند بار بود؟',
-        'index': {'chunker': 'session', 'embedder': 'char-hash',
-                  'layers': ['chunk', 'habit']},
-        'retrieval': {'search_layers': ['habit'], 'k': 4, 'retriever': 'bm25'},
-        'generation': {'answerer': 'extractive'}}).json()
-    assert body['contexts']
-    assert any(context.get('habit') for context in body['contexts'])
 
 
 def test_panel_is_served(client):
@@ -2404,7 +2137,7 @@ def test_ad_hoc_query_returns_stages_and_contexts(client):
         'question': 'آذر چه خبر بود؟',
         'index': {'chunker': 'message', 'embedder': 'char-hash',
                   'layers': ['chunk']},
-        'retrieval': {'search_layers': ['chunk'], 'k': 4},
+        'retrieval': {'k': 4},
         'generation': {'answerer': 'extractive'}}).json()
     assert body['contexts'] and body['answer']
     assert body['time_scope']['label'] == 'آذر'
@@ -2428,7 +2161,7 @@ def test_questions_endpoint_hides_the_answers(client):
 def test_options_offers_a_model_choice_for_every_llm_task(client):
     body = client.get('/api/options').json()
     roles = {role['key']: role for role in body['model_roles']}
-    assert set(roles) == {'summarize', 'expand', 'rerank', 'grade', 'answer',
+    assert set(roles) == {'expand', 'rerank', 'grade', 'answer',
                           'judge', 'ragas'}
     assert all(role['help'] and role['label'] and role['field']
                for role in roles.values())
@@ -2439,9 +2172,9 @@ def test_options_offers_a_model_choice_for_every_llm_task(client):
 
 def test_options_explains_every_knob(client):
     body = client.get('/api/options').json()
-    for key in ('index.chunker', 'index.summarizer', 'retrieval.reranker',
+    for key in ('index.chunker', 'retrieval.reranker',
                 'retrieval.grade_threshold', 'generation.answerer', 'model.answer',
-                'model.summarize'):
+                'model.answer'):
         assert body['help'].get(key), key
 
 
@@ -2449,7 +2182,6 @@ def test_defaults_carry_the_per_task_model_fields(client):
     """The panel merges saved settings over these, so a field missing here is a
     dropdown that renders as undefined on an old browser tab."""
     defaults = client.get('/api/options').json()['defaults']
-    assert defaults['index']['summarizer_model'] == ''
     assert defaults['retrieval']['reranker_model'] == ''
     assert defaults['retrieval']['grader_model'] == ''
     assert defaults['retrieval']['expansion_model'] == ''
@@ -2461,7 +2193,7 @@ def test_a_per_task_model_is_accepted_by_the_query_endpoint(client):
     res = client.post('/api/query', json={
         'question': 'آذر چه خبر بود؟',
         'index': {'chunker': 'message', 'embedder': 'char-hash', 'layers': ['chunk']},
-        'retrieval': {'search_layers': ['chunk'], 'k': 4,
+        'retrieval': {'k': 4,
                       'grader_model': 'meta-llama/llama-3.3-70b-instruct'},
         'generation': {'answerer': 'extractive', 'judge_model': 'openai/gpt-5'}})
     assert res.status_code == 200
@@ -2515,7 +2247,7 @@ def test_an_embedding_model_is_accepted_by_the_query_endpoint(client):
         'index': {'chunker': 'message', 'embedder': 'char-hash',
                   'embed_model': 'intfloat/multilingual-e5-large',
                   'layers': ['chunk']},
-        'retrieval': {'search_layers': ['chunk'], 'k': 4},
+        'retrieval': {'k': 4},
         'generation': {'answerer': 'extractive'}})
     assert res.status_code == 200
     assert res.json()['contexts']
@@ -2554,7 +2286,6 @@ def test_options_colour_code_the_pipeline_steps(client):
     steps = {step['key'] for step in body['steps']}
     assert all(role['step'] in steps for role in body['model_roles'])
     by_key = {role['key']: role['step'] for role in body['model_roles']}
-    assert by_key['summarize'] == 'index'
     assert by_key['rerank'] == 'retrieval'
     assert by_key['answer'] == 'generation'
 
@@ -2621,14 +2352,6 @@ def test_the_standalone_panel_keeps_every_model_in_one_place():
     assert card, 'the standalone panel has no model column'
     assert 'id="embedder"' in card.group(0)
     assert 'id="embed_model"' in card.group(0)
-
-
-def test_the_standalone_panel_shows_which_habit_a_context_belongs_to():
-    """A habit ledger read cold looks like any other rollup; the slug is the only
-    thing on it that says which habit's numbers you are reading."""
-    from .raglab.server import STATIC
-    html = (STATIC / 'index.html').read_text(encoding='utf-8')
-    assert 'c.habit' in html, 'the retrieved-context list ignores the new metadata'
 
 
 def test_the_standalone_panel_ranks_the_leaderboard_by_the_deciding_score():

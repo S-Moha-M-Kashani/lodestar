@@ -164,23 +164,17 @@ def resolve_time_scope(question: str, query_date: str) -> TimeScope | None:
     return None
 
 
-def where_clause(scope: TimeScope | None, layers: tuple[str, ...],
-                 all_layers: tuple[str, ...]) -> dict | None:
-    """Store filter for a time scope and a layer selection, in the operator
-    dialect `store.matches` implements.
+def where_clause(scope: TimeScope | None) -> dict | None:
+    """Store filter for a time scope, in the operator dialect `store.matches`
+    implements.
 
-    The date test is an *overlap* test, not containment: a thread rollup spans
-    twelve months, and requiring span_from >= scope.from would throw away
-    exactly the summary layer that the question needs."""
-    clauses: list[dict] = []
-    if scope:
-        clauses.append({'span_from': {'$lte': scope.to_int}})
-        clauses.append({'span_to': {'$gte': scope.from_int}})
-    if layers and set(layers) != set(all_layers):
-        clauses.append({'layer': {'$in': list(layers)}})
-    if not clauses:
+    The date test is an *overlap* test rather than containment, so a chunk whose
+    span straddles the edge of the window is kept: a scope is a question about a
+    period, not a claim that the evidence sits entirely inside it."""
+    if not scope:
         return None
-    return clauses[0] if len(clauses) == 1 else {'$and': clauses}
+    return {'$and': [{'span_from': {'$lte': scope.to_int}},
+                     {'span_to': {'$gte': scope.from_int}}]}
 
 
 def keyword_query(question: str) -> str:
