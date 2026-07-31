@@ -1283,28 +1283,22 @@ try:
             "chunkers": ["fixed", "semantic-drift"],
             "embedders": ["ascii-hash", "char-hash", "fastembed",
                           "sentence-transformers", "openai"],
-            "summarizers": ["extractive", "llm"],
-            "layers": ["chunk", "session", "month", "thread", "commitment", "habit"],
             "retrievers": ["dense", "bm25", "hybrid-rrf"],
             "rerankers": ["none", "lexical", "cross-encoder", "llm"],
             "graders": ["none", "lexical", "llm"],
-            "expansions": ["none", "neighbors", "session"],
             "answerers": ["none", "extractive", "llm"],
             "question_types": ["single-hop", "temporal", "habit"],
             "defaults": {
                 "index": {"chunker": "semantic-drift", "chunk_chars": 500,
                           "overlap": 100, "contextual": True, "embedder": "char-hash",
-                          "embed_model": "",
-                          "summarizer": "extractive", "summarizer_model": "",
-                          "layers": ["chunk", "session", "month", "thread", "commitment", "habit"]},
+                          "embed_model": ""},
                 "retrieval": {"retriever": "hybrid-rrf", "k": 8, "candidates": 40,
-                              "search_layers": ["chunk", "session"],
-                              "rollup_boost": 1.0, "time_filter": True,
+                              "time_filter": True,
                               "multi_query": True, "hyde": False, "mmr_lambda": 1.0,
                               "reranker": "lexical", "rerank_depth": 20,
                               "reranker_model": "", "grader": "none",
                               "grade_threshold": 0.0, "grader_model": "",
-                              "expansion_model": "", "parent_expansion": "none"},
+                              "expansion_model": ""},
                 "generation": {"answerer": "extractive", "key_facts_judge": False,
                                "model": "", "judge_model": "", "ragas_model": ""},
                 "label": "",
@@ -1420,10 +1414,6 @@ try:
                  "note": "Turns contexts into a Farsi answer, and grades it."},
             ],
             "model_roles": [
-                {"key": "summarize", "label": "Summaries", "step": "index",
-                 "field": "index.summarizer_model", "only_when": "Summaries = llm",
-                 "help": "Writes the session, month and thread summaries the rollup "
-                         "layers are made of. Runs once per session."},
                 {"key": "expand", "label": "Query rewriting (HyDE)",
                  "step": "retrieval",
                  "field": "retrieval.expansion_model", "only_when": "HyDE is on",
@@ -1522,27 +1512,21 @@ try:
                                      "Only the multilingual ones can represent Farsi "
                                      "at all, so this is the knob that decides "
                                      "whether a run measures anything.",
-                "index.summarizer": "Extractive picks real sentences; llm writes new ones.",
-                "index.layers": "Which summary rollups are stored beside raw chunks. \"habit\" is an adherence ledger per tracked habit.",
                 "retrieval.retriever": "Vectors, keywords, or both fused.",
                 "retrieval.k": "How many contexts the answerer finally sees.",
                 "retrieval.candidates": "How deep each retriever looks first.",
                 "retrieval.reranker": "Re-scores the candidates before the cut.",
                 "retrieval.rerank_depth": "How many candidates the reranker sees.",
                 "retrieval.mmr_lambda": "Below 1 trades relevance for variety.",
-                "retrieval.rollup_boost": "Above 1 favours summaries over raw chunks.",
                 "retrieval.grader": "The gate that makes abstention possible.",
                 "retrieval.grade_threshold": "Score a chunk must clear to survive.",
-                "retrieval.parent_expansion": "Add surrounding text to a small hit.",
                 "retrieval.time_filter": "Read Farsi time words as a date range.",
                 "retrieval.multi_query": "Search several rewrites of the question.",
                 "retrieval.hyde": "Search with an invented answer, not the question.",
-                "retrieval.search_layers": "Which layers a query is allowed to hit.",
                 "generation.answerer": "Who writes the answer, if anyone.",
                 "generation.key_facts_judge": "Score answers against the key facts.",
                 "run.ragas_mode": "Offline metrics, judged metrics, or none.",
                 "run.limit": "How many ground-truth questions to score.",
-                "model.summarize": "Model that writes the session summaries.",
                 "model.expand": "Model that invents the HyDE query.",
                 "model.rerank": "Model that re-scores candidates.",
                 "model.grade": "Model behind the relevance gate.",
@@ -1579,7 +1563,6 @@ try:
             "run_id": "20260729-000000-abcdef", "label": "e2e mock run",
             "seconds": 3.2, "started_at": "2026-07-29 00:00:00", "notes": [],
             "index": {"collection": "raglab-abc", "chunks": 688,
-                      "by_layer": {"chunk": 509, "session": 157},
                       "avg_chars": 640.0, "p95_chars": 1200, "embed_dim": 384,
                       "build_seconds": 12.0, "reused": True},
             "summary": {"n_questions": 100,
@@ -1593,7 +1576,7 @@ try:
                                                    "hit": 0.9,
                                                    "abstained_correctly": None,
                                                    "false_abstention": 0.0}},
-                        "by_difficulty": {}, "layer_usage": {"chunk": 100}},
+                        "by_difficulty": {}},
             "ragas": {"mode": "llm", "n_samples": 92, "skipped": 8,
                       "metrics": {"non_llm_context_recall": 0.2249,
                                   "faithfulness": 0.7431,
@@ -1609,7 +1592,7 @@ try:
                       "notes": ["offline RAGAS context metrics are "
                                 "whole-string similarity"]},
             "rows": [{"id": "q-sh-001", "type": "single-hop", "difficulty": "easy",
-                      "answerable": True, "n_contexts": 8, "layers": ["chunk"],
+                      "answerable": True, "n_contexts": 8,
                       "latency_ms": 26.0, "abstained": False}],
         }
 
@@ -1631,8 +1614,7 @@ try:
                             "n_questions": 20,
                             "config": {"index": {"chunker": "semantic-drift",
                                                  "embedder": "sentence-transformers",
-                                                 "embed_model": "heydariAI/persian-embeddings",
-                                                 "layers": ["chunk", "habit"]},
+                                                 "embed_model": "heydariAI/persian-embeddings"},
                                        "retrieval": {"retriever": "hybrid-rrf",
                                                      "reranker": "lexical"},
                                        "generation": {"answerer": "llm"}},
@@ -1666,11 +1648,15 @@ try:
                                                     "graded_out": 0,
                                                     "queries": []},
                     "timings": {"retrieve_ms": 4.0},
-                    "contexts": [{"chunk_id": "habit-gym", "layer": "habit",
-                                  "session_id": "", "date": "2026-05-16",
+                    # Exactly the fields pipeline.Context.as_dict() sends — no
+                    # more, so a panel reading a field the lab dropped shows up
+                    # here as rendered "undefined" rather than in production.
+                    "contexts": [{"chunk_id": "2026-05-16-a#3",
+                                  "session_id": "2026-05-16-a",
+                                  "date": "2026-05-16",
                                   "score": 0.81, "stages": {"retrieval": 1.0},
-                                  "expanded_from": "", "habit": "gym",
-                                  "text": "دفتر عادت «باشگاه» — هدف: 3 بار در هر هفته"}]}
+                                  "expanded_from": "",
+                                  "text": "این هفته سه بار باشگاه رفتم."}]}
             elif "/api/raglab/jobs/" in url:
                 # The first poll is still running and carries a detail. A judged
                 # run on a local model spends hours inside one stage, so the
@@ -1699,9 +1685,12 @@ try:
         page.wait_for_selector(".rag-grid")
         check("raglab: every stage of the pipeline gets a panel",
               page.locator(".rag-panel").count() >= 3)
+        # Three lists from three different steps, because one could be a
+        # coincidence: every dropdown's options arrive in the options payload.
+        offered = " ".join(page.locator(".rag-panel select").all_inner_texts())
         check("raglab: the strategy lists come from the lab, not from the browser",
-              "semantic-drift" in page.locator(".rag-panel select").first.inner_text()
-              and page.locator(".rag-checks input[type=checkbox]").count() >= 5)
+              "semantic-drift" in offered and "hybrid-rrf" in offered
+              and "cross-encoder" in offered)
         corpus_line = page.locator(".rag-corpus").inner_text()
         check("raglab: the corpus under test is named on the page",
               "167 sessions" in corpus_line and "112 ground-truth questions" in corpus_line)
@@ -1718,15 +1707,15 @@ try:
         check("raglab: the page names no vector database",
               "chroma" not in caps_text.lower())
 
-        # Model choice per task. Seven stages can call a model and they want
+        # Model choice per task. Six stages can call a model and they want
         # different things from one, so none of them is hard-coded; the licence is
         # on the label because on a Farsi corpus the open-weight candidates are
         # the interesting ones.
         check("raglab: every task that calls a model has its own dropdown",
-              page.locator(".rag-models select.rag-model").count() == 7)
+              page.locator(".rag-models select.rag-model").count() == 6)
         models_text = page.locator(".rag-models").inner_text()
         check("raglab: each model role is named after the task it drives",
-              "Summaries" in models_text and "Relevance gate" in models_text
+              "Reranker" in models_text and "Relevance gate" in models_text
               and "RAGAS judge" in models_text)
         options_text = page.locator('.rag-models select.rag-model[data-role="answer"]').inner_text()
         check("raglab: model options say whether the weights are open or closed",
@@ -1826,7 +1815,7 @@ try:
         check("raglab: every language model lives in the models panel",
               page.locator(".rag-models select.rag-embedder").count() == 1
               and page.locator(".rag-models select.rag-embed-model").count() == 1
-              and page.locator(".rag-models select.rag-model").count() == 7)
+              and page.locator(".rag-models select.rag-model").count() == 6)
         check("raglab: the index knobs no longer hold a model picker",
               page.locator('fieldset.rag-panel[data-step="index"] select').count() >= 1
               and page.locator(
@@ -1839,11 +1828,12 @@ try:
               .count() == 1
               and page.locator('.rag-models [data-step="index"] '
                                "select.rag-embed-model").count() == 1)
+        # No chat model writes to the index step any more — the summariser was the
+        # only one, and it went with the rollup layers. The embedder is the index
+        # step's model now, and the check above is what colours it.
         check("raglab: each per-task model wears the ink of the step it serves",
-              page.locator('.rag-models [data-step="index"] '
-                           'select.rag-model[data-role="summarize"]').count() == 1
-              and page.locator('.rag-models [data-step="retrieval"] '
-                               'select.rag-model[data-role="grade"]').count() == 1
+              page.locator('.rag-models [data-step="retrieval"] '
+                           'select.rag-model[data-role="grade"]').count() == 1
               and page.locator('.rag-models [data-step="generation"] '
                                'select.rag-model[data-role="answer"]').count() == 1)
         sides = page.evaluate(
@@ -2038,24 +2028,19 @@ try:
               "composite" in header and "quote" in header)
         page.screenshot(path=shot("raglab-leaderboard.png"))
 
-        # ---- the habit ledger ------------------------------------------------
-        # A habit is the card you repeat instead of finish, so the lab indexes an
-        # adherence ledger per habit beside the raw text. It carries no session
-        # id, so its slug is the only thing saying whose tallies these are.
-        check("raglab: the habit ledger is an indexable and searchable layer",
-              page.locator('.rag-checks input[type=checkbox][value="habit"]').count() == 2)
-        page.locator('.rag-panel .rag-why[data-topic="index.layers"]').click()
-        page.wait_for_selector(".rag-help")
-        check("raglab: the layers explainer covers the new habit ledger",
-              "habit" in page.locator(".rag-help").first.inner_text().lower())
-        page.locator('.rag-panel .rag-why[data-topic="index.layers"]').click()
+        # ---- a retrieved context ----------------------------------------------
+        # There is one kind of row in the index now, so the meta line's whole job
+        # is saying which chunk this is and when it was written. It reads straight
+        # off the payload, so a field the lab has stopped sending renders as the
+        # word "undefined" — visible, unfailing, and easy to ship.
         page.fill("#raglab-question", "باشگاه هفته‌ای چند بار بود؟")
         page.click("#raglab-ask")
         page.wait_for_selector(".rag-context")
         context_meta = page.locator(".rag-context .rag-meta").first.inner_text()
-        check("raglab: a retrieved habit ledger says which habit it belongs to",
-              "habit gym" in context_meta and "habit-gym" in context_meta)
-        page.screenshot(path=shot("raglab-habit-ledger.png"))
+        check("raglab: a retrieved context says which chunk it is and when",
+              "2026-05-16-a#3" in context_meta and "2026-05-16" in context_meta
+              and "undefined" not in context_meta)
+        page.screenshot(path=shot("raglab-context.png"))
 
         # A chosen strategy is what a developer changes twenty times in a sitting;
         # losing it on every reload would make the page useless.

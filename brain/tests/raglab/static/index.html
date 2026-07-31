@@ -659,7 +659,6 @@ function renderResult(result) {
     : `<div class="muted">no RAGAS scores${(r.notes || []).length ? ': ' + r.notes.join('; ') : ''}</div>`;
 
   $('extras').innerHTML =
-    table(['layer', 'questions using it'], Object.entries(result.summary.layer_usage)) +
     table(['difficulty', 'n', 'recall'], Object.entries(result.summary.by_difficulty)
       .map(([k, v]) => [k, v.n, fmt(v.recall)]));
 
@@ -692,7 +691,7 @@ $('ask').onclick = async () => {
       Object.entries(out.timings).map(([k, v]) => `${k} ${v}`).join(' · ') + '</div>' +
       (out.answer ? `<div class="ctx fa"><b>${out.abstained ? '(abstained) ' : ''}</b>${out.answer}</div>` : '') +
       out.contexts.map((c) => `<div class="ctx">
-          <div class="meta">${c.chunk_id} · ${c.layer} · ${c.date} · score ${fmt(c.score)} ·
+          <div class="meta">${c.chunk_id} · ${c.date} · score ${fmt(c.score)} ·
             ${Object.entries(c.stages).map(([k, v]) => k + ' ' + fmt(v, 2)).join(' · ')}
             ${c.expanded_from ? ' · expanded from ' + c.expanded_from : ''}</div>
           <div class="fa">${escapeHtml(c.text).replace(/\n/g, '<br>')}</div></div>`).join('');

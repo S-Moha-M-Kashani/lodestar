@@ -4768,29 +4768,6 @@
   function ragFieldControl(field, cfg) {
     const options = ragState.options;
     const bag = cfg[field.group];
-    if (field.kind === 'checks') {
-      const wrap = document.createElement('div');
-      wrap.className = 'rag-checks';
-      for (const value of options[field.from]) {
-        const label = document.createElement('label');
-        const box = document.createElement('input');
-        box.type = 'checkbox';
-        box.value = value;
-        box.checked = (bag[field.key] || []).includes(value);
-        box.addEventListener('change', () => {
-          const set = new Set(bag[field.key] || []);
-          if (box.checked) set.add(value); else set.delete(value);
-          // Kept in the registry's order, because the lab fingerprints an index
-          // from this list and a reordered list is the same index.
-          bag[field.key] = options[field.from].filter((v) => set.has(v));
-          ragPersist();
-        });
-        label.appendChild(box);
-        label.append(' ' + value);
-        wrap.appendChild(label);
-      }
-      return wrap;
-    }
     if (field.kind === 'check') {
       const box = document.createElement('input');
       box.type = 'checkbox';
@@ -5225,11 +5202,10 @@
         item.className = 'rag-context';
         const meta = document.createElement('div');
         meta.className = 'rag-meta';
-        // A habit ledger carries no session id, so without its slug the panel
-        // shows a block of tallies with nothing saying whose they are.
-        meta.textContent = `${context.chunk_id} · ${context.layer} · ${context.date}`
-          + ` · score ${ragNum(context.score)}`
-          + (context.habit ? ` · habit ${context.habit}` : '');
+        // There is one kind of row in the index, so the chunk id and its date
+        // are the whole of what identifies a hit.
+        meta.textContent = `${context.chunk_id} · ${context.date}`
+          + ` · score ${ragNum(context.score)}`;
         const text = document.createElement('div');
         text.className = 'rag-context-text';
         text.dir = 'rtl';

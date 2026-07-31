@@ -2208,6 +2208,34 @@ def test_the_standalone_panel_offers_the_model_pickers_too():
     assert 'model_roles' in html and 'rag-model' in html
 
 
+# This is a unit test.
+def test_the_standalone_panel_reads_only_fields_the_lab_still_produces():
+    """Deleting the summary hierarchy left the panel reading two fields nobody
+    sends any more. `context.layer` merely prints "undefined";
+    `summary.layer_usage` is `Object.entries(undefined)`, which throws and takes
+    the whole results screen with it. So the panel's reads are checked against
+    what the lab returns rather than against a list of names someone has to
+    remember to prune."""
+    from .raglab.server import STATIC
+    html = (STATIC / 'index.html').read_text(encoding='utf-8')
+
+    served = set(metrics.aggregate([]))
+    read = set(re.findall(r'result\.summary\.(\w+)', html))
+    assert read <= served, (
+        'the panel reads summary fields the lab no longer returns: '
+        f'{sorted(read - served)}')
+
+    # Scoped to the contexts loop on purpose: `c` names the corpus object
+    # elsewhere in the same file, so an unscoped `c.` would match its fields too.
+    loop = html.split('out.contexts.map')[1].split(".join('')")[0]
+    sent = set(pipeline.Context(chunk_id='c1', text='t', session_id='s1',
+                                date='2026-01-01', score=1.0).as_dict())
+    read = set(re.findall(r'\bc\.(\w+)', loop))
+    assert read <= sent, (
+        'the panel reads context fields the lab no longer returns: '
+        f'{sorted(read - sent)}')
+
+
 def test_ragas_takes_its_own_judge_model(index, ground_truth):
     pytest.importorskip('ragas')
     pytest.importorskip('rapidfuzz')
