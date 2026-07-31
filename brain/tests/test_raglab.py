@@ -2816,6 +2816,31 @@ def test_both_frontends_read_the_progress_detail():
     assert '.job.detail' in board
 
 
+def test_the_terminal_bar_says_stage_fraction_elapsed_and_detail():
+    line = sweep.bar('Stage F', 'scoring', 0.5, 'question 16/30 · hard',
+                     time.time() - 63)
+    assert line.startswith('\r'), 'the line is rewritten in place, not appended'
+    assert 'Stage F' in line
+    assert '50.0%' in line
+    assert '1m03s' in line, line          # elapsed, because a fraction alone
+    assert 'question 16/30 · hard' in line   # cannot tell slow from stuck
+    filled = line.count('█')
+    assert filled == sweep.BAR_WIDTH // 2, filled
+
+
+def test_a_shorter_detail_cannot_leave_the_tail_of_a_longer_one_behind():
+    """Without the padding a redraw leaves stale characters on the line, which
+    reads as a stale *number* rather than as a drawing artefact."""
+    written = []
+    report = sweep.live('Stage A', time.time(),
+                        stream=type('S', (), {'write': written.append,
+                                              'flush': lambda self: None})())
+    report('ragas', 0.94, 'judge call 137 of ~420')
+    report('done', 1.0, '')
+    assert len(written[0]) == len(written[1])
+    assert '137' not in written[1]
+
+
 def test_the_expected_judge_call_count_scales_with_k():
     """Context precision asks one verdict per retrieved chunk, so k is what
     drives the bill — the estimate has to know that or it is decoration."""
