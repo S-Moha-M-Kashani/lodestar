@@ -264,7 +264,7 @@ def run_eval(registry: IndexRegistry, ground_truth: dict, cfg: LabConfig,
              limit: int | None = None, difficulty: list[str] | None = None,
              balance: str = 'stride',
              ragas_mode: str = 'offline', ragas_limit: int | None = None,
-             workers: int = 1, progress=None) -> RunResult:
+             workers: int = 1, progress=None, cancelled=None) -> RunResult:
     problems = cfg.validate() + models.provider_problems(cfg, settings)
     if problems:
         raise ValueError('; '.join(problems))
@@ -280,8 +280,11 @@ def run_eval(registry: IndexRegistry, ground_truth: dict, cfg: LabConfig,
     # dropped for one that does not, because the panel's reporter predates it and
     # a run must not fail on its progress bar.
     report = _reporter(progress)
+    check_cancelled = cancelled or (lambda: None)
 
+    check_cancelled()
     index = registry.get(cfg.index, progress=lambda stage, f: report(stage, f * 0.4))
+    check_cancelled()
     questions = select_questions(ground_truth, types, limit, difficulty, balance)
     selection = selection_note(questions, limit, balance)
     query_date = ground_truth['meta'].get('query_date', '2026-07-28')
@@ -306,13 +309,17 @@ def run_eval(registry: IndexRegistry, ground_truth: dict, cfg: LabConfig,
                      'fake provider, so their numbers are meaningless')
 
     def handle(question: dict):
+        check_cancelled()
         outcome = pipeline.retrieve(index, cfg.retrieval, question['question_fa'],
                                     question.get('query_date', query_date),
                                     llm=llm, models=roles)
+        check_cancelled()
         outcome = pipeline.answer(outcome, cfg.generation, llm=llm, models=roles)
+        check_cancelled()
         row = metrics.score_question(question, outcome, cfg.retrieval.k)
         if (cfg.generation.key_facts_judge and outcome.answer
                 and settings.llm_ready and question.get('answerable')):
+            check_cancelled()
             row['key_fact_coverage'] = judge_key_facts(llm, roles.judge, question,
                                                        outcome.answer)
         return question, outcome, row
@@ -345,6 +352,7 @@ def run_eval(registry: IndexRegistry, ground_truth: dict, cfg: LabConfig,
         rows.append(json_safe(row))
     report('ragas', 0.92, 'judging')
 
+    check_cancelled()
     summary = metrics.aggregate(rows)
     ragas_report: dict = {}
     if ragas_mode != 'off':

@@ -4477,6 +4477,7 @@
     cfg: null,            // whatever the panel last had; server defaults fill it
     run: { ragas_mode: 'offline', limit: 0, types: [] },
     job: null,            // { stage, progress, kind }
+    jobId: null,          // server job currently running or stopping
     result: null,
     runs: [],
     questions: [],        // ground truth without its answers, for the picker
@@ -4677,18 +4678,22 @@
     try {
       const job = await ragApi('/jobs/' + jobId);
       ragState.job = job;
-      if (job.state === 'running') {
+      if (job.state === 'running' || job.state === 'cancelling') {
         if (view === 'raglab') render();
         setTimeout(() => ragPoll(jobId, onDone), 900);
         return;
       }
       ragState.busy = false;
       ragState.job = null;
+      ragState.jobId = null;
       if (job.state === 'error') ragState.problem = job.error;
-      else onDone(job.result);
+      else if (job.state === 'cancelled') {
+        ragState.problem = 'Experiment stopped; no further model calls were started.';
+      } else onDone(job.result);
     } catch (error) {
       ragState.busy = false;
       ragState.job = null;
+      ragState.jobId = null;
       ragState.problem = error.message;
     }
     if (view === 'raglab') render();
@@ -4701,6 +4706,8 @@
     render();
     try {
       const { job_id: jobId } = await ragApi('/' + kind, { ...ragConfig(), ...extra });
+      ragState.jobId = jobId;
+      render();
       ragPoll(jobId, async (result) => {
         if (kind === 'run') {
           ragState.result = result;
@@ -4713,6 +4720,21 @@
       ragState.busy = false;
       ragState.problem = error.message;
       render();
+    }
+  }
+
+  async function ragCancel() {
+    if (!ragState.jobId) return;
+    ragState.problem = '';
+    try {
+      ragState.job = { ...(ragState.job || {}), kind: 'run', stage: 'stopping',
+        progress: (ragState.job && ragState.job.progress) || 0,
+        detail: 'stopping before the next model call' };
+      render();
+      await ragApi('/jobs/' + ragState.jobId + '/cancel', {});
+    } catch (error) {
+      ragState.problem = error.message;
+      if (view === 'raglab') render();
     }
   }
 
@@ -5383,7 +5405,14 @@
       limit: ragState.run.limit || null,
       types: ragState.run.types,
     }));
-    actions.append(buildBtn, runBtn);
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'btn ghost';
+    cancelBtn.id = 'raglab-cancel';
+    cancelBtn.textContent = 'Stop experiment';
+    cancelBtn.disabled = !ragState.jobId;
+    cancelBtn.addEventListener('click', ragCancel);
+    actions.append(buildBtn, runBtn, cancelBtn);
     sheet.appendChild(actions);
 
     if (ragState.indexInfo) {

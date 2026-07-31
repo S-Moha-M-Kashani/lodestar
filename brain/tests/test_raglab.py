@@ -9,6 +9,7 @@ production embedder finds nothing at all — only exist at that scale.
 import json
 import os
 import re
+import threading
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -2828,6 +2829,34 @@ def test_the_job_carries_the_detail_to_whoever_is_polling():
     assert 'detail' in jobs.jobs[job_id]
 
 
+def test_a_running_job_can_be_cancelled_before_its_next_call():
+    """Stopping a run must prevent its next unit of work, not just its polling."""
+    from .raglab.server import Jobs
+    jobs = Jobs()
+    started = threading.Event()
+
+    def target(report, cancelled):
+        started.set()
+        while not cancelled():
+            time.sleep(0.001)
+        # The normal checkpoint used by indexing and evaluation raises the
+        # cooperative cancellation exception as soon as the active call ends.
+        report('scoring', 0.5, 'would have made another model call')
+
+    job_id = jobs.start('run', target)
+    assert started.wait(timeout=1)
+    stopped = jobs.cancel(job_id)
+    assert stopped['state'] == 'cancelling'
+    for _ in range(100):
+        if jobs.get(job_id)['state'] == 'cancelled':
+            break
+        time.sleep(0.01)
+    job = jobs.get(job_id)
+    assert job['state'] == 'cancelled'
+    assert job['cancel_requested'] is True
+    assert '_cancel' not in job
+
+
 def test_both_frontends_read_the_progress_detail():
     """Neither UI may quietly stop showing it: a judged local run spends hours in
     one stage, and the detail is the only thing that moves."""
@@ -2835,6 +2864,16 @@ def test_both_frontends_read_the_progress_detail():
     board = (REPO_ROOT / 'app.js').read_text(encoding='utf-8')
     assert 'job.detail' in panel
     assert '.job.detail' in board
+
+
+def test_both_rag_lab_frontends_offer_a_cooperative_stop():
+    """The embedded panel is the usual surface, but the standalone lab needs it too."""
+    panel = (RAGLAB_DIR / 'static' / 'index.html').read_text(encoding='utf-8')
+    board = (REPO_ROOT / 'app.js').read_text(encoding='utf-8')
+    assert 'Stop experiment' in panel
+    assert "'/api/jobs/' + jobId + '/cancel'" in panel
+    assert 'raglab-cancel' in board
+    assert "'/jobs/' + ragState.jobId + '/cancel'" in board
 
 
 def test_the_terminal_bar_says_stage_fraction_elapsed_and_detail():
