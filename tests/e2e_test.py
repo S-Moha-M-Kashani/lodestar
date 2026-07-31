@@ -95,7 +95,7 @@ def start_brain():
         ["uv", "run", "--project", "brain", "uvicorn",
          "lodestar_brain.server:app", "--port", str(BRAIN_PORT)],
         cwd=ROOT,
-        env={**os.environ, "BRAIN_LLM": "fake", "BRAIN_EMBEDDER": "hash",
+        env={**os.environ, "BRAIN_LLM": "fake", "BRAIN_EMBEDDER": "fake",
              "BRAIN_TRANSCRIBER": "fake",
              "BOARD_API_URL": f"http://127.0.0.1:{PORT}",
              # in-process Chroma: e2e must not depend on the Docker server,
