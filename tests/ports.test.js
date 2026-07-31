@@ -194,3 +194,50 @@ test('the brain Dockerfile EXPOSEs the port it serves', () => {
   assert.ok(exposed && served, 'brain/Dockerfile is missing EXPOSE or --port');
   assert.equal(Number(exposed[1]), Number(served[1]));
 });
+
+// Ollama is a *fifth* process, and unlike the other four it is not ours: it is
+// installed system-wide and owns 11434 by convention. The brain and the lab both
+// reach it as clients, so the requirement is only that we never bind it — and
+// that both defaults name the same port, since a lab pointed at a port nothing
+// serves fails as "LLM metrics unavailable", which reads like a missing key.
+const OLLAMA_PORT = 11434;
+
+test('the local model server is reached, never bound', () => {
+  const brain = read('brain/src/lodestar_brain/config.py').match(
+    /ollama_base_url: str = 'http:\/\/localhost:(\d+)\/v1'/,
+  );
+  assert.ok(brain, 'could not read ollama_base_url out of the brain settings');
+  assert.equal(Number(brain[1]), OLLAMA_PORT);
+
+  const lab = read('brain/tests/raglab/config.py').match(
+    /ollama_base_url: str = 'http:\/\/localhost:(\d+)\/v1'/,
+  );
+  assert.ok(lab, 'could not read ollama_base_url out of the lab settings');
+  assert.equal(Number(lab[1]), Number(brain[1]));
+
+  // And it collides with nothing we start ourselves.
+  const ours = [
+    MAIN_BOARD_PORT,
+    MAIN_BRAIN_PORT,
+    RAGLAB_PORT,
+    testBoardPort(),
+    testBrainPort(),
+    ...CHROMA_PORTS,
+  ];
+  assert.ok(!ours.includes(OLLAMA_PORT), `we bind :${OLLAMA_PORT} ourselves`);
+});
+
+test("the '/v1' is part of the URL, not appended by a caller", () => {
+  // Ollama's OpenAI-compatible surface lives under /v1, and ChatOpenAI takes the
+  // base URL verbatim. Keeping the suffix in the setting is what lets the same
+  // field point at llama.cpp or vLLM without a code change — and stops a caller
+  // from inventing a second convention about who adds it.
+  const brain = read('brain/src/lodestar_brain/config.py');
+  assert.match(brain, /BRAIN_OLLAMA_BASE_URL', *\n? *'http:\/\/localhost:11434\/v1'/);
+  const factory = read('brain/src/lodestar_brain/llm/factory.py');
+  assert.match(factory, /base_url=settings\.ollama_base_url/);
+  assert.ok(
+    !/ollama_base_url\s*\+/.test(factory),
+    'the factory is concatenating onto the base URL instead of using it',
+  );
+});

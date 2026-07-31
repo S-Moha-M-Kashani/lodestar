@@ -89,14 +89,15 @@ Every capability sits behind a small interface chosen by env vars, so each piece
 
 | Env var | Default | Meaning |
 | --- | --- | --- |
-| `OPENROUTER_API_KEY` | *(empty)* | LLM access. Without it the assistant errors politely; the board is unaffected |
-| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | Any OpenAI-compatible endpoint works (e.g. a local Ollama later) |
-| `BRAIN_MODEL` | `openai/gpt-5-nano` | Fallback when the browser sends no pick; any OpenRouter model id |
-| `BRAIN_LLM` | `openrouter` | `fake` = deterministic offline chat model (tests/CI). An unrecognised value **raises at boot** — there is no silent fallback to `openrouter` |
+| `OPENROUTER_API_KEY` | *(empty)* | Optional remote-LLM access. The local defaults do not use it. |
+| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | Any OpenAI-compatible endpoint works |
+| `BRAIN_MODEL` | `4skl/gemma4-e2b-mtp` | Text-generation default for the local Ollama backend. |
+| `BRAIN_LLM` | `ollama` | Text-generation route. The Assistant UI can explicitly switch to OpenRouter and GPT-5 Nano; use `fake` for deterministic tests. |
+| `BRAIN_OLLAMA_BASE_URL` | `http://localhost:11434/v1` | Where the local model server is. The `/v1` is part of the URL, so the same setting reaches llama.cpp or vLLM without a code change |
 | `BRAIN_EMBEDDER` | `hash` | `fastembed` (semantic, needs the `semantic` extra) or `hash` (offline token buckets). No fallback mode — a missing wheel is an error, not a silent downgrade |
 | `BRAIN_MAX_STEPS` | `8` | Tool-call budget per chat turn |
-| `BRAIN_TRANSCRIBER` | `parakeet` | Voice-to-text backend. `parakeet` = local MLX model (free, offline, Apple Silicon only); `openrouter` = the omni model; `fake` = deterministic offline transcript (tests/CI). Compose pins `openrouter`, since the brain image cannot install mlx |
-| `BRAIN_OMNI_MODEL` | `google/gemini-2.5-flash-lite` | Audio → text model for the OpenRouter backend; the Assistant view's omni picker overrides it per request |
+| `BRAIN_TRANSCRIBER` | `openrouter` | Voice-to-text backend. `openrouter` is the frontend default; `parakeet` is the local MLX alternative (Apple Silicon); `fake` is deterministic for tests. |
+| `BRAIN_OMNI_MODEL` | `openai/whisper-large-v3-turbo` | Audio → text (route: OpenRouter API), sent to its dedicated `/audio/transcriptions` endpoint. |
 | `BRAIN_PARAKEET_MODEL` | `mlx-community/parakeet-tdt-0.6b-v3` | Local checkpoint for the Parakeet backend (2.5 GB, fetched on first use) |
 | `BOARD_API_URL` | `http://127.0.0.1:3000` | Where the brain finds the board API |
 | `AGENT_URL` | `http://127.0.0.1:9000` | Where the Node proxy finds the brain |
@@ -122,12 +123,11 @@ uv sync --project brain --extra voice     # Apple Silicon only
 The checkpoint is a 2.5 GB download on the first dictation (cached in
 `~/.cache/huggingface` afterwards, and held in memory for the life of the brain process).
 
-Everywhere else (Linux, Docker) `auto` falls back to **OpenRouter**, sending the audio as an
-`input_audio` part to `BRAIN_OMNI_MODEL`. Pick that model with care: several models advertise
-audio input but the provider serving them silently discards it and answers an invented
-apology instead of a transcript. The brain detects that shape and reports which model is at
-fault rather than filing its apology as your words. Verified working: `google/gemini-2.5-flash-lite`
-(the default), `openai/gpt-audio-mini`, `mistralai/voxtral-small-24b-2507`.
+With the OpenRouter backend, the default is **`openai/whisper-large-v3-turbo`**
+(route: OpenRouter API), sent to the dedicated `/audio/transcriptions` endpoint.
+Other audio-capable chat models use `input_audio` on chat completions. The brain
+detects providers that drop audio and reports the offending model rather than
+filing its apology as your words.
 
 ### Chat memory
 
@@ -152,12 +152,28 @@ that writes nothing to disk.
 Run it locally (requires uv; deps install on first run):
 
 ```sh
-export OPENROUTER_API_KEY=sk-or-...
 uv run --project brain uvicorn lodestar_brain.server:app --reload --port 9000
 # in another terminal: npm start, then open http://localhost:3000 → Assistant
 ```
 
-With Compose, both services start together (`docker compose up`); put `OPENROUTER_API_KEY` in your environment or a `.env` file first. Fully offline mode — used by the tests — is `BRAIN_LLM=fake BRAIN_EMBEDDER=hash`.
+### Local Ollama option
+
+Install Ollama from [ollama.com](https://ollama.com), start it with `ollama serve`,
+then pull the local models this project exposes:
+
+```sh
+ollama pull 4skl/gemma4-e2b-mtp   # fast local chat / RAG answerer
+ollama pull gemma4:e2b            # stronger local RAG judge
+ollama pull deepseek-r1:8b        # optional slower reasoning alternative
+```
+
+Set `BRAIN_LLM=ollama BRAIN_MODEL=4skl/gemma4-e2b-mtp` for local chat, and
+`RAGLAB_LLM=ollama RAGLAB_MODEL=4skl/gemma4-e2b-mtp` for local RAG Lab LLM
+stages. The RAG Lab’s default Qwen embeddings and Cohere reranker still use the
+OpenRouter API; choose a local embedder/reranker in its settings for a fully
+local experiment.
+
+With Compose, both services start together (`docker compose up`). Fully offline test mode is `BRAIN_LLM=fake BRAIN_EMBEDDER=hash`.
 
 Swap points, each one file: the chat model (`brain/src/lodestar_brain/llm/factory.py` — add a branch, e.g. `ChatOllama`, never edit a call site), the search provider (`tools/websearch.py`), the embedder (`rag/embedder.py`), and the agent itself (`agent/runner.py`, registered in `agent/registry.py`).
 
@@ -227,11 +243,19 @@ behind it is a normal state rather than a broken screen. The service also serves
 standalone panel at `http://localhost:9002/` if you would rather run it without a board.
 
 Two fixtures are the whole basis of it: `brain/tests/fixtures/diary_year_fa.json`
-(157 sessions, 954 messages, Aug 2025 → Jul 2026, with a mood and storyline tags per
-session) and `diary_year_fa_groundtruth.json` (100 questions across ten types —
-single-hop, temporal, multi-hop, aggregation, knowledge-update, commitment, entity,
-pattern, abstention, adversarial — each with a reference answer and verbatim evidence
-quotes). Both are synthetic; every person and event in them is fictional.
+(167 sessions, 998 messages, Aug 2025 → Jul 2026, with a mood and storyline tags per
+session, plus a `habits` block declaring five tracked practices) and `diary_year_fa_groundtruth.json` (112 questions across
+eleven types — single-hop, temporal, multi-hop, aggregation, knowledge-update,
+commitment, entity, pattern, abstention, adversarial, habit — each with a reference
+answer and verbatim evidence quotes). Both are synthetic; every person and event in
+them is fictional.
+
+A candidate sweep is measured on **49 of those questions, balanced across the
+difficulty bands** (17 easy / 16 medium / 16 hard). The bands are naturally 29/57/26,
+so sampling the set as it is hands medium about half of every run — and since the
+four deciding metrics are means over questions, that measures one band and reports it
+as the pipeline. Which questions a run actually scored is saved on the run itself,
+because two rows are comparable only if they scored the same ones.
 
 Pick a strategy per stage and the panel grades it:
 
@@ -239,7 +263,8 @@ Pick a strategy per stage and the panel grades it:
 | --- | --- |
 | Chunking | fixed 500 (what the brain ships), fixed+overlap, per-message, turn-pair, whole-session, semantic-drift (topic segmentation) — each optionally with Anthropic-style contextual headers |
 | Hierarchy | raw chunks plus, additively, session summaries, month digests, per-storyline digests, and a promise/deadline ledger; summaries extractive (offline) or LLM |
-| Embedding | `ascii-hash` (the brain's current default), `token-hash`, `char-hash` (character n-grams), or a real model through one of three backends: **fastembed** (its own ONNX list), **sentence-transformers** (any HuggingFace checkpoint — the lab default is `heydariAI/persian-embeddings`, Persian-tuned; `Qwen/Qwen3-Embedding-8B` is the recommended ceiling), or **openai** (`text-embedding-3-small`/`-large`, needs `OPENAI_API_KEY`). Every option states its language coverage, its licence, and the backend that serves it; anything unavailable stays listed as NA |
+| Embedding | **OpenRouter Qwen3-Embedding-8B** is the lab default: Text → embedding (route: OpenRouter API). Local alternatives remain fastembed and sentence-transformers (including Persian-tuned `heydariAI/persian-embeddings`); OpenAI embeddings remain optional. |
+| Reranking | **Cohere Rerank 4 Fast** is the lab default: Query + text → relevance score (route: OpenRouter API). Local lexical, recency, cross-encoder, and Ollama LLM alternatives remain available. |
 | Retrieval | dense, BM25, or hybrid with Reciprocal Rank Fusion; Farsi time expressions («آذر», «پارسال پاییز») resolved into a Chroma date range; multi-query expansion; HyDE |
 | Reranking | none, lexical, recency, "agentic" (relevance + recency + emotional importance), multilingual cross-encoder, or LLM grading |
 | Gating | a relevance threshold — what makes an honest *"I have nothing on that"* possible — plus parent/session expansion and MMR diversification |
@@ -248,17 +273,185 @@ Pick a strategy per stage and the panel grades it:
 Everything is reported per question *type*, because a change that lifts single-hop
 recall while destroying temporal recall is not an improvement.
 
-`npm run raglab` installs what the default embedder needs (the `local-embeddings`
+`npm run raglab` starts the lab at `http://localhost:9002/`. Its defaults use
+`qwen/qwen3-embedding-8b` for embeddings and `cohere/rerank-4-fast` for
+reranking through OpenRouter, so a run requires `OPENROUTER_API_KEY`. The local
+alternatives stay useful for private/offline experiments. The command installs what the local embedder needs (the `local-embeddings`
 extra: sentence-transformers and torch, ~1 GB), and downloads the Persian model
 once (~2.2 GB) on the first index build. `tests/ports.test.js` checks that launcher
 against the configured default, so switching the default without switching the
 extra fails a test rather than a run.
+
+Four of the metrics that choose the architecture are LLM-judged, so a lab with no
+model can rank nothing. `RAGLAB_LLM=ollama` points every LLM stage — answerer,
+relevance gate, reranker **and the RAGAS judge** — at a model on this machine, which
+is what makes the expensive candidates measurable without buying credit (a
+per-chunk relevance gate is *k* calls per question). Two rules it keeps: a model the
+daemon does not serve stops the run rather than silently becoming another one, and
+the judge is **screened before it is allowed to grade** —
+`npm run raglab:judgescreen -- --models qwen3.5:2b gemma4:e2b` scores it on claims
+whose answers are already known, and the results are committed under `.screens/`
+because they are the evidence for which model was permitted to decide. Two of the
+local models screened so far answered identically to every claim, which scores 50%
+on a balanced set and separates no candidate from any other. `RAGLAB_LLM=ollama` is
+enough on its own — the model defaults follow the backend, since a slug only means
+something to whatever serves it — and every phase reports where it is, per question
+while answering and per judge call while grading, because a judged local run spends
+hours inside one stage.
+
+`npm run raglab:leaderboard` builds the leaderboard from `.runs/`, and its main job
+is refusing to rank rows that are not comparable: a decision score is a mean over
+questions judged by a model, so it groups by (question set, judge) and never ranks
+across groups. A lead inside the combined error of the top two rows is reported as
+a tie rather than a win, and runs that recorded only *how many* questions they
+scored get no rank numbers at all — two runs of 24 questions may be two different
+24.
 
 The lab is strictly test-side: it writes only to its own Chroma database
 (`lodestar-raglab`, and it refuses to start against the production one) and to a
 git-ignored `.runs/` folder, and no production module imports it — the board knows
 nothing about it beyond a proxy prefix. Its own tests are part of the brain suite
 (`npm run test:raglab`), and the page is covered by the e2e suite.
+
+## What the RAG lab measured
+
+The lab exists so retrieval choices are settled by measurement rather than taste. It
+has now been used in anger — eight candidate architectures, one changed knob each —
+and this is what came back. The short version is that **the sweep could not separate
+the candidates, and the reason it could not is more useful than a winner would have
+been.**
+
+### The whole path a question travels
+
+```
+ ┌───────────────────────────────────────────────────────────────────┐
+ │ browser — board UI, seven views, Assistant chat                   │
+ └────────────────────────────────┬──────────────────────────────────┘
+                                  │  the browser talks only to Node
+                                  ▼
+ ┌───────────────────────────────────────────────────────────────────┐
+ │ Node  server.js  :3000       board API · static files · zero deps │
+ │                                                                   │
+ │   ┌──────────────────────────────────────────────────────────┐    │
+ │   │ SQLite  board.db          built-in node:sqlite, no ORM   │    │
+ │   │   one `cards` table · boot-time column migrations        │    │
+ │   │   soft delete only — a card is destroyed only by         │    │
+ │   │   Trash → "Delete permanently"                           │    │
+ │   └──────────────────────────────────────────────────────────┘    │
+ │                                                                   │
+ │   proxy  /api/agent/*   /api/rag/*   /api/raglab/*                │
+ └────────────────────────────────┬──────────────────────────────────┘
+                                  ▼
+ ┌───────────────────────────────────────────────────────────────────┐
+ │ brain  :9000 — the chatbot            FastAPI + LangChain agent   │
+ │   tools:  board CRUD · web_search · find_related · recall_chat    │
+ │   every write goes back out through Node's API, never SQLite      │
+ │   a card it invents is a *proposal* until you accept it           │
+ └────────────────────────────────┬──────────────────────────────────┘
+                                  │  recall_chat — diary memory
+                                  ▼
+ ┌───────────────────────────────────────────────────────────────────┐
+ │ INDEX                                         once per corpus     │
+ │   semantic-drift chunker · 500 chars / 100 overlap                │
+ │   contextual headers                                              │
+ │   embedder · 1024-d          ◄── the one choice that mattered     │
+ │                                                                   │
+ │   6 additive layers ── 732 chunks                                 │
+ │     chunk  515 │ session 167 │ month   12  ···· never retrieved   │
+ │     thread  32 │ commit    1 │ habit    5  ···· 1 question in 24  │
+ └────────────────────────────────┬──────────────────────────────────┘
+                                  ▼
+ ┌───────────────────────────────────────────────────────────────────┐
+ │ RETRIEVE   multi-query expansion                                  │
+ │            hybrid BM25 + dense ─► RRF (k0 = 60)                   │
+ │            40 candidates across all 6 layers                      │
+ │            Farsi time expressions → Chroma date ranges            │
+ └────────────────────────────────┬──────────────────────────────────┘
+                                  ▼
+ ┌───────────────────────────────────────────────────────────────────┐
+ │ RANK       lexical rerank, depth 20                               │
+ │            rollup boost 1.0        (candidate G tried 1.4: worse) │
+ └────────────────────────────────┬──────────────────────────────────┘
+                                  ▼
+ ┌───────────────────────────────────────────────────────────────────┐
+ │ CUT        top k = 8               (k=5 and k=12 measured: tie)   │
+ └────────────────────────────────┬──────────────────────────────────┘
+                                  ▼
+ ╔═══════════════════════════════════════════════════════════════════╗
+ ║ GATE       an LLM scores each context, drop below 0.40            ║
+ ║            8 ─► 6.47 contexts · the run costs LESS                ║
+ ║            ◄── candidate F's only change, and the chosen one      ║
+ ╚════════════════════════════════╤══════════════════════════════════╝
+                                  ▼
+ ┌───────────────────────────────────────────────────────────────────┐
+ │ GENERATE   Farsi answer with [session-id] citations, or refuse    │
+ │                                                                   │
+ │      context precision  0.9338  ◄─┐                               │
+ │      answer relevancy   0.4886  ◄─┴─ the gap, and the bottleneck  │
+ └───────────────────────────────────────────────────────────────────┘
+
+     Chunks and vectors live in Chroma :8001 — one collection per
+     index configuration, named by its fingerprint.
+
+     Nothing in the eight-candidate sweep ever changed the bottom box.
+```
+
+### Which approach won
+
+Nothing, on score. Every comparison that carries an error bar came back a **tie**:
+F against A is 0.7375 ± 0.0333 versus 0.7222 ± 0.0341 — a 0.0153 lead inside a
+combined error of 0.0477. The earlier hosted sweep put five candidates inside 0.0116
+with no error bar at all, which is a ranking rather than a result.
+
+There is still a defensible answer, ordered by how well established it is:
+
+| Choice | Verdict | Evidence |
+| --- | --- | --- |
+| **The embedder** | **the only decision that was ever large** | hash → a real Persian encoder moved recall ~0.01 → 0.617, roughly **60×**. Every knob in the sweep is worth under 2%. |
+| **F — the relevance gate** | **keep, on cost rather than quality** | ties A on all four deciding metrics, cuts context 7.90 → 6.47 chunks, and the run costs *less* — 6814 s against 7296 s, because a shorter context means fewer judge calls. Refused 1 of 30 questions against A's 2. |
+| k = 5 / k = 12 | settled — stop tuning it | opposite changes to one knob finishing 0.0014 apart, precision and recall simply trading places |
+| Dropping the rollup layers | **genuinely open** | the simplest configuration had the best deterministic headline; the `month` layer was retrieved **zero times** in every candidate, and the habit ledger once in 24 |
+| G — boost the rollups ×1.4 | **no** | worse in every difficulty band, and it promoted month digests rather than the habit ledger it was meant to rescue |
+| H — whole-session chunks | **no** | the weakest retrieval in the sweep, hit rate 0.7727 against 0.8636 |
+
+### What the measurements taught
+
+- **The decision rule picks the winner before any data arrives.** Rank on the four
+  judged metrics and one candidate wins; rank on the deterministic composite and the
+  candidate that deletes the entire summary hierarchy wins instead. Same runs, same
+  answers, opposite architectural conclusions. Fixing the rule *before* seeing the
+  rows is the whole reason the result is trustworthy.
+- **A score without an error is not a result.** The hosted sweep produced a confident
+  ranking from five numbers with no spread. As soon as error bars existed, the first
+  comparison they touched returned *tie* rather than a winner — same shape of data,
+  opposite conclusion, purely from recording the uncertainty. This is why
+  `npm run raglab:leaderboard` refuses to rank rows that cannot be compared.
+- **Retrieval is close to saturated here; the answerer is the constraint.** Context
+  precision 0.9338 against answer relevancy 0.4886. Across the sweep, retrieval recall
+  varies by 0.1098 while the score meant to measure the whole pipeline varies by
+  0.0116 — retrieval differences arrive at the answer **9.5× attenuated**. All eight
+  candidates varied retrieval; none varied generation.
+- **The largest lever was pulled before the sweep began.** The embedder was ~60×;
+  everything swept afterwards was worth under 2%. You can only learn that in
+  retrospect, which is the argument for measuring early and cheaply rather than
+  tuning carefully.
+- **A metric can punish the right answer.** On an adversarial question with a false
+  premise — *"when we bought the apartment, what was the payment?"*, where no apartment
+  was ever bought — one candidate correctly replied that the purchase never happened
+  and scored 0.0, because `abstained_correctly` checks whether the model emitted a
+  refusal, not whether it was right.
+- **Some question types are not retrieval problems.** The `pattern` question failed
+  identically in every candidate, and the habit questions scored perfect recall even
+  in the configuration that indexes no habit ledger. Counting, streak and date-range
+  questions are lookups against structured card fields; routing them is the change
+  most likely to move a number next.
+
+Full write-ups, with run ids, real Farsi model outputs and every metric table:
+
+- `report/rag-sweep-essence.html` — the brief: abstract, findings, what to do next.
+- `report/rag-candidates-abcd.html` — the evidence, candidate by candidate.
+- `docs/rag-architecture.md` and `docs/rag-chosen-architecture.md` — the measured
+  argument and the recorded decision.
 
 ## More
 

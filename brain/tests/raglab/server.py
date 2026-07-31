@@ -14,7 +14,10 @@ describes.
 """
 import threading
 import traceback
+import urllib.error
+import urllib.request
 import uuid
+import inspect
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -22,13 +25,38 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from . import (embedding, evaluate, explain, metrics, models, pipeline,
                ragas_eval, retrieval)
-from .config import (ANSWERERS, CHUNKERS, EMBEDDERS, EXPANSIONS, GRADERS, LAYERS,
-                     RERANKERS, RETRIEVERS, STEPS, SUMMARIZERS, LabConfig,
-                     load_lab_settings)
+from .config import (ANSWERERS, BALANCES, CHUNKERS, DIFFICULTIES, EMBEDDERS,
+                     EXPANSIONS, GRADERS, LAYERS, RERANKERS, RETRIEVERS, STEPS,
+                     SUMMARIZERS, LabConfig, load_lab_settings)
 from .corpus import load_diary, load_ground_truth
 from .index import IndexRegistry, _lab_llm
 
 STATIC = Path(__file__).resolve().parent / 'static'
+
+
+class JobCancelled(Exception):
+    """A cooperative stop requested from the RAG Lab panel."""
+
+
+def require_chroma(settings) -> None:
+    """Fail before creating a job when the vector service cannot be reached.
+
+    A build used to become a background job before its first Chroma call.  That
+    made the panel briefly say "running", even when nothing could possibly
+    build.  The heartbeat is read-only and makes that dependency explicit.
+    """
+    if settings.chroma_url == 'memory':
+        return
+    endpoint = f'{settings.chroma_url.rstrip("/")}/api/v2/heartbeat'
+    try:
+        with urllib.request.urlopen(endpoint, timeout=3):
+            pass
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        raise HTTPException(
+            503,
+            f'Chroma is unavailable at {settings.chroma_url}. Start the local '
+            f'Chroma server on port 8001, then try again. ({error})',
+        ) from error
 
 
 class Jobs:
@@ -42,27 +70,47 @@ class Jobs:
 
     def start(self, kind: str, target) -> str:
         with self.lock:
-            if self.current and self.jobs[self.current]['state'] == 'running':
+            if self.current and self.jobs[self.current]['state'] in ('running', 'cancelling'):
                 raise HTTPException(409, f'a {self.jobs[self.current]["kind"]} job '
-                                         'is already running')
+                                         'is still stopping')
             job_id = uuid.uuid4().hex[:10]
             self.jobs[job_id] = {'id': job_id, 'kind': kind, 'state': 'running',
                                  'stage': 'starting', 'progress': 0.0,
-                                 'result': None, 'error': None}
+                                 'detail': '',
+                                 'result': None, 'error': None,
+                                 'cancel_requested': False,
+                                 '_cancel': threading.Event()}
             self.current = job_id
 
-        def report(stage: str, fraction: float) -> None:
+        cancel = self.jobs[job_id]['_cancel']
+
+        def report(stage: str, fraction: float, detail: str = '') -> None:
+            if cancel.is_set():
+                raise JobCancelled()
             job = self.jobs[job_id]
             job['stage'] = stage
             job['progress'] = round(min(1.0, max(0.0, fraction)), 3)
+            # "question 16/30 · hard" beside the fraction, because a judged run on
+            # a local model spends hours inside one stage and a bar that only
+            # moves at stage boundaries looks like a hang.
+            job['detail'] = detail
 
         def run() -> None:
             job = self.jobs[job_id]
             try:
-                job['result'] = target(report)
+                # Targets that make external calls receive a cancellation probe.
+                # Keep one-argument targets working for small callers and tests.
+                wants_cancel = len(inspect.signature(target).parameters) >= 2
+                job['result'] = target(report, cancel.is_set) if wants_cancel else target(report)
+                if cancel.is_set():
+                    raise JobCancelled()
                 job['state'] = 'done'
                 job['progress'] = 1.0
                 job['stage'] = 'done'
+            except JobCancelled:
+                job['state'] = 'cancelled'
+                job['stage'] = 'cancelled'
+                job['detail'] = 'stopped before the next model call'
             except Exception as error:              # surfaced, never swallowed
                 job['state'] = 'error'
                 job['error'] = f'{type(error).__name__}: {error}'
@@ -75,7 +123,20 @@ class Jobs:
         job = self.jobs.get(job_id)
         if not job:
             raise HTTPException(404, 'unknown job')
-        return job
+        # The event is an implementation detail, not JSON the browser can read.
+        return {key: value for key, value in job.items() if key != '_cancel'}
+
+    def cancel(self, job_id: str) -> dict:
+        job = self.jobs.get(job_id)
+        if not job:
+            raise HTTPException(404, 'unknown job')
+        if job['state'] == 'running':
+            job['cancel_requested'] = True
+            job['_cancel'].set()
+            job['state'] = 'cancelling'
+            job['stage'] = 'stopping'
+            job['detail'] = 'stopping before the next model call'
+        return self.get(job_id)
 
 
 def create_app() -> FastAPI:
@@ -102,6 +163,11 @@ def create_app() -> FastAPI:
             'graders': list(GRADERS), 'expansions': list(EXPANSIONS),
             'answerers': list(ANSWERERS),
             'question_types': list(metrics.TYPES),
+            'difficulties': list(DIFFICULTIES),
+            # How a limited run picks its questions. Served because the sample is
+            # part of the measurement: two rows scored on different samples are
+            # not two results, and the panel has to be able to say which.
+            'balances': list(BALANCES),
             'defaults': LabConfig().to_dict(),
             # The three steps, in pipeline order. The panel groups and colours
             # every control by these, so which step a thing belongs to is served
@@ -146,8 +212,15 @@ def create_app() -> FastAPI:
                     settings.cross_encoder_model),
                 'cross_encoder_model': settings.cross_encoder_model,
                 'fastembed_model': settings.fastembed_model,
-                'llm': bool(settings.openrouter_api_key),
+                # `llm` is "a real model is reachable", not "a key exists": with
+                # RAGLAB_LLM=ollama every stage runs on this machine and there is
+                # no key at all. The provider is served beside it because the
+                # badge has to name where the numbers came from — a run on the
+                # fake provider is not a cheaper run, it is not a run.
+                'llm': settings.llm_ready,
+                'llm_provider': settings.provider,
                 'llm_model': settings.llm_model,
+                'ollama_base_url': settings.ollama_base_url,
                 'ragas': ragas_eval.availability(settings).as_dict(),
                 'chroma_url': settings.chroma_url,
                 'chroma_database': settings.chroma_database,
@@ -157,10 +230,11 @@ def create_app() -> FastAPI:
 
     @app.post('/api/index')
     def build_index(payload: dict):
+        require_chroma(settings)
         cfg = LabConfig.from_dict(payload)
         force = bool(payload.get('force'))
 
-        def work(report):
+        def work(report, _cancelled):
             index = registry.get(cfg.index, progress=report, force=force)
             return {'collection': index.stats.collection,
                     'chunks': index.stats.chunks,
@@ -175,20 +249,26 @@ def create_app() -> FastAPI:
 
     @app.post('/api/run')
     def start_run(payload: dict):
+        require_chroma(settings)
         cfg = LabConfig.from_dict(payload)
-        problems = cfg.validate()
+        problems = cfg.validate() + models.provider_problems(cfg, settings)
         if problems:
             raise HTTPException(400, '; '.join(problems))
 
-        def work(report):
+        def work(report, cancelled):
+            def check_cancelled():
+                if cancelled():
+                    raise JobCancelled()
             result = evaluate.run_eval(
                 registry, ground_truth, cfg, settings,
                 types=payload.get('types') or None,
                 difficulty=payload.get('difficulty') or None,
                 limit=payload.get('limit') or None,
+                balance=payload.get('balance') or 'stride',
                 ragas_mode=payload.get('ragas_mode', 'offline'),
                 ragas_limit=payload.get('ragas_limit') or None,
-                workers=int(payload.get('workers', 1)), progress=report)
+                workers=int(payload.get('workers', 1)), progress=report,
+                cancelled=check_cancelled)
             return result.as_dict()
 
         return {'job_id': jobs.start('run', work)}
@@ -196,6 +276,10 @@ def create_app() -> FastAPI:
     @app.get('/api/jobs/{job_id}')
     def job_status(job_id: str):
         return jobs.get(job_id)
+
+    @app.post('/api/jobs/{job_id}/cancel')
+    def cancel_job(job_id: str):
+        return jobs.cancel(job_id)
 
     @app.get('/api/runs')
     def runs(limit: int = 50):
@@ -212,6 +296,7 @@ def create_app() -> FastAPI:
     def ad_hoc_query(payload: dict):
         """Run one question through the current settings and return every stage.
         The fastest way to understand *why* a config scores the way it does."""
+        require_chroma(settings)
         cfg = LabConfig.from_dict(payload)
         question = (payload.get('question') or '').strip()
         if not question:

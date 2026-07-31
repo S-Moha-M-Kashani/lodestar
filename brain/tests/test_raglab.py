@@ -8,7 +8,11 @@ production embedder finds nothing at all — only exist at that scale.
 """
 import json
 import os
+import re
+import threading
+import time
 from dataclasses import replace
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -16,14 +20,16 @@ import pytest
 from lodestar_brain.llm.fake import FakeChat
 
 from .raglab import (chunking, config, corpus, embedding, evaluate, explain,
-                     metrics, models, pipeline, query, retrieval, summarize,
-                     sweep, textnorm)
-from .raglab.config import (EMBEDDERS, GenerationConfig, IndexConfig, LabConfig,
-                            LabSettings, RetrievalConfig)
+                     leaderboard, metrics, models, pipeline, query, ragas_eval,
+                     retrieval, summarize, sweep, textnorm)
+from .raglab.config import (EMBEDDERS, RERANKERS, GenerationConfig, IndexConfig,
+                            LabConfig, LabSettings, RetrievalConfig)
 from .raglab.index import IndexRegistry, LabIndex
 
 LAB_SETTINGS = LabSettings(chroma_url='memory', chroma_database='raglab-tests',
-                           openrouter_api_key='')
+                           openrouter_api_key='', llm_provider='fake')
+RAGLAB_DIR = Path(__file__).resolve().parent / 'raglab'
+REPO_ROOT = RAGLAB_DIR.parents[2]
 
 
 # --- fixtures --------------------------------------------------------------
@@ -1540,6 +1546,28 @@ def test_the_catalogue_offers_every_requested_model_with_its_backend():
         assert entry.farsi and entry.note, model_id
 
 
+def test_no_knob_offers_an_openrouter_embedding_or_rerank_model():
+    """Availability is verified here, never guessed — the rule the embedder list
+    already follows. Measured against OpenRouter's published catalogue on
+    2026-07-31: 337 models, and not one embedding, rerank or whisper entry;
+    `qwen/qwen3-embedding-8b` and `cohere/rerank-4-fast` are both absent. The
+    gateway does answer 401 rather than 404 on /embeddings and /rerank, so the
+    routes exist — but a route with no servable model is not a backend, and a key
+    in the environment is not evidence that one is there.
+
+    An unservable *reranker* is the worse half: `pipeline._rerank` swallows every
+    exception and returns the pre-rerank order, so such a candidate would report
+    itself as reranked while having done nothing — a silent accuracy difference,
+    which is the exact failure this lab exists to catch."""
+    assert 'openrouter' not in EMBEDDERS
+    assert 'openrouter' not in embedding.BACKENDS
+    assert 'openrouter' not in embedding.BACKEND_DEFAULTS
+    assert 'rerank-4-fast' not in RERANKERS
+    # And neither is reachable as a default, which is how they arrived.
+    assert IndexConfig().embedder == 'sentence-transformers'
+    assert RetrievalConfig().reranker == 'lexical'
+
+
 def test_every_model_names_a_backend_the_lab_actually_has():
     assert all(model.backend in embedding.BACKENDS
                for model in embedding.EMBED_MODELS)
@@ -2121,8 +2149,8 @@ def test_options_offers_a_model_choice_for_every_llm_task(client):
     assert all(role['help'] and role['label'] and role['field']
                for role in roles.values())
     ids = [m['id'] for m in body['models']]
-    assert ids[0] == '' and 'openai/gpt-5-nano' in ids
-    assert {m['source'] for m in body['models']} >= {'open', 'closed'}
+    assert ids[0] == '' and '4skl/gemma4-e2b-mtp' in ids
+    assert {m['source'] for m in body['models']} >= {'default', 'open'}
 
 
 def test_options_explains_every_knob(client):
@@ -2328,3 +2356,975 @@ def test_the_standalone_panel_ranks_the_leaderboard_by_the_deciding_score():
     # And by the score *with its error*: neither panel may show the mean alone,
     # because the candidates in a sweep sit inside each other's error bars.
     assert 'ragas_decision_stderr' in html
+
+
+# --- the local backend: a model on this machine ----------------------------
+# The four deciding metrics are judged, so an unkeyed lab could measure nothing
+# at all — which is what made the expensive candidates (an LLM gate is k calls
+# per question) unmeasurable when the credit ran out. Ollama closes that gap, and
+# the requirement is that it closes it *honestly*: a run judged locally must be
+# labelled locally, and a slug the daemon cannot load must stop the run rather
+# than quietly become whatever the other backend serves.
+
+OLLAMA_SETTINGS = replace(LAB_SETTINGS, llm_provider='ollama',
+                          llm_model='gemma4:e2b')
+
+
+def test_the_lab_provider_resolves_to_a_real_backend_or_the_fake():
+    """Local is the default; another backend is always an explicit choice."""
+    assert LabSettings(openrouter_api_key='').provider == 'ollama'
+    assert LabSettings(openrouter_api_key='sk-x').provider == 'ollama'
+    assert LabSettings(openrouter_api_key='sk-x', llm_provider='openrouter').provider == 'openrouter'
+    # A named provider is a commitment, and outranks whether a key happens to
+    # exist: with 'ollama' set, a key in the environment must not divert the run
+    # to a paid API.
+    assert LabSettings(openrouter_api_key='sk-x',
+                       llm_provider='ollama').provider == 'ollama'
+
+
+def test_an_unknown_lab_provider_raises_rather_than_falling_back():
+    with pytest.raises(ValueError, match='RAGLAB_LLM'):
+        LabSettings(llm_provider='ollamma')
+
+
+def test_llm_ready_asks_whether_a_real_model_is_reachable_not_whether_a_key_is():
+    """The distinction the whole change rests on. The fake provider answers and
+    grades every question without ever failing, so 'has a backend' and 'has a
+    key' are different questions — and a local judge needs no key at all."""
+    assert LabSettings(openrouter_api_key='').llm_ready
+    assert LabSettings(openrouter_api_key='sk-x').llm_ready
+    assert LabSettings(llm_provider='ollama').llm_ready
+    assert not LabSettings(openrouter_api_key='sk-x', llm_provider='fake').llm_ready
+
+
+def test_the_lab_builds_its_local_model_through_the_production_seam():
+    """CLAUDE.md's rule: the lab tracks production seams, so whatever wins here
+    ports over unchanged. Adding 'ollama' to make_chat_model is what made it
+    reachable in the lab, and there is no lab-side branch to drift from it."""
+    from .raglab.llm import brain_settings
+    built = brain_settings(replace(OLLAMA_SETTINGS,
+                                   ollama_base_url='http://localhost:11434/v1'))
+    assert built.llm_provider == 'ollama'
+    assert built.ollama_base_url == 'http://localhost:11434/v1'
+    assert built.model == 'gemma4:e2b'
+
+
+def test_the_ragas_judge_follows_the_provider_instead_of_hardcoding_openrouter():
+    """The bug this replaces: ragas_eval named ChatOpenAI, the OpenRouter key and
+    the OpenRouter base URL itself, so the judge was the one stage RAGLAB_LLM
+    could not move. A local answerer with a remote judge is a paid run that looks
+    free, and nothing on the row said which."""
+    from .raglab.llm import judge_llm
+    judge = judge_llm(replace(OLLAMA_SETTINGS, llm_model='gemma4:e2b'),
+                      'qwen3.5:2b')
+    assert str(judge.openai_api_base) == OLLAMA_SETTINGS.ollama_base_url
+    # The judge slug reaches the wire because RAGAS binds the model at
+    # construction and never forwards one per request.
+    assert judge.model_name == 'qwen3.5:2b'
+
+
+def test_ragas_availability_accepts_a_local_judge_with_no_api_key():
+    from .raglab import ragas_eval
+    status = ragas_eval.availability(OLLAMA_SETTINGS)
+    if status.installed:
+        assert status.llm_ready, status.notes
+    fake = ragas_eval.availability(LAB_SETTINGS)
+    if fake.installed:
+        assert not fake.llm_ready
+        assert any('ollama' in note for note in fake.notes), (
+            'the note has to name the way out, not just the missing key')
+
+
+def test_the_judge_is_pushed_far_less_hard_when_it_runs_locally():
+    """The failure this exists to prevent, measured: RAGAS defaults to 16
+    concurrent calls, one laptop model serves two or three, and the queued
+    requests tripped the client timeout — a judged run came back with one of its
+    four deciding metrics and three `TimeoutError`s.
+
+    Concurrency and timeout cannot change *what* a judge scores, only whether the
+    score arrives, which is why tuning them per backend is not a thumb on the
+    scale."""
+    from .raglab import ragas_eval
+    local = ragas_eval.judge_load(OLLAMA_SETTINGS)
+    remote = ragas_eval.judge_load(replace(LAB_SETTINGS,
+                                           openrouter_api_key='sk-x',
+                                           llm_provider='openrouter'))
+    assert local['max_workers'] < remote['max_workers']
+    assert local['timeout'] > remote['timeout']
+    assert local['timeout'] >= 600, 'calls under load were measured at 80–92s'
+
+
+def test_a_run_records_which_backend_judged_it():
+    """A decision score is comparable only within one judge, and the model slug
+    alone does not say whether it ran locally or was paid for."""
+    note = models.note_for(LabConfig(), OLLAMA_SETTINGS)
+    assert 'ollama' in note
+    assert 'fake' in models.note_for(LabConfig(), LAB_SETTINGS)
+
+
+def test_the_dropdown_offers_the_local_models_when_the_backend_is_local():
+    """Two lists, not one: an OpenRouter slug is not something Ollama can load,
+    and a local tag is not something OpenRouter serves. One merged dropdown would
+    offer every user half a menu of choices that cannot work."""
+    local = {e['id'] for e in models.catalogue(OLLAMA_SETTINGS)}
+    remote = {e['id'] for e in models.catalogue(LAB_SETTINGS)}
+    assert 'qwen3.5:2b' in local and 'gemma4:e2b' in local
+    assert 'openai/gpt-5-nano' in remote
+    assert 'qwen3.5:2b' not in remote
+    # The lists are disjoint, which is the property that matters. Note it cannot
+    # be checked by the shape of a slug: `4skl/gemma4-e2b-mtp` is a namespaced
+    # Ollama tag and contains a '/' exactly like an OpenRouter one.
+    assert not ({o.id for o in models.CHAT_MODELS}
+                & {o.id for o in models.OLLAMA_MODELS})
+    assert not (local - {''}) & {o.id for o in models.CHAT_MODELS}
+
+
+def test_every_local_model_says_what_it_is_for():
+    """The catalogue rule applies to the local list too: the licence is part of
+    the label and every option says why you would pick it. On a local backend
+    that note is doing more work than usual — the models differ mostly in speed,
+    and the judge is ~276 calls per run."""
+    for option in models.OLLAMA_MODELS:
+        assert option.source == 'open', option.id
+        assert option.note, option.id
+        assert option.label
+
+
+def test_a_model_the_local_backend_does_not_serve_stops_the_run(monkeypatch):
+    """The embedder rule applied to chat models: a mismatch is a validation
+    error, never a silent fallback. A leaderboard row labelled qwen3.5:2b that
+    was actually scored by gpt-5-mini is the worst artefact this lab can produce,
+    because no other field on the row contradicts it."""
+    monkeypatch.setattr(models, 'served_ids',
+                        lambda settings: frozenset({'gemma4:e2b'}))
+    cfg = LabConfig(generation=GenerationConfig(ragas_model='qwen3.5:2b'))
+    problems = models.provider_problems(cfg, OLLAMA_SETTINGS)
+    assert problems and 'qwen3.5:2b' in problems[0]
+    assert models.provider_problems(
+        LabConfig(generation=GenerationConfig(ragas_model='gemma4:e2b')),
+        OLLAMA_SETTINGS) == []
+
+
+def test_an_unreachable_daemon_claims_nothing_rather_than_refusing_everything(
+        monkeypatch):
+    """"Cannot check" and "not there" are different facts. With the daemon down
+    the served list is empty, and a guard that read that as "serves nothing"
+    would refuse every run on a machine that was merely idle."""
+    monkeypatch.setattr(models, 'served_ids', lambda settings: frozenset())
+    cfg = LabConfig(generation=GenerationConfig(ragas_model='anything:1b'))
+    assert models.provider_problems(cfg, OLLAMA_SETTINGS) == []
+
+
+def test_the_local_tag_list_is_read_from_the_daemon_not_guessed(monkeypatch):
+    """Availability is verified, never inferred from the shape of a slug."""
+    calls = {}
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {'models': [{'name': 'qwen3.5:2b'},
+                               {'name': 'gemma4:e2b:latest'}]}
+
+    def fake_get(url, timeout=None):
+        calls['url'] = url
+        return Response()
+
+    import httpx
+    monkeypatch.setattr(httpx, 'get', fake_get)
+    monkeypatch.setattr(models, '_LIVE', {})
+    ids = models.ollama_ids(OLLAMA_SETTINGS)
+    # /api/tags, not the OpenAI-compatible /v1/models: a tag is what `ollama
+    # pull` names and what a run should be labelled with.
+    assert calls['url'] == 'http://localhost:11434/api/tags'
+    assert 'qwen3.5:2b' in ids
+    # Both spellings, because `ollama run gemma4:e2b` works even though the
+    # daemon prints the ':latest' form.
+    assert 'gemma4:e2b' in ids and 'gemma4:e2b:latest' in ids
+
+
+def test_the_sweep_can_be_pointed_at_a_local_pairing():
+    """The sweep's two model pins are env-settable so a local run needs no edit
+    to the file — but the rule they exist to enforce is unchanged: two different
+    models, because a model grading its own output is not evidence."""
+    assert sweep.ANSWER_MODEL != sweep.JUDGE_MODEL
+    for cfg in sweep.candidates():
+        assert cfg.generation.model == sweep.ANSWER_MODEL, cfg.label
+        assert cfg.generation.ragas_model == sweep.JUDGE_MODEL, cfg.label
+
+
+def test_each_provider_names_its_own_pairing_and_never_crosses_them():
+    """A slug only means something to the backend that serves it, so the default
+    pairing is per provider. Crossing them is the failure `provider_problems`
+    exists to stop, and a default must not be the thing that trips it."""
+    for provider, pair in sweep.PAIRINGS.items():
+        assert pair['answerer'] != pair['judge'], provider
+        served = (models.OLLAMA_MODELS if provider == 'ollama'
+                  else models.CHAT_MODELS)
+        slugs = {m.id for m in served}
+        assert pair['answerer'] in slugs, (provider, pair)
+        assert pair['judge'] in slugs, (provider, pair)
+
+
+def test_choosing_the_local_backend_is_enough_to_get_a_local_default_model():
+    """`RAGLAB_LLM=ollama` on its own has to produce a runnable lab. It did not:
+    the default model stayed a remote slug, so `provider_problems` refused every
+    run for a model the user never chose — a default that cannot run is a broken
+    default, not a strict one."""
+    local = LabSettings(chroma_url='memory', chroma_database='raglab-tests',
+                        llm_provider='ollama')
+    assert local.llm_model in {m.id for m in models.OLLAMA_MODELS}, local.llm_model
+    assert not models.provider_problems(LabConfig(), local)
+
+
+def test_an_explicit_model_is_never_replaced_by_the_provider_default():
+    """The resolution is for the *unset* case only. Overwriting a stated model
+    would mean a run labelled with one model was scored by another."""
+    local = LabSettings(chroma_url='memory', chroma_database='raglab-tests',
+                        llm_provider='ollama', llm_model='gemma4:e2b')
+    assert local.llm_model == 'gemma4:e2b'
+
+
+def test_every_provider_has_a_default_model_it_can_actually_serve():
+    for provider, model in config.PROVIDER_MODELS.items():
+        served = (models.OLLAMA_MODELS if provider == 'ollama'
+                  else models.CHAT_MODELS)
+        assert model in {m.id for m in served}, (provider, model)
+
+
+def test_the_local_pairing_is_the_one_that_was_screened():
+    """The judge is part of the apparatus, so the default judge has to be a model
+    `.screens/` has a row for — a default nobody screened is judge-shopping with
+    extra steps."""
+    assert sweep.PAIRINGS['ollama'] == {'answerer': '4skl/gemma4-e2b-mtp',
+                                        'judge': 'gemma4:e2b'}
+
+
+def test_the_sweep_refuses_a_judge_that_grades_its_own_answers(monkeypatch,
+                                                              tmp_path):
+    monkeypatch.setattr(sweep, 'ANSWER_MODEL', 'gemma4:e2b')
+    monkeypatch.setattr(sweep, 'JUDGE_MODEL', 'gemma4:e2b')
+    monkeypatch.setattr(sweep, 'load_lab_settings', lambda: OLLAMA_SETTINGS)
+    monkeypatch.setattr(evaluate, 'RUNS_DIR', tmp_path)
+    with pytest.raises(SystemExit, match='own output'):
+        sweep.judged_settings()
+
+
+def test_the_sweep_starts_with_a_local_judge_and_no_api_key(monkeypatch):
+    """The guard used to test for a credential, so anyone judging locally was
+    sent away from a run they could have made."""
+    monkeypatch.setattr(sweep, 'load_lab_settings', lambda: OLLAMA_SETTINGS)
+    assert sweep.judged_settings().provider == 'ollama'
+
+
+# --- the 49-question sample, balanced across difficulty --------------------
+# The four deciding metrics are means over questions, so which questions a run
+# scored is part of the measurement. The natural distribution is 29 easy / 57
+# medium / 26 hard, and a plain stride hands medium about half of any sample —
+# which measures the medium pipeline and reports it as the pipeline.
+
+def test_a_balanced_sample_splits_the_difficulty_bands_as_evenly_as_it_can(
+        ground_truth):
+    picked = evaluate.select_questions(ground_truth, limit=49,
+                                       balance='difficulty')
+    assert len(picked) == 49
+    counts = {name: sum(1 for q in picked if q['difficulty'] == name)
+              for name in config.DIFFICULTIES}
+    # 49 does not divide by three; the remainder goes to the earlier bands in
+    # DIFFICULTIES order, so the split is 17/16/16 and not "whatever came out".
+    assert counts == {'easy': 17, 'medium': 16, 'hard': 16}, counts
+
+
+def test_a_balanced_sample_that_divides_evenly_is_exactly_equal(ground_truth):
+    picked = evaluate.select_questions(ground_truth, limit=51,
+                                       balance='difficulty')
+    counts = {name: sum(1 for q in picked if q['difficulty'] == name)
+              for name in config.DIFFICULTIES}
+    assert counts == {'easy': 17, 'medium': 17, 'hard': 17}, counts
+
+
+def test_a_balanced_sample_is_the_same_questions_every_time(ground_truth):
+    """Two candidates are only comparable if they scored the same questions, so
+    the selection has to be deterministic rather than merely proportionate."""
+    first = evaluate.select_questions(ground_truth, limit=49,
+                                      balance='difficulty')
+    second = evaluate.select_questions(ground_truth, limit=49,
+                                       balance='difficulty')
+    assert [q['id'] for q in first] == [q['id'] for q in second]
+
+
+def test_a_balanced_sample_still_spreads_across_the_question_types(ground_truth):
+    """Balancing difficulty must not cost type coverage — habit questions are
+    last in the file and were the type a bad stride used to lose entirely."""
+    picked = evaluate.select_questions(ground_truth, limit=49,
+                                       balance='difficulty')
+    types = {q['type'] for q in picked}
+    assert len(types) >= 9, types
+    assert 'habit' in types
+
+
+def test_a_balanced_sample_keeps_the_fixture_order(ground_truth):
+    """Band-by-band output would make two runs undiffable line by line for no
+    reason."""
+    picked = evaluate.select_questions(ground_truth, limit=49,
+                                       balance='difficulty')
+    order = [q['id'] for q in ground_truth['questions']]
+    assert [q['id'] for q in picked] == [i for i in order
+                                        if i in {q['id'] for q in picked}]
+
+
+def test_a_band_too_small_for_its_share_does_not_shrink_the_sample():
+    """A run asked for N questions must produce N whenever the set holds that
+    many; what a small band cannot supply is offered to the others."""
+    questions = ([{'id': f'e{i}', 'difficulty': 'easy', 'type': 't'}
+                  for i in range(2)]
+                 + [{'id': f'm{i}', 'difficulty': 'medium', 'type': 't'}
+                    for i in range(20)]
+                 + [{'id': f'h{i}', 'difficulty': 'hard', 'type': 't'}
+                    for i in range(20)])
+    picked = evaluate.select_questions({'questions': questions}, limit=12,
+                                       balance='difficulty')
+    assert len(picked) == 12
+    assert sum(1 for q in picked if q['difficulty'] == 'easy') == 2
+
+
+def test_the_default_sampling_rule_is_unchanged(ground_truth):
+    """The twelve runs already in `.runs/` were strided. Changing the default
+    underneath the leaderboard would make those rows incomparable rather than
+    merely old — so 'stride' stays the default and the sweep opts in."""
+    strided = evaluate.select_questions(ground_truth, limit=24)
+    explicit = evaluate.select_questions(ground_truth, limit=24,
+                                         balance='stride')
+    assert [q['id'] for q in strided] == [q['id'] for q in explicit]
+
+
+def test_an_unknown_balance_raises_rather_than_silently_striding(ground_truth):
+    with pytest.raises(ValueError, match='balance'):
+        evaluate.select_questions(ground_truth, limit=10, balance='difficlty')
+
+
+def test_an_unknown_balance_raises_even_when_there_is_no_limit(ground_truth):
+    """Checked after the early return, the validation passed silently on any run
+    without a limit — so a typo would only raise on the runs where it happened to
+    change something, which is the worst possible place to find it."""
+    with pytest.raises(ValueError, match='balance'):
+        evaluate.select_questions(ground_truth, balance='difficlty')
+
+
+def test_a_run_saves_the_questions_it_was_measured_on(registry, ground_truth):
+    """Neither the config nor the metric means say which questions produced them,
+    so the ids travel with the row. Losing them is how two rows get compared
+    across two different samples with nothing to reveal it."""
+    cfg = LabConfig(index=IndexConfig(chunker='semantic-drift',
+                                      embedder='char-hash', contextual=True),
+                    generation=GenerationConfig(answerer='none'))
+    result = evaluate.run_eval(registry, ground_truth, cfg, LAB_SETTINGS,
+                               limit=9, balance='difficulty', ragas_mode='off')
+    selection = result.selection
+    assert selection['balance'] == 'difficulty' and selection['limit'] == 9
+    assert selection['n'] == 9
+    assert len(selection['question_ids']) == 9
+    assert selection['by_difficulty'] == {'easy': 3, 'medium': 3, 'hard': 3}
+    assert result.as_dict()['selection'] == selection
+    # And on the leaderboard row — minus the ids, which would swamp it.
+    assert result.brief()['selection']['balance'] == 'difficulty'
+    assert 'question_ids' not in result.brief()['selection']
+
+
+def test_the_sweep_measures_every_candidate_on_the_same_balanced_30():
+    """The sample is a property of the sweep, not of the invocation: a row
+    measured on a different sample is a different measurement."""
+    assert sweep.SWEEP_LIMIT == 30
+    assert sweep.SWEEP_BALANCE == 'difficulty'
+    assert sweep.SWEEP_BALANCE in config.BALANCES
+
+
+def test_the_sweep_sample_is_exactly_ten_of_each_band(ground_truth):
+    """30 divides by three, so this sample needs no remainder rule at all — the
+    bands are equal rather than merely as-equal-as-possible."""
+    picked = evaluate.select_questions(ground_truth, limit=sweep.SWEEP_LIMIT,
+                                       balance=sweep.SWEEP_BALANCE)
+    counts = {name: sum(1 for q in picked if q['difficulty'] == name)
+              for name in config.DIFFICULTIES}
+    assert counts == {'easy': 10, 'medium': 10, 'hard': 10}, counts
+
+
+# --- progress: a run that reports nothing is indistinguishable from a hang ---
+# With a local judge the judged phase is hours, not minutes, so every phase has
+# to say where it is. The callback carries a human detail beside the fraction
+# because "0.92" for two hours tells the reader nothing about what is happening.
+
+PROGRESS_CFG = LabConfig(index=IndexConfig(chunker='message', embedder='char-hash'),
+                         generation=GenerationConfig(answerer='extractive'),
+                         label='progress')
+
+
+def test_progress_reports_which_question_it_is_on(registry, ground_truth,
+                                                  tmp_path, monkeypatch):
+    monkeypatch.setattr(evaluate, 'RUNS_DIR', tmp_path)
+    seen = []
+    evaluate.run_eval(registry, ground_truth, PROGRESS_CFG, LAB_SETTINGS,
+                      limit=4, balance='difficulty', ragas_mode='off',
+                      progress=lambda stage, fraction, detail='': seen.append(
+                          (stage, round(fraction, 3), detail)))
+    scoring = [row for row in seen if row[0] == 'scoring']
+    assert len(scoring) == 4, seen
+    # The count is the point: "question 3/4" is checkable against the sample the
+    # row itself records, where a bare fraction is not.
+    assert scoring[2][2].startswith('question 3/4'), scoring
+    assert scoring[-1][2].startswith('question 4/4'), scoring
+    # And the band, because a slow phase on hard questions is a different fact
+    # from a slow phase overall.
+    assert any(band in scoring[0][2] for band in config.DIFFICULTIES), scoring
+
+
+def test_a_two_argument_progress_callback_still_works(registry, ground_truth,
+                                                      tmp_path, monkeypatch):
+    """The detail is additive. The panel's reporter predates it, and a run must
+    not fail because its caller does not want the third argument."""
+    monkeypatch.setattr(evaluate, 'RUNS_DIR', tmp_path)
+    seen = []
+    evaluate.run_eval(registry, ground_truth, PROGRESS_CFG, LAB_SETTINGS,
+                      limit=2, ragas_mode='off',
+                      progress=lambda stage, fraction: seen.append(stage))
+    assert 'scoring' in seen and 'done' in seen
+
+
+def test_the_judged_phase_reports_calls_as_they_land():
+    """The judged phase is the whole wall clock on a local judge. RAGAS scores a
+    batch, so without a per-call hook the bar sits at one number for hours."""
+    watch = ragas_eval.JudgeWatch(total=6)
+    seen = []
+    watch.progress = lambda stage, fraction, detail='': seen.append(detail)
+    watch.on_llm_end(None)
+    watch.on_llm_end(None)
+    assert 'judge call 2' in seen[-1]
+    assert '~6' in seen[-1], 'the estimate is marked as one, not stated as fact'
+    # A judge that makes more calls than estimated must not report >100%.
+    for _ in range(20):
+        watch.on_llm_end(None)
+    assert watch.fraction() <= 1.0
+
+
+def test_the_job_carries_the_detail_to_whoever_is_polling():
+    """The panel polls a job dict, so the detail has to be a field on it — a
+    progress line only the terminal sees leaves the two UIs looking hung."""
+    from .raglab.server import Jobs
+    jobs = Jobs()
+    captured = {}
+
+    def target(report):
+        report('scoring', 0.5, 'question 16/30 · hard')
+        captured['snapshot'] = dict(jobs.jobs[jobs.current])
+        return {'ok': True}
+
+    job_id = jobs.start('run', target)
+    while jobs.jobs[job_id]['state'] == 'running':
+        time.sleep(0.01)
+    assert captured['snapshot']['detail'] == 'question 16/30 · hard'
+    assert captured['snapshot']['stage'] == 'scoring'
+    # Present from the start, so a poll landing before the first report reads a
+    # blank rather than undefined.
+    assert 'detail' in jobs.jobs[job_id]
+
+
+def test_a_running_job_can_be_cancelled_before_its_next_call():
+    """Stopping a run must prevent its next unit of work, not just its polling."""
+    from .raglab.server import Jobs
+    jobs = Jobs()
+    started = threading.Event()
+
+    def target(report, cancelled):
+        started.set()
+        while not cancelled():
+            time.sleep(0.001)
+        # The normal checkpoint used by indexing and evaluation raises the
+        # cooperative cancellation exception as soon as the active call ends.
+        report('scoring', 0.5, 'would have made another model call')
+
+    job_id = jobs.start('run', target)
+    assert started.wait(timeout=1)
+    stopped = jobs.cancel(job_id)
+    assert stopped['state'] == 'cancelling'
+    for _ in range(100):
+        if jobs.get(job_id)['state'] == 'cancelled':
+            break
+        time.sleep(0.01)
+    job = jobs.get(job_id)
+    assert job['state'] == 'cancelled'
+    assert job['cancel_requested'] is True
+    assert '_cancel' not in job
+
+
+def test_both_frontends_read_the_progress_detail():
+    """Neither UI may quietly stop showing it: a judged local run spends hours in
+    one stage, and the detail is the only thing that moves."""
+    panel = (RAGLAB_DIR / 'static' / 'index.html').read_text(encoding='utf-8')
+    board = (REPO_ROOT / 'app.js').read_text(encoding='utf-8')
+    assert 'job.detail' in panel
+    assert '.job.detail' in board
+
+
+def test_both_rag_lab_frontends_offer_a_cooperative_stop():
+    """The embedded panel is the usual surface, but the standalone lab needs it too."""
+    panel = (RAGLAB_DIR / 'static' / 'index.html').read_text(encoding='utf-8')
+    board = (REPO_ROOT / 'app.js').read_text(encoding='utf-8')
+    assert 'Stop experiment' in panel
+    assert "'/api/jobs/' + jobId + '/cancel'" in panel
+    assert 'raglab-cancel' in board
+    assert "'/jobs/' + ragState.jobId + '/cancel'" in board
+
+
+def test_the_terminal_bar_says_stage_fraction_elapsed_and_detail():
+    line = sweep.bar('Stage F', 'scoring', 0.5, 'question 16/30 · hard',
+                     time.time() - 63)
+    assert line.startswith('\r'), 'the line is rewritten in place, not appended'
+    assert 'Stage F' in line
+    assert '50.0%' in line
+    assert '1m03s' in line, line          # elapsed, because a fraction alone
+    assert 'question 16/30 · hard' in line   # cannot tell slow from stuck
+    filled = line.count('█')
+    assert filled == sweep.BAR_WIDTH // 2, filled
+
+
+def test_a_shorter_detail_cannot_leave_the_tail_of_a_longer_one_behind():
+    """Without the padding a redraw leaves stale characters on the line, which
+    reads as a stale *number* rather than as a drawing artefact."""
+    written = []
+    report = sweep.live('Stage A', time.time(),
+                        stream=type('S', (), {'write': written.append,
+                                              'flush': lambda self: None})())
+    report('ragas', 0.94, 'judge call 137 of ~420')
+    report('done', 1.0, '')
+    assert len(written[0]) == len(written[1])
+    assert '137' not in written[1]
+
+
+def test_the_expected_judge_call_count_scales_with_k():
+    """Context precision asks one verdict per retrieved chunk, so k is what
+    drives the bill — the estimate has to know that or it is decoration."""
+    at_k5 = ragas_eval.expected_judge_calls(n_samples=10, k=5)
+    at_k12 = ragas_eval.expected_judge_calls(n_samples=10, k=12)
+    assert at_k12 > at_k5
+    assert at_k12 - at_k5 == 10 * 7, (at_k5, at_k12)
+
+
+def test_the_balance_control_is_explained_like_every_other_knob():
+    """`explain.missing()` covers config fields; a run-level control has to be
+    added to the same registry by hand or it reaches the panel unexplained."""
+    assert 'run.balance' in explain.topics()
+    assert 'run.difficulty' in explain.topics()
+
+
+# --- the leaderboard, and what it refuses to rank together ------------------
+# A decision score is comparable only against rows that scored the same questions
+# with the same judge. One flat ranking over everything in `.runs/` is exactly
+# where that gets forgotten, so the producer groups first and ranks second.
+
+def _row(run_id, label, decision, ids, judge, stderr=None):
+    return {'run_id': run_id, 'label': label, 'ragas_decision': decision,
+            'ragas_decision_stderr': stderr, 'started_at': '2026-07-31 10:00:00',
+            'seconds': 60, 'n_questions': len(ids), 'summary': {}, 'ragas': {},
+            'config': {}, 'judge': judge,
+            'selection': {'balance': 'difficulty', 'n': len(ids),
+                          'question_ids': ids}}
+
+
+def test_the_sweeps_own_ranking_applies_the_same_error_test():
+    """Measured, and it is why this exists: F scored 0.7375 against A's 0.7222 on
+    identical questions, and the sweep printed F on top of a list headed "ranked
+    by the decision score" — a win, by presentation. The combined error was
+    0.0477, three times the lead. The leaderboard refused to call it; the sweep
+    that produced the rows must refuse too, or the first thing anyone reads is the
+    conclusion the analysis rejects."""
+    judge = {'model': 'gemma4:e2b', 'provider': 'ollama'}
+    ids = ['q1', 'q2']
+    lines = sweep.ranking_verdict([
+        _row('r2', 'F llm relevance gate', 0.7375, ids, judge, stderr=0.0333),
+        _row('r1', 'A baseline', 0.7222, ids, judge, stderr=0.0341)])
+    text = '\n'.join(lines)
+    assert 'do not separate' in text or 'No winner' in text, text
+    assert '0.0477' in text or '0.048' in text, 'the error it was judged against'
+
+
+def test_the_sweeps_ranking_names_a_winner_when_there_is_one():
+    judge = {'model': 'gemma4:e2b', 'provider': 'ollama'}
+    ids = ['q1', 'q2']
+    text = '\n'.join(sweep.ranking_verdict([
+        _row('r2', 'F', 0.90, ids, judge, stderr=0.01),
+        _row('r1', 'A', 0.50, ids, judge, stderr=0.01)]))
+    assert 'F' in text and 'Winner' in text
+
+
+def test_rows_that_scored_different_questions_are_not_ranked_together():
+    """The failure this exists to stop: F measured on 30 balanced questions read
+    as beating A measured on 24 strided ones, when neither number bears on the
+    other."""
+    judge = {'model': 'gemma4:e2b', 'provider': 'ollama'}
+    groups = leaderboard.group([
+        _row('r1', 'A', 0.61, ['q1', 'q2'], judge),
+        _row('r2', 'F', 0.72, ['q3', 'q4'], judge),
+    ])
+    assert len(groups) == 2, 'two samples are two measurements'
+    assert all(len(g.rows) == 1 for g in groups)
+
+
+def test_rows_scored_by_different_judges_are_not_ranked_together():
+    ids = ['q1', 'q2']
+    groups = leaderboard.group([
+        _row('r1', 'A', 0.61, ids, {'model': 'gemma4:e2b', 'provider': 'ollama'}),
+        _row('r2', 'F', 0.72, ids, {'model': 'openai/gpt-5-mini',
+                                    'provider': 'openrouter'}),
+    ])
+    assert len(groups) == 2, 'a judge swap is a different measurement'
+
+
+def test_a_group_ranks_by_decision_score_and_keeps_the_unranked_rows_last():
+    judge = {'model': 'gemma4:e2b', 'provider': 'ollama'}
+    ids = ['q1', 'q2']
+    group, = leaderboard.group([
+        _row('r1', 'A', 0.61, ids, judge),
+        _row('r2', 'no judged metrics', None, ids, judge),
+        _row('r3', 'F', 0.72, ids, judge),
+    ])
+    assert [r['label'] for r in group.rows] == ['F', 'A', 'no judged metrics']
+    # Present, not dropped: a run that measured nothing is a fact about the run.
+    assert group.rows[-1]['ragas_decision'] is None
+
+
+def test_a_lead_inside_the_error_is_reported_as_a_tie():
+    """0.6487 against 0.6501 was a real pair in this lab, and a bare ranking read
+    it as a win. The margin has to be compared to the error or the leaderboard
+    manufactures conclusions."""
+    judge = {'model': 'gemma4:e2b', 'provider': 'ollama'}
+    ids = ['q1', 'q2']
+    group, = leaderboard.group([
+        _row('r1', 'A', 0.6487, ids, judge, stderr=0.03),
+        _row('r2', 'F', 0.6501, ids, judge, stderr=0.03),
+    ])
+    assert leaderboard.verdict(group) == 'tie'
+    clear, = leaderboard.group([
+        _row('r1', 'A', 0.50, ids, judge, stderr=0.01),
+        _row('r2', 'F', 0.72, ids, judge, stderr=0.01),
+    ])
+    assert leaderboard.verdict(clear) == 'F'
+
+
+def test_runs_that_never_recorded_their_sample_are_not_treated_as_one_sample():
+    """Found by running the thing: every run predating `RunResult.selection` has
+    no question ids, so keying on the ids alone put 3-, 24- and 100-question runs
+    in one ranked table. A missing sample is not evidence of a *shared* sample."""
+    judge = {'model': 'openai/gpt-5-mini', 'provider': 'openrouter'}
+    rows = [_row('r1', 'A 24q', 0.6385, [], judge),
+            _row('r2', 'A 3q', 0.5488, [], judge)]
+    rows[0]['n_questions'] = 24
+    rows[1]['n_questions'] = 3
+    for r in rows:
+        r['selection'] = {}
+    assert len(leaderboard.group(rows)) == 2, 'different counts, different samples'
+
+
+def test_an_unrecorded_sample_can_never_declare_a_winner():
+    """Two runs of 24 questions apiece may still be two *different* 24 — striding
+    changed, and nothing on those rows says which questions they were. So even
+    with errors measured, the comparison is not established."""
+    judge = {'model': 'openai/gpt-5-mini', 'provider': 'openrouter'}
+    rows = [_row('r1', 'D', 0.6501, [], judge, stderr=0.01),
+            _row('r2', 'A', 0.5000, [], judge, stderr=0.01)]
+    for r in rows:
+        r['selection'] = {}
+        r['n_questions'] = 24
+    found, = leaderboard.group(rows)
+    assert leaderboard.verdict(found) == 'unknown'
+    text = leaderboard.markdown([found])
+    assert 'not recorded' in text
+    # And no rank numbers, or the table contradicts the sentence above it.
+    assert '| 1 |' not in text, text
+
+
+def test_a_group_with_no_measured_error_cannot_claim_a_winner():
+    """`± 0` on the oldest rows would present them as the most precise."""
+    judge = {'model': 'openai/gpt-5-mini', 'provider': 'openrouter'}
+    ids = ['q1', 'q2']
+    group, = leaderboard.group([
+        _row('r1', 'A', 0.50, ids, judge, stderr=None),
+        _row('r2', 'F', 0.72, ids, judge, stderr=None),
+    ])
+    assert leaderboard.verdict(group) == 'unknown'
+
+
+def test_the_group_that_decides_something_is_printed_first():
+    """Sorting by question count put a 100-question group of unrecorded samples —
+    which cannot be ranked at all — above the 30-question group that decides the
+    architecture. A reader opens this for the live decision."""
+    judge = {'model': 'gemma4:e2b', 'provider': 'ollama'}
+    stale = _row('r0', 'old 100q', 0.61, [], judge)
+    stale['selection'], stale['n_questions'] = {}, 100
+    stale['started_at'] = '2026-07-29 10:00:00'
+    live_rows = [_row('r1', 'F', 0.90, ['q1', 'q2'], judge, stderr=0.01),
+                 _row('r2', 'A', 0.50, ['q1', 'q2'], judge, stderr=0.01)]
+    groups = leaderboard.group([stale] + live_rows)
+    assert leaderboard.verdict(groups[0]) == 'F', [g.sample for g in groups]
+
+
+def test_every_judge_label_reads_as_a_noun_after_judged_by():
+    judge = {'model': '', 'provider': ''}
+    unjudged, = leaderboard.group([_row('r1', 'retrieval only', None,
+                                        ['q1'], judge)])
+    text = leaderboard.markdown([unjudged])
+    assert 'judged by nothing judged' not in text, text
+    assert 'judged by no judge —' in text
+
+
+def test_the_markdown_names_the_sample_and_the_judge_on_every_group():
+    judge = {'model': 'gemma4:e2b', 'provider': 'ollama'}
+    text = leaderboard.markdown(leaderboard.group([
+        _row('r1', 'A baseline', 0.61, ['q1', 'q2'], judge, stderr=0.02)]))
+    assert 'gemma4:e2b' in text and 'ollama' in text
+    assert '2 questions' in text
+    assert '0.610' in text and '0.020' in text
+    assert 'r1' in text, 'the run id is what makes a row checkable'
+
+
+def test_the_run_list_carries_the_two_fields_comparability_needs(tmp_path,
+                                                                 monkeypatch):
+    """`brief()` had them and `list_runs` did not, so the panel's own leaderboard
+    could not tell an incomparable row from a comparable one.
+
+    Writes its own run file rather than reading `.runs/`: a test that skips when
+    the developer's disk happens to be empty is not coverage."""
+    monkeypatch.setattr(evaluate, 'RUNS_DIR', tmp_path)
+    (tmp_path / '20260731-120000-abc123.json').write_text(json.dumps({
+        'run_id': '20260731-120000-abc123', 'label': 'A baseline',
+        'selection': {'balance': 'difficulty', 'n': 2,
+                      'question_ids': ['q1', 'q2']},
+        'summary': {'n_questions': 2},
+        'ragas': {'metrics': {'faithfulness': 0.9}, 'decision': 0.61,
+                  'decision_spread': {'stderr': 0.02},
+                  'judge': {'model': 'gemma4:e2b', 'provider': 'ollama'}},
+    }), encoding='utf-8')
+    row, = evaluate.list_runs(limit=5)
+    assert row['selection']['question_ids'] == ['q1', 'q2']
+    assert row['judge'] == {'model': 'gemma4:e2b', 'provider': 'ollama'}
+    # And the grouping keys off exactly those, so the two travel together.
+    found, = leaderboard.group([row])
+    assert found.question_ids == ('q1', 'q2')
+    assert found.judge_model == 'gemma4:e2b'
+
+
+# --- screening a judge before it is allowed to grade ------------------------
+# Four of the metrics are judged, so the judge is part of the apparatus. A weak
+# one does not produce noisy rankings — it produces confident wrong ones, and two
+# of the local models screened so far answered identically to every claim, which
+# scores 0.5 on a balanced set and separates no candidate from any other.
+
+def test_the_screen_pairs_a_verified_answer_with_one_fabricated_number(
+        diary, ground_truth):
+    """Built from the ground truth, not hand-authored: a supported claim is a
+    question's own verified answer, and its partner is that answer with one
+    numeral changed to one the context never states."""
+    from .raglab import judgescreen
+    sessions = corpus.sessions_by_id(diary)
+    items = judgescreen.build_items(ground_truth, sessions, pairs=4)
+    assert len(items) == 8
+    yes = [i for i in items if i.supported]
+    no = [i for i in items if not i.supported]
+    assert len(yes) == len(no) == 4, 'an unbalanced screen flatters a constant judge'
+    for supported, fabricated in zip(yes, no):
+        assert supported.question_id == fabricated.question_id
+        assert supported.claim != fabricated.claim
+        # Word-for-word identical apart from digits: that is what removes the
+        # lexical shortcut.
+        strip = lambda text: ''.join(c for c in text if not c.isdigit()
+                                     and c not in '۰۱۲۳۴۵۶۷۸۹')
+        assert strip(supported.claim) == strip(fabricated.claim)
+
+
+def test_the_screen_measures_how_much_word_overlap_could_explain(diary,
+                                                                ground_truth):
+    """Reported, not assumed — and it is not zero, which is a deliberate trade.
+
+    Two designs were tried and both leaked. Picking the most similar answer from a
+    *different* question left the true answer ahead on overlap 0.43 to 0.20.
+    Mutating one numeral made the classes lexically identical (0.533 vs 0.517) but
+    the labels were **wrong**: the context was raw message text, which never states
+    a date, so a true claim mentioning one was correctly refused by every judge.
+    Dating the context fixed the labels and brought a modest signal back, because
+    the correct numeral now appears in the context and the fabricated one does not.
+
+    Correct labels win that trade every time: a mislabelled screen disqualifies
+    good judges, which is worse than one a word-counter could partly game. So the
+    number is measured and travels with the result, and the check that actually
+    decides is degeneracy, which no lexical shortcut can pass."""
+    from .raglab import judgescreen
+    items = judgescreen.build_items(ground_truth, corpus.sessions_by_id(diary),
+                                    pairs=6)
+    signal = judgescreen.lexical_signal(items)
+    assert signal['difference'] is not None
+    assert 'blind' in signal
+    # Small enough that overlap cannot be the whole story: the fabricated claims
+    # still share almost all their vocabulary with the context.
+    assert abs(signal['difference']) <= 0.15, signal
+
+
+def test_the_screen_dates_its_context_the_way_the_pipeline_does(diary,
+                                                               ground_truth):
+    """The defect that made the first screen's verdicts worthless.
+
+    Diary messages are spoken and almost never state a date; the date is session
+    metadata. Reference answers state dates. So a judge shown bare message text
+    refuses a true claim *for the right reason* — which is exactly what happened:
+    `gemma4:e2b` scored 0.2 and `qwen3.5:2b` 0.0 on the supported class, and
+    reading their reasons showed the screen was wrong, not the models. The
+    pipeline under test has the same problem and solves it the same way
+    (`IndexConfig.contextual` prepends a dated header before embedding)."""
+    from .raglab import judgescreen
+    sessions = corpus.sessions_by_id(diary)
+    items = judgescreen.build_items(ground_truth, sessions, pairs=6)
+    for item in items:
+        for line in item.context:
+            assert re.match(r'^\[\d{4}-\d{2}-\d{2}\]', line), line
+
+
+def test_a_screened_claim_is_one_sentence_not_a_whole_answer(diary,
+                                                            ground_truth):
+    """The second defect. A reference answer is several clauses spanning several
+    sessions, so a judge asked to entail all of it against one question's evidence
+    is right to refuse. RAGAS's own faithfulness decomposes a response into atomic
+    statements *before* judging any of them, so an undecomposed paragraph did not
+    resemble the real task either."""
+    from .raglab import judgescreen
+    sessions = corpus.sessions_by_id(diary)
+    items = judgescreen.build_items(ground_truth, sessions, pairs=6)
+    answers = {q['id']: q['answer_fa'] for q in ground_truth['questions']}
+    for item in items:
+        # One sentence. Not "shorter than the answer": a single-sentence answer
+        # legitimately yields a claim of the same length, and asserting length
+        # would be testing the fixture's prose rather than the decomposition.
+        assert len(textnorm.sentences(item.claim)) == 1, item.id
+        assert len(item.claim) <= len(answers[item.question_id]), item.id
+        # And it is anchored: it states a number the context also states, so the
+        # context can actually settle it either way.
+        anchored = [n for n in judgescreen.NUMERAL.findall(item.claim)
+                    if textnorm.normalize(n)
+                    in textnorm.normalize(' '.join(item.context))]
+        assert anchored or not item.supported, item.id
+
+
+def test_the_fabricated_number_is_one_the_context_never_states(diary,
+                                                              ground_truth):
+    """Otherwise the claim is labelled unsupported while being arguably
+    supported, and the screen would disqualify the judge that got it right."""
+    from .raglab import judgescreen
+    sessions = corpus.sessions_by_id(diary)
+    items = judgescreen.build_items(ground_truth, sessions, pairs=6)
+    for item in (i for i in items if not i.supported):
+        context = textnorm.normalize(' '.join(item.context))
+        original = next(i for i in items
+                        if i.question_id == item.question_id and i.supported)
+        changed = [n for n in judgescreen.NUMERAL.findall(item.claim)
+                   if n not in judgescreen.NUMERAL.findall(original.claim)]
+        assert changed, item.id
+        for numeral in changed:
+            assert textnorm.normalize(numeral) not in context, (item.id, numeral)
+
+
+def test_a_question_that_cannot_be_mutated_cleanly_is_skipped(diary):
+    """No mutation is better than a mislabelled one."""
+    from .raglab import judgescreen
+    sessions = corpus.sessions_by_id(diary)
+    # No numerals at all, so nothing can be fabricated.
+    ground_truth = {'questions': [
+        {'id': 'q-x', 'answerable': True, 'answer_fa': 'هیچ عددی اینجا نیست',
+         'evidence': [{'quote': 'متن بدون عدد', 'session_id': 'nope',
+                       'message_indices': []}]}]}
+    assert judgescreen.build_items(ground_truth, sessions, pairs=4) == []
+
+
+def test_the_screen_reads_a_ragas_shaped_reply_and_nothing_looser():
+    """RAGAS asks for nested JSON and retries on malformed output, so a model that
+    judges well but writes prose spends its speed advantage on retries. Counting
+    a bare 'yes' as an answer here would hide exactly that cost."""
+    from .raglab import judgescreen
+    good = '{"statements": [{"statement": "x", "verdict": 1, "reason": "y"}]}'
+    assert judgescreen._verdict(good) == 1
+    # A fenced block is a formatting habit, not a failure to answer.
+    assert judgescreen._verdict('```json\n{"statements":[{"verdict":0}]}\n```') == 0
+    assert judgescreen._verdict('Yes, it is supported.') is None
+    assert judgescreen._verdict('{"statements": []}') is None
+    assert judgescreen._verdict('{"verdict": 1}') is None
+    assert judgescreen._verdict('') is None
+
+
+def test_a_constant_judge_is_reported_as_degenerate_not_as_fifty_percent():
+    """The field that decides. A model answering the same way every time is
+    unusable at any accuracy, because it cannot separate two candidates — and on
+    a balanced set it posts 0.5, which reads like a merely weak judge."""
+    from .raglab.judgescreen import Call, score
+    calls = [Call(item_id=f'i{i}', supported=i % 2 == 0, verdict=1, parsed=True,
+                  seconds=1.0, prompt='p', reply='r') for i in range(8)]
+    result = score(calls)
+    assert result['degenerate'] is True
+    assert result['accuracy'] == 0.5
+    assert result['recall_supported'] == 1.0
+    assert result['recall_unsupported'] == 0.0
+
+
+def test_a_judge_that_tracks_the_claim_is_not_flagged_degenerate():
+    from .raglab.judgescreen import Call, score
+    calls = [Call(item_id=f'i{i}', supported=i % 2 == 0,
+                  verdict=int(i % 2 == 0), parsed=True, seconds=1.0,
+                  prompt='p', reply='r') for i in range(8)]
+    result = score(calls)
+    assert result['degenerate'] is False and result['accuracy'] == 1.0
+
+
+def test_unparseable_replies_are_counted_separately_from_wrong_ones():
+    """Two different problems with two different fixes: a prompt/format issue and
+    a comprehension issue. Folding them together would send you tuning the wrong
+    one."""
+    from .raglab.judgescreen import Call, score
+    calls = [Call(item_id='a', supported=True, verdict=1, parsed=True,
+                  seconds=1.0, prompt='p', reply='r'),
+             Call(item_id='b', supported=False, verdict=None, parsed=False,
+                  seconds=1.0, prompt='p', reply='I think maybe')]
+    result = score(calls)
+    assert result['schema_failures'] == 1
+    assert result['n_parsed'] == 1
+    assert result['accuracy'] == 1.0, 'accuracy is over what could be graded'
+
+
+def test_the_screen_refuses_to_run_without_a_backend(monkeypatch):
+    """The same guard as the sweep, for the same reason: the fake provider judges
+    every claim without failing, and a screen it passed would be a licence."""
+    from .raglab import judgescreen
+    monkeypatch.setattr(judgescreen, 'load_lab_settings', lambda: LAB_SETTINGS)
+    with pytest.raises(SystemExit, match='no LLM backend'):
+        judgescreen.screen(['whatever:1b'], pairs=1)
+
+
+def test_the_screen_keeps_every_prompt_and_reply_it_sent():
+    """A screen that reported only an accuracy could not be re-read to see *how*
+    a model failed, and 'it was a constant predictor' is a conclusion nobody can
+    check from a number. This is the field that a wiped scratch directory took
+    last time."""
+    from dataclasses import fields
+
+    from .raglab.judgescreen import Call
+    names = {f.name for f in fields(Call)}
+    assert {'prompt', 'reply', 'verdict', 'parsed', 'seconds', 'usage'} <= names
+
+
+def test_a_remote_slug_is_never_refused_on_the_strength_of_a_listing(monkeypatch):
+    """OpenRouter's list is authoritative in one direction only: everything on it
+    works, but a slug missing from it may still be valid — the routing suffixes
+    (`:free`, `:floor`) do not appear as ids. Blocking runs that used to work is a
+    worse failure than the mislabelled row this guard exists to prevent, so the
+    refusal is scoped to the local backend, whose tag list *is* authoritative both
+    ways."""
+    keyed = replace(LAB_SETTINGS, openrouter_api_key='sk-x')
+    monkeypatch.setattr(models, 'openrouter_ids',
+                        lambda settings: frozenset({'openai/gpt-5-nano'}))
+    cfg = LabConfig(generation=GenerationConfig(ragas_model='openai/gpt-5-mini:floor'))
+    assert models.provider_problems(cfg, keyed) == []

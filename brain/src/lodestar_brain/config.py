@@ -13,13 +13,34 @@ PRODUCTION_BOARD_PORT = 3000
 PRODUCTION_DATABASE = 'lodestar'
 NON_PRODUCTION_DATABASE = 'lodestar-test'
 
+# The default chat model per backend. A slug only means something to the backend
+# that serves it, so `BRAIN_LLM=ollama` has to move the model too — otherwise
+# every chat turn asks the local daemon for a model it cannot load, naming one the
+# user never chose. `BRAIN_MODEL` still wins: an explicit model must never be
+# replaced by a default, or the answer came from something other than what the
+# picker says it did.
+PROVIDER_MODELS = {'openrouter': 'openai/gpt-5-nano',
+                   'ollama': '4skl/gemma4-e2b-mtp',
+                   'fake': 'openai/gpt-5-nano'}
+
 
 @dataclass(frozen=True)
 class Settings:
     openrouter_api_key: str = ''
     openrouter_base_url: str = 'https://openrouter.ai/api/v1'
-    model: str = 'openai/gpt-5-nano'
-    llm_provider: str = 'openrouter'   # 'openrouter' | 'fake'
+    # '' = the backend's own default (PROVIDER_MODELS), resolved in
+    # __post_init__ so every reader sees a concrete slug. It cannot be a literal
+    # here: Settings(llm_provider='openrouter') is how the unit tests, the evals
+    # and create_app's callers build settings, and a hard-coded slug from one
+    # backend under a provider field naming another is the exact mismatch
+    # PROVIDER_MODELS exists to prevent.
+    model: str = ''
+    llm_provider: str = 'ollama'       # 'openrouter' | 'ollama' | 'fake'
+    # Where a locally served model lives. Ollama's OpenAI-compatible surface, so
+    # the '/v1' is part of the URL rather than something the factory appends —
+    # pointing this at any other local OpenAI-compatible server (llama.cpp, vLLM)
+    # then needs no code change at all.
+    ollama_base_url: str = 'http://localhost:11434/v1'
     # 'fastembed' | 'hash'. No 'auto': probing for the optional fastembed wheel
     # and taking HashEmbedder when it was missing meant a machine without the
     # 'semantic' extra ran token-overlap hashing while believing it had
@@ -39,13 +60,25 @@ class Settings:
     # config. Default to the free, offline, private backend; Docker pins
     # 'openrouter' because mlx cannot be installed there at all.
     transcriber: str = 'parakeet'
-    # Audio/photo/video → text. Matches the Assistant view's omni picker default.
-    # Must be a model that genuinely *receives* audio: nemotron-3-nano-omni:free
-    # advertises audio input but its provider discards the input_audio part, so
-    # every dictation came back an invented apology instead of a transcript.
+    # Audio/photo/video → text, for the *remote* transcriber only; Parakeet owns
+    # its own checkpoint and ignores this. Must be a model OpenRouter serves and
+    # one that genuinely *receives* audio: nemotron-3-nano-omni:free advertises
+    # audio input but its provider discards the input_audio part, so every
+    # dictation came back an invented apology. openai/whisper-* fails earlier
+    # still — measured 2026-07-31, OpenRouter's catalogue holds no whisper entry.
     omni_model: str = 'google/gemini-2.5-flash-lite'
     # Local checkpoint for the Parakeet backend (Apple Silicon, MLX).
     parakeet_model: str = 'mlx-community/parakeet-tdt-0.6b-v3'
+
+    def __post_init__(self):
+        # An unknown provider gets the remote slug and is rejected by
+        # make_chat_model, which is where that error belongs — resolving a model
+        # for it here would turn a clear "unknown backend" into a confusing
+        # "unknown model". An explicitly named model is never replaced, or the
+        # picker's label and the model that answered would disagree.
+        if not self.model:
+            object.__setattr__(self, 'model', PROVIDER_MODELS.get(
+                self.llm_provider, PROVIDER_MODELS['openrouter']))
 
 
 def _board_port(board_api_url: str) -> int | None:
@@ -66,11 +99,16 @@ def _chroma_database_for(board_api_url: str) -> str:
 def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     env = os.environ if env is None else env
     board_api_url = env.get('BOARD_API_URL', 'http://127.0.0.1:3000')
+    provider = env.get('BRAIN_LLM', 'ollama')
     return Settings(
         openrouter_api_key=env.get('OPENROUTER_API_KEY', ''),
         openrouter_base_url=env.get('OPENROUTER_BASE_URL', 'https://openrouter.ai/api/v1'),
-        model=env.get('BRAIN_MODEL', 'openai/gpt-5-nano'),
-        llm_provider=env.get('BRAIN_LLM', 'openrouter'),
+        # '' hands the choice to __post_init__, so the env path and a settings
+        # object built in code resolve the backend's model by the same rule.
+        model=env.get('BRAIN_MODEL', ''),
+        llm_provider=provider,
+        ollama_base_url=env.get('BRAIN_OLLAMA_BASE_URL',
+                                'http://localhost:11434/v1'),
         embedder=env.get('BRAIN_EMBEDDER', 'hash'),
         board_api_url=board_api_url,
         chroma_url=env.get('BRAIN_CHROMA_URL', 'http://localhost:8001'),

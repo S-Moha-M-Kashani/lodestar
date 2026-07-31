@@ -4,7 +4,7 @@ from lodestar_brain.config import Settings, load_settings
 def test_defaults():
     s = load_settings(env={})
     assert s.openrouter_base_url == 'https://openrouter.ai/api/v1'
-    assert s.llm_provider == 'openrouter'
+    assert s.llm_provider == 'ollama'
     # No 'auto' anywhere: a mode that silently degrades hides which backend is
     # actually running. 'hash' is the honest default because fastembed is an
     # optional extra — a machine without it must say so, not quietly downgrade.
@@ -15,15 +15,38 @@ def test_defaults():
     # Likewise explicit: the local, free, private backend is the default, and
     # Docker pins BRAIN_TRANSCRIBER=openrouter because mlx cannot install there.
     assert s.transcriber == 'parakeet'
-    # The cheap tier is the default: a request that arrives without a model
-    # (evals, direct API use) should not silently buy the expensive one.
-    assert s.model == 'openai/gpt-5-nano'
-    # The old default, nvidia/nemotron-3-nano-omni-...:free, is advertised as
-    # audio-capable but its provider silently discards the input_audio part —
-    # every dictation came back a hallucinated apology. The default must be a
-    # model verified to actually receive audio.
+    # The local screened model is the default: a request that arrives without a
+    # model never silently spends API credit.
+    assert s.model == '4skl/gemma4-e2b-mtp'
+    # Ollama's OpenAI-compatible surface, '/v1' included: the factory forwards
+    # this verbatim, so any other local server (llama.cpp, vLLM) is a URL change
+    # rather than a code change.
+    assert s.ollama_base_url == 'http://localhost:11434/v1'
+    # The remote dictation default has to be a model OpenRouter actually serves
+    # *and* one verified to receive the audio. nvidia/nemotron-3-nano-omni:free
+    # advertises audio input but its provider discards the input_audio part, so
+    # every dictation came back a hallucinated apology. openai/whisper-* is a
+    # different failure and was reverted for it: measured 2026-07-31, OpenRouter's
+    # published catalogue is 337 models and contains no whisper, embedding or
+    # rerank entry at all, so a whisper default cannot transcribe anything.
     assert s.omni_model == 'google/gemini-2.5-flash-lite'
     assert s.parakeet_model == 'mlx-community/parakeet-tdt-0.6b-v3'
+
+
+def test_choosing_the_backend_chooses_the_model_on_a_hand_built_settings():
+    """`Settings(llm_provider=...)` is how the unit tests, the evals and
+    create_app's callers build settings — load_settings is only the env path. A
+    dataclass default that hard-codes one backend's slug while the provider field
+    names another is exactly the mismatch PROVIDER_MODELS exists to prevent: it
+    made /agent/models answer 'openrouter' with a model only the local daemon can
+    load, and no other field on the response contradicts it."""
+    assert Settings(llm_provider='openrouter').model == 'openai/gpt-5-nano'
+    assert Settings(llm_provider='ollama').model == '4skl/gemma4-e2b-mtp'
+    assert Settings(llm_provider='fake').model == 'openai/gpt-5-nano'
+    # An explicitly named model is never replaced, or the picker's label and the
+    # model that answered would disagree.
+    assert Settings(llm_provider='ollama',
+                    model='openai/gpt-5-nano').model == 'openai/gpt-5-nano'
 
 
 def test_env_overrides():
@@ -37,7 +60,9 @@ def test_env_overrides():
         'BRAIN_TRANSCRIBER': 'fake',
         'BRAIN_OMNI_MODEL': 'google/gemini-2.5-flash',
         'BRAIN_PARAKEET_MODEL': 'mlx-community/parakeet-tdt-1.1b',
+        'BRAIN_OLLAMA_BASE_URL': 'http://gpu.lan:11434/v1',
     })
+    assert s.ollama_base_url == 'http://gpu.lan:11434/v1'
     assert s.openrouter_api_key == 'sk-test'
     assert s.model == 'anthropic/claude-sonnet-4.5'
     assert s.llm_provider == 'fake'

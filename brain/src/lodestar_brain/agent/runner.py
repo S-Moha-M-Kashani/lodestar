@@ -146,20 +146,24 @@ class LodestarAgent:
         self.system_prompt = system_prompt
         self.max_steps = max_steps
         self._llm = llm            # tests inject a FakeChat; create_app never does
-        self._graphs: dict[str, Any] = {}
+        self._graphs: dict[tuple[str, str], Any] = {}
         # Build the default graph now rather than on the first request: an
         # unknown BRAIN_LLM has to fail at boot (create_app builds the agent),
         # which is the no-auto-modes rule. Lazily, a typo would serve a healthy
         # /health and then 500 the first chat.
         self._graph(None)
 
-    def _graph(self, model: str | None):
-        """One compiled graph per model name. create_agent binds its model at
-        build time, but the Assistant view sends a model per request — so the
-        picker needs a graph per pick, cached for the life of the process."""
-        key = model or ''
+    def _graph(self, model: str | None, provider: str | None = None):
+        """One compiled graph per provider/model pair.
+
+        ``create_agent`` binds its model at build time. The Assistant picker can
+        intentionally move between the local Ollama backend and OpenRouter, so
+        the provider is part of the cache key too: a model slug alone is not a
+        complete destination.
+        """
+        key = (provider or self.settings.llm_provider, model or '')
         if key not in self._graphs:
-            llm = self._llm or make_chat_model(self.settings, model)
+            llm = self._llm or make_chat_model(self.settings, model, provider)
             self._graphs[key] = create_agent(model=llm, tools=self.tools,
                                              system_prompt=self.system_prompt,
                                              middleware=[ToolErrorsToJson()])
@@ -171,12 +175,13 @@ class LodestarAgent:
         # turn: 2n+1 nodes for n tool calls.
         return {'recursion_limit': 2 * self.max_steps + 1}
 
-    def run(self, messages: list[dict], model: str | None = None) -> AgentResult:
+    def run(self, messages: list[dict], model: str | None = None,
+            provider: str | None = None) -> AgentResult:
         seen: list[BaseMessage] = []
         try:
             # Streamed, not invoked: GraphRecursionError carries no messages,
             # so this is the only way to still report the steps taken.
-            for chunk in self._graph(model).stream({'messages': messages},
+            for chunk in self._graph(model, provider).stream({'messages': messages},
                                                    config=self._config,
                                                    stream_mode='values'):
                 seen = chunk['messages']
@@ -184,11 +189,11 @@ class LodestarAgent:
             return AgentResult(reply=STEP_LIMIT_REPLY, steps=_steps_from(seen))
         return AgentResult(reply=_reply_from(seen), steps=_steps_from(seen))
 
-    async def arun(self, messages: list[dict],
-                   model: str | None = None) -> AgentResult:
+    async def arun(self, messages: list[dict], model: str | None = None,
+                   provider: str | None = None) -> AgentResult:
         seen: list[BaseMessage] = []
         try:
-            async for chunk in self._graph(model).astream({'messages': messages},
+            async for chunk in self._graph(model, provider).astream({'messages': messages},
                                                           config=self._config,
                                                           stream_mode='values'):
                 seen = chunk['messages']

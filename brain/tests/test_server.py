@@ -46,6 +46,25 @@ def test_chat_echo_roundtrip():
 
 
 @respx.mock
+def test_chat_accepts_the_providers_the_picker_offers_and_refuses_the_rest():
+    """The Assistant's provider selector rides along on every chat turn, so the
+    route is the boundary that has to reject a provider this brain cannot serve.
+    A fake brain answers regardless — the offline contract belongs to the server,
+    not to a browser deciding when to leave the field out."""
+    client = TestClient(fake_app())
+    for provider in ('ollama', 'openrouter'):
+        res = client.post('/agent/chat', json={
+            'messages': [{'role': 'user', 'content': 'hello brain'}],
+            'provider': provider})
+        assert res.status_code == 200, provider
+        assert res.json()['reply'] == 'FAKE: hello brain'
+    res = client.post('/agent/chat', json={
+        'messages': [{'role': 'user', 'content': 'hello brain'}],
+        'provider': 'anthropic'})
+    assert res.status_code == 422
+
+
+@respx.mock
 def test_chat_add_proposes_a_card_without_mutating_the_board():
     # create_question now proposes; the board is unchanged until the user
     # confirms. The two events are distinct flags because the frontend reacts
@@ -152,6 +171,29 @@ def test_transcribe_forwards_the_picked_omni_model():
     assert res.status_code == 200
     assert res.json() == {'text': 'spoken words'}
     assert json.loads(route.calls.last.request.content)['model'] == 'google/gemini-2.5-flash'
+
+
+@respx.mock
+def test_every_transcription_uses_the_one_chat_completions_wire_format():
+    """One wire format, as the module's own docstring states: audio rides in as an
+    `input_audio` content part on a normal chat completion. A second branch that
+    sniffed `openai/whisper-` out of the model name and posted JSON to
+    /audio/transcriptions was reverted — that slug is absent from OpenRouter's
+    published catalogue (measured 2026-07-31: 337 models, no whisper entry), the
+    OpenAI-compatible transcription endpoint takes multipart form-data rather than
+    this JSON body, and no test ever exercised it. respx fails an unmocked call,
+    so mocking only /chat/completions is what enforces the single route."""
+    route = respx.post('https://openrouter.ai/api/v1/chat/completions').mock(
+        return_value=httpx.Response(200, json={
+            'choices': [{'message': {'content': 'spoken words'}}]}))
+    client = TestClient(create_app(Settings(
+        llm_provider='fake', embedder='hash', transcriber='openrouter',
+        openrouter_api_key='sk-test', board_api_url='http://board.test')))
+    res = client.post('/agent/transcribe', json={
+        'audio': b64(WAV), 'model': 'openai/whisper-large-v3-turbo'})
+    assert res.status_code == 200
+    assert res.json() == {'text': 'spoken words'}
+    assert route.called
 
 
 @respx.mock
@@ -280,3 +322,58 @@ def test_rag_reindex_and_communities():
     res = client.get('/rag/communities')
     assert res.status_code == 200
     assert isinstance(res.json()['communities'], list)
+
+
+# --- which models this brain can serve --------------------------------------
+# The browser sends a model with every chat turn, so a picker offering slugs the
+# backend cannot load is a broken Assistant with no way out of it from the UI.
+
+def test_models_route_says_nothing_is_verified_on_a_remote_backend():
+    """OpenRouter is a paid API with hundreds of models; probing it on every
+    settings render would be absurd, so `verified` is False and the frontend's
+    curated list stands. False must not read as "serves nothing"."""
+    client = TestClient(create_app(Settings(llm_provider='openrouter',
+                                            embedder='hash', transcriber='fake')))
+    body = client.get('/agent/models').json()
+    assert body == {'provider': 'openrouter', 'default': 'openai/gpt-5-nano',
+                    'verified': False, 'models': []}
+
+
+@respx.mock
+def test_models_route_lists_what_the_local_daemon_serves():
+    respx.get('http://localhost:11434/api/tags').mock(
+        return_value=httpx.Response(200, json={'models': [{'name': 'qwen3.5:2b'},
+                                                          {'name': 'gemma4:e2b'}]}))
+    client = TestClient(create_app(Settings(llm_provider='ollama',
+                                            model='gemma4:e2b',
+                                            embedder='hash', transcriber='fake')))
+    body = client.get('/agent/models').json()
+    assert body['provider'] == 'ollama' and body['verified'] is True
+    assert body['models'] == ['gemma4:e2b', 'qwen3.5:2b']
+    assert body['default'] == 'gemma4:e2b'
+
+
+@respx.mock
+def test_a_local_daemon_that_is_down_claims_nothing_rather_than_an_empty_list():
+    """A daemon that is not running is a normal state, not an error. Reporting
+    verified=True with no models would empty the picker instead of leaving the
+    presets in place."""
+    respx.get('http://localhost:11434/api/tags').mock(
+        side_effect=httpx.ConnectError('nope'))
+    client = TestClient(create_app(Settings(llm_provider='ollama',
+                                            embedder='hash', transcriber='fake')))
+    body = client.get('/agent/models').json()
+    assert body['verified'] is False and body['models'] == []
+
+
+@respx.mock
+def test_the_models_route_reads_the_configured_base_url():
+    """So the same setting reaches a daemon on another host without a code
+    change — and so a wrong URL surfaces as an unverified backend rather than
+    silently probing localhost."""
+    respx.get('http://gpu.lan:11434/api/tags').mock(
+        return_value=httpx.Response(200, json={'models': [{'name': 'x:1b'}]}))
+    client = TestClient(create_app(Settings(
+        llm_provider='ollama', embedder='hash', transcriber='fake',
+        ollama_base_url='http://gpu.lan:11434/v1')))
+    assert client.get('/agent/models').json()['models'] == ['x:1b']

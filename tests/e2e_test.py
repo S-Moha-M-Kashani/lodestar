@@ -1024,14 +1024,23 @@ try:
         # changes behaviour today (it rides along on every chat request); the
         # omni and embedding picks are stored preferences for the brain's
         # coming media/RAG features. All three persist in localStorage.
-        # The text picker offers one cheap default and one step up, nothing else.
+        # The text picker is local-first: it offers the models pulled on this
+        # machine, and OpenRouter is one explicit selector away. All three local
+        # slugs were verified against `ollama list` rather than assumed.
         # moonshotai/kimi-k3 and openai/gpt-4o-mini are retired, and so is
         # openrouter/auto: it is deprecated, it routes to a different model per
         # request, and the brain never reads the resolved slug back out of the
         # response — so a slow or badly tool-calling turn was unattributable.
-        DEFAULT_TEXT = "openai/gpt-5-nano"
-        ALT_TEXT = "openai/gpt-5-mini"
+        DEFAULT_TEXT = "4skl/gemma4-e2b-mtp"
+        ALT_TEXT = "gemma4:e2b"
+        THIRD_TEXT = "deepseek-r1:8b"
         RETIRED_TEXT = ["moonshotai/kimi-k3", "openai/gpt-4o-mini", "openrouter/auto"]
+
+        # Every option now says which route it takes, so the label is no longer
+        # the slug. Assert on the values — the label carries its own check below.
+        def option_values(selector):
+            return page.locator(f"{selector} option").evaluate_all(
+                "os => os.map(o => o.value)")
         # Every omni option must be a model that actually receives audio.
         # nemotron:free advertises audio input but its provider discards the
         # input_audio part, so every dictation came back an invented apology; it
@@ -1040,6 +1049,12 @@ try:
         # a working choice — free dictation is Parakeet's job, locally and offline
         # (BRAIN_TRANSCRIBER defaults to parakeet). Voxtral replaces it: a
         # purpose-built speech model at the same price as the default.
+        # openai/whisper-large-v3-turbo was briefly the default and is not one:
+        # measured on 2026-07-31, OpenRouter's published catalogue is 337 models
+        # and holds no whisper, embedding or rerank entry, so it can transcribe
+        # nothing. The picker is the remote route by definition — local dictation
+        # is Parakeet's job inside the brain, which ignores this pick entirely, so
+        # the local checkpoint is not an option here either.
         DEFAULT_OMNI = "google/gemini-2.5-flash-lite"
         ALT_OMNI = ["openai/gpt-audio-mini", "mistralai/voxtral-small-24b-2507"]
         BROKEN_OMNI = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
@@ -1055,23 +1070,69 @@ try:
               page.input_value("#model-text") == DEFAULT_TEXT
               and page.input_value("#model-omni") == DEFAULT_OMNI
               and page.input_value("#model-embed") == DEFAULT_EMBED)
-        omni_options = page.locator("#model-omni option").all_inner_texts()
+        omni_options = option_values("#model-omni")
         check("assistant: the audio-dropping free model is gone from the picker",
               BROKEN_OMNI not in omni_options)
         check("assistant: the audio picker offers only models that take audio",
               omni_options == [DEFAULT_OMNI, *ALT_OMNI])
-        text_options = page.locator("#model-text option").all_inner_texts()
-        check("assistant: the text picker offers exactly the two GPT-5 tiers",
-              text_options == [DEFAULT_TEXT, ALT_TEXT])
+        text_options = option_values("#model-text")
+        check("assistant: the text picker offers the local default and alternatives",
+              text_options == [DEFAULT_TEXT, ALT_TEXT, THIRD_TEXT])
         check("assistant: the retired text models are gone from the picker",
               not any(slug in text_options for slug in RETIRED_TEXT))
+        # ---- Local-first: the text provider is a choice, and every option says
+        # where it runs. Free-and-private against billed-and-remote is the one
+        # difference a picker must never leave implicit, so the label carries the
+        # route rather than the explainer alone.
+        check("assistant: the panel offers a text provider selector",
+              page.locator("#model-provider").count() == 1)
+        check("assistant: the provider defaults to the local daemon",
+              page.input_value("#model-provider") == "ollama")
+        check("assistant: the provider selector offers exactly local and remote",
+              option_values("#model-provider") == ["ollama", "openrouter"])
+        text_labels = page.locator("#model-text option").all_inner_texts()
+        check("assistant: every local text option says it runs locally",
+              all("local" in label for label in text_labels))
+        omni_labels = page.locator("#model-omni option").all_inner_texts()
+        check("assistant: every audio option names the remote route it bills",
+              all("OpenRouter API" in label for label in omni_labels))
+        page.select_option("#model-provider", "openrouter")
+        check("assistant: choosing OpenRouter switches the text list to remote models",
+              option_values("#model-text") == ["openai/gpt-5-nano"])
+        check("assistant: the remote text option says which API serves it",
+              all("OpenRouter API" in label
+                  for label in page.locator("#model-text option").all_inner_texts()))
+        with page.expect_request("**/api/agent/chat") as prov_req:
+            page.fill("#chat-input", "provider ride-along probe")
+            page.click("#chat-send")
+        check("assistant: the chosen provider rides along on the chat request",
+              '"provider":"openrouter"' in (prov_req.value.post_data or "").replace(" ", ""))
+        page.wait_for_selector(".chat-msg.assistant")
+        page.select_option("#model-provider", "ollama")
+        check("assistant: switching back restores the local list and its default",
+              option_values("#model-text") == [DEFAULT_TEXT, ALT_TEXT, THIRD_TEXT]
+              and page.input_value("#model-text") == DEFAULT_TEXT)
         # openrouter/auto is gone from every picker, not just the text one: it is
         # deprecated, and the resolved model was never read back out of the
         # response, so no picker should be able to hand the brain a router.
-        embed_options = page.locator("#model-embed option").all_inner_texts()
+        embed_options = option_values("#model-embed")
         check("assistant: no picker offers the deprecated openrouter/auto router",
               all("openrouter/auto" not in opts
                   for opts in (text_options, omni_options, embed_options)))
+        # The brain now says which models it can serve, because the text pick
+        # rides on every chat turn: pointed at a local backend, a picker offering
+        # `openai/gpt-5-nano` would fail every turn with no way out from the UI.
+        # Here the brain is the fake provider, so the honest answer is "nothing
+        # verified" — and the presets above must therefore stand untouched, which
+        # is exactly what the three checks before this one just asserted.
+        served = page.evaluate(
+            "() => fetch('/api/agent/models').then(r => r.json())")
+        check("assistant: the brain reports which models it can serve",
+              served.get("provider") == "fake")
+        check("assistant: an unprobed backend claims nothing rather than nothing-serves",
+              served.get("verified") is False and served.get("models") == [])
+        check("assistant: no local-backend hint when the models are unverified",
+              "served locally" not in page.locator(".chat-settings").inner_text())
 
         n_replies = page.locator(".chat-msg.assistant").count()
         page.fill("#chat-input", "model ride-along probe")
@@ -1120,8 +1181,7 @@ try:
             check(f"assistant: retired text pick {retired_text} resets to the default",
                   page.input_value("#model-text") == DEFAULT_TEXT)
             check(f"assistant: retired text pick {retired_text} is not offered",
-                  retired_text
-                  not in page.locator("#model-text option").all_inner_texts())
+                  retired_text not in option_values("#model-text"))
             check(f"assistant: retired {retired_text} is cleared from storage",
                   retired_text not in page.evaluate(
                       "key => localStorage.getItem(key) || ''", MODELS_KEY))
@@ -1130,8 +1190,7 @@ try:
             check("assistant: the audio-dropping saved omni pick resets to the default",
                   page.input_value("#model-omni") == DEFAULT_OMNI)
             check("assistant: the audio-dropping omni pick is not offered",
-                  BROKEN_OMNI
-                  not in page.locator("#model-omni option").all_inner_texts())
+                  BROKEN_OMNI not in option_values("#model-omni"))
             # A live pick in the same payload must be left exactly as it was.
             check("assistant: a still-valid saved pick survives the sweep",
                   page.input_value("#model-embed") == "openai/text-embedding-3-small")
@@ -1148,7 +1207,7 @@ try:
         page.wait_for_selector("#model-text")
         check("assistant: a deliberately hand-set model is still honoured",
               page.input_value("#model-text") == HAND_PICKED
-              and HAND_PICKED in page.locator("#model-text option").all_inner_texts())
+              and HAND_PICKED in option_values("#model-text"))
 
         # Back to a clean slate so the later assistant checks see the defaults.
         page.evaluate("key => localStorage.removeItem(key)", MODELS_KEY)
@@ -1550,6 +1609,8 @@ try:
                       "latency_ms": 26.0, "abstained": False}],
         }
 
+        job_polls = []
+
         def lab_route(route):
             url = route.request.url
             payload = None
@@ -1607,9 +1668,21 @@ try:
                                   "expanded_from": "", "habit": "gym",
                                   "text": "دفتر عادت «باشگاه» — هدف: 3 بار در هر هفته"}]}
             elif "/api/raglab/jobs/" in url:
-                payload = {"id": "job-1", "kind": "run", "state": "done",
-                           "stage": "done", "progress": 1.0, "result": LAB_RESULT,
-                           "error": None}
+                # The first poll is still running and carries a detail. A judged
+                # run on a local model spends hours inside one stage, so the
+                # detail is the only thing that moves — a page that shows only the
+                # percentage looks hung for the whole judged phase.
+                if not job_polls:
+                    job_polls.append(1)
+                    payload = {"id": "job-1", "kind": "run", "state": "running",
+                               "stage": "ragas", "progress": 0.94,
+                               "detail": "judge call 137 of ~420",
+                               "result": None, "error": None}
+                else:
+                    payload = {"id": "job-1", "kind": "run", "state": "done",
+                               "stage": "done", "progress": 1.0,
+                               "detail": "done", "result": LAB_RESULT,
+                               "error": None}
             elif "/api/raglab/run" in url:
                 payload = {"job_id": "job-1"}
             if payload is None:
@@ -1836,6 +1909,10 @@ try:
               page.locator(".raglab-sheet").count() == 1)
 
         page.click("#raglab-run")
+        # Caught on the first poll, before the second one completes the job.
+        page.wait_for_selector(".rag-progress")
+        check("raglab: a running job says which call it is on, not just a percent",
+              "judge call 137 of ~420" in page.locator(".rag-meta").last.inner_text())
         page.wait_for_selector(".rag-figures")
         figures = page.locator(".rag-figures").inner_text()
         check("raglab: a run renders its grades",
