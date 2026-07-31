@@ -8,6 +8,7 @@ the board actually persists to (and deletes from) the database.
 """
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -59,7 +60,28 @@ def check(name, cond):
     print(("PASS" if cond else "FAIL"), "-", name)
 
 
+# A port this suite needs must be free before anything is started on it. The
+# readiness probes below cannot tell our server from a stranger's: a board left
+# behind by an earlier crashed run answers /api/state instantly, so the probe
+# green-lights it and the whole suite drives someone else's database. Measured
+# once as 22 phantom failures beginning at "seed: 6 cards on first run", with
+# nothing in the output pointing at the port. :8797 is included because the
+# suite deliberately never starts a lab there — a real one left running would
+# turn the "lab is not running" checks red for the person working on the lab.
+def require_free(port, what):
+    try:
+        socket.create_connection(("127.0.0.1", port), timeout=0.5).close()
+    except OSError:
+        return
+    raise RuntimeError(
+        f":{port} is already serving something, so the {what} cannot start "
+        f"there and this run would silently measure whatever is. Stop it first "
+        f"(lsof -nP -iTCP:{port} -sTCP:LISTEN).")
+
+
 def start_server():
+    require_free(PORT, "test board")
+    require_free(RAGLAB_PORT, "absent RAG lab the proxy checks for")
     proc = subprocess.Popen(
         ["node", "server.js"],
         cwd=ROOT,
@@ -91,6 +113,7 @@ def stop_server(proc):
 
 def start_brain():
     # The brain runs fully offline here: deterministic fake LLM + hash embedder.
+    require_free(BRAIN_PORT, "test brain")
     proc = subprocess.Popen(
         ["uv", "run", "--project", "brain", "uvicorn",
          "lodestar_brain.server:app", "--port", str(BRAIN_PORT)],
