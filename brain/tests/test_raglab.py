@@ -241,14 +241,56 @@ def test_commitment_layer_captures_the_recurring_promise(diary):
     assert 'باشگاه' in text, 'the gym promise is the corpus\'s signature commitment'
 
 
-def test_summary_cache_is_keyed_by_content(tmp_path, session):
-    cache = summarize.SummaryCache(tmp_path / 'cache.json')
+def test_summary_cache_is_keyed_by_content(session):
+    cache = summarize.SummaryCache()
     cache.put('extractive', session, 'خلاصه')
-    cache.flush()
-    assert summarize.SummaryCache(tmp_path / 'cache.json').get('extractive', session) \
-        == 'خلاصه'
+    assert cache.get('extractive', session) == 'خلاصه'
     edited = dict(session, messages=[dict(session['messages'][0], content='عوض شد')])
     assert cache.get('extractive', edited) is None
+
+
+def test_the_summary_cache_does_not_outlive_its_owner(session):
+    """It used to be a file under .runs/cache/. A summary is model output about
+    experimental data — derived, and rebuildable — so it now lives for the
+    process that made it and no longer. A second cache starts empty because
+    there is nothing on disk for it to read."""
+    cache = summarize.SummaryCache()
+    cache.put('extractive', session, 'خلاصه')
+    assert summarize.SummaryCache().get('extractive', session) is None
+
+
+def test_the_summariser_module_writes_nothing():
+    """The absence *is* the assertion: this module held the one derived cache the
+    lab wrote automatically, and the cheapest way for it to come back is a
+    `flush()` that quietly grows a path again."""
+    source = (RAGLAB_DIR / 'summarize.py').read_text(encoding='utf-8')
+    for forbidden in ('write_text', 'mkdir', 'open('):
+        assert forbidden not in source, forbidden
+
+
+def test_summaries_are_reused_across_builds_in_one_process(diary, monkeypatch):
+    """What the disk cache was actually for: an LLM summariser is one call per
+    session, and switching chunker rebuilds every chunk while changing no
+    summary. The registry owns that reuse now, so it is bounded by the process."""
+    calls: list[str] = []
+
+    class CountingSummarizer(summarize.ExtractiveSummarizer):
+        name = 'counting'
+
+        def session(self, session_dict):
+            calls.append(session_dict['session_id'])
+            return super().session(session_dict)
+
+    sessions = diary['sessions'][:3]
+    counting = CountingSummarizer(summarize.build_idf(sessions))
+    monkeypatch.setattr(summarize, 'ExtractiveSummarizer', lambda _idf: counting)
+    registry = IndexRegistry(LAB_SETTINGS, {'sessions': sessions, 'threads': {},
+                                            'habits': {}})
+    base = {'embedder': 'ascii-hash', 'layers': ('session',)}
+    registry.get(IndexConfig(chunker='fixed', **base))
+    assert len(calls) == len(sessions), calls
+    registry.get(IndexConfig(chunker='message', **base))
+    assert len(calls) == len(sessions), 'the second build re-summarised the corpus'
 
 
 # --- habits: the card you repeat instead of finish -------------------------
@@ -878,6 +920,30 @@ def test_ascii_hash_baseline_retrieves_worse_than_char_hash(registry, ground_tru
 
 # --- evaluation harness ----------------------------------------------------
 
+def test_a_run_writes_one_json_file_and_nothing_else(registry, ground_truth,
+                                                     tmp_path, monkeypatch):
+    """The whole artifact policy in one assertion. A run's index, contexts and
+    answers are experimental data and die with the process; the single thing that
+    outlives it is one strict-JSON file holding the config, the metrics and the
+    per-question detail needed to reopen the result.
+
+    `rglob` rather than `glob`, because the way this rule broke before was a
+    subdirectory — `.runs/cache/` — appearing beside the runs."""
+    monkeypatch.setattr(evaluate, 'RUNS_DIR', tmp_path)
+    cfg = LabConfig(index=IndexConfig(chunker='session', embedder='char-hash',
+                                      layers=('chunk',)),
+                    retrieval=RetrievalConfig(search_layers=('chunk',), k=4),
+                    generation=GenerationConfig(answerer='extractive'))
+    result = evaluate.run_eval(registry, ground_truth, cfg, LAB_SETTINGS,
+                               limit=2, ragas_mode='off')
+    assert [p.name for p in tmp_path.rglob('*')] == [f'{result.run_id}.json']
+    saved = json.loads((tmp_path / f'{result.run_id}.json').read_text(
+        encoding='utf-8'), parse_constant=lambda literal: pytest.fail(
+            f'{literal} is not JSON a strict parser accepts'))
+    assert saved['run_id'] == result.run_id
+    assert saved['config'] and saved['summary'] and saved['rows']
+
+
 def test_run_eval_scores_a_slice_end_to_end(registry, ground_truth, tmp_path,
                                             monkeypatch):
     monkeypatch.setattr(evaluate, 'RUNS_DIR', tmp_path)
@@ -1390,7 +1456,7 @@ def test_the_summary_model_names_the_collection_only_when_llm_summaries_are_on()
     assert llm.fingerprint() != replace(llm, summarizer_model='sum/model').fingerprint()
 
 
-def test_two_summary_models_do_not_share_cached_summaries(session, tmp_path):
+def test_two_summary_models_do_not_share_cached_summaries(session):
     """The cache is what makes the hierarchy affordable, and it is keyed by
     summariser. With a per-task model that key has to include the model, or
     comparing two summarisers silently compares one of them twice."""
@@ -1398,14 +1464,15 @@ def test_two_summary_models_do_not_share_cached_summaries(session, tmp_path):
     first = summarize.LLMSummarizer(FakeChat(), 'a/model', fallback)
     second = summarize.LLMSummarizer(FakeChat(), 'b/model', fallback)
     assert first.name != second.name
-    cache = summarize.SummaryCache(path=tmp_path / 'summaries.json')
+    cache = summarize.SummaryCache()
     summarize.session_summaries([session], first, cache)
     assert cache.get(first.name, session) is not None
     assert cache.get(second.name, session) is None
 
 
-def test_the_index_summarises_with_the_chosen_model(monkeypatch, tmp_path, diary):
-    monkeypatch.setattr(summarize, 'RUNS_DIR', tmp_path)
+def test_the_index_summarises_with_the_chosen_model(monkeypatch, diary):
+    # No RUNS_DIR redirect: a build writes nothing at all now, which the
+    # surrounding tests assert directly.
     seen: list[str] = []
     real = summarize.LLMSummarizer
 

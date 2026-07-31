@@ -63,10 +63,15 @@ class LabIndex:
 
     @classmethod
     def build(cls, cfg: IndexConfig, diary: dict, settings: LabSettings,
-              progress=None) -> 'LabIndex':
+              progress=None, summaries: summarize.SummaryCache | None = None
+              ) -> 'LabIndex':
         """Always a full build. There is no `force`: nothing persists, so every
         call embeds the corpus into a store of its own. Skipping the work is the
-        registry's decision, not this one's."""
+        registry's decision, not this one's.
+
+        `summaries` is that decision's one exception: an LLM summariser costs a
+        call per session and produces the same text for every chunker, so a
+        caller that will build repeatedly passes a cache it owns."""
         started = time.time()
         cfg = cfg.normalized()
         stats = IndexStats(collection=cfg.collection())
@@ -83,7 +88,7 @@ class LabIndex:
             summarizer = summarize.LLMSummarizer(
                 _lab_llm(settings),
                 cfg.summarizer_model or settings.llm_model, summarizer)
-        cache = summarize.SummaryCache()
+        cache = summaries if summaries is not None else summarize.SummaryCache()
         summaries = summarize.session_summaries(
             sessions, summarizer, cache,
             progress=(lambda i, n: progress('summarising', 0.05 + 0.35 * i / n))
@@ -205,12 +210,17 @@ class IndexRegistry:
         self.settings = settings
         self.diary = diary
         self._indexes: dict[str, LabIndex] = {}
+        # Shared across every build this process makes: summaries depend on the
+        # corpus and the summarizer, never on the chunker or the embedder, so a
+        # sweep would otherwise pay an LLM summariser once per candidate.
+        self.summaries = summarize.SummaryCache()
 
     def get(self, cfg: IndexConfig, progress=None, force: bool = False) -> LabIndex:
         key = cfg.normalized().fingerprint()
         if force or key not in self._indexes:
             self._indexes[key] = LabIndex.build(cfg, self.diary, self.settings,
-                                                progress=progress)
+                                                progress=progress,
+                                                summaries=self.summaries)
         else:
             # The one form of reuse that still exists, reported where the panel
             # already looked for it: this process built it and still has it.
