@@ -29,12 +29,15 @@ services:
     environment:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
-      BRAIN_MODEL: ${BRAIN_MODEL:-openai/gpt-5-nano}
-      BRAIN_LLM: ${BRAIN_LLM:-openrouter}
+      BRAIN_MODEL: ${BRAIN_MODEL:-4skl/gemma4-e2b-mtp}
+      BRAIN_LLM: ${BRAIN_LLM:-ollama}
+      BRAIN_OLLAMA_BASE_URL: ${BRAIN_OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
       # Both backends are named outright because there is no 'auto' mode to fall
       # back on any more. The image installs the 'semantic' extra, so the real
       # embedder is available here; it can never install the 'voice' extra, since
-      # parakeet-mlx is Apple-Silicon only — hence OpenRouter for dictation.
+      # parakeet-mlx is Apple-Silicon only — hence OpenRouter for dictation. The
+      # chat model is the opposite way round: BRAIN_LLM=ollama reaches the daemon
+      # on the host, so the composed brain is local-first like the native one.
       # tests/compose.test.js fails if either pin goes missing.
       BRAIN_EMBEDDER: ${BRAIN_EMBEDDER:-fastembed}
       BRAIN_TRANSCRIBER: ${BRAIN_TRANSCRIBER:-openrouter}

@@ -86,6 +86,46 @@ def test_factory_honours_the_per_request_model_override_on_ollama():
     assert llm.model_name == 'qwen3.5:2b'
 
 
+def test_factory_can_switch_a_local_default_to_nano_per_request():
+    """The UI may opt into a remote model without changing the local default."""
+    llm = make_chat_model(_settings(llm_provider='ollama',
+                                    model='4skl/gemma4-e2b-mtp'),
+                          'openai/gpt-5-nano', provider='openrouter')
+    assert llm.model_name == 'openai/gpt-5-nano'
+    assert str(llm.openai_api_base) == 'https://openrouter.ai/api/v1'
+    assert llm.request_timeout == REMOTE_TIMEOUT
+
+
+def test_a_ui_provider_with_no_model_gets_that_providers_own_default():
+    """Switching provider in the picker without naming a model must not carry the
+    other backend's slug across: it is the same rule BRAIN_LLM already follows."""
+    llm = make_chat_model(_settings(llm_provider='ollama',
+                                    model='4skl/gemma4-e2b-mtp'),
+                          None, provider='openrouter')
+    assert llm.model_name == 'openai/gpt-5-nano'
+
+
+def test_an_unknown_ui_provider_raises_instead_of_falling_back():
+    """The no-auto-modes rule reaches the per-request seam too. A browser sending
+    a provider this brain cannot serve is a bug to surface, not something to
+    quietly serve from whichever backend happens to be configured."""
+    with pytest.raises(ValueError):
+        make_chat_model(_settings(llm_provider='ollama'), 'x',
+                        provider='anthropic')
+
+
+def test_the_fake_backend_ignores_a_ui_provider_so_offline_stays_offline():
+    """`fake` is the backend the whole suite and the e2e board run on. A browser
+    naming 'ollama' must not move a brain configured as fake onto a real daemon.
+    The guard lives here, where the configured backend is known, rather than in
+    the browser choosing when to omit the field — a client cannot be responsible
+    for protecting the server's own offline contract."""
+    assert isinstance(make_chat_model(_settings(llm_provider='fake'),
+                                      'anything', provider='ollama'), FakeChat)
+    assert isinstance(make_chat_model(_settings(llm_provider='fake'),
+                                      'anything', provider='openrouter'), FakeChat)
+
+
 def test_choosing_the_local_backend_is_enough_to_get_a_local_default_model():
     # BRAIN_LLM=ollama on its own has to produce a working brain. The remote
     # default slug is not something the daemon can load, so every chat turn

@@ -46,6 +46,25 @@ def test_chat_echo_roundtrip():
 
 
 @respx.mock
+def test_chat_accepts_the_providers_the_picker_offers_and_refuses_the_rest():
+    """The Assistant's provider selector rides along on every chat turn, so the
+    route is the boundary that has to reject a provider this brain cannot serve.
+    A fake brain answers regardless — the offline contract belongs to the server,
+    not to a browser deciding when to leave the field out."""
+    client = TestClient(fake_app())
+    for provider in ('ollama', 'openrouter'):
+        res = client.post('/agent/chat', json={
+            'messages': [{'role': 'user', 'content': 'hello brain'}],
+            'provider': provider})
+        assert res.status_code == 200, provider
+        assert res.json()['reply'] == 'FAKE: hello brain'
+    res = client.post('/agent/chat', json={
+        'messages': [{'role': 'user', 'content': 'hello brain'}],
+        'provider': 'anthropic'})
+    assert res.status_code == 422
+
+
+@respx.mock
 def test_chat_add_proposes_a_card_without_mutating_the_board():
     # create_question now proposes; the board is unchanged until the user
     # confirms. The two events are distinct flags because the frontend reacts
@@ -152,6 +171,29 @@ def test_transcribe_forwards_the_picked_omni_model():
     assert res.status_code == 200
     assert res.json() == {'text': 'spoken words'}
     assert json.loads(route.calls.last.request.content)['model'] == 'google/gemini-2.5-flash'
+
+
+@respx.mock
+def test_every_transcription_uses_the_one_chat_completions_wire_format():
+    """One wire format, as the module's own docstring states: audio rides in as an
+    `input_audio` content part on a normal chat completion. A second branch that
+    sniffed `openai/whisper-` out of the model name and posted JSON to
+    /audio/transcriptions was reverted — that slug is absent from OpenRouter's
+    published catalogue (measured 2026-07-31: 337 models, no whisper entry), the
+    OpenAI-compatible transcription endpoint takes multipart form-data rather than
+    this JSON body, and no test ever exercised it. respx fails an unmocked call,
+    so mocking only /chat/completions is what enforces the single route."""
+    route = respx.post('https://openrouter.ai/api/v1/chat/completions').mock(
+        return_value=httpx.Response(200, json={
+            'choices': [{'message': {'content': 'spoken words'}}]}))
+    client = TestClient(create_app(Settings(
+        llm_provider='fake', embedder='hash', transcriber='openrouter',
+        openrouter_api_key='sk-test', board_api_url='http://board.test')))
+    res = client.post('/agent/transcribe', json={
+        'audio': b64(WAV), 'model': 'openai/whisper-large-v3-turbo'})
+    assert res.status_code == 200
+    assert res.json() == {'text': 'spoken words'}
+    assert route.called
 
 
 @respx.mock
