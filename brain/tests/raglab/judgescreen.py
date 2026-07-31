@@ -343,9 +343,18 @@ def screen(models: list[str], pairs: int = 6) -> dict:
     report = {'provider': settings.provider, 'pairs': pairs,
               'lexical_signal': signal,
               'items': [asdict(item) for item in items], 'models': {}}
-    for model in models:
+    for i, model in enumerate(models, start=1):
         llm = judge_llm(settings, model)
-        calls = [ask(llm, item) for item in items]
+        calls = []
+        for j, item in enumerate(items, start=1):
+            # One rewritten line per item. A reasoning model is a minute per call,
+            # so eight items is ten silent minutes otherwise — and silence during
+            # a slow screen is indistinguishable from a hung daemon.
+            print(f'\r  [{i}/{len(models)}] {model[:28]:28} item {j}/{len(items)} '
+                  f'{"supported" if item.supported else "fabricated":>10}'.ljust(78),
+                  end='', flush=True)
+            calls.append(ask(llm, item))
+        print('\r'.ljust(80), end='')
         result = score(calls)
         report['models'][model] = {'score': result,
                                    'calls': [asdict(call) for call in calls]}
