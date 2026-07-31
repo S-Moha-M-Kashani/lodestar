@@ -1072,6 +1072,20 @@ try:
         check("assistant: no picker offers the deprecated openrouter/auto router",
               all("openrouter/auto" not in opts
                   for opts in (text_options, omni_options, embed_options)))
+        # The brain now says which models it can serve, because the text pick
+        # rides on every chat turn: pointed at a local backend, a picker offering
+        # `openai/gpt-5-nano` would fail every turn with no way out from the UI.
+        # Here the brain is the fake provider, so the honest answer is "nothing
+        # verified" — and the presets above must therefore stand untouched, which
+        # is exactly what the three checks before this one just asserted.
+        served = page.evaluate(
+            "() => fetch('/api/agent/models').then(r => r.json())")
+        check("assistant: the brain reports which models it can serve",
+              served.get("provider") == "fake")
+        check("assistant: an unprobed backend claims nothing rather than nothing-serves",
+              served.get("verified") is False and served.get("models") == [])
+        check("assistant: no local-backend hint when the models are unverified",
+              "served locally" not in page.locator(".chat-settings").inner_text())
 
         n_replies = page.locator(".chat-msg.assistant").count()
         page.fill("#chat-input", "model ride-along probe")

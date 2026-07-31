@@ -2845,6 +2845,51 @@
     'openrouter/auto',
   ]);
   const assistantModels = { ...DEFAULT_MODELS };
+  // What the brain says it can actually serve. Empty until asked, and only a
+  // local backend ever answers with a list (see served_models in the brain):
+  // OpenRouter is a paid API with hundreds of models, so nothing is probed there
+  // and the curated list above stands.
+  //
+  // This exists because the text pick rides on every chat request. With
+  // BRAIN_LLM=ollama the brain forwards that slug to a daemon that cannot load
+  // `openai/gpt-5-nano`, so every turn would fail with a picker offering no way
+  // out — the RETIRED_MODELS lesson again: a pick that cannot work has to be
+  // deselected, not merely delisted.
+  const brainModels = { provider: '', verified: false, models: [], default: '' };
+
+  async function probeBrainModels() {
+    let answered = false;
+    try {
+      const res = await fetch('/api/agent/models');
+      if (res.ok) {
+        Object.assign(brainModels, await res.json());
+        answered = true;
+      }
+    } catch { /* brain down — the presets stand, and chat will say so itself */ }
+    if (!answered || !brainModels.verified || !brainModels.models.length) return;
+    // The backend named its models, so an unservable text pick is switched to
+    // one that works rather than left to fail on the next turn.
+    let changed = false;
+    if (!brainModels.models.includes(assistantModels.text)) {
+      assistantModels.text = brainModels.models.includes(brainModels.default)
+        ? brainModels.default : brainModels.models[0];
+      persistModels();
+      changed = true;
+    }
+    // Only when the answer changed something. Re-rendering unconditionally would
+    // loop: the render triggers the probe that triggers the render.
+    if (changed && view === 'assistant') render();
+  }
+
+  // The options for one picker: the backend's own list when it verified one,
+  // otherwise the presets. Only the text pick is served by the chat model, so
+  // the omni and embedding pickers keep their curated lists either way.
+  function pickerOptions(picker) {
+    if (picker.key === 'text' && brainModels.verified && brainModels.models.length) {
+      return brainModels.models;
+    }
+    return picker.options;
+  }
   const persistModels = () => {
     try { localStorage.setItem(MODELS_KEY, JSON.stringify(assistantModels)); }
     catch { /* private mode — the pick still applies to this session */ }
@@ -2878,8 +2923,9 @@
       sel.id = picker.id;
       // A previously saved slug that left the preset list still deserves to
       // show as selected, so it becomes an extra option instead of vanishing.
-      const opts = picker.options.includes(assistantModels[picker.key])
-        ? picker.options : [assistantModels[picker.key], ...picker.options];
+      const offered = pickerOptions(picker);
+      const opts = offered.includes(assistantModels[picker.key])
+        ? offered : [assistantModels[picker.key], ...offered];
       for (const slug of opts) {
         const opt = document.createElement('option');
         opt.value = slug;
@@ -2898,6 +2944,15 @@
     hint.className = 'field-hint';
     hint.textContent = 'Text generation applies to the chat; the omni model transcribes your voice, unless the brain is dictating locally with Parakeet — that ignores this pick. The embedding pick is saved for upcoming retrieval features.';
     panel.appendChild(hint);
+    // Where the chat model runs, when the brain told us. Worth saying out loud:
+    // a local backend is free and private but answers in tens of seconds, and
+    // the list above is then the daemon's, not ours.
+    if (brainModels.verified && brainModels.models.length) {
+      const where = document.createElement('p');
+      where.className = 'field-hint';
+      where.textContent = `Text models are served locally by ${brainModels.provider} — free and private, and the list is whatever is pulled on this machine.`;
+      panel.appendChild(where);
+    }
     return panel;
   }
 
@@ -3229,6 +3284,11 @@
   }
 
   function renderAssistant() {
+    // Asked on entering the view rather than at load, and retried on every entry
+    // until it answers — a brain started after the page must be found without a
+    // reload, exactly like the RAG lab's own re-probe. Not awaited: the view
+    // renders from the presets and re-renders only if the answer changes a pick.
+    if (!brainModels.provider) probeBrainModels();
     const sheet = document.createElement('section');
     sheet.className = 'assistant-sheet';
 
@@ -5166,7 +5226,12 @@
     const c = options.capabilities;
     capability(c.fastembed, c.fastembed ? 'embeddings ready' : 'fastembed missing');
     capability(c.cross_encoder, c.cross_encoder ? 'cross-encoder ready' : 'cross-encoder missing');
-    capability(c.llm, c.llm ? `model ${c.llm_model}` : 'no API key');
+    // Provider as well as model: on ollama the run is free and private, on
+    // openrouter it is billed, and on the fake provider every LLM number on the
+    // results screen is meaningless. One chip cannot say that if it only names
+    // the slug.
+    capability(c.llm, c.llm ? `${c.llm_provider} · ${c.llm_model}`
+                            : 'no LLM backend');
     capability(c.ragas.installed, c.ragas.installed ? `ragas ${c.ragas.version}` : 'ragas missing');
     capability(true, `chroma ${c.chroma_database}`);
     sheet.appendChild(caps);
