@@ -19,7 +19,12 @@ class Settings:
     openrouter_api_key: str = ''
     openrouter_base_url: str = 'https://openrouter.ai/api/v1'
     model: str = 'openai/gpt-5-nano'
-    llm_provider: str = 'openrouter'   # 'openrouter' | 'fake'
+    llm_provider: str = 'openrouter'   # 'openrouter' | 'ollama' | 'fake'
+    # Where a locally served model lives. Ollama's OpenAI-compatible surface, so
+    # the '/v1' is part of the URL rather than something the factory appends —
+    # pointing this at any other local OpenAI-compatible server (llama.cpp, vLLM)
+    # then needs no code change at all.
+    ollama_base_url: str = 'http://localhost:11434/v1'
     # 'fastembed' | 'hash'. No 'auto': probing for the optional fastembed wheel
     # and taking HashEmbedder when it was missing meant a machine without the
     # 'semantic' extra ran token-overlap hashing while believing it had
@@ -71,6 +76,8 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         openrouter_base_url=env.get('OPENROUTER_BASE_URL', 'https://openrouter.ai/api/v1'),
         model=env.get('BRAIN_MODEL', 'openai/gpt-5-nano'),
         llm_provider=env.get('BRAIN_LLM', 'openrouter'),
+        ollama_base_url=env.get('BRAIN_OLLAMA_BASE_URL',
+                                'http://localhost:11434/v1'),
         embedder=env.get('BRAIN_EMBEDDER', 'hash'),
         board_api_url=board_api_url,
         chroma_url=env.get('BRAIN_CHROMA_URL', 'http://localhost:8001'),

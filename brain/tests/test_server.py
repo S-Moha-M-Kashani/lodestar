@@ -280,3 +280,58 @@ def test_rag_reindex_and_communities():
     res = client.get('/rag/communities')
     assert res.status_code == 200
     assert isinstance(res.json()['communities'], list)
+
+
+# --- which models this brain can serve --------------------------------------
+# The browser sends a model with every chat turn, so a picker offering slugs the
+# backend cannot load is a broken Assistant with no way out of it from the UI.
+
+def test_models_route_says_nothing_is_verified_on_a_remote_backend():
+    """OpenRouter is a paid API with hundreds of models; probing it on every
+    settings render would be absurd, so `verified` is False and the frontend's
+    curated list stands. False must not read as "serves nothing"."""
+    client = TestClient(create_app(Settings(llm_provider='openrouter',
+                                            embedder='hash', transcriber='fake')))
+    body = client.get('/agent/models').json()
+    assert body == {'provider': 'openrouter', 'default': 'openai/gpt-5-nano',
+                    'verified': False, 'models': []}
+
+
+@respx.mock
+def test_models_route_lists_what_the_local_daemon_serves():
+    respx.get('http://localhost:11434/api/tags').mock(
+        return_value=httpx.Response(200, json={'models': [{'name': 'qwen3.5:2b'},
+                                                          {'name': 'gemma4:e2b'}]}))
+    client = TestClient(create_app(Settings(llm_provider='ollama',
+                                            model='gemma4:e2b',
+                                            embedder='hash', transcriber='fake')))
+    body = client.get('/agent/models').json()
+    assert body['provider'] == 'ollama' and body['verified'] is True
+    assert body['models'] == ['gemma4:e2b', 'qwen3.5:2b']
+    assert body['default'] == 'gemma4:e2b'
+
+
+@respx.mock
+def test_a_local_daemon_that_is_down_claims_nothing_rather_than_an_empty_list():
+    """A daemon that is not running is a normal state, not an error. Reporting
+    verified=True with no models would empty the picker instead of leaving the
+    presets in place."""
+    respx.get('http://localhost:11434/api/tags').mock(
+        side_effect=httpx.ConnectError('nope'))
+    client = TestClient(create_app(Settings(llm_provider='ollama',
+                                            embedder='hash', transcriber='fake')))
+    body = client.get('/agent/models').json()
+    assert body['verified'] is False and body['models'] == []
+
+
+@respx.mock
+def test_the_models_route_reads_the_configured_base_url():
+    """So the same setting reaches a daemon on another host without a code
+    change — and so a wrong URL surfaces as an unverified backend rather than
+    silently probing localhost."""
+    respx.get('http://gpu.lan:11434/api/tags').mock(
+        return_value=httpx.Response(200, json={'models': [{'name': 'x:1b'}]}))
+    client = TestClient(create_app(Settings(
+        llm_provider='ollama', embedder='hash', transcriber='fake',
+        ollama_base_url='http://gpu.lan:11434/v1')))
+    assert client.get('/agent/models').json()['models'] == ['x:1b']

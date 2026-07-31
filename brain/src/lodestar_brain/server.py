@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from .agent.registry import build_agent
 from .config import Settings, load_settings
+from .llm.factory import served_models
 from .rag.chat_memory import ChromaChatMemory, chunk_text, make_recall_tool
 from .rag.embedder import make_embedder
 from .rag.index import LeidenIndex, make_retrieve_tool
@@ -75,6 +76,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get('/health')
     def health() -> dict:
         return {'ok': True, 'service': 'lodestar-brain'}
+
+    @app.get('/agent/models')
+    def models() -> dict:
+        """Which models this brain can serve, so the picker cannot offer one it
+        cannot load. Under /agent/ because that is the prefix the board proxies.
+
+        Only a local backend answers with a list: see `served_models`."""
+        return served_models(settings)
 
     @app.post('/agent/chat')
     async def chat(body: ChatBody) -> dict:
