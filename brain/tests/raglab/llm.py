@@ -21,14 +21,36 @@ from lodestar_brain.llm.factory import make_chat_model
 from .config import LabSettings
 
 
-def lab_llm(settings: LabSettings):
-    """The production chat model, or the offline fake when there is no key — the
-    lab must remain runnable with no network at all."""
-    return make_chat_model(Settings(
-        llm_provider='openrouter' if settings.openrouter_api_key else 'fake',
-        model=settings.llm_model,
+def brain_settings(settings: LabSettings, model: str = '') -> Settings:
+    """LabSettings → the brain's Settings, for make_chat_model.
+
+    The whole point of routing through the production seam is that adding
+    'ollama' there made it reachable here with no lab-side branch, so this only
+    translates fields. `settings.provider` resolves the blank once, in
+    LabSettings, rather than in each caller."""
+    return Settings(
+        llm_provider=settings.provider,
+        model=model or settings.llm_model,
         openrouter_api_key=settings.openrouter_api_key,
-        openrouter_base_url=settings.openrouter_base_url))
+        openrouter_base_url=settings.openrouter_base_url,
+        ollama_base_url=settings.ollama_base_url)
+
+
+def lab_llm(settings: LabSettings):
+    """The production chat model, or the offline fake when nothing real is
+    configured — the lab must remain runnable with no network at all."""
+    return make_chat_model(brain_settings(settings))
+
+
+def judge_llm(settings: LabSettings, model: str = ''):
+    """The client RAGAS judges with.
+
+    Its own client rather than the one every other stage shares, because the
+    judge is the only stage whose model is *bound* at construction: RAGAS calls
+    it through its own wrapper and never forwards a per-request model, so
+    passing the judge slug here is the only way it reaches the wire. Building it
+    from the same seam is what makes a local judge possible at all."""
+    return make_chat_model(brain_settings(settings, model))
 
 
 def lab_chat(llm, messages: list[dict], model: str = '') -> BaseMessage:

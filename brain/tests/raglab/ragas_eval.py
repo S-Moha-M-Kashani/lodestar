@@ -62,6 +62,26 @@ LLM_METRICS = ('faithfulness', 'answer_relevancy', 'factual_correctness(mode=f1)
 DECISION_METRICS = ('faithfulness', 'answer_relevancy',
                     'llm_context_precision_with_reference', 'context_recall')
 
+# How hard RAGAS is allowed to push the judge, per backend.
+#
+# RAGAS defaults to 16 concurrent requests and the lab used to accept that. A
+# remote API absorbs it; one model on a laptop serves two or three at a time, so
+# the sixteenth request waits behind the queue and trips the client timeout.
+# Measured on gemma4:e2b judging candidate A: a single call took ~8s, calls under
+# load reached 80–92s, and the run came back with one of its four deciding
+# metrics — the other three were `Exception raised in Job[20]: TimeoutError()`.
+# Concurrency and timeout cannot change *what* a judge scores, only whether the
+# score arrives, which is why these are tuned per backend and not per candidate.
+JUDGE_LOAD = {'openrouter': {'max_workers': 16, 'timeout': 180},
+              'ollama': {'max_workers': 3, 'timeout': 600},
+              'fake': {'max_workers': 16, 'timeout': 60}}
+
+
+def judge_load(settings) -> dict:
+    """RunConfig arguments for the backend actually serving the judge."""
+    return JUDGE_LOAD.get(getattr(settings, 'provider', 'openrouter'),
+                          JUDGE_LOAD['openrouter'])
+
 
 def decision_score(metrics: dict) -> float | None:
     """The one number the architecture is chosen by: the unweighted mean of the
@@ -251,8 +271,14 @@ def availability(settings) -> Availability:
         notes.append('rapidfuzz is missing — the offline (non-LLM) RAGAS metrics '
                      'cannot run without it')
     llm_ready = False
-    if not settings.openrouter_api_key:
-        notes.append('no OPENROUTER_API_KEY — LLM-judged RAGAS metrics disabled')
+    # `llm_ready` asks whether a *real* judge can be reached, which is not the
+    # same question as whether an OpenRouter key exists: a model served by Ollama
+    # on this machine judges perfectly well and needs no key at all. What must
+    # stay disqualified is the fake provider, which grades every answer without
+    # ever failing and would fill the leaderboard with confident noise.
+    if not settings.llm_ready:
+        notes.append('no LLM backend for judging — set OPENROUTER_API_KEY, or '
+                     'RAGLAB_LLM=ollama to judge on a local model')
     else:
         try:
             import langchain_openai  # noqa: F401
@@ -346,6 +372,7 @@ def run(pairs, settings, embedder, mode: str = 'offline',
             from ragas import EvaluationDataset, evaluate
             from ragas.metrics import (NonLLMContextPrecisionWithReference,
                                        NonLLMContextRecall)
+            from ragas.run_config import RunConfig
         except Exception as error:
             report['notes'].append(f'ragas import failed: {error}')
             return report
@@ -365,11 +392,24 @@ def run(pairs, settings, embedder, mode: str = 'offline',
         if mode == 'llm':
             try:
                 metrics += _llm_metrics(settings, embedder, judge_model)
+                # Which backend served the judge, on the row itself. A decision
+                # score is only comparable within one judge, so two rows scored
+                # by different models are two different measurements — and the
+                # model slug alone does not say whether it ran locally.
+                report['judge'] = {
+                    'provider': getattr(settings, 'provider', ''),
+                    'model': judge_model or settings.llm_model}
+                report['notes'].append(
+                    f"judged by {report['judge']['model']} via "
+                    f"{report['judge']['provider']}")
             except Exception as error:
                 report['notes'].append(f'LLM metrics unavailable: {error}')
+        load = judge_load(settings)
+        report['judge_load'] = dict(load)
         try:
             result = evaluate(EvaluationDataset(samples=samples), metrics=metrics,
-                              show_progress=False)
+                              show_progress=False,
+                              run_config=RunConfig(**load))
         except Exception as error:
             report['notes'].append(f'ragas evaluate failed: {error}')
             return report
@@ -403,16 +443,19 @@ def run(pairs, settings, embedder, mode: str = 'offline',
 
 
 def _llm_metrics(settings, embedder, judge_model: str = ''):
-    from langchain_openai import ChatOpenAI
     from ragas.embeddings import LangchainEmbeddingsWrapper
     from ragas.llms import LangchainLLMWrapper
     from ragas.metrics import (Faithfulness, FactualCorrectness, LLMContextRecall,
                                LLMContextPrecisionWithReference, ResponseRelevancy)
 
-    judge = LangchainLLMWrapper(ChatOpenAI(
-        model=judge_model or settings.llm_model,
-        api_key=settings.openrouter_api_key,
-        base_url=settings.openrouter_base_url, timeout=90))
+    from .llm import judge_llm
+
+    # Built through the lab's own seam rather than a ChatOpenAI here. This module
+    # used to name the class, the OpenRouter key and the base URL itself, which
+    # meant the judge was the one stage that could not follow RAGLAB_LLM: with
+    # the answerer running locally, the row's judge was still going out to a
+    # paid API, and nothing on the row said so.
+    judge = LangchainLLMWrapper(judge_llm(settings, judge_model))
     vectors = LangchainEmbeddingsWrapper(_LabEmbeddings(embedder))
     return [Faithfulness(llm=judge),
             ResponseRelevancy(llm=judge, embeddings=vectors),
