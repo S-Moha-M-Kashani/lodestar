@@ -5333,7 +5333,11 @@
     capability(c.llm, c.llm ? `${c.llm_provider} · ${c.llm_model}`
                             : 'no LLM backend');
     capability(c.ragas.installed, c.ragas.installed ? `ragas ${c.ragas.version}` : 'ragas missing');
-    capability(true, `chroma ${c.chroma_database}`);
+    // Where the experiment lives, not which service holds it: the index is
+    // process memory and the only thing kept is the JSON run. This chip used to
+    // name a Chroma database, which is exactly the impression to avoid — that a
+    // lab run leaves a store behind for the next one to find.
+    capability(true, `index in memory · runs → ${c.storage.runs}`);
     sheet.appendChild(caps);
 
     // Steps on the left in pipeline order, every model on the right. The step

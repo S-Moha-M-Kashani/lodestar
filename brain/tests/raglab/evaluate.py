@@ -4,7 +4,7 @@ A run is: build (or reuse) the index → for every question, retrieve and
 optionally answer → score deterministically → optionally score with RAGAS →
 write a JSON file. Runs are kept on disk so the panel can show a leaderboard
 across sessions; nothing here writes anywhere near board.db or the brain's own
-Chroma database.
+in-memory index.
 """
 import inspect
 import json

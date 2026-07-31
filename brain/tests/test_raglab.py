@@ -1,7 +1,7 @@
 """Tests for the RAG Lab (brain/tests/raglab).
 
-Fully offline: Chroma runs in-process (`memory`), embeddings are the lab's
-hash embedders, and no test touches an LLM. The integration tests run against
+Fully offline by construction: the lab's index is process memory, embeddings are
+its hash embedders, and no test touches an LLM. The integration tests run against
 the real one-year fixture rather than a toy corpus, because the properties worth
 asserting — that a Farsi question finds its evidence session, that the current
 production embedder finds nothing at all — only exist at that scale.
@@ -27,8 +27,7 @@ from .raglab.config import (EMBEDDERS, RERANKERS, GenerationConfig, IndexConfig,
                             LabConfig, LabSettings, RetrievalConfig)
 from .raglab.index import IndexRegistry, LabIndex
 
-LAB_SETTINGS = LabSettings(chroma_url='memory', chroma_database='raglab-tests',
-                           openrouter_api_key='', llm_provider='fake')
+LAB_SETTINGS = LabSettings(openrouter_api_key='', llm_provider='fake')
 RAGLAB_DIR = Path(__file__).resolve().parent / 'raglab'
 REPO_ROOT = RAGLAB_DIR.parents[2]
 
@@ -969,9 +968,22 @@ def test_config_round_trips_through_the_panel_payload():
     assert LabConfig.from_dict(cfg.to_dict()).to_dict() == cfg.to_dict()
 
 
-def test_lab_refuses_the_production_chroma_database():
-    with pytest.raises(ValueError, match='production'):
+def test_the_lab_names_no_vector_database_at_all():
+    """The guard used to be "refuse the production database". Having no such
+    setting is the stronger version of it: a database the lab cannot name is one
+    it cannot be pointed at by a typo, an old shell, or a copied command."""
+    settings = LabSettings()
+    assert [f for f in vars(settings) if 'chroma' in f or 'database' in f] == []
+    with pytest.raises(TypeError):
         LabSettings(chroma_database='lodestar')
+
+
+def test_the_lab_ignores_a_leftover_chroma_environment(monkeypatch):
+    """The board's Chroma stack runs whenever a board does, and a shell that ran
+    the old lab commands still exports these. Neither may reach the lab."""
+    monkeypatch.setenv('RAGLAB_CHROMA_DATABASE', 'lodestar')
+    monkeypatch.setenv('BRAIN_CHROMA_URL', 'http://localhost:8001')
+    assert 'lodestar' not in repr(config.load_lab_settings())
 
 
 # --- RAGAS bridge ----------------------------------------------------------
@@ -2222,8 +2234,6 @@ def test_the_export_never_invents_the_context_text(ground_truth, tmp_path):
 
 @pytest.fixture(scope='module')
 def client():
-    os.environ['BRAIN_CHROMA_URL'] = 'memory'
-    os.environ['RAGLAB_CHROMA_DATABASE'] = 'raglab-tests'
     from fastapi.testclient import TestClient
 
     from .raglab.server import create_app
@@ -2237,8 +2247,37 @@ def test_options_describes_the_corpus_and_capabilities(client):
     assert body['corpus']['sessions'] == 167
     assert body['corpus']['questions'] == 112
     assert 'semantic-drift' in body['chunkers']
-    assert body['capabilities']['chroma_database'] == 'raglab-tests'
     assert 'ragas' in body['capabilities']
+
+
+def test_options_advertises_no_vector_database(client):
+    """The panel used to carry a `chroma <db> @ <url>` badge, which is now a
+    claim about a service that is not involved. It is replaced by a positive
+    statement rather than an absence, because the panel does have to say where an
+    experiment's vectors live and where its one durable artifact lands."""
+    caps = client.get('/api/options').json()['capabilities']
+    assert [key for key in caps if 'chroma' in key] == []
+    assert caps['storage'] == {'index': 'memory',
+                               'runs': 'brain/tests/raglab/.runs'}
+
+
+def test_health_says_the_lab_depends_on_no_service(client):
+    body = client.get('/api/health').json()
+    assert body['ok'] and body['storage'] == 'memory'
+    assert [key for key in body if 'chroma' in key or key == 'database'] == []
+
+
+def test_a_build_starts_without_any_service_running(client):
+    """`/api/index` used to answer 503 unless a Chroma heartbeat came back. With
+    the index in process memory there is nothing that can be down, so the job
+    starts — and the gate that could refuse it is gone rather than passing."""
+    from .raglab import server as lab_server
+
+    assert not hasattr(lab_server, 'require_chroma')
+    body = client.post('/api/index', json={
+        'index': {'chunker': 'session', 'embedder': 'ascii-hash',
+                  'layers': ['session']}}).json()
+    assert body['job_id']
 
 
 def test_options_counts_the_habits_the_corpus_tracks(client):
@@ -2748,8 +2787,7 @@ def test_choosing_the_local_backend_is_enough_to_get_a_local_default_model():
     the default model stayed a remote slug, so `provider_problems` refused every
     run for a model the user never chose — a default that cannot run is a broken
     default, not a strict one."""
-    local = LabSettings(chroma_url='memory', chroma_database='raglab-tests',
-                        llm_provider='ollama')
+    local = LabSettings(llm_provider='ollama')
     assert local.llm_model in {m.id for m in models.OLLAMA_MODELS}, local.llm_model
     assert not models.provider_problems(LabConfig(), local)
 
@@ -2757,8 +2795,7 @@ def test_choosing_the_local_backend_is_enough_to_get_a_local_default_model():
 def test_an_explicit_model_is_never_replaced_by_the_provider_default():
     """The resolution is for the *unset* case only. Overwriting a stated model
     would mean a run labelled with one model was scored by another."""
-    local = LabSettings(chroma_url='memory', chroma_database='raglab-tests',
-                        llm_provider='ollama', llm_model='gemma4:e2b')
+    local = LabSettings(llm_provider='ollama', llm_model='gemma4:e2b')
     assert local.llm_model == 'gemma4:e2b'
 
 

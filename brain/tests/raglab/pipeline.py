@@ -80,7 +80,7 @@ class Outcome:
 
 
 def _mask(index, scope, layers: tuple[str, ...]) -> np.ndarray:
-    """The BM25 equivalent of the Chroma `where` clause. Kept in lockstep with
+    """The BM25 equivalent of the store's `where` clause. Kept in lockstep with
     query.where_clause: if the two disagree, hybrid fusion silently compares two
     different candidate pools."""
     allowed = np.ones(len(index.chunks), dtype=bool)

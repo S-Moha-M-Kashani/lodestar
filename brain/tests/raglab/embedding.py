@@ -139,7 +139,7 @@ class FastEmbedMultilingual:
         return _normalize(vectors)
 
     def embed(self, texts: list[str]) -> np.ndarray:
-        """The document side. Everything stored in Chroma comes through here."""
+        """The document side. Everything that gets indexed comes through here."""
         return self._vectors(list(texts), self.passage_prefix)
 
     def embed_queries(self, texts: list[str]) -> np.ndarray:
@@ -194,7 +194,7 @@ class SentenceTransformerEmbedder:
                                     show_progress_bar=False,
                                     convert_to_numpy=True)
         # Normalised here rather than trusting the flag: cosine similarity in
-        # Chroma is only cosine similarity if the vectors are unit length.
+        # Cosine similarity is only cosine if the vectors are unit length.
         return _normalize(np.asarray(vectors, dtype=np.float32))
 
     def embed(self, texts: list[str]) -> np.ndarray:

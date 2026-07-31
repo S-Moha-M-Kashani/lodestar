@@ -2,8 +2,15 @@
 
 Splitting the knobs into IndexConfig / RetrievalConfig / GenerationConfig is not
 cosmetic: only IndexConfig changes what is stored, so its fingerprint names the
-Chroma collection. Retrieval and generation can then be swept for free against
+in-memory index. Retrieval and generation can then be swept for free against
 an index that is already built — which is what makes the settings panel usable.
+
+**There are no storage settings here, and that is the design.** An experiment's
+index lives in process memory (`store.MemoryVectors`) and its results in one
+JSON file per run under RUNS_DIR. The lab used to carry a Chroma url and its own
+database name, guarded by a check that refused 'lodestar'; a setting that does
+not exist is the stronger guard, because it cannot be pointed at real chat
+memory by a typo, a stale shell, or a command copied from an old README.
 """
 import hashlib
 import json
@@ -13,12 +20,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]        # the lodestar repo root
 RUNS_DIR = Path(__file__).resolve().parent / '.runs'
-
-# The lab's own Chroma database. Never 'lodestar' (real chat memory) and never
-# 'lodestar-test' (the paired test board's memory) — an experiment that drops
-# and rebuilds collections 40 times must not be able to touch either.
-LAB_DATABASE = 'lodestar-raglab'
-FORBIDDEN_DATABASES = ('lodestar',)
 
 # Which backend serves the lab's chat models. Local Ollama is the default: the
 # lab's judged runs can make hundreds of model calls, so a default must never
@@ -52,8 +53,6 @@ def load_env_file(path: Path | None = None) -> None:
 
 @dataclass(frozen=True)
 class LabSettings:
-    chroma_url: str = 'http://localhost:8001'
-    chroma_database: str = LAB_DATABASE
     openrouter_api_key: str = ''
     openrouter_base_url: str = 'https://openrouter.ai/api/v1'
     # See LLM_PROVIDERS. Set RAGLAB_LLM=ollama to run every LLM stage — answerer,
@@ -80,10 +79,6 @@ class LabSettings:
     cross_encoder_model: str = 'jinaai/jina-reranker-v2-base-multilingual'
 
     def __post_init__(self):
-        if self.chroma_database in FORBIDDEN_DATABASES:
-            raise ValueError(
-                f'refusing to run the lab against Chroma database '
-                f'{self.chroma_database!r}: that is production chat memory')
         if self.llm_provider not in LLM_PROVIDERS:
             raise ValueError(
                 f'unknown RAGLAB_LLM {self.llm_provider!r}; expected one of '
@@ -117,9 +112,10 @@ class LabSettings:
 def load_lab_settings(env: dict | None = None) -> LabSettings:
     load_env_file()
     env = os.environ if env is None else env
+    # BRAIN_CHROMA_URL and RAGLAB_CHROMA_DATABASE are deliberately not read: the
+    # board's Chroma stack runs whenever a board does, and an experiment must not
+    # be able to find it just because it is there.
     return LabSettings(
-        chroma_url=env.get('BRAIN_CHROMA_URL', 'http://localhost:8001'),
-        chroma_database=env.get('RAGLAB_CHROMA_DATABASE', LAB_DATABASE),
         openrouter_api_key=env.get('OPENROUTER_API_KEY', ''),
         openrouter_base_url=env.get('OPENROUTER_BASE_URL',
                                     'https://openrouter.ai/api/v1'),
@@ -193,7 +189,7 @@ STEPS = (
 
 @dataclass(frozen=True)
 class IndexConfig:
-    """What gets written to Chroma. Its fingerprint names the collection."""
+    """What gets indexed. Its fingerprint names the in-memory index."""
     chunker: str = 'semantic-drift'
     chunk_chars: int = 500
     overlap: int = 100          # fixed-overlap only
@@ -360,7 +356,7 @@ HELP = {
         'before embedding it (Anthropic call this contextual retrieval). A diary '
         'chunk that says "بهتر شد" is unsearchable without knowing what "it" was.'),
     'index.embedder': (
-        'Turns text into the vector Chroma searches, and the one choice that '
+        'Turns text into the vector the index is searched by, and the one choice that '
         'decides whether anything else matters. Each option says which languages '
         'it can represent: "ascii-hash" is what the brain ships today and reads '
         'Latin script only, so Farsi embeds to the zero vector — measured at 0.01 '
