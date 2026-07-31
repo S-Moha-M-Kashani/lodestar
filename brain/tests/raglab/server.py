@@ -22,9 +22,9 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from . import (embedding, evaluate, explain, metrics, models, pipeline,
                ragas_eval, retrieval)
-from .config import (ANSWERERS, CHUNKERS, EMBEDDERS, EXPANSIONS, GRADERS, LAYERS,
-                     RERANKERS, RETRIEVERS, STEPS, SUMMARIZERS, LabConfig,
-                     load_lab_settings)
+from .config import (ANSWERERS, BALANCES, CHUNKERS, DIFFICULTIES, EMBEDDERS,
+                     EXPANSIONS, GRADERS, LAYERS, RERANKERS, RETRIEVERS, STEPS,
+                     SUMMARIZERS, LabConfig, load_lab_settings)
 from .corpus import load_diary, load_ground_truth
 from .index import IndexRegistry, _lab_llm
 
@@ -48,13 +48,18 @@ class Jobs:
             job_id = uuid.uuid4().hex[:10]
             self.jobs[job_id] = {'id': job_id, 'kind': kind, 'state': 'running',
                                  'stage': 'starting', 'progress': 0.0,
+                                 'detail': '',
                                  'result': None, 'error': None}
             self.current = job_id
 
-        def report(stage: str, fraction: float) -> None:
+        def report(stage: str, fraction: float, detail: str = '') -> None:
             job = self.jobs[job_id]
             job['stage'] = stage
             job['progress'] = round(min(1.0, max(0.0, fraction)), 3)
+            # "question 16/30 · hard" beside the fraction, because a judged run on
+            # a local model spends hours inside one stage and a bar that only
+            # moves at stage boundaries looks like a hang.
+            job['detail'] = detail
 
         def run() -> None:
             job = self.jobs[job_id]
@@ -102,6 +107,11 @@ def create_app() -> FastAPI:
             'graders': list(GRADERS), 'expansions': list(EXPANSIONS),
             'answerers': list(ANSWERERS),
             'question_types': list(metrics.TYPES),
+            'difficulties': list(DIFFICULTIES),
+            # How a limited run picks its questions. Served because the sample is
+            # part of the measurement: two rows scored on different samples are
+            # not two results, and the panel has to be able to say which.
+            'balances': list(BALANCES),
             'defaults': LabConfig().to_dict(),
             # The three steps, in pipeline order. The panel groups and colours
             # every control by these, so which step a thing belongs to is served
@@ -146,8 +156,15 @@ def create_app() -> FastAPI:
                     settings.cross_encoder_model),
                 'cross_encoder_model': settings.cross_encoder_model,
                 'fastembed_model': settings.fastembed_model,
-                'llm': bool(settings.openrouter_api_key),
+                # `llm` is "a real model is reachable", not "a key exists": with
+                # RAGLAB_LLM=ollama every stage runs on this machine and there is
+                # no key at all. The provider is served beside it because the
+                # badge has to name where the numbers came from — a run on the
+                # fake provider is not a cheaper run, it is not a run.
+                'llm': settings.llm_ready,
+                'llm_provider': settings.provider,
                 'llm_model': settings.llm_model,
+                'ollama_base_url': settings.ollama_base_url,
                 'ragas': ragas_eval.availability(settings).as_dict(),
                 'chroma_url': settings.chroma_url,
                 'chroma_database': settings.chroma_database,
@@ -176,7 +193,7 @@ def create_app() -> FastAPI:
     @app.post('/api/run')
     def start_run(payload: dict):
         cfg = LabConfig.from_dict(payload)
-        problems = cfg.validate()
+        problems = cfg.validate() + models.provider_problems(cfg, settings)
         if problems:
             raise HTTPException(400, '; '.join(problems))
 
@@ -186,6 +203,7 @@ def create_app() -> FastAPI:
                 types=payload.get('types') or None,
                 difficulty=payload.get('difficulty') or None,
                 limit=payload.get('limit') or None,
+                balance=payload.get('balance') or 'stride',
                 ragas_mode=payload.get('ragas_mode', 'offline'),
                 ragas_limit=payload.get('ragas_limit') or None,
                 workers=int(payload.get('workers', 1)), progress=report)

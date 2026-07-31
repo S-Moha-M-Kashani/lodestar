@@ -18,6 +18,10 @@ def test_defaults():
     # The cheap tier is the default: a request that arrives without a model
     # (evals, direct API use) should not silently buy the expensive one.
     assert s.model == 'openai/gpt-5-nano'
+    # Ollama's OpenAI-compatible surface, '/v1' included: the factory forwards
+    # this verbatim, so any other local server (llama.cpp, vLLM) is a URL change
+    # rather than a code change.
+    assert s.ollama_base_url == 'http://localhost:11434/v1'
     # The old default, nvidia/nemotron-3-nano-omni-...:free, is advertised as
     # audio-capable but its provider silently discards the input_audio part —
     # every dictation came back a hallucinated apology. The default must be a
@@ -37,7 +41,9 @@ def test_env_overrides():
         'BRAIN_TRANSCRIBER': 'fake',
         'BRAIN_OMNI_MODEL': 'google/gemini-2.5-flash',
         'BRAIN_PARAKEET_MODEL': 'mlx-community/parakeet-tdt-1.1b',
+        'BRAIN_OLLAMA_BASE_URL': 'http://gpu.lan:11434/v1',
     })
+    assert s.ollama_base_url == 'http://gpu.lan:11434/v1'
     assert s.openrouter_api_key == 'sk-test'
     assert s.model == 'anthropic/claude-sonnet-4.5'
     assert s.llm_provider == 'fake'

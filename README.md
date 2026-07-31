@@ -90,9 +90,10 @@ Every capability sits behind a small interface chosen by env vars, so each piece
 | Env var | Default | Meaning |
 | --- | --- | --- |
 | `OPENROUTER_API_KEY` | *(empty)* | LLM access. Without it the assistant errors politely; the board is unaffected |
-| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | Any OpenAI-compatible endpoint works (e.g. a local Ollama later) |
-| `BRAIN_MODEL` | `openai/gpt-5-nano` | Fallback when the browser sends no pick; any OpenRouter model id |
-| `BRAIN_LLM` | `openrouter` | `fake` = deterministic offline chat model (tests/CI). An unrecognised value **raises at boot** — there is no silent fallback to `openrouter` |
+| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | Any OpenAI-compatible endpoint works |
+| `BRAIN_MODEL` | `openai/gpt-5-nano` | Fallback when the browser sends no pick; an OpenRouter model id, or an Ollama tag when `BRAIN_LLM=ollama` |
+| `BRAIN_LLM` | `openrouter` | `ollama` = a model served on this machine (free, private, no key; needs `ollama serve` and the model pulled). `fake` = deterministic offline chat model (tests/CI). An unrecognised value **raises at boot** — there is no silent fallback to `openrouter`, and deliberately no "local if the daemon is up" mode, which would bill an API on whichever machine had it down |
+| `BRAIN_OLLAMA_BASE_URL` | `http://localhost:11434/v1` | Where the local model server is. The `/v1` is part of the URL, so the same setting reaches llama.cpp or vLLM without a code change |
 | `BRAIN_EMBEDDER` | `hash` | `fastembed` (semantic, needs the `semantic` extra) or `hash` (offline token buckets). No fallback mode — a missing wheel is an error, not a silent downgrade |
 | `BRAIN_MAX_STEPS` | `8` | Tool-call budget per chat turn |
 | `BRAIN_TRANSCRIBER` | `parakeet` | Voice-to-text backend. `parakeet` = local MLX model (free, offline, Apple Silicon only); `openrouter` = the omni model; `fake` = deterministic offline transcript (tests/CI). Compose pins `openrouter`, since the brain image cannot install mlx |
@@ -227,11 +228,19 @@ behind it is a normal state rather than a broken screen. The service also serves
 standalone panel at `http://localhost:9002/` if you would rather run it without a board.
 
 Two fixtures are the whole basis of it: `brain/tests/fixtures/diary_year_fa.json`
-(157 sessions, 954 messages, Aug 2025 → Jul 2026, with a mood and storyline tags per
-session) and `diary_year_fa_groundtruth.json` (100 questions across ten types —
-single-hop, temporal, multi-hop, aggregation, knowledge-update, commitment, entity,
-pattern, abstention, adversarial — each with a reference answer and verbatim evidence
-quotes). Both are synthetic; every person and event in them is fictional.
+(167 sessions, 998 messages, Aug 2025 → Jul 2026, with a mood and storyline tags per
+session, plus a `habits` block declaring five tracked practices) and `diary_year_fa_groundtruth.json` (112 questions across
+eleven types — single-hop, temporal, multi-hop, aggregation, knowledge-update,
+commitment, entity, pattern, abstention, adversarial, habit — each with a reference
+answer and verbatim evidence quotes). Both are synthetic; every person and event in
+them is fictional.
+
+A candidate sweep is measured on **49 of those questions, balanced across the
+difficulty bands** (17 easy / 16 medium / 16 hard). The bands are naturally 29/57/26,
+so sampling the set as it is hands medium about half of every run — and since the
+four deciding metrics are means over questions, that measures one band and reports it
+as the pipeline. Which questions a run actually scored is saved on the run itself,
+because two rows are comparable only if they scored the same ones.
 
 Pick a strategy per stage and the panel grades it:
 
@@ -253,6 +262,31 @@ extra: sentence-transformers and torch, ~1 GB), and downloads the Persian model
 once (~2.2 GB) on the first index build. `tests/ports.test.js` checks that launcher
 against the configured default, so switching the default without switching the
 extra fails a test rather than a run.
+
+Four of the metrics that choose the architecture are LLM-judged, so a lab with no
+model can rank nothing. `RAGLAB_LLM=ollama` points every LLM stage — answerer,
+relevance gate, reranker **and the RAGAS judge** — at a model on this machine, which
+is what makes the expensive candidates measurable without buying credit (a
+per-chunk relevance gate is *k* calls per question). Two rules it keeps: a model the
+daemon does not serve stops the run rather than silently becoming another one, and
+the judge is **screened before it is allowed to grade** —
+`npm run raglab:judgescreen -- --models qwen3.5:2b gemma4:e2b` scores it on claims
+whose answers are already known, and the results are committed under `.screens/`
+because they are the evidence for which model was permitted to decide. Two of the
+local models screened so far answered identically to every claim, which scores 50%
+on a balanced set and separates no candidate from any other. `RAGLAB_LLM=ollama` is
+enough on its own — the model defaults follow the backend, since a slug only means
+something to whatever serves it — and every phase reports where it is, per question
+while answering and per judge call while grading, because a judged local run spends
+hours inside one stage.
+
+`npm run raglab:leaderboard` builds the leaderboard from `.runs/`, and its main job
+is refusing to rank rows that are not comparable: a decision score is a mean over
+questions judged by a model, so it groups by (question set, judge) and never ranks
+across groups. A lead inside the combined error of the top two rows is reported as
+a tie rather than a win, and runs that recorded only *how many* questions they
+scored get no rank numbers at all — two runs of 24 questions may be two different
+24.
 
 The lab is strictly test-side: it writes only to its own Chroma database
 (`lodestar-raglab`, and it refuses to start against the production one) and to a

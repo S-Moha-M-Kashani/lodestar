@@ -20,6 +20,23 @@ RUNS_DIR = Path(__file__).resolve().parent / '.runs'
 LAB_DATABASE = 'lodestar-raglab'
 FORBIDDEN_DATABASES = ('lodestar',)
 
+# Which backend serves the lab's chat models. '' is not "auto" in the sense the
+# rest of the project forbids — it does not probe anything. It means "openrouter
+# if a key is present, otherwise the offline fake", which is the behaviour the
+# lab has always had and the only way the panel stays runnable with no network.
+# Naming 'ollama' or 'openrouter' explicitly is a commitment: the run then fails
+# rather than quietly measuring the other one.
+LLM_PROVIDERS = ('', 'openrouter', 'ollama', 'fake')
+
+# The default chat model per backend, because a slug only means something to the
+# backend that serves it. The local default is the model the judge screen has a
+# row for (`.screens/`) — a default nobody screened is judge-shopping with extra
+# steps. 'fake' keeps the remote slug: it ignores the model entirely, and changing
+# it would make the offline runs' notes disagree with every earlier one.
+PROVIDER_MODELS = {'openrouter': 'openai/gpt-5-nano',
+                   'ollama': '4skl/gemma4-e2b-mtp',
+                   'fake': 'openai/gpt-5-nano'}
+
 
 def load_env_file(path: Path | None = None) -> None:
     """Read repo-root .env into the environment without overriding what is
@@ -42,7 +59,18 @@ class LabSettings:
     chroma_database: str = LAB_DATABASE
     openrouter_api_key: str = ''
     openrouter_base_url: str = 'https://openrouter.ai/api/v1'
-    llm_model: str = 'openai/gpt-5-nano'
+    # See LLM_PROVIDERS. Set RAGLAB_LLM=ollama to run every LLM stage — answerer,
+    # gate, reranker and the RAGAS judge — on a model on this machine, which is
+    # what makes the expensive candidates (a per-chunk LLM gate is k calls per
+    # question) measurable without buying credit.
+    llm_provider: str = ''
+    ollama_base_url: str = 'http://localhost:11434/v1'
+    # '' = the provider's own default (PROVIDER_MODELS), resolved in __post_init__
+    # so every reader sees a concrete slug. It has to follow the provider: a
+    # remote slug left standing under RAGLAB_LLM=ollama made
+    # `models.provider_problems` refuse every run, for a model the user never
+    # picked. A default that cannot run is a broken default, not a strict one.
+    llm_model: str = ''
     fastembed_model: str = 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'
     # Its own key, deliberately not the OpenRouter one: OpenRouter serves no
     # /embeddings endpoint, so the chat key cannot stand in here. Absent means the
@@ -59,6 +87,34 @@ class LabSettings:
             raise ValueError(
                 f'refusing to run the lab against Chroma database '
                 f'{self.chroma_database!r}: that is production chat memory')
+        if self.llm_provider not in LLM_PROVIDERS:
+            raise ValueError(
+                f'unknown RAGLAB_LLM {self.llm_provider!r}; expected one of '
+                + ', '.join(repr(name) for name in LLM_PROVIDERS))
+        # Only when unset: overwriting a stated model would mean a run labelled
+        # with one model had been scored by another, which is the one artefact
+        # this lab must never produce.
+        if not self.llm_model:
+            object.__setattr__(self, 'llm_model', PROVIDER_MODELS[self.provider])
+
+    @property
+    def provider(self) -> str:
+        """The backend a chat model will actually be built with — never ''.
+
+        One place resolves the blank, because every caller that resolved it for
+        itself was a chance for the judge to run on one backend while the run
+        notes claimed the other."""
+        if self.llm_provider:
+            return self.llm_provider
+        return 'openrouter' if self.openrouter_api_key else 'fake'
+
+    @property
+    def llm_ready(self) -> bool:
+        """Whether an LLM stage would reach a real model. 'fake' answers and
+        judges without ever failing, which is why this is not `bool(key)`: the
+        thing worth knowing is not whether a credential exists but whether the
+        numbers a run produces mean anything."""
+        return self.provider in ('openrouter', 'ollama')
 
 
 def load_lab_settings(env: dict | None = None) -> LabSettings:
@@ -70,7 +126,10 @@ def load_lab_settings(env: dict | None = None) -> LabSettings:
         openrouter_api_key=env.get('OPENROUTER_API_KEY', ''),
         openrouter_base_url=env.get('OPENROUTER_BASE_URL',
                                     'https://openrouter.ai/api/v1'),
-        llm_model=env.get('RAGLAB_MODEL', 'openai/gpt-5-nano'),
+        llm_provider=env.get('RAGLAB_LLM', ''),
+        ollama_base_url=env.get('RAGLAB_OLLAMA_BASE_URL',
+                                'http://localhost:11434/v1'),
+        llm_model=env.get('RAGLAB_MODEL', ''),
         fastembed_model=env.get(
             'RAGLAB_FASTEMBED_MODEL',
             'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'),
@@ -97,6 +156,11 @@ RERANKERS = ('none', 'lexical', 'recency', 'agentic', 'cross-encoder', 'llm')
 GRADERS = ('none', 'lexical', 'llm')
 EXPANSIONS = ('none', 'neighbors', 'session')
 ANSWERERS = ('none', 'extractive', 'llm')
+# Ascending, and the order the remainder of an uneven sample is handed out in, so
+# a balanced selection is reproducible rather than merely proportionate.
+DIFFICULTIES = ('easy', 'medium', 'hard')
+# How a limited run picks its questions. See evaluate.select_questions.
+BALANCES = ('stride', 'difficulty')
 
 
 @dataclass(frozen=True)
@@ -440,6 +504,15 @@ HELP = {
         'temporal, counting, latest-state, unanswerable, adversarial. The type '
         'breakdown is usually more informative than the headline.'),
     'run.difficulty': 'Restrict the run to easy, medium or hard questions.',
+    'run.balance': (
+        'How a limited run chooses its questions. "difficulty" takes an equal '
+        'share of easy, medium and hard; "stride" spreads across the set as it '
+        'is, which means medium — 57 of the 112 — gets about half the sample. '
+        'That matters because the four deciding metrics are means over '
+        'questions, so a skewed sample measures one band and reports it as the '
+        'pipeline. The sweep uses 49 balanced (17/16/16); runs before '
+        '2026-07-31 used stride, which is why the setting is recorded on every '
+        'row rather than assumed.'),
     'run.workers': (
         'How many questions are scored in parallel. Only worth raising when a '
         'stage calls a model, where wall-clock is dominated by waiting.'),

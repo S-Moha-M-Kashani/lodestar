@@ -528,7 +528,12 @@ async function boot() {
   $('caps').innerHTML = [
     badge(caps.fastembed, `fastembed ${caps.fastembed ? 'ready' : 'missing'}`),
     badge(caps.cross_encoder, `cross-encoder ${caps.cross_encoder ? 'ready' : 'missing'}`),
-    badge(caps.llm, caps.llm ? `LLM ${caps.llm_model}` : 'no OPENROUTER_API_KEY'),
+    // The backend is on the badge, not just the model: a run costs money on
+    // openrouter and nothing on ollama, and the same slug means neither on the
+    // fake provider — where every LLM number is meaningless, which is worth
+    // seeing before the run rather than after.
+    badge(caps.llm, caps.llm ? `LLM ${caps.llm_provider} · ${caps.llm_model}`
+                             : 'no LLM backend — set OPENROUTER_API_KEY or RAGLAB_LLM=ollama'),
     badge(caps.ragas.installed, `ragas ${caps.ragas.installed ? caps.ragas.version : 'missing'}`),
     badge(caps.ragas.llm_ready, `ragas LLM metrics ${caps.ragas.llm_ready ? 'ready' : 'off'}`),
     `<span class="badge">chroma ${caps.chroma_database} @ ${caps.chroma_url}</span>`,
@@ -557,8 +562,13 @@ async function poll(jobId, onDone) {
   const box = $('jobBox');
   const tick = async () => {
     const job = await api('/api/jobs/' + jobId);
+    // The detail ("question 16/30 · hard", "judge call 137 of ~420") is the part
+    // that distinguishes a slow stage from a stuck one, and on a local judge one
+    // stage is hours.
     box.innerHTML = `<div class="muted">${job.kind}: ${job.stage} ` +
-      `${Math.round(job.progress * 100)}%</div><progress value="${job.progress}" max="1"></progress>`;
+      `${Math.round(job.progress * 100)}%` +
+      `${job.detail ? ' · ' + job.detail : ''}</div>` +
+      `<progress value="${job.progress}" max="1"></progress>`;
     if (job.state === 'running') { setTimeout(tick, 700); return; }
     if (job.state === 'error') {
       box.innerHTML = `<div class="note"><b>${job.error}</b><pre style="white-space:pre-wrap;font-size:.7rem">${job.traceback || ''}</pre></div>`;

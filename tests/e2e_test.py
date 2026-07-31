@@ -1072,6 +1072,20 @@ try:
         check("assistant: no picker offers the deprecated openrouter/auto router",
               all("openrouter/auto" not in opts
                   for opts in (text_options, omni_options, embed_options)))
+        # The brain now says which models it can serve, because the text pick
+        # rides on every chat turn: pointed at a local backend, a picker offering
+        # `openai/gpt-5-nano` would fail every turn with no way out from the UI.
+        # Here the brain is the fake provider, so the honest answer is "nothing
+        # verified" — and the presets above must therefore stand untouched, which
+        # is exactly what the three checks before this one just asserted.
+        served = page.evaluate(
+            "() => fetch('/api/agent/models').then(r => r.json())")
+        check("assistant: the brain reports which models it can serve",
+              served.get("provider") == "fake")
+        check("assistant: an unprobed backend claims nothing rather than nothing-serves",
+              served.get("verified") is False and served.get("models") == [])
+        check("assistant: no local-backend hint when the models are unverified",
+              "served locally" not in page.locator(".chat-settings").inner_text())
 
         n_replies = page.locator(".chat-msg.assistant").count()
         page.fill("#chat-input", "model ride-along probe")
@@ -1550,6 +1564,8 @@ try:
                       "latency_ms": 26.0, "abstained": False}],
         }
 
+        job_polls = []
+
         def lab_route(route):
             url = route.request.url
             payload = None
@@ -1607,9 +1623,21 @@ try:
                                   "expanded_from": "", "habit": "gym",
                                   "text": "دفتر عادت «باشگاه» — هدف: 3 بار در هر هفته"}]}
             elif "/api/raglab/jobs/" in url:
-                payload = {"id": "job-1", "kind": "run", "state": "done",
-                           "stage": "done", "progress": 1.0, "result": LAB_RESULT,
-                           "error": None}
+                # The first poll is still running and carries a detail. A judged
+                # run on a local model spends hours inside one stage, so the
+                # detail is the only thing that moves — a page that shows only the
+                # percentage looks hung for the whole judged phase.
+                if not job_polls:
+                    job_polls.append(1)
+                    payload = {"id": "job-1", "kind": "run", "state": "running",
+                               "stage": "ragas", "progress": 0.94,
+                               "detail": "judge call 137 of ~420",
+                               "result": None, "error": None}
+                else:
+                    payload = {"id": "job-1", "kind": "run", "state": "done",
+                               "stage": "done", "progress": 1.0,
+                               "detail": "done", "result": LAB_RESULT,
+                               "error": None}
             elif "/api/raglab/run" in url:
                 payload = {"job_id": "job-1"}
             if payload is None:
@@ -1836,6 +1864,10 @@ try:
               page.locator(".raglab-sheet").count() == 1)
 
         page.click("#raglab-run")
+        # Caught on the first poll, before the second one completes the job.
+        page.wait_for_selector(".rag-progress")
+        check("raglab: a running job says which call it is on, not just a percent",
+              "judge call 137 of ~420" in page.locator(".rag-meta").last.inner_text())
         page.wait_for_selector(".rag-figures")
         figures = page.locator(".rag-figures").inner_text()
         check("raglab: a run renders its grades",

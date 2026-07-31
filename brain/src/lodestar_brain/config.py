@@ -13,13 +13,28 @@ PRODUCTION_BOARD_PORT = 3000
 PRODUCTION_DATABASE = 'lodestar'
 NON_PRODUCTION_DATABASE = 'lodestar-test'
 
+# The default chat model per backend. A slug only means something to the backend
+# that serves it, so `BRAIN_LLM=ollama` has to move the model too — otherwise
+# every chat turn asks the local daemon for a model it cannot load, naming one the
+# user never chose. `BRAIN_MODEL` still wins: an explicit model must never be
+# replaced by a default, or the answer came from something other than what the
+# picker says it did.
+PROVIDER_MODELS = {'openrouter': 'openai/gpt-5-nano',
+                   'ollama': '4skl/gemma4-e2b-mtp',
+                   'fake': 'openai/gpt-5-nano'}
+
 
 @dataclass(frozen=True)
 class Settings:
     openrouter_api_key: str = ''
     openrouter_base_url: str = 'https://openrouter.ai/api/v1'
     model: str = 'openai/gpt-5-nano'
-    llm_provider: str = 'openrouter'   # 'openrouter' | 'fake'
+    llm_provider: str = 'openrouter'   # 'openrouter' | 'ollama' | 'fake'
+    # Where a locally served model lives. Ollama's OpenAI-compatible surface, so
+    # the '/v1' is part of the URL rather than something the factory appends —
+    # pointing this at any other local OpenAI-compatible server (llama.cpp, vLLM)
+    # then needs no code change at all.
+    ollama_base_url: str = 'http://localhost:11434/v1'
     # 'fastembed' | 'hash'. No 'auto': probing for the optional fastembed wheel
     # and taking HashEmbedder when it was missing meant a machine without the
     # 'semantic' extra ran token-overlap hashing while believing it had
@@ -66,11 +81,19 @@ def _chroma_database_for(board_api_url: str) -> str:
 def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     env = os.environ if env is None else env
     board_api_url = env.get('BOARD_API_URL', 'http://127.0.0.1:3000')
+    provider = env.get('BRAIN_LLM', 'openrouter')
     return Settings(
         openrouter_api_key=env.get('OPENROUTER_API_KEY', ''),
         openrouter_base_url=env.get('OPENROUTER_BASE_URL', 'https://openrouter.ai/api/v1'),
-        model=env.get('BRAIN_MODEL', 'openai/gpt-5-nano'),
-        llm_provider=env.get('BRAIN_LLM', 'openrouter'),
+        # An unknown provider gets the remote default and is rejected by
+        # make_chat_model, which is where that error belongs — resolving a model
+        # for it here would turn a clear "unknown backend" into a confusing
+        # "unknown model".
+        model=env.get('BRAIN_MODEL')
+              or PROVIDER_MODELS.get(provider, PROVIDER_MODELS['openrouter']),
+        llm_provider=provider,
+        ollama_base_url=env.get('BRAIN_OLLAMA_BASE_URL',
+                                'http://localhost:11434/v1'),
         embedder=env.get('BRAIN_EMBEDDER', 'hash'),
         board_api_url=board_api_url,
         chroma_url=env.get('BRAIN_CHROMA_URL', 'http://localhost:8001'),
