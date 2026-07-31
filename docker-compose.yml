@@ -33,13 +33,20 @@ services:
       BRAIN_LLM: ${BRAIN_LLM:-ollama}
       BRAIN_OLLAMA_BASE_URL: ${BRAIN_OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
       # Both backends are named outright because there is no 'auto' mode to fall
-      # back on any more. The image installs the 'semantic' extra, so the real
-      # embedder is available here; it can never install the 'voice' extra, since
-      # parakeet-mlx is Apple-Silicon only — hence OpenRouter for dictation. The
-      # chat model is the opposite way round: BRAIN_LLM=ollama reaches the daemon
-      # on the host, so the composed brain is local-first like the native one.
+      # back on any more. The embedder is the architecture: this one measured
+      # 0.617 recall on the Farsi corpus against ~0.01 for the Latin-only
+      # alternative, a ~60x gap where every other retrieval knob was worth under
+      # 2%. BRAIN_EMBED_MODEL is deliberately left unset — '' already resolves to
+      # heydariAI/persian-embeddings. It costs a ~2.2 GB download, paid on the
+      # first retrieval rather than at boot: the weights load lazily so /health
+      # answers while the container is still cold, which is what keeps a fresh
+      # `docker compose up` from looking hung. The image can never install the
+      # 'voice' extra, since parakeet-mlx is Apple-Silicon only — hence
+      # OpenRouter for dictation. The chat model is the opposite way round:
+      # BRAIN_LLM=ollama reaches the daemon on the host, so the composed brain is
+      # local-first like the native one.
       # tests/compose.test.js fails if either pin goes missing.
-      BRAIN_EMBEDDER: ${BRAIN_EMBEDDER:-fastembed}
+      BRAIN_EMBEDDER: ${BRAIN_EMBEDDER:-sentence-transformers}
       BRAIN_TRANSCRIBER: ${BRAIN_TRANSCRIBER:-openrouter}
       BOARD_API_URL: http://lodestar:3000
       # Chat memory lives on the Chroma server running on the host, not in this
