@@ -85,8 +85,15 @@ OLLAMA_MODELS = (
                      'models screened so far were both constant predictors, so '
                      'screen it before trusting a row it produced'),
     ModelOption('4skl/gemma4-e2b-mtp', 'Gemma 4 E2B (MTP)', 'open',
-                note='multi-token-prediction build of the above; same weights, '
-                     'so it is a throughput test, not a quality one'),
+                note='multi-token-prediction build of the above, and 3.7 GB at '
+                     'Q4_0 against 7.2 GB at Q4_K_M — so it is a throughput '
+                     'test, and the quantisation differs too, which means a '
+                     'quality difference from the base build is not ruled out'),
+    ModelOption('deepseek-r1:8b', 'DeepSeek-R1 8B', 'open',
+                note='the strongest reasoner installed at a size that still '
+                     'answers, but reasoning is the cost here: the judge is the '
+                     'high-volume stage, and a model that spends hundreds of '
+                     'thinking tokens per verdict pays that on every call'),
     ModelOption('dolphin-mixtral:8x7b', 'Dolphin Mixtral 8x7B', 'open',
                 note='the largest thing installed; a 47B mixture is slow enough '
                      'that it is an answerer, not a 276-call judge'),
