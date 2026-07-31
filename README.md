@@ -274,7 +274,19 @@ the judge is **screened before it is allowed to grade** —
 whose answers are already known, and the results are committed under `.screens/`
 because they are the evidence for which model was permitted to decide. Two of the
 local models screened so far answered identically to every claim, which scores 50%
-on a balanced set and separates no candidate from any other.
+on a balanced set and separates no candidate from any other. `RAGLAB_LLM=ollama` is
+enough on its own — the model defaults follow the backend, since a slug only means
+something to whatever serves it — and every phase reports where it is, per question
+while answering and per judge call while grading, because a judged local run spends
+hours inside one stage.
+
+`npm run raglab:leaderboard` builds the leaderboard from `.runs/`, and its main job
+is refusing to rank rows that are not comparable: a decision score is a mean over
+questions judged by a model, so it groups by (question set, judge) and never ranks
+across groups. A lead inside the combined error of the top two rows is reported as
+a tie rather than a win, and runs that recorded only *how many* questions they
+scored get no rank numbers at all — two runs of 24 questions may be two different
+24.
 
 The lab is strictly test-side: it writes only to its own Chroma database
 (`lodestar-raglab`, and it refuses to start against the production one) and to a
