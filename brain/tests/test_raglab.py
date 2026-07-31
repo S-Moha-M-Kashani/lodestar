@@ -9,6 +9,7 @@ production embedder finds nothing at all — only exist at that scale.
 import json
 import os
 import re
+import threading
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -21,12 +22,12 @@ from lodestar_brain.llm.fake import FakeChat
 from .raglab import (chunking, config, corpus, embedding, evaluate, explain,
                      leaderboard, metrics, models, pipeline, query, ragas_eval,
                      retrieval, summarize, sweep, textnorm)
-from .raglab.config import (EMBEDDERS, GenerationConfig, IndexConfig, LabConfig,
-                            LabSettings, RetrievalConfig)
+from .raglab.config import (EMBEDDERS, RERANKERS, GenerationConfig, IndexConfig,
+                            LabConfig, LabSettings, RetrievalConfig)
 from .raglab.index import IndexRegistry, LabIndex
 
 LAB_SETTINGS = LabSettings(chroma_url='memory', chroma_database='raglab-tests',
-                           openrouter_api_key='')
+                           openrouter_api_key='', llm_provider='fake')
 RAGLAB_DIR = Path(__file__).resolve().parent / 'raglab'
 REPO_ROOT = RAGLAB_DIR.parents[2]
 
@@ -1545,6 +1546,28 @@ def test_the_catalogue_offers_every_requested_model_with_its_backend():
         assert entry.farsi and entry.note, model_id
 
 
+def test_no_knob_offers_an_openrouter_embedding_or_rerank_model():
+    """Availability is verified here, never guessed — the rule the embedder list
+    already follows. Measured against OpenRouter's published catalogue on
+    2026-07-31: 337 models, and not one embedding, rerank or whisper entry;
+    `qwen/qwen3-embedding-8b` and `cohere/rerank-4-fast` are both absent. The
+    gateway does answer 401 rather than 404 on /embeddings and /rerank, so the
+    routes exist — but a route with no servable model is not a backend, and a key
+    in the environment is not evidence that one is there.
+
+    An unservable *reranker* is the worse half: `pipeline._rerank` swallows every
+    exception and returns the pre-rerank order, so such a candidate would report
+    itself as reranked while having done nothing — a silent accuracy difference,
+    which is the exact failure this lab exists to catch."""
+    assert 'openrouter' not in EMBEDDERS
+    assert 'openrouter' not in embedding.BACKENDS
+    assert 'openrouter' not in embedding.BACKEND_DEFAULTS
+    assert 'rerank-4-fast' not in RERANKERS
+    # And neither is reachable as a default, which is how they arrived.
+    assert IndexConfig().embedder == 'sentence-transformers'
+    assert RetrievalConfig().reranker == 'lexical'
+
+
 def test_every_model_names_a_backend_the_lab_actually_has():
     assert all(model.backend in embedding.BACKENDS
                for model in embedding.EMBED_MODELS)
@@ -2126,8 +2149,8 @@ def test_options_offers_a_model_choice_for_every_llm_task(client):
     assert all(role['help'] and role['label'] and role['field']
                for role in roles.values())
     ids = [m['id'] for m in body['models']]
-    assert ids[0] == '' and 'openai/gpt-5-nano' in ids
-    assert {m['source'] for m in body['models']} >= {'open', 'closed'}
+    assert ids[0] == '' and '4skl/gemma4-e2b-mtp' in ids
+    assert {m['source'] for m in body['models']} >= {'default', 'open'}
 
 
 def test_options_explains_every_knob(client):
@@ -2348,12 +2371,10 @@ OLLAMA_SETTINGS = replace(LAB_SETTINGS, llm_provider='ollama',
 
 
 def test_the_lab_provider_resolves_to_a_real_backend_or_the_fake():
-    """'' is the historical behaviour and stays it: openrouter with a key, the
-    offline fake without one. It is not an 'auto' mode in the sense the project
-    forbids — nothing is probed, so no configuration can change backend by
-    itself."""
-    assert LabSettings(openrouter_api_key='').provider == 'fake'
-    assert LabSettings(openrouter_api_key='sk-x').provider == 'openrouter'
+    """Local is the default; another backend is always an explicit choice."""
+    assert LabSettings(openrouter_api_key='').provider == 'ollama'
+    assert LabSettings(openrouter_api_key='sk-x').provider == 'ollama'
+    assert LabSettings(openrouter_api_key='sk-x', llm_provider='openrouter').provider == 'openrouter'
     # A named provider is a commitment, and outranks whether a key happens to
     # exist: with 'ollama' set, a key in the environment must not divert the run
     # to a paid API.
@@ -2370,7 +2391,7 @@ def test_llm_ready_asks_whether_a_real_model_is_reachable_not_whether_a_key_is()
     """The distinction the whole change rests on. The fake provider answers and
     grades every question without ever failing, so 'has a backend' and 'has a
     key' are different questions — and a local judge needs no key at all."""
-    assert not LabSettings(openrouter_api_key='').llm_ready
+    assert LabSettings(openrouter_api_key='').llm_ready
     assert LabSettings(openrouter_api_key='sk-x').llm_ready
     assert LabSettings(llm_provider='ollama').llm_ready
     assert not LabSettings(openrouter_api_key='sk-x', llm_provider='fake').llm_ready
@@ -2426,7 +2447,8 @@ def test_the_judge_is_pushed_far_less_hard_when_it_runs_locally():
     from .raglab import ragas_eval
     local = ragas_eval.judge_load(OLLAMA_SETTINGS)
     remote = ragas_eval.judge_load(replace(LAB_SETTINGS,
-                                           openrouter_api_key='sk-x'))
+                                           openrouter_api_key='sk-x',
+                                           llm_provider='openrouter'))
     assert local['max_workers'] < remote['max_workers']
     assert local['timeout'] > remote['timeout']
     assert local['timeout'] >= 600, 'calls under load were measured at 80–92s'
@@ -2807,6 +2829,34 @@ def test_the_job_carries_the_detail_to_whoever_is_polling():
     assert 'detail' in jobs.jobs[job_id]
 
 
+def test_a_running_job_can_be_cancelled_before_its_next_call():
+    """Stopping a run must prevent its next unit of work, not just its polling."""
+    from .raglab.server import Jobs
+    jobs = Jobs()
+    started = threading.Event()
+
+    def target(report, cancelled):
+        started.set()
+        while not cancelled():
+            time.sleep(0.001)
+        # The normal checkpoint used by indexing and evaluation raises the
+        # cooperative cancellation exception as soon as the active call ends.
+        report('scoring', 0.5, 'would have made another model call')
+
+    job_id = jobs.start('run', target)
+    assert started.wait(timeout=1)
+    stopped = jobs.cancel(job_id)
+    assert stopped['state'] == 'cancelling'
+    for _ in range(100):
+        if jobs.get(job_id)['state'] == 'cancelled':
+            break
+        time.sleep(0.01)
+    job = jobs.get(job_id)
+    assert job['state'] == 'cancelled'
+    assert job['cancel_requested'] is True
+    assert '_cancel' not in job
+
+
 def test_both_frontends_read_the_progress_detail():
     """Neither UI may quietly stop showing it: a judged local run spends hours in
     one stage, and the detail is the only thing that moves."""
@@ -2814,6 +2864,16 @@ def test_both_frontends_read_the_progress_detail():
     board = (REPO_ROOT / 'app.js').read_text(encoding='utf-8')
     assert 'job.detail' in panel
     assert '.job.detail' in board
+
+
+def test_both_rag_lab_frontends_offer_a_cooperative_stop():
+    """The embedded panel is the usual surface, but the standalone lab needs it too."""
+    panel = (RAGLAB_DIR / 'static' / 'index.html').read_text(encoding='utf-8')
+    board = (REPO_ROOT / 'app.js').read_text(encoding='utf-8')
+    assert 'Stop experiment' in panel
+    assert "'/api/jobs/' + jobId + '/cancel'" in panel
+    assert 'raglab-cancel' in board
+    assert "'/jobs/' + ragState.jobId + '/cancel'" in board
 
 
 def test_the_terminal_bar_says_stage_fraction_elapsed_and_detail():

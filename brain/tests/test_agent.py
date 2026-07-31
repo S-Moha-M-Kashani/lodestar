@@ -142,9 +142,32 @@ def test_steps_from_ignores_a_call_with_no_result_yet():
 def test_the_model_picker_gets_one_compiled_graph_per_model():
     # create_agent binds its model at build time, but the Assistant view sends
     # a model per request — so there is a graph per pick, cached per process.
+    # The key is (provider, model), not the slug alone: the picker can move
+    # between the local daemon and the paid API, so a model name on its own is
+    # not a whole destination. The provider falls back to the configured one,
+    # which is why an unspecified pick keys on 'fake' here.
     agent = build([AIMessage(content='a'), AIMessage(content='b'),
                    AIMessage(content='c')], [echo_tool([])])
     agent.run([{'role': 'user', 'content': 'x'}])
     agent.run([{'role': 'user', 'content': 'x'}], model='anthropic/claude-sonnet-4.5')
     agent.run([{'role': 'user', 'content': 'x'}], model='anthropic/claude-sonnet-4.5')
-    assert sorted(agent._graphs) == ['', 'anthropic/claude-sonnet-4.5']
+    assert sorted(agent._graphs) == [('fake', ''),
+                                     ('fake', 'anthropic/claude-sonnet-4.5')]
+
+
+def test_the_same_slug_under_two_providers_gets_two_graphs():
+    """A model name means something only to the backend serving it. Keyed on the
+    slug alone, picking OpenRouter after Ollama would replay the graph compiled
+    for the local daemon — and the reply would come from a model other than the
+    one the picker names, with nothing on screen to contradict it."""
+    agent = build([AIMessage(content='a'), AIMessage(content='b')],
+                  [echo_tool([])])
+    agent.run([{'role': 'user', 'content': 'x'}], model='shared-slug',
+              provider='ollama')
+    agent.run([{'role': 'user', 'content': 'x'}], model='shared-slug',
+              provider='openrouter')
+    # ('fake', '') is the graph the constructor builds so an unknown BRAIN_LLM
+    # fails at boot rather than on the first chat; the two picks are the point.
+    assert sorted(agent._graphs) == [('fake', ''),
+                                     ('ollama', 'shared-slug'),
+                                     ('openrouter', 'shared-slug')]

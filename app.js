@@ -2804,19 +2804,25 @@
   // defaults to it). voxtral-small is the replacement — a purpose-built speech
   // model priced the same as the default, rather than a general omni one.
   const DEFAULT_MODELS = {
-    text: 'openai/gpt-5-nano',
+    // Local-first is the normal Assistant experience. Nano stays one click
+    // away under the explicit OpenRouter provider selector below. The omni and
+    // embedding picks are the remote route by definition — local dictation is
+    // Parakeet's job inside the brain, which ignores this pick entirely.
+    text: '4skl/gemma4-e2b-mtp',
     omni: 'google/gemini-2.5-flash-lite',
     embed: 'nvidia/llama-nemotron-embed-vl-1b-v2:free',
   };
   const MODEL_PICKERS = [
     { key: 'text', id: 'model-text', label: 'Text generation',
-      options: [DEFAULT_MODELS.text, 'openai/gpt-5-mini'] },
-    { key: 'omni', id: 'model-omni', label: 'Audio / photo / video → text',
+      options: [DEFAULT_MODELS.text, 'gemma4:e2b', 'deepseek-r1:8b'] },
+    { key: 'omni', id: 'model-omni', label: 'Audio → text (route: OpenRouter API)',
       options: [DEFAULT_MODELS.omni, 'openai/gpt-audio-mini',
                 'mistralai/voxtral-small-24b-2507'] },
-    { key: 'embed', id: 'model-embed', label: 'Embeddings',
+    { key: 'embed', id: 'model-embed', label: 'Text → embedding (route: OpenRouter API)',
       options: [DEFAULT_MODELS.embed, 'openai/text-embedding-3-small'] },
   ];
+  const modelRoute = (slug) =>
+    (slug.startsWith('4skl/') || !slug.includes('/')) ? 'local' : 'OpenRouter API';
   // Slugs retired *for cause* — not merely dropped from the preset list above.
   // Dropping a model from MODEL_PICKERS does not deselect it: a saved pick that
   // left the list is re-added as an option and stays selected. That is right for
@@ -2845,6 +2851,11 @@
     'openrouter/auto',
   ]);
   const assistantModels = { ...DEFAULT_MODELS };
+  assistantModels.provider = 'ollama';
+  const TEXT_MODELS_BY_PROVIDER = {
+    ollama: MODEL_PICKERS[0].options,
+    openrouter: ['openai/gpt-5-nano'],
+  };
   // What the brain says it can actually serve. Empty until asked, and only a
   // local backend ever answers with a list (see served_models in the brain):
   // OpenRouter is a paid API with hundreds of models, so nothing is probed there
@@ -2866,6 +2877,17 @@
         answered = true;
       }
     } catch { /* brain down — the presets stand, and chat will say so itself */ }
+    // A configured OpenRouter brain is still an explicit remote choice, but it
+    // is a useful initial value for a fresh browser profile. Once saved, the
+    // person's picker choice wins over a later server configuration change.
+    if (!savedTextProvider && (brainModels.provider === 'ollama'
+        || brainModels.provider === 'openrouter')) {
+      assistantModels.provider = brainModels.provider;
+      if (!pickerOptions(MODEL_PICKERS[0]).includes(assistantModels.text)) {
+        assistantModels.text = pickerOptions(MODEL_PICKERS[0])[0];
+      }
+      persistModels();
+    }
     if (!answered || !brainModels.verified || !brainModels.models.length) return;
     // The backend named its models, so an unservable text pick is switched to
     // one that works rather than left to fail on the next turn.
@@ -2885,8 +2907,12 @@
   // otherwise the presets. Only the text pick is served by the chat model, so
   // the omni and embedding pickers keep their curated lists either way.
   function pickerOptions(picker) {
-    if (picker.key === 'text' && brainModels.verified && brainModels.models.length) {
-      return brainModels.models;
+    if (picker.key === 'text') {
+      if (assistantModels.provider === 'openrouter') return TEXT_MODELS_BY_PROVIDER.openrouter;
+      if (brainModels.provider === 'ollama' && brainModels.verified && brainModels.models.length) {
+        return brainModels.models;
+      }
+      return TEXT_MODELS_BY_PROVIDER.ollama;
     }
     return picker.options;
   }
@@ -2894,6 +2920,7 @@
     try { localStorage.setItem(MODELS_KEY, JSON.stringify(assistantModels)); }
     catch { /* private mode — the pick still applies to this session */ }
   };
+  let savedTextProvider = false;
   try {
     const saved = JSON.parse(localStorage.getItem(MODELS_KEY) || '{}');
     let swept = false;
@@ -2903,6 +2930,10 @@
       // including an off-list slug that was chosen on purpose.
       if (RETIRED_MODELS.has(saved[k])) { swept = true; continue; }
       assistantModels[k] = saved[k];
+    }
+    if (saved.provider === 'ollama' || saved.provider === 'openrouter') {
+      assistantModels.provider = saved.provider;
+      savedTextProvider = true;
     }
     // Write the sweep back rather than re-running it every load: left in storage,
     // a dead slug would return the moment a later version trimmed the list above.
@@ -2915,6 +2946,29 @@
     const legend = document.createElement('legend');
     legend.textContent = 'Models';
     panel.appendChild(legend);
+    const providerLabel = document.createElement('label');
+    providerLabel.className = 'field';
+    providerLabel.append('Text provider');
+    const provider = document.createElement('select');
+    provider.id = 'model-provider';
+    for (const [value, label] of [['ollama', 'Ollama — local, free & private'],
+                                  ['openrouter', 'OpenRouter — remote API']]) {
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = label;
+      provider.append(opt);
+    }
+    provider.value = assistantModels.provider;
+    provider.addEventListener('change', () => {
+      assistantModels.provider = provider.value;
+      const options = pickerOptions(MODEL_PICKERS[0]);
+      if (!options.includes(assistantModels.text)) assistantModels.text = options[0];
+      savedTextProvider = true;
+      persistModels();
+      render();
+    });
+    providerLabel.append(provider);
+    panel.appendChild(providerLabel);
     for (const picker of MODEL_PICKERS) {
       const label = document.createElement('label');
       label.className = 'field';
@@ -2929,7 +2983,7 @@
       for (const slug of opts) {
         const opt = document.createElement('option');
         opt.value = slug;
-        opt.textContent = slug;
+        opt.textContent = `${slug} (${modelRoute(slug)})`;
         sel.append(opt);
       }
       sel.value = assistantModels[picker.key];
@@ -2942,7 +2996,7 @@
     }
     const hint = document.createElement('p');
     hint.className = 'field-hint';
-    hint.textContent = 'Text generation applies to the chat; the omni model transcribes your voice, unless the brain is dictating locally with Parakeet — that ignores this pick. The embedding pick is saved for upcoming retrieval features.';
+    hint.textContent = 'Text generation applies to the chat. Ollama uses models pulled on this machine; OpenRouter currently offers GPT-5 Nano and requires an API key. The omni model transcribes your voice, unless the brain is dictating locally with Parakeet — that ignores this pick. The embedding pick is saved for upcoming retrieval features.';
     panel.appendChild(hint);
     // Where the chat model runs, when the brain told us. Worth saying out loud:
     // a local backend is free and private but answers in tens of seconds, and
@@ -2950,7 +3004,7 @@
     if (brainModels.verified && brainModels.models.length) {
       const where = document.createElement('p');
       where.className = 'field-hint';
-      where.textContent = `Text models are served locally by ${brainModels.provider} — free and private, and the list is whatever is pulled on this machine.`;
+      where.textContent = `The configured backend serves local models through ${brainModels.provider} — free and private, and the list is whatever is pulled on this machine.`;
       panel.appendChild(where);
     }
     return panel;
@@ -3407,7 +3461,15 @@
       const res = await fetch('/api/agent/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: history, model: assistantModels.text }),
+        body: JSON.stringify({
+          messages: history,
+          model: assistantModels.text,
+          // Always sent, including against a brain configured as 'fake'. The
+          // offline contract is the server's to keep (make_chat_model checks
+          // 'fake' before it reads this), and a client that decides when to omit
+          // the field is a client deciding when the guard applies.
+          provider: assistantModels.provider,
+        }),
       });
       if (!res.ok) throw new Error(`agent ${res.status}`);
       const data = await res.json();
@@ -4415,6 +4477,7 @@
     cfg: null,            // whatever the panel last had; server defaults fill it
     run: { ragas_mode: 'offline', limit: 0, types: [] },
     job: null,            // { stage, progress, kind }
+    jobId: null,          // server job currently running or stopping
     result: null,
     runs: [],
     questions: [],        // ground truth without its answers, for the picker
@@ -4615,18 +4678,22 @@
     try {
       const job = await ragApi('/jobs/' + jobId);
       ragState.job = job;
-      if (job.state === 'running') {
+      if (job.state === 'running' || job.state === 'cancelling') {
         if (view === 'raglab') render();
         setTimeout(() => ragPoll(jobId, onDone), 900);
         return;
       }
       ragState.busy = false;
       ragState.job = null;
+      ragState.jobId = null;
       if (job.state === 'error') ragState.problem = job.error;
-      else onDone(job.result);
+      else if (job.state === 'cancelled') {
+        ragState.problem = 'Experiment stopped; no further model calls were started.';
+      } else onDone(job.result);
     } catch (error) {
       ragState.busy = false;
       ragState.job = null;
+      ragState.jobId = null;
       ragState.problem = error.message;
     }
     if (view === 'raglab') render();
@@ -4639,6 +4706,8 @@
     render();
     try {
       const { job_id: jobId } = await ragApi('/' + kind, { ...ragConfig(), ...extra });
+      ragState.jobId = jobId;
+      render();
       ragPoll(jobId, async (result) => {
         if (kind === 'run') {
           ragState.result = result;
@@ -4651,6 +4720,21 @@
       ragState.busy = false;
       ragState.problem = error.message;
       render();
+    }
+  }
+
+  async function ragCancel() {
+    if (!ragState.jobId) return;
+    ragState.problem = '';
+    try {
+      ragState.job = { ...(ragState.job || {}), kind: 'run', stage: 'stopping',
+        progress: (ragState.job && ragState.job.progress) || 0,
+        detail: 'stopping before the next model call' };
+      render();
+      await ragApi('/jobs/' + ragState.jobId + '/cancel', {});
+    } catch (error) {
+      ragState.problem = error.message;
+      if (view === 'raglab') render();
     }
   }
 
@@ -5321,7 +5405,14 @@
       limit: ragState.run.limit || null,
       types: ragState.run.types,
     }));
-    actions.append(buildBtn, runBtn);
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'btn ghost';
+    cancelBtn.id = 'raglab-cancel';
+    cancelBtn.textContent = 'Stop experiment';
+    cancelBtn.disabled = !ragState.jobId;
+    cancelBtn.addEventListener('click', ragCancel);
+    actions.append(buildBtn, runBtn, cancelBtn);
     sheet.appendChild(actions);
 
     if (ragState.indexInfo) {

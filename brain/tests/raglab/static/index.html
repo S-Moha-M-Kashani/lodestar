@@ -239,6 +239,7 @@
     <input type="text" id="label" placeholder="e.g. semantic + hybrid + ce">
     <div style="margin-top:.7rem" class="inline">
       <button id="run">Run evaluation</button>
+      <button class="ghost" id="cancel" disabled>Stop experiment</button>
       <button class="ghost" id="stopPoll">Refresh</button>
     </div>
     <div id="jobBox" style="margin-top:.55rem"></div>
@@ -429,6 +430,19 @@ function selected(host) {
   return [...host.querySelectorAll('input:checked')].map((el) => el.value);
 }
 
+function syncSearchLayers() {
+  // A retrieval layer cannot exist unless it was included in the index. Keep
+  // the two pickers coherent instead of making Run evaluation fail later with
+  // "searching layers that were never indexed".
+  const indexed = new Set(selected($('layers')));
+  for (const input of $('search_layers').querySelectorAll('input')) {
+    const available = indexed.has(input.value);
+    input.disabled = !available;
+    if (!available) input.checked = false;
+    input.parentElement.classList.toggle('muted', !available);
+  }
+}
+
 async function api(path, body) {
   const res = await fetch(path, body ? {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -513,6 +527,8 @@ async function boot() {
   fill($('answerer'), o.answerers);
   checkboxes($('layers'), o.layers, o.defaults.index.layers);
   checkboxes($('search_layers'), o.layers, o.defaults.retrieval.search_layers);
+  $('layers').addEventListener('change', syncSearchLayers);
+  syncSearchLayers();
   checkboxes($('types'), o.question_types, []);
   fillModels();
   applyDefaults(o.defaults);
@@ -560,6 +576,8 @@ function renderIndexes(indexes) {
 
 async function poll(jobId, onDone) {
   const box = $('jobBox');
+  $('cancel').dataset.jobId = jobId;
+  $('cancel').disabled = false;
   const tick = async () => {
     const job = await api('/api/jobs/' + jobId);
     // The detail ("question 16/30 · hard", "judge call 137 of ~420") is the part
@@ -569,7 +587,13 @@ async function poll(jobId, onDone) {
       `${Math.round(job.progress * 100)}%` +
       `${job.detail ? ' · ' + job.detail : ''}</div>` +
       `<progress value="${job.progress}" max="1"></progress>`;
-    if (job.state === 'running') { setTimeout(tick, 700); return; }
+    if (job.state === 'running' || job.state === 'cancelling') { setTimeout(tick, 700); return; }
+    $('cancel').disabled = true;
+    delete $('cancel').dataset.jobId;
+    if (job.state === 'cancelled') {
+      box.innerHTML = '<div class="muted">experiment stopped; no further model calls were started</div>';
+      return;
+    }
     if (job.state === 'error') {
       box.innerHTML = `<div class="note"><b>${job.error}</b><pre style="white-space:pre-wrap;font-size:.7rem">${job.traceback || ''}</pre></div>`;
       return;
@@ -583,15 +607,17 @@ async function poll(jobId, onDone) {
 $('build').onclick = () => doBuild(false);
 $('rebuild').onclick = () => doBuild(true);
 async function doBuild(force) {
-  const body = Object.assign(readConfig(), { force });
-  const { job_id } = await api('/api/index', body);
-  poll(job_id, (result) => {
-    $('indexInfo').innerHTML =
-      `<b>${result.collection}</b> — ${result.chunks} chunks, avg ${result.avg_chars} chars, ` +
-      `p95 ${result.p95_chars}, dim ${result.embed_dim}, ${result.build_seconds}s` +
-      (result.reused ? ' (reused)' : '') +
-      (result.notes || []).map((n) => `<div class="note">${n}</div>`).join('');
-  });
+  try {
+    const body = Object.assign(readConfig(), { force });
+    const { job_id } = await api('/api/index', body);
+    poll(job_id, (result) => {
+      $('indexInfo').innerHTML =
+        `<b>${result.collection}</b> — ${result.chunks} chunks, avg ${result.avg_chars} chars, ` +
+        `p95 ${result.p95_chars}, dim ${result.embed_dim}, ${result.build_seconds}s` +
+        (result.reused ? ' (reused)' : '') +
+        (result.notes || []).map((n) => `<div class="note">${n}</div>`).join('');
+    });
+  } catch (e) { $('jobBox').innerHTML = `<div class="note">${e.message}</div>`; }
 }
 
 $('run').onclick = async () => {
@@ -605,6 +631,14 @@ $('run').onclick = async () => {
     const { job_id } = await api('/api/run', body);
     poll(job_id, (result) => { renderResult(result); loadBoard(); });
   } catch (e) { $('jobBox').innerHTML = `<div class="note">${e.message}</div>`; }
+};
+
+$('cancel').onclick = async () => {
+  const jobId = $('cancel').dataset.jobId;
+  if (!jobId) return;
+  $('cancel').disabled = true;
+  try { await api('/api/jobs/' + jobId + '/cancel', { method: 'POST' }); }
+  catch (e) { $('jobBox').innerHTML = `<div class="note">${e.message}</div>`; }
 };
 
 $('stopPoll').onclick = () => { boot(); };

@@ -20,12 +20,9 @@ RUNS_DIR = Path(__file__).resolve().parent / '.runs'
 LAB_DATABASE = 'lodestar-raglab'
 FORBIDDEN_DATABASES = ('lodestar',)
 
-# Which backend serves the lab's chat models. '' is not "auto" in the sense the
-# rest of the project forbids — it does not probe anything. It means "openrouter
-# if a key is present, otherwise the offline fake", which is the behaviour the
-# lab has always had and the only way the panel stays runnable with no network.
-# Naming 'ollama' or 'openrouter' explicitly is a commitment: the run then fails
-# rather than quietly measuring the other one.
+# Which backend serves the lab's chat models. Local Ollama is the default: the
+# lab's judged runs can make hundreds of model calls, so a default must never
+# silently spend API credit. Naming another provider is an explicit opt-in.
 LLM_PROVIDERS = ('', 'openrouter', 'ollama', 'fake')
 
 # The default chat model per backend, because a slug only means something to the
@@ -63,7 +60,7 @@ class LabSettings:
     # gate, reranker and the RAGAS judge — on a model on this machine, which is
     # what makes the expensive candidates (a per-chunk LLM gate is k calls per
     # question) measurable without buying credit.
-    llm_provider: str = ''
+    llm_provider: str = 'ollama'
     ollama_base_url: str = 'http://localhost:11434/v1'
     # '' = the provider's own default (PROVIDER_MODELS), resolved in __post_init__
     # so every reader sees a concrete slug. It has to follow the provider: a
@@ -126,7 +123,7 @@ def load_lab_settings(env: dict | None = None) -> LabSettings:
         openrouter_api_key=env.get('OPENROUTER_API_KEY', ''),
         openrouter_base_url=env.get('OPENROUTER_BASE_URL',
                                     'https://openrouter.ai/api/v1'),
-        llm_provider=env.get('RAGLAB_LLM', ''),
+        llm_provider=env.get('RAGLAB_LLM', 'ollama'),
         ollama_base_url=env.get('RAGLAB_OLLAMA_BASE_URL',
                                 'http://localhost:11434/v1'),
         llm_model=env.get('RAGLAB_MODEL', ''),

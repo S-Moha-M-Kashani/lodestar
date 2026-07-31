@@ -13,7 +13,9 @@ needs either yet, and the day it does, that is one more branch.
 """
 from langchain_core.language_models import BaseChatModel
 
-from ..config import Settings
+from dataclasses import replace
+
+from ..config import PROVIDER_MODELS, Settings
 from .fake import FakeChat
 
 # A remote API answers in seconds; a local model on a laptop does not. Measured
@@ -26,9 +28,28 @@ REMOTE_TIMEOUT = 90
 LOCAL_TIMEOUT = 600
 
 
-def make_chat_model(settings: Settings, model: str | None = None) -> BaseChatModel:
+def make_chat_model(settings: Settings, model: str | None = None,
+                    provider: str | None = None) -> BaseChatModel:
+    """Build a model for the configured backend or an explicit UI selection.
+
+    A provider is never inferred from model text. Choosing OpenRouter in the
+    UI is deliberate (and potentially billed); choosing a local-looking slug
+    must not quietly redirect to it.
+    """
+    # Ahead of the UI selection on purpose: 'fake' is the backend the whole test
+    # suite and the e2e board run on, and a browser naming a real provider must
+    # not be able to move a brain configured as offline onto a live daemon or a
+    # paid API. The offline contract belongs to the server, not to a client
+    # deciding when to leave the field out.
     if settings.llm_provider == 'fake':
         return FakeChat()
+    if provider is not None:
+        if provider not in {'ollama', 'openrouter'}:
+            raise ValueError(f'unsupported UI provider {provider!r}')
+        # The model has to follow the provider: switching backend in the picker
+        # without naming a model must not carry the other backend's slug across.
+        settings = replace(settings, llm_provider=provider,
+                           model=model or PROVIDER_MODELS[provider])
     if settings.llm_provider == 'openrouter':
         from langchain_openai import ChatOpenAI
         # `or 'missing'`: ChatOpenAI refuses to construct without a key, but

@@ -14,7 +14,10 @@ describes.
 """
 import threading
 import traceback
+import urllib.error
+import urllib.request
 import uuid
+import inspect
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -31,6 +34,31 @@ from .index import IndexRegistry, _lab_llm
 STATIC = Path(__file__).resolve().parent / 'static'
 
 
+class JobCancelled(Exception):
+    """A cooperative stop requested from the RAG Lab panel."""
+
+
+def require_chroma(settings) -> None:
+    """Fail before creating a job when the vector service cannot be reached.
+
+    A build used to become a background job before its first Chroma call.  That
+    made the panel briefly say "running", even when nothing could possibly
+    build.  The heartbeat is read-only and makes that dependency explicit.
+    """
+    if settings.chroma_url == 'memory':
+        return
+    endpoint = f'{settings.chroma_url.rstrip("/")}/api/v2/heartbeat'
+    try:
+        with urllib.request.urlopen(endpoint, timeout=3):
+            pass
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        raise HTTPException(
+            503,
+            f'Chroma is unavailable at {settings.chroma_url}. Start the local '
+            f'Chroma server on port 8001, then try again. ({error})',
+        ) from error
+
+
 class Jobs:
     """In-process job table. A lab restart loses running jobs; finished runs are
     on disk, which is the part that matters."""
@@ -42,17 +70,23 @@ class Jobs:
 
     def start(self, kind: str, target) -> str:
         with self.lock:
-            if self.current and self.jobs[self.current]['state'] == 'running':
+            if self.current and self.jobs[self.current]['state'] in ('running', 'cancelling'):
                 raise HTTPException(409, f'a {self.jobs[self.current]["kind"]} job '
-                                         'is already running')
+                                         'is still stopping')
             job_id = uuid.uuid4().hex[:10]
             self.jobs[job_id] = {'id': job_id, 'kind': kind, 'state': 'running',
                                  'stage': 'starting', 'progress': 0.0,
                                  'detail': '',
-                                 'result': None, 'error': None}
+                                 'result': None, 'error': None,
+                                 'cancel_requested': False,
+                                 '_cancel': threading.Event()}
             self.current = job_id
 
+        cancel = self.jobs[job_id]['_cancel']
+
         def report(stage: str, fraction: float, detail: str = '') -> None:
+            if cancel.is_set():
+                raise JobCancelled()
             job = self.jobs[job_id]
             job['stage'] = stage
             job['progress'] = round(min(1.0, max(0.0, fraction)), 3)
@@ -64,10 +98,19 @@ class Jobs:
         def run() -> None:
             job = self.jobs[job_id]
             try:
-                job['result'] = target(report)
+                # Targets that make external calls receive a cancellation probe.
+                # Keep one-argument targets working for small callers and tests.
+                wants_cancel = len(inspect.signature(target).parameters) >= 2
+                job['result'] = target(report, cancel.is_set) if wants_cancel else target(report)
+                if cancel.is_set():
+                    raise JobCancelled()
                 job['state'] = 'done'
                 job['progress'] = 1.0
                 job['stage'] = 'done'
+            except JobCancelled:
+                job['state'] = 'cancelled'
+                job['stage'] = 'cancelled'
+                job['detail'] = 'stopped before the next model call'
             except Exception as error:              # surfaced, never swallowed
                 job['state'] = 'error'
                 job['error'] = f'{type(error).__name__}: {error}'
@@ -80,7 +123,20 @@ class Jobs:
         job = self.jobs.get(job_id)
         if not job:
             raise HTTPException(404, 'unknown job')
-        return job
+        # The event is an implementation detail, not JSON the browser can read.
+        return {key: value for key, value in job.items() if key != '_cancel'}
+
+    def cancel(self, job_id: str) -> dict:
+        job = self.jobs.get(job_id)
+        if not job:
+            raise HTTPException(404, 'unknown job')
+        if job['state'] == 'running':
+            job['cancel_requested'] = True
+            job['_cancel'].set()
+            job['state'] = 'cancelling'
+            job['stage'] = 'stopping'
+            job['detail'] = 'stopping before the next model call'
+        return self.get(job_id)
 
 
 def create_app() -> FastAPI:
@@ -174,10 +230,11 @@ def create_app() -> FastAPI:
 
     @app.post('/api/index')
     def build_index(payload: dict):
+        require_chroma(settings)
         cfg = LabConfig.from_dict(payload)
         force = bool(payload.get('force'))
 
-        def work(report):
+        def work(report, _cancelled):
             index = registry.get(cfg.index, progress=report, force=force)
             return {'collection': index.stats.collection,
                     'chunks': index.stats.chunks,
@@ -192,12 +249,16 @@ def create_app() -> FastAPI:
 
     @app.post('/api/run')
     def start_run(payload: dict):
+        require_chroma(settings)
         cfg = LabConfig.from_dict(payload)
         problems = cfg.validate() + models.provider_problems(cfg, settings)
         if problems:
             raise HTTPException(400, '; '.join(problems))
 
-        def work(report):
+        def work(report, cancelled):
+            def check_cancelled():
+                if cancelled():
+                    raise JobCancelled()
             result = evaluate.run_eval(
                 registry, ground_truth, cfg, settings,
                 types=payload.get('types') or None,
@@ -206,7 +267,8 @@ def create_app() -> FastAPI:
                 balance=payload.get('balance') or 'stride',
                 ragas_mode=payload.get('ragas_mode', 'offline'),
                 ragas_limit=payload.get('ragas_limit') or None,
-                workers=int(payload.get('workers', 1)), progress=report)
+                workers=int(payload.get('workers', 1)), progress=report,
+                cancelled=check_cancelled)
             return result.as_dict()
 
         return {'job_id': jobs.start('run', work)}
@@ -214,6 +276,10 @@ def create_app() -> FastAPI:
     @app.get('/api/jobs/{job_id}')
     def job_status(job_id: str):
         return jobs.get(job_id)
+
+    @app.post('/api/jobs/{job_id}/cancel')
+    def cancel_job(job_id: str):
+        return jobs.cancel(job_id)
 
     @app.get('/api/runs')
     def runs(limit: int = 50):
@@ -230,6 +296,7 @@ def create_app() -> FastAPI:
     def ad_hoc_query(payload: dict):
         """Run one question through the current settings and return every stage.
         The fastest way to understand *why* a config scores the way it does."""
+        require_chroma(settings)
         cfg = LabConfig.from_dict(payload)
         question = (payload.get('question') or '').strip()
         if not question:

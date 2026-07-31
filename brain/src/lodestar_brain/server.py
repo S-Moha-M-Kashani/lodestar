@@ -3,6 +3,7 @@ module (LLM provider, search provider, embedder) is chosen here from Settings.""
 import base64
 import binascii
 import logging
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -29,6 +30,9 @@ PROPOSING_TOOLS = {'create_question'}
 class ChatBody(BaseModel):
     messages: list[dict]
     model: str | None = None
+    # The browser defaults to the local Ollama provider. OpenRouter is an
+    # explicit alternative because it can use billed remote models such as Nano.
+    provider: Literal['ollama', 'openrouter'] | None = None
 
 
 class TranscribeBody(BaseModel):
@@ -90,7 +94,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Async because cycle 2's MCP tools are coroutine-only. Safe today: the
         # sync tools (board HTTP, ddgs, Chroma) run in LangChain's thread
         # executor, so nothing here blocks the event loop.
-        result = await agent.arun(body.messages, model=body.model)
+        result = await agent.arun(body.messages, model=body.model,
+                                  provider=body.provider)
         if memory is not None:
             last_user = next((m.get('content', '') for m in reversed(body.messages)
                               if m.get('role') == 'user'), '')
