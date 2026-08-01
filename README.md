@@ -544,16 +544,26 @@ cost guard, not a security boundary. Each machine keeps its own database and boa
 between laptops — moving one is copying a file or Export → Import. Deploying this to a public
 address without putting authentication in front of it would publish your diary.
 
-**The Docker image is 18.1 GB, and the first question asked of a cold container takes about
-nine minutes.** Both numbers are measured, on the first real `docker compose up --build` this
-project has ever done (2026-08-02). The size is not the Persian model — it is the CUDA stack
-`torch` installs by default, which cannot run on a Mac and is unused by a CPU-only deployment;
-pinning the CPU-only wheel is the obvious fix and has not been done. The wait is the
-`heydariAI/persian-embeddings` download plus load: **522.9 s on the first retrieval, then
-0.15 s warm.** That is the lazy-loading design working as intended — `/health` answers
-throughout and readiness never blocks — but it means a fresh container's *first* assistant
-question that touches retrieval sits for ~9 minutes with no progress indication. Pre-warming
-the model on boot, or telling the user what the wait is, is unbuilt.
+**The Docker image is 18.1 GB, and a cold container pays about nine minutes before it can
+embed anything.** Both measured on the first real `docker compose up --build` this project has
+ever done (2026-08-02). The size is not the Persian model — it is the CUDA stack `torch`
+installs by default, which cannot run on a Mac and is unused by a CPU-only deployment; pinning
+the CPU-only wheel is the obvious fix and has not been done.
+
+The wait was timed through the production seam — `make_embeddings(...)` then one
+`embed_query` — at **522.9 s cold against 0.15 s warm**. Almost all of it is the
+`heydariAI/persian-embeddings` download (~2.2 GB, unauthenticated, so rate-limited by
+HuggingFace); the embedding itself is the 0.15 s. Read it as a **lower bound on the first
+real retrieval** rather than a measurement of one: no `find_related` or `recall_chat` call was
+timed end to end, but every retrieval path blocks on exactly this, because `retrieval.py`'s
+lazy `model` property is what defers it. One sample, on one network.
+
+That deferral is the design working — `/health` answers throughout and readiness never blocks
+— but two consequences are not written down anywhere else. A fresh container's first
+retrieval-touching question sits for minutes with **no progress indication**, and the weights
+cache inside the container rather than on a volume, so the cost returns on **every container
+recreate**, not once ever. Mounting `~/.cache/huggingface`, pre-warming on boot, or simply
+telling the user what the wait is — all unbuilt.
 
 **CI is written but has never run.** `.github/workflows/ci.yml` runs the brain units and the
 full e2e suite on every push — and the repository has no git remote, so it has never executed
