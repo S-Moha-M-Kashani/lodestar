@@ -166,14 +166,34 @@ test('compose mounts the brain source over the image copy', () => {
 const brainEnvPin = (key) =>
   serviceBlock('brain').match(new RegExp(`^\\s*${key}:\\s*(.+)$`, 'm'))?.[1].trim();
 
+// Which extra each model-backed embedder needs, and what the brain image
+// actually installs. A pin the image cannot load is the same bug as no pin at
+// all, just later: the container starts, answers /health, and fails on the
+// first retrieval call.
+const EMBEDDER_EXTRA = {
+  fastembed: 'semantic',
+  'sentence-transformers': 'local-embeddings',
+};
+const brainExtras = () =>
+  new Set([...read('brain/Dockerfile').matchAll(/--extra\s+(\S+)/g)].map((m) => m[1]));
+
 test('compose pins the brain embedder to the one its image installs', () => {
   const pinned = brainEnvPin('BRAIN_EMBEDDER');
   assert.ok(
-    pinned && pinned.includes('fastembed'),
-    `the composed brain does not pin BRAIN_EMBEDDER to fastembed (got ` +
-      `${pinned ?? 'nothing'}). The Dockerfile installs the 'semantic' extra so ` +
-      `the real embedder is available; unpinned, the container would fall to the ` +
-      `hash embedder and Leiden RAG would silently run on token overlap.`,
+    pinned && pinned.includes('sentence-transformers'),
+    `the composed brain does not pin BRAIN_EMBEDDER to sentence-transformers ` +
+      `(got ${pinned ?? 'nothing'}). It is the measured winner on the Farsi ` +
+      `corpus — 0.617 recall against fastembed's Latin-only ~0.01, a ~60x gap ` +
+      `where every other knob in the sweep was worth under 2%. Pinning anything ` +
+      `else leaves the container embedding with a model that cannot read the ` +
+      `corpus while the docs name one that can, and nothing fails to say so.`,
+  );
+  const needed = EMBEDDER_EXTRA[pinned.trim()];
+  assert.ok(
+    !needed || brainExtras().has(needed),
+    `compose pins BRAIN_EMBEDDER=${pinned}, which needs the '${needed}' extra, ` +
+      `but brain/Dockerfile installs [${[...brainExtras()].join(', ')}]. The ` +
+      `container would start and then fail on its first retrieval call.`,
   );
 });
 

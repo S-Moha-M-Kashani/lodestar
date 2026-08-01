@@ -202,7 +202,7 @@ test('proxy returns 503 assistant unavailable when brain is down', async () => {
 test('/api/rag/* is also proxied (503 when brain down)', async () => {
   const s = await startServer({ env: { AGENT_URL: 'http://127.0.0.1:59999' } });
   try {
-    const res = await fetch(s.base + '/api/rag/communities');
+    const res = await fetch(s.base + '/api/rag/recall');
     assert.equal(res.status, 503);
     assert.deepEqual(await res.json(), { error: 'assistant unavailable' });
   } finally { await s.stop(); }

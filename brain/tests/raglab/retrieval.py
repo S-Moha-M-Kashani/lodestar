@@ -28,7 +28,7 @@ from collections import defaultdict
 
 import numpy as np
 
-from . import textnorm
+from lodestar_brain import textnorm
 from .llm import lab_chat
 
 

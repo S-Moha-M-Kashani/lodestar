@@ -10,11 +10,12 @@ import time
 from dataclasses import dataclass, field
 
 import numpy as np
+from lodestar_brain import textnorm
 
 from . import embedding
 from . import query as query_mod
-from . import retrieval, textnorm
-from .config import LAYERS, GenerationConfig, RetrievalConfig
+from . import retrieval
+from .config import GenerationConfig, RetrievalConfig
 from .llm import lab_chat
 from .models import Roles
 
@@ -32,23 +33,18 @@ REFUSAL_MARKERS = ('پیدا نکردم', 'چیزی ثبت نشده', 'اطلا�
 class Context:
     chunk_id: str
     text: str
-    layer: str
     session_id: str
     date: str
     score: float
     stages: dict = field(default_factory=dict)
     expanded_from: str = ''
-    # Which habit's ledger this is, when it is one. A habit chunk carries no
-    # session id, so without this the panel shows a block of tallies with
-    # nothing saying whose they are.
-    habit: str = ''
 
     def as_dict(self) -> dict:
-        return {'chunk_id': self.chunk_id, 'layer': self.layer,
+        return {'chunk_id': self.chunk_id,
                 'session_id': self.session_id, 'date': self.date,
                 'score': round(self.score, 4), 'text': self.text,
                 'stages': {k: round(v, 4) for k, v in self.stages.items()},
-                'expanded_from': self.expanded_from, 'habit': self.habit}
+                'expanded_from': self.expanded_from}
 
 
 @dataclass
@@ -79,16 +75,14 @@ class Outcome:
                 'timings': self.timings}
 
 
-def _mask(index, scope, layers: tuple[str, ...]) -> np.ndarray:
+def _mask(index, scope) -> np.ndarray:
     """The BM25 equivalent of the store's `where` clause. Kept in lockstep with
     query.where_clause: if the two disagree, hybrid fusion silently compares two
     different candidate pools."""
     allowed = np.ones(len(index.chunks), dtype=bool)
     for i, chunk in enumerate(index.chunks):
-        if chunk.layer not in layers:
-            allowed[i] = False
-        elif scope and (chunk.span_from > scope.to_int
-                        or chunk.span_to < scope.from_int):
+        if scope and (chunk.span_from > scope.to_int
+                      or chunk.span_to < scope.from_int):
             allowed[i] = False
     return allowed
 
@@ -123,8 +117,8 @@ def retrieve(index, cfg: RetrievalConfig, question: str, query_date: str,
     queries = query_mod.expand(question) if cfg.multi_query else [question]
     if cfg.hyde and llm is not None:
         queries = queries + [query_mod.hyde(llm, roles.expand, question)]
-    where = query_mod.where_clause(scope, cfg.search_layers, LAYERS)
-    allowed = _mask(index, scope, cfg.search_layers)
+    where = query_mod.where_clause(scope)
+    allowed = _mask(index, scope)
     timings['understand_ms'] = round((clock() - start) * 1000, 1)
     diagnostics['queries'] = queries
     diagnostics['candidates_in_scope'] = int(allowed.sum())
@@ -166,16 +160,6 @@ def retrieve(index, cfg: RetrievalConfig, question: str, query_date: str,
                        diagnostics=diagnostics | {'reason': 'no candidates'},
                        timings=timings)
 
-    # The boost is applied to the fused scores, *before* the candidate cut. Doing
-    # it afterwards is useless: there are twenty times more leaf chunks than
-    # rollups, so a summary that did not already survive the cut can never be
-    # promoted into it.
-    if cfg.rollup_boost != 1.0:
-        for chunk_id in list(base):
-            chunk = index.by_id.get(chunk_id)
-            if chunk is not None and chunk.layer != 'chunk':
-                base[chunk_id] *= cfg.rollup_boost
-
     ids = sorted(base, key=lambda cid: -base[cid])[:max(cfg.rerank_depth, cfg.k)]
     chunks = [index.by_id[cid] for cid in ids if cid in index.by_id]
     ids = [c.id for c in chunks]
@@ -197,9 +181,9 @@ def retrieve(index, cfg: RetrievalConfig, question: str, query_date: str,
     contexts = []
     for i in order:
         chunk = chunks[i]
-        contexts.append(Context(chunk_id=chunk.id, text=chunk.text, layer=chunk.layer,
+        contexts.append(Context(chunk_id=chunk.id, text=chunk.text,
                                 session_id=chunk.session_id, date=chunk.date,
-                                score=float(final[i]), habit=chunk.habit,
+                                score=float(final[i]),
                                 stages=stage_scores[chunk.id]))
 
     start = clock()
@@ -207,7 +191,6 @@ def retrieve(index, cfg: RetrievalConfig, question: str, query_date: str,
     timings['grade_ms'] = round((clock() - start) * 1000, 1)
     diagnostics['graded_out'] = len(contexts) - len(kept)
 
-    kept = _expand_parents(index, cfg, kept)
     kept = _fit_budget(kept, cfg.max_context_chars)
     return Outcome(question=question, contexts=kept, abstained=abstained,
                    time_scope=scope.as_dict() if scope else None,
@@ -292,34 +275,6 @@ def _grade(index, cfg, question, contexts, llm, model):
     return kept, not kept
 
 
-def _expand_parents(index, cfg, contexts):
-    """Small-to-big: retrieve precisely, then hand the model the surrounding
-    text. A message-level hit is often too short to answer from on its own."""
-    if cfg.parent_expansion == 'none' or not contexts:
-        return contexts
-    seen = {c.chunk_id for c in contexts}
-    extra: list[Context] = []
-    for context in contexts:
-        chunk = index.by_id.get(context.chunk_id)
-        if chunk is None or not chunk.session_id:
-            continue
-        if cfg.parent_expansion == 'neighbors':
-            candidates = index.neighbors(chunk)
-        else:
-            candidates = [c for c in index.by_session.get(chunk.session_id, [])
-                          if c.layer == chunk.layer]
-        for sibling in candidates:
-            if sibling.id in seen:
-                continue
-            seen.add(sibling.id)
-            extra.append(Context(chunk_id=sibling.id, text=sibling.text,
-                                 layer=sibling.layer, session_id=sibling.session_id,
-                                 date=sibling.date, score=context.score * 0.5,
-                                 stages={'expanded': 1.0}, habit=sibling.habit,
-                                 expanded_from=context.chunk_id))
-    return contexts + extra
-
-
 def _fit_budget(contexts, max_chars: int):
     """Truncate the *list*, never a chunk: half a diary entry reads as a
     complete one and invites the model to answer from a sentence whose second
@@ -396,7 +351,7 @@ def _llm_answer(outcome: Outcome, llm, model: str) -> str:
     blocks = []
     for context in outcome.contexts:
         label = context.session_id or context.chunk_id
-        blocks.append(f'[{label} | {context.date} | {context.layer}]\n{context.text}')
+        blocks.append(f'[{label} | {context.date}]\n{context.text}')
     try:
         turn = lab_chat(llm, [{'role': 'system', 'content': ANSWER_PROMPT},
                               {'role': 'user', 'content':

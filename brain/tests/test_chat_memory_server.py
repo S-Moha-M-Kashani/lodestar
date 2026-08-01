@@ -11,8 +11,7 @@ import uuid
 
 import pytest
 
-from lodestar_brain.rag.chat_memory import ChromaChatMemory
-from lodestar_brain.rag.embedder import HashEmbedder
+from lodestar_brain.retrieval import ChatStore, LexicalHashEmbeddings
 
 CHROMA_URL = 'http://localhost:8001'
 PRODUCTION_DATABASE = 'lodestar'   # board.db's memory — must stay untouched
@@ -44,14 +43,14 @@ def collection_name():
     name = f'chat-test-{uuid.uuid4().hex[:8]}'
     yield name
     try:
-        ChromaChatMemory(CHROMA_URL, HashEmbedder(), collection=name,
+        ChatStore(CHROMA_URL, LexicalHashEmbeddings(), collection=name,
                          database=DATABASE).drop()
     except Exception:
         pass
 
 
-def store(collection: str) -> ChromaChatMemory:
-    return ChromaChatMemory(CHROMA_URL, HashEmbedder(), collection=collection,
+def store(collection: str) -> ChatStore:
+    return ChatStore(CHROMA_URL, LexicalHashEmbeddings(), collection=collection,
                             database=DATABASE)
 
 
@@ -107,6 +106,6 @@ def test_two_board_collections_do_not_leak_on_the_server():
 
 def test_unreachable_server_raises_a_clear_error():
     with pytest.raises(Exception) as err:
-        ChromaChatMemory('http://127.0.0.1:9', HashEmbedder(),
+        ChatStore('http://127.0.0.1:9', LexicalHashEmbeddings(),
                          collection='chat', database=DATABASE)
     assert '9' in str(err.value) or 'connect' in str(err.value).lower()

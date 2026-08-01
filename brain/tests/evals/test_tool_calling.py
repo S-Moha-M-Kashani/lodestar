@@ -51,7 +51,9 @@ def test_at_least_one_scenario_exists():
     reason="live eval: set BRAIN_EVAL_LIVE=1 and OPENROUTER_API_KEY to run")
 def test_live_agent_answers_a_trivial_prompt():
     # Uses real LLM but a fake board URL is fine — we only assert it replies.
-    app = create_app(Settings(embedder="hash"))  # llm_provider defaults to openrouter
+    # 'fake' keeps the live run to one paid thing — the chat model. 'hash' used
+    # to sit here and is now retired by name, so this only ever ran live.
+    app = create_app(Settings(embedder="fake"))  # llm_provider defaults to openrouter
     client = TestClient(app)
     res = client.post("/agent/chat", json={"messages": [
         {"role": "user", "content": "Say the word ready and nothing else."}]})
