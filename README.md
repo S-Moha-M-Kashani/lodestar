@@ -99,8 +99,8 @@ Every capability sits behind a small interface chosen by env vars, so each piece
 | `BRAIN_GRADER` | `llm` | The relevance gate between retrieval and generation. `none` disables it. It follows `BRAIN_MODEL`, so it needs no model of its own, and it is one batched call per query rather than one per result |
 | `BRAIN_GRADE_THRESHOLD` | `0.4` | Below this a retrieved card is dropped before the model sees it. A reply the gate cannot parse means *no opinion* (0.5), never *irrelevant* — otherwise one change of output format silently empties every answer's evidence |
 | `BRAIN_MAX_STEPS` | `8` | Tool-call budget per chat turn |
-| `BRAIN_TRANSCRIBER` | `openrouter` | Voice-to-text backend. `openrouter` is the frontend default; `parakeet` is the local MLX alternative (Apple Silicon); `fake` is deterministic for tests. |
-| `BRAIN_OMNI_MODEL` | `openai/whisper-large-v3-turbo` | Audio → text (route: OpenRouter API), sent to its dedicated `/audio/transcriptions` endpoint. |
+| `BRAIN_TRANSCRIBER` | `parakeet` | Voice-to-text backend. `parakeet` is local MLX (Apple Silicon, nothing leaves the machine); `openrouter` is the hosted alternative; `fake` is deterministic for tests. No `auto` mode — an unknown value raises at boot rather than silently picking the one that sends your audio away |
+| `BRAIN_OMNI_MODEL` | `google/gemini-2.5-flash-lite` | Audio → text for the *remote* transcriber only. Parakeet owns its own checkpoint and ignores this |
 | `BRAIN_PARAKEET_MODEL` | `mlx-community/parakeet-tdt-0.6b-v3` | Local checkpoint for the Parakeet backend (2.5 GB, fetched on first use) |
 | `BOARD_API_URL` | `http://127.0.0.1:3000` | Where the brain finds the board API |
 | `AGENT_URL` | `http://127.0.0.1:9000` | Where the Node proxy finds the brain |
@@ -108,6 +108,16 @@ Every capability sits behind a small interface chosen by env vars, so each piece
 | `BRAIN_CHROMA_DATABASE` | paired with the board | `lodestar` for the board on `:3000`, `lodestar-test` for every other board |
 | `BRAIN_CHAT_COLLECTION` | `chat-board-<port>` | One collection per board, so recall never leaks between boards |
 | `LANGSMITH_TRACING` | *(never set)* | Deliberately not enabled and not defaulted anywhere in this repo. LangChain's tracing would upload whole conversations — marriage, health, money — to a third-party cloud. Set it yourself only if you accept that |
+| `LODESTAR_AGENT_BURST` | `60` | How many assistant requests may land at once before the board starts refusing with `429` plus a `Retry-After`. Set on the **Node** server, not the brain |
+| `LODESTAR_AGENT_PER_MIN` | `240` | How fast that budget is earned back. Separate from the burst because they answer different questions — how big a spike is tolerated, and what the sustained rate is |
+
+The rate limit covers `/api/agent/*` **and** `/api/rag/*` — both are the brain, and an unbounded
+recall loop costs embeddings just as an unbounded chat loop costs tokens. It is one bucket for
+the whole assistant surface rather than one per client address: this is a single-user local
+board, so keying a map on a value that never varies would be bookkeeping, not protection.
+Requests are metered *before* the body is read (a flood should cost nothing to refuse), and
+**the board API is never metered** — being over the assistant's limit must not make your own
+cards unreachable. The developer-only `/api/raglab/*` proxy is deliberately unmetered too.
 
 ### Voice input
 
@@ -115,9 +125,14 @@ The mic beside Send dictates into the composer: the browser records, decodes to 
 WAV and posts it to the brain, and the transcript lands in the textarea as **editable text
 that is never auto-sent** — a misheard word must be fixable before it reaches the agent.
 
-Two backends sit behind the same seam. **Local Parakeet** (`nvidia/parakeet-tdt-0.6b-v3` via
-MLX) is free, offline and private — no key and no audio leave the machine — and is what
-`auto` picks whenever it is installed:
+Two backends sit behind the same seam, and you name the one you want — **there is no `auto`
+mode**. It used to prefer local Parakeet when `mlx` was importable and fall back to OpenRouter
+when it was not, which meant an audio file could leave the machine because a wheel failed to
+install. Naming the backend outright makes that a boot error instead of a silent privacy
+change, so an unknown value raises rather than choosing for you.
+
+**Local Parakeet** (`nvidia/parakeet-tdt-0.6b-v3` via MLX) is the default — free, offline and
+private, with no key and no audio leaving the machine:
 
 ```sh
 uv sync --project brain --extra voice     # Apple Silicon only
@@ -126,11 +141,14 @@ uv sync --project brain --extra voice     # Apple Silicon only
 The checkpoint is a 2.5 GB download on the first dictation (cached in
 `~/.cache/huggingface` afterwards, and held in memory for the life of the brain process).
 
-With the OpenRouter backend, the default is **`openai/whisper-large-v3-turbo`**
-(route: OpenRouter API), sent to the dedicated `/audio/transcriptions` endpoint.
-Other audio-capable chat models use `input_audio` on chat completions. The brain
-detects providers that drop audio and reports the offending model rather than
-filing its apology as your words.
+With the OpenRouter backend (`BRAIN_TRANSCRIBER=openrouter`) the default is
+**`google/gemini-2.5-flash-lite`**. The audio rides in as an `input_audio` content part on an
+ordinary chat completion, so any audio-capable chat model works without a second code path.
+The brain detects providers that silently drop the audio part and reports the offending model
+rather than filing its "I can't hear audio" apology as your words.
+
+The Assistant's model picker chooses the *omni model*, not the backend: with the default
+`BRAIN_TRANSCRIBER=parakeet` the brain dictates locally and ignores that pick entirely.
 
 ### Chat memory
 
@@ -179,7 +197,7 @@ needs no API key.
 
 With Compose, both services start together (`docker compose up`). Fully offline test mode is `BRAIN_LLM=fake BRAIN_EMBEDDER=fake`.
 
-Swap points, each one file: the chat model (`brain/src/lodestar_brain/llm/factory.py` — add a branch, never edit a call site), the search provider (`tools/websearch.py`), the embedder (`retrieval.py`'s `make_embeddings`, which returns a LangChain `Embeddings`, so a new backend is a class rather than a protocol of ours), and the agent itself (`agent/runner.py`, registered in `agent/registry.py`).
+Swap points, each one file: the chat model (`brain/src/lodestar_brain/llm.py`'s `make_chat_model` — add a branch, never edit a call site), the search provider (`tools/websearch.py`), the embedder (`retrieval.py`'s `make_embeddings`, which returns a LangChain `Embeddings`, so a new backend is a class rather than a protocol of ours), the relevance gate (`retrieval.py`'s `gate_llm`), and the transcriber (`voice/`). The agent itself is deliberately *not* a swap point: a second agent is a second `LodestarAgent` (`agent.py`) constructed with its own tools and prompt at the call site. The one-entry builder registry that used to sit there was removed on 2026-08-01 — one name behind one constructor established no extension direction, so it was ceremony rather than a seam.
 
 ## Keyboard shortcuts (with a card focused)
 
