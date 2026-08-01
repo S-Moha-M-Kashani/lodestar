@@ -3618,7 +3618,21 @@
     }
     const sources = sourcesOf(done);
     if (sources.length) el.appendChild(renderChatSources(sources));
+    if (msg.usage) el.appendChild(renderChatUsage(msg.usage));
     return el;
+  }
+
+  // What the turn spent. Tokens only, deliberately no money figure: a price per
+  // model is a number this app cannot verify, and one that has quietly gone
+  // stale is worse than none at all. Absent, not zero, when the model reported
+  // nothing — see _usage_from in the brain.
+  function renderChatUsage(usage) {
+    const line = document.createElement('p');
+    line.className = 'chat-usage';
+    const n = (v) => Number(v || 0).toLocaleString();
+    line.textContent = `${n(usage.total_tokens)} tokens · ${n(usage.input_tokens)} in`
+      + ` · ${n(usage.output_tokens)} out`;
+    return line;
   }
 
   // Deliberately anchored on the scheme, so nothing but http(s) can become an
@@ -3868,6 +3882,10 @@
       turn.content = data.reply || '';
       turn.steps = data.steps || [];
       turn.running = [];
+      // Only from `done`: the tokens of a turn that died mid-stream were spent,
+      // but nothing on the wire says how many, and a partial count shown as the
+      // total would be wrong in the direction that flatters us.
+      turn.usage = data.usage || null;
       // Two distinct outcomes: an edit changed the board, a proposal did not.
       if (data.mutated) await adoptServerBoard();
       if (data.proposed) await refreshProposals();

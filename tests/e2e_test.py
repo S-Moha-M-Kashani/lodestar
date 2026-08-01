@@ -1034,6 +1034,11 @@ try:
         page.wait_for_selector(".chat-msg.assistant")
         check("assistant: chat roundtrip through the Node proxy",
               "FAKE: hello brain" in page.inner_text(".chat-log"))
+        # What the turn spent. The offline backend reports usage precisely so
+        # this path is exercised without a paid model in the loop.
+        check("assistant: the turn reports the tokens it spent",
+              page.locator(".chat-usage").count() >= 1
+              and "tokens" in page.locator(".chat-usage").last.inner_text())
 
         # ---- Agent card confirmation gate -----------------------------------
         # A card the agent invents is a PROPOSAL: nothing reaches the board until

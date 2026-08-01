@@ -43,6 +43,11 @@ def test_chat_echo_roundtrip():
     assert body['reply'] == 'FAKE: hello brain'
     assert body['mutated'] is False
     assert body['steps'] == []
+    # What the turn spent, so the Assistant can show it. Reported by the offline
+    # backend too — otherwise the whole path is untestable without a paid model.
+    assert body['usage']['total_tokens'] == (body['usage']['input_tokens']
+                                             + body['usage']['output_tokens'])
+    assert body['usage']['output_tokens'] > 0
 
 
 @respx.mock
@@ -426,6 +431,9 @@ def test_the_streamed_turn_reports_each_tool_then_agrees_with_the_buffered_one()
     assert done['reply'] == 'FAKE: created "What is RRF?"'
     assert done['proposed'] is True and done['mutated'] is False
     assert done['steps'] == [step]
+    # Including what it spent: this turn made two model calls, so a `done` that
+    # reported one of them would understate every turn that used a tool.
+    assert done['usage']['output_tokens'] > 0
 
     tokens = ''.join(data['text'] for name, data in events if name == 'token')
     assert 'n1' not in tokens, 'tool output must not stream as reply text'

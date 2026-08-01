@@ -90,7 +90,10 @@ def _turn_json(result: AgentResult) -> dict:
     return {'reply': result.reply,
             'mutated': any(s.tool in MUTATING_TOOLS for s in result.steps),
             'proposed': any(s.tool in PROPOSING_TOOLS for s in result.steps),
-            'steps': [_step_json(s) for s in result.steps]}
+            'steps': [_step_json(s) for s in result.steps],
+            # null when the model reported nothing, so the Assistant can stay
+            # silent rather than claim a turn cost zero.
+            'usage': result.usage}
 
 
 def _sse(event: str, data: dict) -> str:

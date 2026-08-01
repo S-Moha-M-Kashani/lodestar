@@ -66,6 +66,8 @@ class AgentStep:
 class AgentResult:
     reply: str
     steps: list[AgentStep] = field(default_factory=list)
+    # What the turn spent, or None when the model reported nothing.
+    usage: dict | None = None
 
 
 def _tool_error(exc: Exception, request: Any) -> str:
@@ -131,6 +133,42 @@ def _reply_from(messages: list[BaseMessage]) -> str:
     return ''
 
 
+def _usage_from(messages: list[BaseMessage]) -> dict | None:
+    """What the turn spent, summed over its model calls.
+
+    A turn that used tools is several calls, and each one re-sends the transcript
+    grown by the last tool's answer — so those input tokens really are paid
+    again, and summing them is the bill rather than double counting.
+
+    None instead of zeros when nothing was reported: a model that does not report
+    usage and a turn that cost nothing are different facts, and a turn shown as
+    "0 tokens" is a measurement nobody made.
+    """
+    totals = {'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0}
+    reported = False
+    for message in messages:
+        usage = getattr(message, 'usage_metadata', None)
+        if not usage:
+            continue
+        reported = True
+        for key in totals:
+            totals[key] += usage.get(key, 0)
+    return totals if reported else None
+
+
+def _result_from(messages: list[BaseMessage], reply: str | None = None) -> AgentResult:
+    """One place a turn's result is built.
+
+    Every method returns twice — once normally, once for the step limit — so
+    six construction sites is six chances for one path to report a field the
+    others forget. `reply` is passed only for the step-limit path, where the
+    transcript is abandoned but the steps and the spend still happened.
+    """
+    return AgentResult(reply=_reply_from(messages) if reply is None else reply,
+                       steps=_steps_from(messages),
+                       usage=_usage_from(messages))
+
+
 class LodestarAgent:
     def __init__(self, *, settings: Settings, tools: list[BaseTool],
                  system_prompt: str = SYSTEM_PROMPT, max_steps: int = 8,
@@ -188,8 +226,8 @@ class LodestarAgent:
                     stream_mode='values'):
                 seen = chunk['messages']
         except GraphRecursionError:
-            return AgentResult(reply=STEP_LIMIT_REPLY, steps=_steps_from(seen))
-        return AgentResult(reply=_reply_from(seen), steps=_steps_from(seen))
+            return _result_from(seen, STEP_LIMIT_REPLY)
+        return _result_from(seen)
 
     async def arun(self, messages: list[dict], model: str | None = None,
                    provider: str | None = None) -> AgentResult:
@@ -200,8 +238,8 @@ class LodestarAgent:
                     stream_mode='values'):
                 seen = chunk['messages']
         except GraphRecursionError:
-            return AgentResult(reply=STEP_LIMIT_REPLY, steps=_steps_from(seen))
-        return AgentResult(reply=_reply_from(seen), steps=_steps_from(seen))
+            return _result_from(seen, STEP_LIMIT_REPLY)
+        return _result_from(seen)
 
     async def astream(self, messages: list[dict], model: str | None = None,
                       provider: str | None = None
@@ -252,7 +290,6 @@ class LodestarAgent:
                 if isinstance(message, AIMessage) and (text := _text(message)):
                     yield 'token', text
         except GraphRecursionError:
-            yield 'done', AgentResult(reply=STEP_LIMIT_REPLY,
-                                      steps=_steps_from(seen))
+            yield 'done', _result_from(seen, STEP_LIMIT_REPLY)
             return
-        yield 'done', AgentResult(reply=_reply_from(seen), steps=_steps_from(seen))
+        yield 'done', _result_from(seen)
