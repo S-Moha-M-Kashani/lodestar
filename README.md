@@ -173,9 +173,24 @@ that writes nothing to disk.
 Run it locally (requires uv; deps install on first run):
 
 ```sh
-uv run --project brain uvicorn lodestar_brain.server:app --reload --port 9000
+# The brain reads .env only under Docker, so export it yourself when running natively —
+# otherwise BRAIN_LLM falls back to its `ollama` default and every chat needs Ollama up.
+set -a; . ./.env; set +a
+
+# --extra local-embeddings is required: BRAIN_EMBEDDER defaults to sentence-transformers
+# and the bare project venv has no torch, so the service raises at boot without it.
+uv run --project brain --extra local-embeddings uvicorn lodestar_brain.server:app --reload --port 9000
+
+# Or skip the ~1 GB install and run with the offline embedder — chat still works,
+# retrieval is lexical rather than semantic:
+BRAIN_EMBEDDER=fake uv run --project brain uvicorn lodestar_brain.server:app --reload --port 9000
+
 # in another terminal: npm start, then open http://localhost:3000 → Assistant
 ```
+
+Torch is deliberately kept out of `brain/.venv` — that is what lets the brain test suite run
+fully offline with no extras — so the `fake` line is the lighter of the two unless you
+specifically need real semantic retrieval.
 
 ### Local Ollama option
 
