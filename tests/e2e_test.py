@@ -804,14 +804,14 @@ try:
         page.wait_for_selector("#import-mode-dialog[open]")
         page.click("#import-add")
         page.wait_for_timeout(200)
-        check("import: questions added on top of the existing board",
+        check("import: cards added on top of the existing board",
               page.locator(".card").count() == count_before_import + 2)
         check("import: added card kept its column, defaults fill the gaps",
               page.locator('[data-col="in-progress"] .card', has_text="offsite").count() == 1
               and page.locator('[data-col="inbox"] .card', has_text="onboarding doc").count() == 1)
         nums = page.locator("#board .card-num").all_inner_texts()
         check("import: ledger numbers stay unique after adding",
-              len(nums) == len(set(nums)) and all(n.startswith("Q-0") for n in nums))
+              len(nums) == len(set(nums)) and all(n.startswith("C-0") for n in nums))
 
         # ---- Import: SUBSTITUTE asks are-you-sure (cancel, then confirm) ----
         page.set_input_files("#import-input", import_file)
@@ -923,6 +923,39 @@ try:
         check("db: a fresh browser loads the board from the database (not localStorage)",
               fresh_page.locator(".card", has_text="PERSIST-MARKER-alpha").count() == 1)
         fresh.close()
+
+        # ---- localStorage keys: 'question-board:*' → 'lodestar:*' ----
+        # This is an end-to-end test.
+        # The prefix was renamed with the board's word, and several of the ten
+        # keys hold data that exists nowhere else — the undo timeline, Review
+        # state, model picks. So the migration copies rather than moves, and a
+        # value changed since migrating must survive the next boot.
+        mig = browser.new_context(viewport={"width": 1200, "height": 800})
+        mig_page = mig.new_page()
+        mig_page.goto(URL)
+        mig_page.wait_for_selector(".card")
+        mig_page.evaluate("""() => {
+          localStorage.clear();
+          localStorage.setItem('question-board:theme', 'night');
+          localStorage.setItem('question-board:reviewed', '12345');
+          localStorage.setItem('question-board:habit-mute', '');
+        }""")
+        mig_page.reload()
+        mig_page.wait_for_selector(".card")
+        get = lambda k: mig_page.evaluate("k => localStorage.getItem(k)", k)
+        check("migration: legacy keys are copied under the lodestar: prefix",
+              get("lodestar:theme") == "night" and get("lodestar:reviewed") == "12345")
+        # '' is a real stored value, so the copy must test for null, not falsiness.
+        check("migration: an empty legacy value is copied, not skipped",
+              get("lodestar:habit-mute") == "")
+        check("migration: the legacy keys survive, so an older build still finds them",
+              get("question-board:theme") == "night")
+        mig_page.evaluate("() => localStorage.setItem('lodestar:theme', 'morning')")
+        mig_page.reload()
+        mig_page.wait_for_selector(".card")
+        check("migration: a value changed after migrating is not clobbered on the next boot",
+              get("lodestar:theme") == "morning")
+        mig.close()
 
         # Delete on the main board: it leaves the live board but is NOT destroyed —
         # it is soft-deleted, kept in the database, and listed in the Trash.
@@ -1158,9 +1191,9 @@ try:
         page.locator('.view-switch button[data-view="board"]').click()
         approved = page.locator(".card", has_text="What is Leiden clustering?").first
         check("gate: approved card visible on the board", approved.count() >= 1)
-        # ensureNums must run on adopt, or the confirmed card shows Q-000.
-        check("gate: the approved card gets a real ledger number, not Q-000",
-              approved.locator(".card-num").inner_text().strip() not in ("Q-000", ""))
+        # ensureNums must run on adopt, or the confirmed card shows C-000.
+        check("gate: the approved card gets a real ledger number, not C-000",
+              approved.locator(".card-num").inner_text().strip() not in ("C-000", ""))
 
         # Rejecting sends the proposal to the Trash rather than erasing it.
         page.locator('.view-switch button[data-view="assistant"]').click()
@@ -1328,7 +1361,7 @@ try:
         # why off-list options exist and it has to stay. The reset is also written
         # back to storage: left in place, the dead slug would return the moment a
         # future version trimmed the retirement list.
-        MODELS_KEY = "question-board:models"
+        MODELS_KEY = "lodestar:models"
         for retired_text in RETIRED_TEXT:
             page.evaluate(
                 "([key, text, omni]) => localStorage.setItem(key, JSON.stringify("

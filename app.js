@@ -1,10 +1,34 @@
 (() => {
   'use strict';
 
-  const STORAGE_KEY = 'question-board:v1';
-  const THEME_KEY = 'question-board:theme';
-  const VIEW_KEY = 'question-board:view';
-  const HISTORY_KEY = 'question-board:history';
+  // Local keys were prefixed 'question-board:' until the board's word became
+  // "card". Several of them hold data that lives nowhere else — the undo
+  // timeline, Review state, the model picks — so the rename copies the old
+  // values across once instead of stranding them. Delete migrateStorageKeys and
+  // LEGACY_* once no browser in use predates the rename.
+  const KEY_PREFIX = 'lodestar:';
+  const LEGACY_PREFIX = 'question-board:';
+  const LEGACY_SUFFIXES = ['v1', 'theme', 'view', 'history', 'habit-mute',
+    'proj', 'matrix', 'reviewed', 'resurface', 'models'];
+
+  function migrateStorageKeys() {
+    try {
+      for (const suffix of LEGACY_SUFFIXES) {
+        const old = localStorage.getItem(LEGACY_PREFIX + suffix);
+        // Test for null, not falsiness: '' is a real stored value. And skip any
+        // key that already exists, or a boot would undo a change made since.
+        if (old !== null && localStorage.getItem(KEY_PREFIX + suffix) === null) {
+          localStorage.setItem(KEY_PREFIX + suffix, old);
+        }
+      }
+    } catch (_) { /* private mode */ }
+  }
+  migrateStorageKeys();
+
+  const STORAGE_KEY = KEY_PREFIX + 'v1';
+  const THEME_KEY = KEY_PREFIX + 'theme';
+  const VIEW_KEY = KEY_PREFIX + 'view';
+  const HISTORY_KEY = KEY_PREFIX + 'history';
   const HISTORY_LIMIT = 50; // snapshots kept; oldest fall off like a rotated log
 
   const COLUMNS = [
@@ -265,7 +289,7 @@
     ].map((c, i) => ({ ...c, num: i + 1 }));
   }
 
-  // Every card keeps a permanent ledger number (Q-001, Q-002, …) in capture order.
+  // Every card keeps a permanent ledger number (C-001, C-002, …) in capture order.
   function ensureNums(cards) {
     let max = cards.reduce((m, c) => Math.max(m, c.num || 0), 0);
     [...cards]
@@ -275,7 +299,7 @@
     return cards;
   }
 
-  const cardLabel = (card) => 'Q-' + String(card.num).padStart(3, '0');
+  const cardLabel = (card) => 'C-' + String(card.num).padStart(3, '0');
 
   function sanitizeCard(raw, reg = categories) {
     if (!raw || typeof raw !== 'object' || typeof raw.title !== 'string' || !raw.title.trim()) return null;
@@ -1014,7 +1038,7 @@
   // browsers refuse audio before the first gesture, so the banner is the
   // channel that always works.
 
-  const HABIT_MUTE_KEY = 'question-board:habit-mute';
+  const HABIT_MUTE_KEY = KEY_PREFIX + 'habit-mute';
   let habitMuted = localStorage.getItem(HABIT_MUTE_KEY) === '1';
   let habitBannerHidden = false; // dismissed for this session; a reload brings it back
   let audioCtx = null;
@@ -1604,7 +1628,7 @@
   // neighbourhoods — clusters of related thoughts pull together). t-SNE is
   // computed from the same vectors, seeded so the same cards always land in
   // the same spots, and cached per exact set of vectors.
-  const PROJ_KEY = 'question-board:proj';
+  const PROJ_KEY = KEY_PREFIX + 'proj';
   const PROJ_LABEL = { pca: 'PCA', tsne: 't-SNE' };
   let projection = 'pca';
   try { const p = localStorage.getItem(PROJ_KEY); if (Object.hasOwn(PROJ_LABEL, p)) projection = p; } catch { /* private mode */ }
@@ -1997,7 +2021,7 @@
     },
   };
 
-  const MATRIX_KEY = 'question-board:matrix';
+  const MATRIX_KEY = KEY_PREFIX + 'matrix';
   let matrixLens = 'eisenhower';
   try {
     const m = localStorage.getItem(MATRIX_KEY);
@@ -2553,8 +2577,8 @@
   // the same ritual shows the same cards all day).
   // --------------------------------------------------------------------------
 
-  const REVIEW_KEY = 'question-board:reviewed';
-  const RESURFACE_KEY = 'question-board:resurface';
+  const REVIEW_KEY = KEY_PREFIX + 'reviewed';
+  const RESURFACE_KEY = KEY_PREFIX + 'resurface';
   let resurfacePicks = { date: '', ids: [] };
   try {
     const saved = JSON.parse(localStorage.getItem(RESURFACE_KEY) || 'null');
@@ -2810,7 +2834,7 @@
   // an effect today — it rides along on every /api/agent/chat request (the
   // brain forwards it to OpenRouter). The omni and embedding picks are stored
   // preferences for the media-ingestion and remote-embedder features to come.
-  const MODELS_KEY = 'question-board:models';
+  const MODELS_KEY = KEY_PREFIX + 'models';
   // Every omni option has to be a model that genuinely receives audio.
   // nemotron-3-nano-omni:free is listed as audio-capable but the provider
   // serving it discards the audio and answers an apology, and it was kept here
@@ -3870,7 +3894,7 @@
         if (cats) categories = cats;
         // ensureNums matters here: a card the server created (an agent edit, or a
         // just-confirmed proposal) arrives with num 0, and without this it would
-        // render as Q-000 until the next reload.
+        // render as C-000 until the next reload.
         state.cards = ensureNums(data.cards);
         saveState();
       }
