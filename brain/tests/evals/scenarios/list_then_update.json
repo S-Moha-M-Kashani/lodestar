@@ -5,12 +5,12 @@
   ],
   "messages": [{ "role": "user", "content": "move the offsite agenda card to answered" }],
   "script": [
-    { "tool_calls": [ { "name": "list_questions", "arguments": { "search": "offsite" } } ] },
-    { "tool_calls": [ { "name": "update_question", "arguments": { "id": "k1", "column_id": "answered" } } ] },
+    { "tool_calls": [ { "name": "list_cards", "arguments": { "search": "offsite" } } ] },
+    { "tool_calls": [ { "name": "update_card", "arguments": { "id": "k1", "column_id": "answered" } } ] },
     { "content": "Moved the offsite agenda card to Answered." }
   ],
   "expect": {
-    "tools_called": ["list_questions", "update_question"],
+    "tools_called": ["list_cards", "update_card"],
     "reply_contains": "Answered",
     "board_size": 1,
     "answered_id": "k1"

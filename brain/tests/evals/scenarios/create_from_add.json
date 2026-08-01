@@ -3,11 +3,11 @@
   "board": [],
   "messages": [{ "role": "user", "content": "add: research vector DB options" }],
   "script": [
-    { "tool_calls": [ { "name": "create_question", "arguments": { "title": "Research vector DB options", "type": "task" } } ] },
+    { "tool_calls": [ { "name": "create_card", "arguments": { "title": "Research vector DB options", "type": "task" } } ] },
     { "content": "Proposed \"Research vector DB options\" — approve it in the Assistant view and it joins your inbox." }
   ],
   "expect": {
-    "tools_called": ["create_question"],
+    "tools_called": ["create_card"],
     "reply_contains": "Research vector DB options",
     "board_size": 0,
     "proposals_size": 1,

@@ -154,13 +154,13 @@ def test_fake_chat_scripted_pops_turns_in_order():
     assert llm.invoke([HumanMessage(content='x')]).content == 'second'
 
 
-def test_fake_chat_add_heuristic_calls_create_question_then_replies():
+def test_fake_chat_add_heuristic_calls_create_card_then_replies():
     # tests/e2e_test.py:961,1001 drive this path through the real UI.
     llm = FakeChat()
     msgs = [HumanMessage(content='add: What is Leiden clustering?')]
     turn = llm.invoke(msgs)
     assert turn.tool_calls
-    assert turn.tool_calls[0]['name'] == 'create_question'
+    assert turn.tool_calls[0]['name'] == 'create_card'
     assert turn.tool_calls[0]['args'] == {'title': 'What is Leiden clustering?'}
     # once the tool result is in the transcript it must produce a final reply
     msgs += [turn, ToolMessage(content='{}', tool_call_id=turn.tool_calls[0]['id'])]

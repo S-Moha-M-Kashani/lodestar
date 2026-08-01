@@ -1010,8 +1010,8 @@ try:
         page.click("#chat-send")
         page.wait_for_function(
             "document.querySelectorAll('.chat-msg.assistant').length >= 2")
-        check("assistant: tool chip shown for create_question",
-              "create_question" in page.inner_text(".chat-log"))
+        check("assistant: tool chip shown for create_card",
+              "create_card" in page.inner_text(".chat-log"))
         # The chip used to be the whole story: a tool's name, with what it was
         # asked and what it answered thrown away. Both are on the wire already.
         step = page.locator(".chat-step").last
