@@ -4618,6 +4618,13 @@
       : $('#chat-export-format').value === 'markdown'
         ? 'lodestar-chat.md' : 'lodestar-chat.json');
 
+  // The copy button names what it will actually put on the clipboard. Left as a
+  // fixed "Copy JSON" it would offer Markdown under a JSON label — a small lie,
+  // but the kind the user only discovers after pasting.
+  const copyLabel = () =>
+    (exportMode === 'chat' && $('#chat-export-format').value === 'markdown'
+      ? 'Copy Markdown' : 'Copy JSON');
+
   function openExportDialog(mode) {
     exportMode = mode;
     const chat = mode === 'chat';
@@ -4627,6 +4634,7 @@
       ? 'Save the Assistant transcript. Markdown is for reading; JSON keeps the turn structure, including which turns failed. If your browser blocks the download, copy the text below instead.'
       : 'Save the whole board as lodestar.json. If your browser blocks the download (some embedded viewers do), copy the JSON below and paste it into a file instead.';
     $('#download-export').textContent = `Download ${currentExportName()}`;
+    $('#copy-export').textContent = copyLabel();
     $('#export-json').value = currentExportText();
     exportDialog.showModal();
   }
@@ -4639,6 +4647,7 @@
   $('#chat-export-format').addEventListener('change', () => {
     $('#export-json').value = chatExportText();
     $('#download-export').textContent = `Download ${currentExportName()}`;
+    $('#copy-export').textContent = copyLabel();
   });
 
   $('#download-export').addEventListener('click', () => {
@@ -4664,7 +4673,7 @@
     const btn = $('#copy-export');
     const done = () => {
       btn.textContent = 'Copied ✓';
-      setTimeout(() => { btn.textContent = 'Copy JSON'; }, 1600);
+      setTimeout(() => { btn.textContent = copyLabel(); }, 1600);
       announce(exportMode === 'chat'
         ? 'Chat transcript copied to clipboard'
         : 'Board JSON copied to clipboard');
@@ -4682,7 +4691,7 @@
         done();
       } else {
         btn.textContent = 'Press ⌘C / Ctrl+C';
-        setTimeout(() => { btn.textContent = 'Copy JSON'; }, 2500);
+        setTimeout(() => { btn.textContent = copyLabel(); }, 2500);
         announce('JSON selected — press Ctrl+C or Cmd+C to copy');
       }
     }

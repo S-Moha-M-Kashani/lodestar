@@ -1562,6 +1562,12 @@ try:
             check("chat export: Markdown names the speakers and keeps the text",
                   "remember this across a reload" in md
                   and md.lower().count("#") >= 2)
+            # The copy button names what it will actually put on the clipboard.
+            # Found by looking at the dialog rather than by a failing check: it
+            # read "Copy JSON" while Markdown was selected, which is only
+            # discovered after pasting.
+            check("chat export: the copy button follows the chosen format",
+                  page.locator("#copy-export").inner_text().strip() == "Copy Markdown")
             page.click("#cancel-export")
             wait_until(lambda: not page.locator("#export-dialog").is_visible())
             # The board's own export must still produce a board, not a chat.
