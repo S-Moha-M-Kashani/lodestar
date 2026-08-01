@@ -99,10 +99,12 @@ def test_sentences_split_spoken_run_ons():
 
 # --- embedders -------------------------------------------------------------
 
-def test_production_ascii_hash_embedder_is_blind_to_farsi():
-    """The finding the lab exists to make measurable: the brain's default
-    embedder tokenises [a-z0-9]+, so a Farsi diary embeds to the zero vector and
-    retrieval is arbitrary. If this ever fails, the default was fixed."""
+def test_ascii_hash_embedder_is_blind_to_farsi():
+    """The finding the lab exists to make measurable, and the one that moved the
+    brain's default: an [a-z0-9]+ tokeniser embeds a Farsi diary to the zero
+    vector, so retrieval is arbitrary — ~0.01 recall against 0.617 for a real
+    Persian encoder. Production has since taken that encoder and retired `hash`
+    by name; this stays as the reference point the 60× is measured from."""
     vectors = embedding.make_embedder('ascii-hash').embed(['امروز با مهسا دعوام شد'])
     assert not np.any(vectors)
 
