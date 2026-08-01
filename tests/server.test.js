@@ -208,6 +208,42 @@ test('/api/rag/* is also proxied (503 when brain down)', async () => {
   } finally { await s.stop(); }
 });
 
+// ---- Rate limit on the assistant proxy -----------------------------------
+// A token bucket in front of the brain. One runaway client loop must not be
+// able to spend the user's API credit or pin a local model for minutes, and the
+// board server is the only place that can say no — the brain answers whatever
+// reaches it. The two knobs exist so this test can trip the limit in three
+// requests; the defaults are far above anything a person does by hand.
+
+// This is an integration test — a real server process in front of a real stub upstream.
+test('the assistant proxy answers 429 with Retry-After once the bucket is empty', async () => {
+  const seen = [];
+  const brain = await startStubBrain((req) => seen.push(req),
+    { status: 200, body: { reply: 'ok' } });
+  const s = await startServer({ env: {
+    AGENT_URL: brain.url, LODESTAR_AGENT_BURST: '2', LODESTAR_AGENT_PER_MIN: '1' } });
+  try {
+    const ask = () => fetch(s.base + '/api/agent/chat', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ messages: [] }),
+    });
+    assert.equal((await ask()).status, 200);
+    assert.equal((await ask()).status, 200);
+    const limited = await ask();
+    assert.equal(limited.status, 429);
+    assert.deepEqual(await limited.json(), { error: 'Too many assistant requests' });
+    // Whole seconds, and never 0 — a client that reads it and retries at once
+    // is straight back where it started.
+    const after = limited.headers.get('retry-after');
+    assert.ok(Number.isInteger(Number(after)) && Number(after) >= 1,
+      `Retry-After was ${after}`);
+    assert.equal(seen.length, 2, 'the rejected request never reached the brain');
+    // The board is local data, not a brain call: being over the assistant's
+    // limit must never make the user's own cards unreachable.
+    assert.equal((await fetch(s.base + '/api/state')).status, 200);
+  } finally { await s.stop(); await brain.stop(); }
+});
+
 // How long the stub upstream sits between its two SSE frames. Long enough that
 // the gap is unmistakable, short enough that the test costs half a second.
 const STREAM_HOLD_MS = 500;

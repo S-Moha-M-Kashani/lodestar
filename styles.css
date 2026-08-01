@@ -2359,6 +2359,16 @@ button.chat-source-card {
   white-space: nowrap;
 }
 
+/* What the turn spent. A receipt line, so it reads like the source label above
+   it rather than like part of the answer. */
+.chat-usage {
+  margin: 6px 0 0;
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+}
+
 .chat-composer { display: flex; gap: 8px; align-items: flex-end; }
 .chat-composer textarea {
   flex: 1;

@@ -163,7 +163,18 @@ class FakeChat(BaseChatModel):
     def _generate(self, messages: list[BaseMessage], stop: list[str] | None = None,
                   run_manager: Optional[CallbackManagerForLLMRun] = None,
                   **kwargs: Any) -> ChatResult:
-        return ChatResult(generations=[ChatGeneration(message=self._next(messages))])
+        message = self._next(messages)
+        # A fake that reports no usage leaves the whole token-reporting path
+        # untestable offline, and the e2e board runs on this backend. Four
+        # characters to the token: an estimate, and it only has to be non-zero
+        # and additive for the reporting to be exercised.
+        if message.usage_metadata is None:
+            spent_in = sum(len(_text(m)) for m in messages) // 4
+            spent_out = len(_text(message)) // 4
+            message = message.model_copy(update={'usage_metadata': {
+                'input_tokens': spent_in, 'output_tokens': spent_out,
+                'total_tokens': spent_in + spent_out}})
+        return ChatResult(generations=[ChatGeneration(message=message)])
 
     def _next(self, messages: list[BaseMessage]) -> AIMessage:
         if self.script:
