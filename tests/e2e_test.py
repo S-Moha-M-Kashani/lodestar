@@ -1427,6 +1427,25 @@ try:
         check("assistant error surfaced a console error to scrub", len(provoked) >= 1)
         for e in provoked:
             errors.remove(e)
+
+        # ---- A 429 is our own rate limit, not a dead brain. Told "check that the
+        # brain service is running", the user would go restart a service that is
+        # working perfectly and never learn to simply wait.
+        n_before = len(errors)
+        n_errs = page.locator(".chat-msg.assistant.error").count()
+        page.route("**/api/agent/chat/stream", lambda route: route.fulfill(
+            status=429, content_type="application/json",
+            headers={"Retry-After": "30"},
+            body='{"error":"Too many assistant requests"}'))
+        page.fill("#chat-input", "One question too many")
+        page.click("#chat-send")
+        wait_until(lambda: page.locator(".chat-msg.assistant.error").count() > n_errs)
+        limited = page.locator(".chat-msg.assistant.error").last.inner_text()
+        check("assistant: a rate-limited turn says to wait, not that the brain is down",
+              "too many" in limited.lower() and "brain service" not in limited)
+        page.unroute("**/api/agent/chat/stream")
+        for e in [e for e in errors[n_before:] if "429" in e]:
+            errors.remove(e)
         page.locator('.view-switch button[data-view="board"]').click()
 
         # ---- RAG test lab ----------------------------------------------------
