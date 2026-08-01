@@ -3,7 +3,8 @@
     "infra": [
       { "id": "i1", "columnId": "inbox", "title": "Kubernetes pod autoscaling thresholds", "notes": "cluster nodes cpu memory scaling", "tags": ["infra"] },
       { "id": "i2", "columnId": "inbox", "title": "Ingress controller TLS renewal", "notes": "kubernetes cluster certificate ingress", "tags": ["infra"] },
-      { "id": "i3", "columnId": "inbox", "title": "Node pool cost optimization", "notes": "cluster node cpu memory cost", "tags": ["infra"] }
+      { "id": "i3", "columnId": "inbox", "title": "Node pool cost optimization", "notes": "cluster node cpu memory cost", "tags": ["infra"] },
+      { "id": "i4", "columnId": "inbox", "title": "Staging smoke run keeps dying overnight", "notes": "The nightly smoke run has failed three nights running. The log is mostly the usual restart noise: a slow rollout, retries on the queue worker, warnings about pod scheduling, node memory pressure, and the scrape interval drifting again. Every one of those turns up whenever the cluster is busy, so nobody read far enough. Near the end of the third attempt the exporter prints ERR_TLS_CERT_EXPIRED and gives up.", "tags": ["infra"] }
     ],
     "hiring": [
       { "id": "h1", "columnId": "inbox", "title": "Interview loop for staff engineer", "notes": "candidate interview feedback panel", "tags": ["hiring"] },
@@ -15,5 +16,11 @@
     { "text": "kubernetes cluster node scaling", "expected_cluster": "infra", "k": 3 },
     { "text": "candidate interview feedback", "expected_cluster": "hiring", "k": 3 }
   ],
-  "thresholds": { "precision_at_k": 0.66 }
+  "thresholds": { "precision_at_k": 0.66 },
+  "rare_literal": {
+    "_comment": "ERR_TLS_CERT_EXPIRED is in exactly one card (i4), buried in a long note, while i2 is short and matches the rest of the query well. Measured: dense, BM25 and RRF fusion all rank i2 first — the long note is penalised by cosine dilution and by BM25 length normalisation alike. Only the IDF term-coverage reranker promotes i4. See the eval's docstring.",
+    "query": "ingress certificate deploy failed ERR_TLS_CERT_EXPIRED",
+    "expected_id": "i4",
+    "k": 3
+  }
 }
