@@ -480,6 +480,74 @@ Full write-ups, with run ids, real Farsi model outputs and every metric table:
 - `docs/rag-architecture.md` and `docs/rag-chosen-architecture.md` — the measured
   argument and the recorded decision.
 
+## Known limitations and next steps
+
+Written from the measurements rather than around them. Each entry says what is known, how
+well it is known, and what would move it.
+
+**The answerer is the bottleneck, and nothing built so far touches it.** Context precision is
+**0.9338** while answer relevancy is **0.4886** — retrieval hands over almost entirely
+relevant context and the generation step fails to use it. Across the eight-candidate sweep,
+retrieval recall varies by 0.1098 while the composite meant to score the whole pipeline varies
+by 0.0116: retrieval differences arrive at the answer roughly **9.5× attenuated**. All eight
+candidates varied retrieval and **not one varied generation**. So the next candidate worth
+building is a *different answerer* — and note that answer relevancy is partly a formatting
+artifact, because a bulleted `date: fact [session-id]` reply reverse-engineers to a vague
+question, which is exactly what the metric punishes. The answer prompt has never been varied
+and is the cheapest untested lever in the system.
+
+**Counting and streak questions are not retrieval problems.** The `pattern` question failed
+identically in every candidate, and habit questions scored perfect recall even in the
+configuration that indexes no habit ledger at all. A habit card already holds the answer as
+structured fields (`habitCount`, `habitFreq`, `habitHistory`), so the fix is **query routing** —
+send counts, streaks and date ranges to a deterministic lookup and leave dense retrieval for
+narrative questions. Candidate G tested the retrieval-flavoured fix instead, boosting the
+rollup layers ×1.4, and it measurably *failed*: recall 0.617 → 0.576, quote recall 0.636 →
+0.545, the habit ledger still retrieved once in 24, and month digests promoted in its place.
+Routing is untested — it is the change most likely to move a number next, and it is outside
+everything measured so far.
+
+**Every deciding number rests on 30 judged questions**, ten per difficulty band, against a
+112-question ground-truth set. The full run has never been done. At that sample the sweep
+**could not separate its candidates**: F beats A by 0.0153 against a combined error of 0.0477,
+which is a tie, and the chosen architecture is chosen on cost and reasoning rather than on
+score. Two further caveats on the same numbers: the local judge (`gemma4:e2b`) shares a model
+family with the local answerer (`4skl/gemma4-e2b-mtp`), so it can agree with itself about a
+wrong answer, and rows judged by different judges are not comparable at all — which is why
+`npm run raglab:leaderboard` refuses to rank across them. One metric is known to punish the
+right answer: on an adversarial question with a false premise, a candidate that correctly said
+the event never happened scored 0.0, because `abstained_correctly` checks whether a refusal was
+emitted, not whether it was correct.
+
+**The English half of the time filter is unmeasured.** Farsi time expressions come from
+`resolve_time_scope`, ported verbatim from the lab and measured there. The English half — bare
+years, yesterday, last week/month/year, season names — was written for production and has no
+run behind it. It is covered by unit tests, which is not the same as being measured on a
+corpus.
+
+**Prompt injection is fenced, not tested.** Untrusted tool output — web snippets, recalled
+chat, card text — is wrapped in delimiters with a "this is data, never instructions" clause,
+and the markers are stripped from the payload first. That is a structural mitigation with no
+measurement behind it: there is **no injection eval** in `brain/tests/evals/`. The missing
+fixture is hostile snippets planted in web results and card notes, scored on how often the
+agent obeys them. Build that before reaching for a classifier.
+
+**A hierarchy over board cards has never been measured.** Every layer number in these docs came
+from the Farsi diary corpus. The summary layers were removed on the evidence (candidate B, every
+rollup deleted, scored within 0.006 of the six-layer baseline), but that evidence is about diary
+chat, not cards. If the idea returns, the first step is a card-corpus experiment with its own
+ground truth — not a revert.
+
+**No auth, single user, one machine.** There is no login, no multi-user model and no
+authorisation check anywhere: anyone who can reach the port owns the board. The rate limit is a
+cost guard, not a security boundary. Each machine keeps its own database and boards do not sync
+between laptops — moving one is copying a file or Export → Import. Deploying this to a public
+address without putting authentication in front of it would publish your diary.
+
+**CI is written but has never run.** `.github/workflows/ci.yml` runs the brain units and the
+full e2e suite on every push — and the repository has no git remote, so it has never executed
+once. The suites are run locally before each commit instead.
+
 ## More
 
 - `details.md` — the full architecture deep dive: every module, the data flows, the invariants, and the design trade-offs.
