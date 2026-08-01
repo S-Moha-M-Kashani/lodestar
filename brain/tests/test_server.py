@@ -375,6 +375,13 @@ def test_the_streamed_turn_reports_each_tool_then_agrees_with_the_buffered_one()
     step = next(data for name, data in events if name == 'step')
     assert step['tool'] == 'create_question' and step['result']['id'] == 'n1'
 
+    # The tool is announced when it is *requested*, not only when it answers.
+    # A web search runs for seconds, and without this the slowest stretch of a
+    # research turn emits nothing at all — indistinguishable from a hang.
+    assert kinds.index('calling') < kinds.index('step')
+    assert next(data for name, data in events if name == 'calling') == {
+        'tool': 'create_question', 'arguments': {'title': 'What is RRF?'}}
+
     done = events[-1][1]
     assert done['reply'] == 'FAKE: created "What is RRF?"'
     assert done['proposed'] is True and done['mutated'] is False

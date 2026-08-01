@@ -8,7 +8,7 @@ model the picker can choose, and partial steps when the step limit is hit.
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -97,23 +97,32 @@ def _decode(content: Any) -> object:
         return content
 
 
+def _calls_in(messages: list[BaseMessage]) -> Iterator[dict]:
+    """Every tool call the model has requested, in the order it requested them."""
+    for message in messages:
+        if isinstance(message, AIMessage):
+            yield from message.tool_calls
+
+
 def _steps_from(messages: list[BaseMessage]) -> list[AgentStep]:
     """Pair each requested tool call with the ToolMessage that answered it.
 
     A call with no answer yet — the transcript was cut off at the step limit —
     is not a step: the old loop appended one only once the tool had run.
+
+    Steps therefore come back in *request* order, which is what lets a streaming
+    consumer pair them with `astream`'s 'calling' events by position. That holds
+    because an unanswered call can only be a trailing one: the sole way to have
+    one is the step limit ending the run.
     """
     results = {m.tool_call_id: m for m in messages if isinstance(m, ToolMessage)}
     steps: list[AgentStep] = []
-    for message in messages:
-        if not isinstance(message, AIMessage):
+    for call in _calls_in(messages):
+        answer = results.get(call['id'])
+        if answer is None:
             continue
-        for call in message.tool_calls:
-            answer = results.get(call['id'])
-            if answer is None:
-                continue
-            steps.append(AgentStep(tool=call['name'], arguments=dict(call['args']),
-                                   result=_decode(answer.content)))
+        steps.append(AgentStep(tool=call['name'], arguments=dict(call['args']),
+                               result=_decode(answer.content)))
     return steps
 
 
@@ -197,10 +206,16 @@ class LodestarAgent:
                       ) -> AsyncIterator[tuple[str, Any]]:
         """The same turn as `arun`, reported while it happens.
 
-        Yields ('step', AgentStep) as each tool answers, ('token', str) as the
-        model writes, and exactly one ('done', AgentResult) last. The final
-        result is built the same way `arun` builds it, so a caller can render
-        the stream and still trust `done` as the record of the turn.
+        Yields ('calling', dict) when a tool is requested, ('step', AgentStep)
+        once it answers, ('token', str) as the model writes, and exactly one
+        ('done', AgentResult) last. The final result is built the same way `arun`
+        builds it, so a caller can render the stream and still trust `done` as
+        the record of the turn.
+
+        'calling' exists because a requested-but-unanswered call is deliberately
+        not a step, so a tool that takes seconds — a web search — would otherwise
+        emit nothing for the slowest stretch of the turn. It carries no result
+        because there is none yet; the matching 'step' follows in request order.
 
         Tokens are *provisional*. Two reasons a consumer must replace what it
         accumulated with `done.reply` rather than keep it: text can arrive on an
@@ -210,12 +225,19 @@ class LodestarAgent:
         """
         seen: list[BaseMessage] = []
         sent = 0
+        announced: set[str] = set()
         try:
             async for mode, chunk in self._graph(model, provider).astream(
                     {'messages': messages}, config=self._config,
                     stream_mode=['values', 'messages']):
                 if mode == 'values':
                     seen = chunk['messages']
+                    for call in _calls_in(seen):
+                        if call['id'] in announced:
+                            continue
+                        announced.add(call['id'])
+                        yield 'calling', {'tool': call['name'],
+                                          'arguments': dict(call['args'])}
                     steps = _steps_from(seen)
                     for step in steps[sent:]:
                         yield 'step', step

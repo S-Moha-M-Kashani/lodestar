@@ -149,7 +149,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             try:
                 async for kind, payload in agent.astream(
                         body.messages, model=body.model, provider=body.provider):
-                    if kind == 'step':
+                    if kind == 'calling':
+                        yield _sse('calling', payload)   # already {tool, arguments}
+                    elif kind == 'step':
                         yield _sse('step', _step_json(payload))
                     elif kind == 'token':
                         yield _sse('token', {'text': payload})
