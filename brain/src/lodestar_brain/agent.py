@@ -8,6 +8,7 @@ model the picker can choose, and partial steps when the step limit is hit.
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -190,3 +191,44 @@ class LodestarAgent:
         except GraphRecursionError:
             return AgentResult(reply=STEP_LIMIT_REPLY, steps=_steps_from(seen))
         return AgentResult(reply=_reply_from(seen), steps=_steps_from(seen))
+
+    async def astream(self, messages: list[dict], model: str | None = None,
+                      provider: str | None = None
+                      ) -> AsyncIterator[tuple[str, Any]]:
+        """The same turn as `arun`, reported while it happens.
+
+        Yields ('step', AgentStep) as each tool answers, ('token', str) as the
+        model writes, and exactly one ('done', AgentResult) last. The final
+        result is built the same way `arun` builds it, so a caller can render
+        the stream and still trust `done` as the record of the turn.
+
+        Tokens are *provisional*. Two reasons a consumer must replace what it
+        accumulated with `done.reply` rather than keep it: text can arrive on an
+        AIMessage that also requests tools (commentary before the work, not the
+        answer), and the step-limit path abandons the transcript entirely for
+        STEP_LIMIT_REPLY.
+        """
+        seen: list[BaseMessage] = []
+        sent = 0
+        try:
+            async for mode, chunk in self._graph(model, provider).astream(
+                    {'messages': messages}, config=self._config,
+                    stream_mode=['values', 'messages']):
+                if mode == 'values':
+                    seen = chunk['messages']
+                    steps = _steps_from(seen)
+                    for step in steps[sent:]:
+                        yield 'step', step
+                    sent = len(steps)
+                    continue
+                # 'messages' carries every message the graph produces, tool
+                # answers included. Filtering to AIMessage is what stops a tool's
+                # JSON being pasted into the reply as if the model had said it.
+                message, _metadata = chunk
+                if isinstance(message, AIMessage) and (text := _text(message)):
+                    yield 'token', text
+        except GraphRecursionError:
+            yield 'done', AgentResult(reply=STEP_LIMIT_REPLY,
+                                      steps=_steps_from(seen))
+            return
+        yield 'done', AgentResult(reply=_reply_from(seen), steps=_steps_from(seen))

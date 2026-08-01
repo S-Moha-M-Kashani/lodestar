@@ -2,13 +2,15 @@
 module (LLM provider, search provider, embedder) is chosen here from Settings."""
 import base64
 import binascii
+import json
 import logging
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from .agent import LodestarAgent
+from .agent import AgentResult, AgentStep, LodestarAgent
 from .config import Settings, load_settings
 from .llm import make_chat_model, served_models
 from .retrieval import CardIndex, ChatStore, gate_llm, make_embeddings
@@ -43,6 +45,26 @@ class TranscribeBody(BaseModel):
 class RecallBody(BaseModel):
     text: str
     k: int = 5
+
+
+def _step_json(step: AgentStep) -> dict:
+    """What the Assistant shows of one tool call: the name, what it was asked,
+    and what it answered. `result` is what turns a bare chip into evidence."""
+    return {'tool': step.tool, 'arguments': step.arguments, 'result': step.result}
+
+
+def _turn_json(result: AgentResult) -> dict:
+    """The whole turn. Built here so the buffered route and the stream's `done`
+    event cannot drift into reporting the same turn differently."""
+    return {'reply': result.reply,
+            'mutated': any(s.tool in MUTATING_TOOLS for s in result.steps),
+            'proposed': any(s.tool in PROPOSING_TOOLS for s in result.steps),
+            'steps': [_step_json(s) for s in result.steps]}
+
+
+def _sse(event: str, data: dict) -> str:
+    # json.dumps escapes newlines, so no payload can end a frame early.
+    return f'event: {event}\ndata: {json.dumps(data)}\n\n'
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -94,6 +116,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         Only a local backend answers with a list: see `served_models`."""
         return served_models(settings)
 
+    def remember(messages: list[dict], reply: str) -> None:
+        """Record both sides of the exchange. Every chat route must call this:
+        a second route is a second place to forget."""
+        if memory is None:
+            return
+        last_user = next((m.get('content', '') for m in reversed(messages)
+                          if m.get('role') == 'user'), '')
+        memory.record([last_user], metadata={'role': 'user'})
+        memory.record([reply], metadata={'role': 'assistant'})
+
     @app.post('/agent/chat')
     async def chat(body: ChatBody) -> dict:
         # Async because cycle 2's MCP tools are coroutine-only. Safe today: the
@@ -101,16 +133,41 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # executor, so nothing here blocks the event loop.
         result = await agent.arun(body.messages, model=body.model,
                                   provider=body.provider)
-        if memory is not None:
-            last_user = next((m.get('content', '') for m in reversed(body.messages)
-                              if m.get('role') == 'user'), '')
-            memory.record([last_user], metadata={'role': 'user'})
-            memory.record([result.reply], metadata={'role': 'assistant'})
-        return {'reply': result.reply,
-                'mutated': any(s.tool in MUTATING_TOOLS for s in result.steps),
-                'proposed': any(s.tool in PROPOSING_TOOLS for s in result.steps),
-                'steps': [{'tool': s.tool, 'arguments': s.arguments}
-                          for s in result.steps]}
+        remember(body.messages, result.reply)
+        return _turn_json(result)
+
+    @app.post('/agent/chat/stream')
+    async def chat_stream(body: ChatBody) -> StreamingResponse:
+        """The same turn as /agent/chat, reported as it happens.
+
+        Kept as a second route rather than a mode of the first: the buffered one
+        is what the evals and any non-browser caller want, and a route that
+        answers with two different content types depending on a flag is worse
+        than two routes.
+        """
+        async def events():
+            try:
+                async for kind, payload in agent.astream(
+                        body.messages, model=body.model, provider=body.provider):
+                    if kind == 'step':
+                        yield _sse('step', _step_json(payload))
+                    elif kind == 'token':
+                        yield _sse('token', {'text': payload})
+                    else:
+                        remember(body.messages, payload.reply)
+                        yield _sse('done', _turn_json(payload))
+            except Exception as exc:
+                # The headers left long ago, so there is no status code to fail
+                # with. Staying quiet would leave the browser on "Thinking…"
+                # forever — the hang this route exists to remove.
+                logging.getLogger(__name__).exception('chat stream failed')
+                yield _sse('error', {'message': str(exc)})
+
+        # no-cache and no buffering: an intermediary holding the frames back
+        # would deliver a correct transcript and none of the progress.
+        return StreamingResponse(events(), media_type='text/event-stream',
+                                 headers={'Cache-Control': 'no-cache',
+                                          'X-Accel-Buffering': 'no'})
 
     @app.post('/agent/transcribe')
     def transcribe(body: TranscribeBody) -> dict:
