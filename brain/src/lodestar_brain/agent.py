@@ -1,25 +1,25 @@
-"""The agent runner.
+"""The agent.
 
-LangChain owns the loop and the tool schemas; this file owns the brain's own
-result type and the two mechanics create_agent does not give us for free:
-partial steps when the step limit is hit, and tool exceptions fed back to the
-model as {'error': ...} instead of escaping the graph.
+LangChain owns the loop and the tool schemas. What is ours is the brain's own
+result type — so a framework type never reaches the HTTP route or the evals —
+and the two mechanics `create_agent` does not give us for free: a graph per
+model the picker can choose, and partial steps when the step limit is hit.
 """
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware import ToolErrorMiddleware
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from langgraph.errors import GraphRecursionError
 
-from ..config import Settings
-from ..llm.factory import make_chat_model
+from .config import Settings
+from .llm import make_chat_model
 
 SYSTEM_PROMPT = """You are Lodestar's assistant — a research companion and coach \
 for a personal life dashboard ("your compass for life"). The board \
@@ -62,35 +62,21 @@ class AgentResult:
     steps: list[AgentStep] = field(default_factory=list)
 
 
-class ToolErrorsToJson(AgentMiddleware):
+def _tool_error(exc: Exception, request: Any) -> str:
     """A raising tool becomes {'error': str(exc)} fed back to the model.
 
-    create_agent lets tool exceptions escape the graph, so one unreachable
-    board would turn into a 500 for the whole chat turn. The hand-rolled loop
-    caught them; this restores that in both tool paths — a sync-only
-    wrap_tool_call raises NotImplementedError under astream, which is the path
-    the route takes.
+    `create_agent` lets tool exceptions escape the graph, so one unreachable
+    board would turn into a 500 for the whole chat turn. `ToolErrorMiddleware`
+    is opt-in — returning None would propagate — so this handles everything,
+    which is what the hand-rolled loop did before it. It also serves the async
+    path, since the middleware falls back to `on_error` when no `aon_error` is
+    given, and astream is the path the route actually takes.
+
+    The message is `str(exc)` rather than the exception's type: these are our
+    own tools failing against the user's own board, and "board unreachable at
+    127.0.0.1:3000" is what lets the model say something useful about it.
     """
-
-    @staticmethod
-    def _message(request: Any, exc: Exception) -> ToolMessage:
-        return ToolMessage(content=json.dumps({'error': str(exc)}),
-                           tool_call_id=request.tool_call['id'],
-                           name=request.tool_call['name'],
-                           status='error')
-
-    def wrap_tool_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
-        try:
-            return handler(request)
-        except Exception as exc:
-            return self._message(request, exc)
-
-    async def awrap_tool_call(self, request: Any,
-                              handler: Callable[[Any], Awaitable[Any]]) -> Any:
-        try:
-            return await handler(request)
-        except Exception as exc:
-            return self._message(request, exc)
+    return json.dumps({'error': str(exc)})
 
 
 def _text(message: BaseMessage) -> str:
@@ -160,13 +146,17 @@ class LodestarAgent:
         intentionally move between the local Ollama backend and OpenRouter, so
         the provider is part of the cache key too: a model slug alone is not a
         complete destination.
+
+        The cache is per agent, not per module: the tools and the prompt differ
+        between apps and between tests, so a process-wide one would answer a
+        call with a graph compiled for somebody else's tools.
         """
         key = (provider or self.settings.llm_provider, model or '')
         if key not in self._graphs:
             llm = self._llm or make_chat_model(self.settings, model, provider)
-            self._graphs[key] = create_agent(model=llm, tools=self.tools,
-                                             system_prompt=self.system_prompt,
-                                             middleware=[ToolErrorsToJson()])
+            self._graphs[key] = create_agent(
+                model=llm, tools=self.tools, system_prompt=self.system_prompt,
+                middleware=[ToolErrorMiddleware(_tool_error)])
         return self._graphs[key]
 
     @property
@@ -181,9 +171,9 @@ class LodestarAgent:
         try:
             # Streamed, not invoked: GraphRecursionError carries no messages,
             # so this is the only way to still report the steps taken.
-            for chunk in self._graph(model, provider).stream({'messages': messages},
-                                                   config=self._config,
-                                                   stream_mode='values'):
+            for chunk in self._graph(model, provider).stream(
+                    {'messages': messages}, config=self._config,
+                    stream_mode='values'):
                 seen = chunk['messages']
         except GraphRecursionError:
             return AgentResult(reply=STEP_LIMIT_REPLY, steps=_steps_from(seen))
@@ -193,9 +183,9 @@ class LodestarAgent:
                    provider: str | None = None) -> AgentResult:
         seen: list[BaseMessage] = []
         try:
-            async for chunk in self._graph(model, provider).astream({'messages': messages},
-                                                          config=self._config,
-                                                          stream_mode='values'):
+            async for chunk in self._graph(model, provider).astream(
+                    {'messages': messages}, config=self._config,
+                    stream_mode='values'):
                 seen = chunk['messages']
         except GraphRecursionError:
             return AgentResult(reply=STEP_LIMIT_REPLY, steps=_steps_from(seen))

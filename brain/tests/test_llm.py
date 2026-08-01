@@ -10,9 +10,8 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 
 from lodestar_brain.config import Settings
-from lodestar_brain.llm.factory import (LOCAL_TIMEOUT, REMOTE_TIMEOUT,
-                                        make_chat_model)
-from lodestar_brain.llm.fake import FakeChat
+from lodestar_brain.llm import (LOCAL_TIMEOUT, REMOTE_TIMEOUT, FakeChat,
+                                make_chat_model)
 
 
 def _settings(**over) -> Settings:

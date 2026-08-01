@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from langchain_core.messages import AIMessage
 
-from lodestar_brain.llm.fake import FakeChat
+from lodestar_brain.llm import FakeChat
 from lodestar_brain.retrieval import CardIndex, LexicalHashEmbeddings
 from lodestar_brain.tools.retrieve import make_retrieve_tool
 

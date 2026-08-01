@@ -49,6 +49,20 @@ def wait_for_snapshots(n, timeout=8.0):
         time.sleep(0.05)
     return snapshots()
 
+
+def wait_until(cond, timeout=5.0):
+    """Poll until cond() holds, then report whether it does.
+
+    For the case where the thing to wait for is what is being asserted, and no
+    selector expresses it: waiting for a *proxy* condition is how both of this
+    suite's real flakes happened. Returns rather than raises, because a check
+    that times out must be one red line among the results, not an exception
+    that abandons every check after it."""
+    deadline = time.time() + timeout
+    while time.time() < deadline and not cond():
+        time.sleep(0.05)
+    return cond()
+
 ARTIFACTS = os.path.join(os.path.dirname(__file__), "artifacts")
 os.makedirs(ARTIFACTS, exist_ok=True)
 shot = lambda name: os.path.join(ARTIFACTS, name)
@@ -929,8 +943,12 @@ try:
         page.wait_for_selector("#history-dialog[open]")
         page.wait_for_selector("#trash-section:not([hidden])")
         trash_rows = page.locator("#trash-list .history-row", has_text="PERSIST-MARKER-alpha")
+        # Waiting for the section is not waiting for this row. refreshTrash()
+        # unhides it only after awaiting the fetch, so an earlier delete (line
+        # ~484) has already left it unhidden and the wait returns at once —
+        # against the previous render, before this card's row is appended.
         check("trash: deleted question is listed in the Trash panel",
-              trash_rows.count() == 1)
+              wait_until(lambda: trash_rows.count() == 1))
         trash_rows.first.locator("button.danger").click()
         page.wait_for_selector("#confirm-dialog[open]")
         page.click("#confirm-ok")
@@ -1281,8 +1299,13 @@ try:
         check("raglab: the button opens the lab page",
               page.locator(".raglab-sheet h2").inner_text().strip().lower() == "rag test lab")
         page.wait_for_selector(".rag-absent")
+        # .rag-absent is rendered in two phases: "Reaching the lab…" while the
+        # probe is in flight, and the how-to-start card once it has failed. The
+        # class matches both, so waiting for it caught the loading card and the
+        # command genuinely was not on screen yet.
         check("raglab: a lab that is not running says how to start it",
-              "npm run raglab" in page.locator(".rag-absent").inner_text())
+              wait_until(lambda: "npm run raglab"
+                         in page.locator(".rag-absent").inner_text()))
         check("raglab: no view-switch button is pressed while on the lab page",
               page.locator('.view-switch button[aria-pressed="true"]').count() == 0)
 

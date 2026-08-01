@@ -258,14 +258,19 @@ test('the local model server is reached, never bound', () => {
 });
 
 test("the '/v1' is part of the URL, not appended by a caller", () => {
-  // Ollama's OpenAI-compatible surface lives under /v1, and ChatOpenAI takes the
-  // base URL verbatim. Keeping the suffix in the setting is what lets the same
-  // field point at llama.cpp or vLLM without a code change — and stops a caller
-  // from inventing a second convention about who adds it.
+  // Ollama's OpenAI-compatible surface lives under /v1, and the model builder
+  // takes the base URL verbatim. Keeping the suffix in the setting is what lets
+  // the same field point at llama.cpp or vLLM without a code change — and stops
+  // a caller from inventing a second convention about who adds it.
+  //
+  // Asserted as "the setting is used, and never concatenated onto" rather than
+  // as one exact call shape: the two backends were collapsed to a single
+  // init_chat_model site, and a test pinned to the old spelling would have
+  // failed for a refactor that cannot violate the rule it exists to protect.
   const brain = read('brain/src/lodestar_brain/config.py');
   assert.match(brain, /BRAIN_OLLAMA_BASE_URL', *\n? *'http:\/\/localhost:11434\/v1'/);
-  const factory = read('brain/src/lodestar_brain/llm/factory.py');
-  assert.match(factory, /base_url=settings\.ollama_base_url/);
+  const factory = read('brain/src/lodestar_brain/llm.py');
+  assert.match(factory, /settings\.ollama_base_url/);
   assert.ok(
     !/ollama_base_url\s*\+/.test(factory),
     'the factory is concatenating onto the base URL instead of using it',
