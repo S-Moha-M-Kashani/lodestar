@@ -544,6 +544,17 @@ cost guard, not a security boundary. Each machine keeps its own database and boa
 between laptops — moving one is copying a file or Export → Import. Deploying this to a public
 address without putting authentication in front of it would publish your diary.
 
+**The Docker image is 18.1 GB, and the first question asked of a cold container takes about
+nine minutes.** Both numbers are measured, on the first real `docker compose up --build` this
+project has ever done (2026-08-02). The size is not the Persian model — it is the CUDA stack
+`torch` installs by default, which cannot run on a Mac and is unused by a CPU-only deployment;
+pinning the CPU-only wheel is the obvious fix and has not been done. The wait is the
+`heydariAI/persian-embeddings` download plus load: **522.9 s on the first retrieval, then
+0.15 s warm.** That is the lazy-loading design working as intended — `/health` answers
+throughout and readiness never blocks — but it means a fresh container's *first* assistant
+question that touches retrieval sits for ~9 minutes with no progress indication. Pre-warming
+the model on boot, or telling the user what the wait is, is unbuilt.
+
 **CI is written but has never run.** `.github/workflows/ci.yml` runs the brain units and the
 full e2e suite on every push — and the repository has no git remote, so it has never executed
 once. The suites are run locally before each commit instead.
