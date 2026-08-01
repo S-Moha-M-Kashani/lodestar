@@ -19,7 +19,7 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.retrievers import BaseRetriever
 
 from lodestar_brain import retrieval
-from lodestar_brain.llm.fake import FakeChat
+from lodestar_brain.llm import FakeChat
 
 # Fixed instants, so the expected date ints are readable rather than arithmetic.
 MADE_ON = int(datetime(2026, 3, 10, 9, 30, tzinfo=timezone.utc).timestamp() * 1000)

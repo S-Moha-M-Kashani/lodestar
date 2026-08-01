@@ -8,9 +8,9 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from .agent.registry import build_agent
+from .agent import LodestarAgent
 from .config import Settings, load_settings
-from .llm.factory import make_chat_model, served_models
+from .llm import make_chat_model, served_models
 from .retrieval import CardIndex, ChatStore, gate_llm, make_embeddings
 from .tools.board import BoardClient, make_board_tools
 from .tools.retrieve import make_recall_tool, make_retrieve_tool
@@ -76,8 +76,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             logging.getLogger(__name__).warning(
                 'chat memory disabled: Chroma at %s is unreachable (%s)',
                 settings.chroma_url, exc)
-    agent = build_agent("default", settings=settings, tools=tools,
-                        max_steps=settings.max_agent_steps)
+    agent = LodestarAgent(settings=settings, tools=tools,
+                          max_steps=settings.max_agent_steps)
     transcriber = make_transcriber(settings)
 
     app = FastAPI(title='lodestar-brain')

@@ -763,7 +763,7 @@ GRADE_THRESHOLD = 0.4
 # emptying the context.
 NO_OPINION = 0.5
 # How long the user waits for the gate before it is abandoned. One constant, not
-# the local/remote pair in llm/factory.py, and for the opposite reason: a
+# the local/remote pair in llm.py, and for the opposite reason: a
 # timeout protects the model's right to finish a call the answer depends on,
 # while this bounds the wait for a stage that measured no quality gain at all.
 # A loaded local model therefore loses its gate instead of costing 90 seconds.
