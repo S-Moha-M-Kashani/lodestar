@@ -81,8 +81,15 @@ def test_chat_add_proposes_a_card_without_mutating_the_board():
     assert not put.called, 'proposing must not write the board'
     assert body['proposed'] is True
     assert body['mutated'] is False
-    assert body['steps'] == [{'tool': 'create_question',
-                              'arguments': {'title': 'What is Leiden clustering?'}}]
+    step, = body['steps']
+    assert step['tool'] == 'create_question'
+    assert step['arguments'] == {'title': 'What is Leiden clustering?'}
+    # `result` rides along with the name and the arguments: the Assistant shows
+    # what each tool answered, and 'pending' is how the user learns this card is
+    # a proposal rather than a board row. Asserted by key rather than whole-dict
+    # so that widening a tool's return is not a failing server test.
+    assert step['result']['id'] == 'n1'
+    assert step['result']['pending'] is True
 
 
 def test_tool_classification_separates_proposing_from_mutating():
@@ -292,18 +299,29 @@ def test_unreachable_chroma_does_not_stop_the_brain_from_serving():
     assert chat.status_code == 200
     res = client.post('/rag/recall', json={'text': 'hello', 'k': 3})
     assert res.status_code == 200
-    assert res.json() == {'matches': []}
+    assert res.json() == {'matches': [], 'memory': False}
 
 
+# This is an integration test.
 @respx.mock
-def test_recall_with_memory_off_returns_no_matches():
-    # Default Settings leave chroma_url empty: no store at all, no matches.
-    client = TestClient(fake_app())
-    client.post('/agent/chat', json={'messages': [
+def test_having_no_matches_and_having_no_memory_are_told_apart():
+    """Both answer with an empty list, and they mean opposite things.
+
+    "Nothing recorded about that" is a claim about the user's history;
+    "chat memory is off" is a claim about the service. Reporting the second as
+    the first sends someone hunting for a conversation the brain was never able
+    to store — the same objection that made /rag/communities 404 rather than
+    answer with an empty list.
+    """
+    off = TestClient(fake_app())          # default Settings: chroma_url is ''
+    off.post('/agent/chat', json={'messages': [
         {'role': 'user', 'content': 'hello brain'}]})
-    res = client.post('/rag/recall', json={'text': 'hello', 'k': 3})
-    assert res.status_code == 200
-    assert res.json() == {'matches': []}
+    assert off.post('/rag/recall', json={'text': 'hello', 'k': 3}).json() == {
+        'matches': [], 'memory': False}
+
+    on = TestClient(memory_app('chat-nothing-said'))
+    assert on.post('/rag/recall', json={'text': 'hello', 'k': 3}).json() == {
+        'matches': [], 'memory': True}
 
 
 def test_recall_requires_a_text_field(tmp_path):
@@ -324,6 +342,86 @@ def test_rag_reindex_says_whether_it_had_to_rebuild():
     # 404s rather than answering [] — an empty list reads as "no themes found",
     # which is a claim about the board rather than about the feature.
     assert client.get('/rag/communities').status_code == 404
+
+
+# --- POST /agent/chat/stream ------------------------------------------------
+# The same turn, reported as it happens. It exists because nothing streamed
+# before and the wait was a motionless "Thinking…" that read as a hang.
+
+def sse_events(client, body, path='/agent/chat/stream'):
+    """Collect an SSE response as [(event name, parsed data), …]."""
+    events, name = [], None
+    with client.stream('POST', path, json=body) as res:
+        assert res.status_code == 200
+        assert res.headers['content-type'].startswith('text/event-stream')
+        for line in res.iter_lines():
+            if line.startswith('event: '):
+                name = line.removeprefix('event: ')
+            elif line.startswith('data: '):
+                events.append((name, json.loads(line.removeprefix('data: '))))
+    return events
+
+
+# This is an integration test — real route, real agent, real in-process Chroma;
+# only the model, the embedder and the board's HTTP are stood in for.
+@respx.mock
+def test_the_streamed_turn_reports_each_tool_then_agrees_with_the_buffered_one():
+    """This route exists to make the wait visible, not to be a second brain, so
+    its `done` payload must be the buffered route's payload exactly.
+
+    Two ways it goes wrong quietly, both asserted here. Tool output travels the
+    same LangGraph channel as the model's own tokens, so an unfiltered token
+    stream would paste a tool's JSON into the reply. And chat memory is recorded
+    by the route, not by the agent — a second route is a second place to forget.
+    """
+    respx.post('http://board.test/api/proposals').mock(
+        return_value=httpx.Response(200, json=card('n1', 'What is RRF?')))
+    client = TestClient(memory_app('chat-stream'))
+    events = sse_events(client, {'messages': [
+        {'role': 'user', 'content': 'add: What is RRF?'}]})
+
+    kinds = [name for name, _ in events]
+    assert kinds.count('done') == 1 and kinds[-1] == 'done'
+    assert kinds.index('step') < kinds.index('done'), 'the step arrived too late to be progress'
+    step = next(data for name, data in events if name == 'step')
+    assert step['tool'] == 'create_question' and step['result']['id'] == 'n1'
+
+    # The tool is announced when it is *requested*, not only when it answers.
+    # A web search runs for seconds, and without this the slowest stretch of a
+    # research turn emits nothing at all — indistinguishable from a hang.
+    assert kinds.index('calling') < kinds.index('step')
+    assert next(data for name, data in events if name == 'calling') == {
+        'tool': 'create_question', 'arguments': {'title': 'What is RRF?'}}
+
+    done = events[-1][1]
+    assert done['reply'] == 'FAKE: created "What is RRF?"'
+    assert done['proposed'] is True and done['mutated'] is False
+    assert done['steps'] == [step]
+
+    tokens = ''.join(data['text'] for name, data in events if name == 'token')
+    assert 'n1' not in tokens, 'tool output must not stream as reply text'
+    matches = client.post('/rag/recall', json={'text': 'RRF', 'k': 4}).json()['matches']
+    assert {'user', 'assistant'} <= {m['metadata']['role'] for m in matches}
+
+
+# This is an integration test.
+@respx.mock
+def test_a_stream_that_dies_says_so_instead_of_going_quiet(monkeypatch):
+    """The headers are long gone by the time the model fails, so there is no
+    status code left to fail with. Without an explicit event the browser just
+    sees a short stream and sits on "Thinking…" forever — the exact hang this
+    route was added to remove."""
+    from lodestar_brain.agent import LodestarAgent
+
+    async def boom(self, *args, **kwargs):
+        raise RuntimeError('model exploded')
+        yield  # never reached; makes boom an async generator
+
+    monkeypatch.setattr(LodestarAgent, 'astream', boom)
+    events = sse_events(TestClient(fake_app()),
+                        {'messages': [{'role': 'user', 'content': 'hello'}]})
+    assert events[-1][0] == 'error'
+    assert 'model exploded' in events[-1][1]['message']
 
 
 # --- which models this brain can serve --------------------------------------

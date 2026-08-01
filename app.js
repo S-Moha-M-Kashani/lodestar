@@ -3378,6 +3378,7 @@
     sheet.appendChild(head);
 
     sheet.appendChild(renderChatSettings());
+    sheet.appendChild(renderRecallPanel());
 
     // Nothing proposed, nothing shown — the section must not sit there empty.
     if (assistantState.proposals.length) sheet.appendChild(renderProposals());
@@ -3390,28 +3391,12 @@
       hint.textContent = 'Ask about your board — research a question, triage the inbox, or find connections.';
       log.appendChild(hint);
     }
-    for (const msg of assistantState.messages) {
-      const el = document.createElement('div');
-      el.className = `chat-msg ${msg.role}${msg.error ? ' error' : ''}`;
-      el.textContent = msg.content;
-      if (msg.steps && msg.steps.length) {
-        const steps = document.createElement('div');
-        steps.className = 'chat-steps';
-        for (const step of msg.steps) {
-          const chip = document.createElement('span');
-          chip.className = 'chat-step';
-          chip.textContent = step.tool;
-          steps.appendChild(chip);
-        }
-        el.appendChild(steps);
-      }
-      log.appendChild(el);
-    }
+    for (const msg of assistantState.messages) log.appendChild(renderChatMessage(msg));
     sheet.appendChild(log);
 
     const status = document.createElement('div');
     status.className = 'chat-status';
-    if (assistantState.busy) status.textContent = 'Thinking…';
+    if (assistantState.busy) status.textContent = busyLabel();
     else if (voiceState.phase === 'transcribing') status.textContent = 'Transcribing…';
     else if (voiceState.phase === 'recording') status.textContent = 'Listening…';
     sheet.appendChild(status);
@@ -3466,15 +3451,350 @@
     return sheet;
   }
 
+  // Chat memory has been searchable by HTTP since the brain gained a Chroma
+  // store, and reachable from the UI only by asking the agent and hoping it
+  // chose the tool. `matches: null` is "not asked yet", which is not the same
+  // as "asked and found nothing".
+  const recallState = { open: false, query: '', matches: null, memory: true,
+                        busy: false, failed: false, focused: false };
+
+  function renderRecallPanel() {
+    const box = document.createElement('details');
+    box.className = 'chat-recall';
+    box.open = recallState.open;
+    box.addEventListener('toggle', () => { recallState.open = box.open; });
+    const name = document.createElement('summary');
+    name.className = 'chat-recall-name';
+    name.textContent = 'Search past conversations';
+    box.appendChild(name);
+
+    const form = document.createElement('form');
+    form.className = 'chat-recall-form';
+    const input = document.createElement('input');
+    input.id = 'recall-input';
+    input.type = 'search';
+    input.placeholder = 'What did we say about…';
+    input.value = recallState.query;
+    input.addEventListener('input', () => { recallState.query = input.value; });
+    input.addEventListener('focus', () => { recallState.focused = true; });
+    input.addEventListener('blur', () => { recallState.focused = false; });
+    const go = document.createElement('button');
+    go.type = 'submit';
+    go.id = 'recall-search';
+    go.className = 'btn';
+    go.textContent = 'Search';
+    go.disabled = recallState.busy;
+    form.append(input, go);
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      recallChat(input.value.trim());
+    });
+    box.appendChild(form);
+    box.appendChild(renderRecallResults());
+
+    // render() rebuilds the whole sheet, and a streaming reply repaints it many
+    // times a second — so without this, typing here while a reply arrives loses
+    // the caret on the next frame.
+    if (recallState.focused) {
+      requestAnimationFrame(() => {
+        const live = document.getElementById('recall-input');
+        if (!live || document.activeElement === live) return;
+        live.focus();
+        live.setSelectionRange(live.value.length, live.value.length);
+      });
+    }
+    return box;
+  }
+
+  function renderRecallResults() {
+    const out = document.createElement('div');
+    out.className = 'chat-recall-results';
+    if (recallState.busy) { out.textContent = 'Searching…'; return out; }
+    if (recallState.failed) {
+      out.textContent = 'Could not reach the assistant to search.';
+      return out;
+    }
+    if (recallState.matches === null) {
+      out.textContent = 'Search what you and the assistant have said before.';
+      return out;
+    }
+    if (!recallState.memory) {
+      // Deliberately not "no matches": this is the service being switched off,
+      // not the history being empty, and the two send you to different places.
+      out.textContent = 'Chat memory is off, so nothing has been recorded. '
+        + 'Start the Chroma container to keep conversations.';
+      return out;
+    }
+    if (!recallState.matches.length) {
+      out.textContent = 'Nothing recorded about that yet.';
+      return out;
+    }
+    const list = document.createElement('ol');
+    list.className = 'recall-hits';
+    for (const hit of recallState.matches) {
+      const item = document.createElement('li');
+      item.className = 'recall-hit';
+      const said = document.createElement('p');
+      said.className = 'recall-hit-text';
+      said.textContent = hit.text;
+      const meta = document.createElement('p');
+      meta.className = 'recall-hit-meta';
+      meta.textContent = `${(hit.metadata && hit.metadata.role) || 'unknown'} · ${hit.score}`;
+      item.append(said, meta);
+      list.appendChild(item);
+    }
+    out.appendChild(list);
+    return out;
+  }
+
+  async function recallChat(text) {
+    if (!text) return;
+    recallState.busy = true;
+    recallState.failed = false;
+    render();
+    try {
+      const res = await fetch('/api/rag/recall', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, k: 5 }),
+      });
+      if (!res.ok) throw new Error(`recall ${res.status}`);
+      const data = await res.json();
+      recallState.matches = data.matches || [];
+      // Only an explicit false means off. A brain too old to send the field
+      // cannot be reported as having memory switched off — that would be a
+      // claim about the service made from its silence.
+      recallState.memory = data.memory !== false;
+    } catch {
+      recallState.failed = true;
+      recallState.matches = null;
+    }
+    recallState.busy = false;
+    render();
+  }
+
+  function renderChatMessage(msg) {
+    const el = document.createElement('div');
+    el.className = `chat-msg ${msg.role}${msg.error ? ' error' : ''}`;
+    // The text is its own node now: the steps below are elements, and setting
+    // textContent on the parent would wipe them.
+    const body = document.createElement('div');
+    body.className = 'chat-text';
+    appendLinked(body, msg.content);
+    el.appendChild(body);
+
+    const done = msg.steps || [];
+    const running = msg.running || [];
+    if (done.length || running.length) {
+      const steps = document.createElement('div');
+      steps.className = 'chat-steps';
+      for (const step of done) steps.appendChild(renderChatStep(step, false));
+      for (const call of running) steps.appendChild(renderChatStep(call, true));
+      el.appendChild(steps);
+    }
+    const sources = sourcesOf(done);
+    if (sources.length) el.appendChild(renderChatSources(sources));
+    return el;
+  }
+
+  // Deliberately anchored on the scheme, so nothing but http(s) can become an
+  // href — a linkifier that accepted any "word:" would happily build a
+  // javascript: link out of a web-search snippet. The last character may not be
+  // punctuation, or a url ending a sentence swallows the full stop.
+  const URL_RE = /\bhttps?:\/\/[^\s<>()[\]{}"']*[^\s<>()[\]{}"'.,;:!?]/g;
+
+  function appendLinked(parent, text) {
+    let at = 0;
+    for (const match of String(text || '').matchAll(URL_RE)) {
+      if (match.index > at) {
+        parent.appendChild(document.createTextNode(text.slice(at, match.index)));
+      }
+      const link = document.createElement('a');
+      link.className = 'chat-link';
+      link.href = match[0];
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.textContent = match[0];
+      parent.appendChild(link);
+      at = match.index + match[0].length;
+    }
+    parent.appendChild(document.createTextNode(String(text || '').slice(at)));
+  }
+
+  // Where an answer came from. Each tool answers in its own shape, so the
+  // reader lives next to the tool it understands rather than one function
+  // guessing from the payload — a misread shape would cite the wrong thing,
+  // which is worse than citing nothing.
+  const SOURCE_READERS = {
+    web_search: (rows) => rows.map((row) => ({
+      label: row.title || row.url, url: row.url, note: row.snippet })),
+    find_related: (rows) => rows.map((row) => ({
+      label: (row.card && row.card.title) || '', cardId: row.card && row.card.id,
+      note: row.card && row.card.columnId })),
+    // No link: a recalled snippet is the transcript itself, and there is
+    // nowhere to send the user that shows more of it than this does.
+    recall_chat: (rows) => rows.map((row) => ({ label: row.text, note: '' })),
+  };
+
+  function sourcesOf(steps) {
+    const found = [];
+    const seen = new Set();
+    for (const step of steps) {
+      const read = SOURCE_READERS[step.tool];
+      if (!read || !Array.isArray(step.result)) continue;
+      for (const source of read(step.result)) {
+        // Two searches often surface the same page; listing it twice would
+        // read as two independent sources agreeing.
+        const key = source.url || source.cardId || source.label;
+        if (!source.label || seen.has(key)) continue;
+        seen.add(key);
+        found.push(source);
+      }
+    }
+    return found;
+  }
+
+  function renderChatSources(sources) {
+    const wrap = document.createElement('div');
+    wrap.className = 'chat-sources';
+    const heading = document.createElement('p');
+    heading.className = 'chat-sources-label';
+    heading.textContent = sources.length === 1 ? '1 source' : `${sources.length} sources`;
+    wrap.appendChild(heading);
+    const list = document.createElement('ol');
+    list.className = 'chat-source-list';
+    for (const source of sources) list.appendChild(renderChatSource(source));
+    wrap.appendChild(list);
+    return wrap;
+  }
+
+  function renderChatSource(source) {
+    const item = document.createElement('li');
+    item.className = 'chat-source';
+    if (source.url) {
+      const link = document.createElement('a');
+      link.className = 'chat-source-link';
+      link.href = source.url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.textContent = source.label;
+      item.appendChild(link);
+    } else if (source.cardId) {
+      // A button, not a link: it opens the card's editor in place rather than
+      // navigating, so the user does not lose the conversation to read it.
+      const open = document.createElement('button');
+      open.type = 'button';
+      open.className = 'chat-source-link chat-source-card';
+      open.textContent = source.label;
+      open.addEventListener('click', () => openDialog(source.cardId));
+      item.appendChild(open);
+    } else {
+      const said = document.createElement('span');
+      said.className = 'chat-source-said';
+      said.textContent = source.label;
+      item.appendChild(said);
+    }
+    if (source.note) {
+      const note = document.createElement('span');
+      note.className = 'chat-source-note';
+      note.textContent = source.note;
+      item.appendChild(note);
+    }
+    return item;
+  }
+
+  // A tool call, collapsed to its name and openable for the evidence. Still
+  // `.chat-step` — the class is test-stable API, so this adds to it rather than
+  // renaming it.
+  function renderChatStep(step, running) {
+    const box = document.createElement('details');
+    box.className = `chat-step${running ? ' chat-step-running' : ''}`;
+    const name = document.createElement('summary');
+    name.className = 'chat-step-name';
+    name.textContent = running ? `${step.tool}…` : step.tool;
+    box.appendChild(name);
+    box.appendChild(chatStepField('arguments', step.arguments));
+    // A running call has no result yet, and an empty "result" row would read as
+    // a tool that answered with nothing.
+    if (!running) box.appendChild(chatStepField('result', step.result));
+    return box;
+  }
+
+  function chatStepField(label, value) {
+    const row = document.createElement('div');
+    row.className = 'chat-step-field';
+    const key = document.createElement('span');
+    key.className = 'chat-step-label';
+    key.textContent = label;
+    const val = document.createElement('pre');
+    val.className = 'chat-step-value';
+    val.textContent = typeof value === 'string' ? value
+      : value === undefined ? '—' : JSON.stringify(value, null, 2);
+    row.appendChild(key);
+    row.appendChild(val);
+    return row;
+  }
+
+  // What the assistant is doing right now, from the last event that arrived.
+  // A label that names the running tool is the difference between waiting and
+  // wondering whether it has hung.
+  function busyLabel() {
+    const last = assistantState.messages[assistantState.messages.length - 1];
+    if (!last || last.role !== 'assistant') return 'Thinking…';
+    const running = last.running || [];
+    if (running.length) return `Running ${running[running.length - 1].tool}…`;
+    return last.content ? 'Writing…' : 'Thinking…';
+  }
+
+  // Server-sent events over fetch, because EventSource is GET-only and the chat
+  // turn is a POST. A frame can be split across reads, so nothing is parsed
+  // until its blank-line terminator is in the buffer.
+  async function* sseFrames(response) {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let cut;
+      while ((cut = buffer.indexOf('\n\n')) !== -1) {
+        const frame = buffer.slice(0, cut);
+        buffer = buffer.slice(cut + 2);
+        let name = 'message';
+        let data = '';
+        for (const line of frame.split('\n')) {
+          if (line.startsWith('event: ')) name = line.slice(7);
+          else if (line.startsWith('data: ')) data += line.slice(6);
+        }
+        if (data) yield { name, data: JSON.parse(data) };
+      }
+    }
+  }
+
+  // One repaint per frame at most. A token-per-render would rebuild the whole
+  // view hundreds of times for one reply; coalescing costs nothing and keeps a
+  // single rendering path rather than a second one that can drift from render().
+  let chatPaint = 0;
+  function paintChatSoon() {
+    if (chatPaint) return;
+    chatPaint = requestAnimationFrame(() => { chatPaint = 0; render(); });
+  }
+
   async function sendChat(text) {
     assistantState.messages.push({ role: 'user', content: text });
     assistantState.busy = true;
     render();
+    // The turn being streamed into. `running` holds tools the model has asked
+    // for but that have not answered yet; `partial` marks a turn the stream
+    // abandoned, so it is shown but never replayed to the model as history.
+    const turn = { role: 'assistant', content: '', steps: [], running: [] };
     try {
       const history = assistantState.messages
-        .filter((m) => !m.error && (m.role === 'user' || m.role === 'assistant'))
+        .filter((m) => !m.error && !m.partial
+          && (m.role === 'user' || m.role === 'assistant'))
         .map(({ role, content }) => ({ role, content }));
-      const res = await fetch('/api/agent/chat', {
+      const res = await fetch('/api/agent/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -3487,19 +3807,44 @@
           provider: assistantModels.provider,
         }),
       });
-      if (!res.ok) throw new Error(`agent ${res.status}`);
-      const data = await res.json();
-      assistantState.messages.push({
-        role: 'assistant',
-        content: data.reply || '',
-        steps: data.steps || [],
-      });
+      if (!res.ok || !res.body) throw new Error(`agent ${res.status}`);
+      assistantState.messages.push(turn);
+      let data = null;
+      let failed = '';
+      for await (const { name, data: payload } of sseFrames(res)) {
+        if (name === 'calling') turn.running.push(payload);
+        // Steps answer in request order, so the oldest running call is this
+        // one. See _steps_from in the brain for why that holds.
+        else if (name === 'step') { turn.steps.push(payload); turn.running.shift(); }
+        else if (name === 'token') turn.content += payload.text;
+        else if (name === 'error') failed = payload.message;
+        else if (name === 'done') data = payload;
+        paintChatSoon();
+      }
+      if (failed) throw new Error(failed);
+      if (!data) throw new Error('the stream ended without a result');
+      // Tokens were provisional: text can arrive on a message that also
+      // requested tools, and the step-limit path abandons the transcript
+      // entirely. `done` is the record of the turn — see the brain's astream.
+      turn.content = data.reply || '';
+      turn.steps = data.steps || [];
+      turn.running = [];
       // Two distinct outcomes: an edit changed the board, a proposal did not.
       if (data.mutated) await adoptServerBoard();
       if (data.proposed) await refreshProposals();
       announce(data.proposed ? 'Assistant proposed a card for your approval'
         : 'Assistant replied');
     } catch {
+      // Whatever arrived before the failure is kept — a long answer that dies
+      // at the last frame should not vanish — but it is marked `partial` so a
+      // truncated reply is never sent back as if the assistant had finished it.
+      const arrived = assistantState.messages.indexOf(turn) !== -1;
+      if (arrived && (turn.content || turn.steps.length)) {
+        turn.running = [];
+        turn.partial = true;
+      } else if (arrived) {
+        assistantState.messages.splice(assistantState.messages.indexOf(turn), 1);
+      }
       assistantState.messages.push({
         role: 'assistant',
         content: 'The assistant is unavailable right now. Check that the brain service is running.',

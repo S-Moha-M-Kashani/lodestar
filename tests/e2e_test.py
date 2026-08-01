@@ -1012,6 +1012,125 @@ try:
             "document.querySelectorAll('.chat-msg.assistant').length >= 2")
         check("assistant: tool chip shown for create_question",
               "create_question" in page.inner_text(".chat-log"))
+        # The chip used to be the whole story: a tool's name, with what it was
+        # asked and what it answered thrown away. Both are on the wire already.
+        step = page.locator(".chat-step").last
+        # Lowercased throughout: inner_text returns *rendered* text, and the
+        # field labels are uppercased by CSS. Asserting on the styling would
+        # make a design change look like a broken feature.
+        check("assistant: a tool step stays collapsed until it is asked to open",
+              "arguments" not in step.inner_text().lower())
+        # Guarded rather than clicked outright: a missing summary must be one red
+        # line, not a TimeoutError that abandons every check after this one.
+        expandable = step.locator("summary").count() == 1
+        if expandable:
+            step.locator("summary").click()
+        opened = step.inner_text().lower() if expandable else ""
+        check("assistant: expanding a step shows its arguments and its result",
+              "arguments" in opened and "result" in opened
+              and "leiden clustering" in opened and "pending" in opened)
+
+        # ---- Sources: three tools, three result shapes, one list -------------
+        # Stubbed rather than provoked through the fake model: web_search needs
+        # the network and each tool answers in its own shape, so a reader that
+        # misreads one is the way this breaks. The steps are repeated inside
+        # `done` because `done` is the record of the turn — the client replaces
+        # what it streamed with it, and a stub that omitted them would pass
+        # while the real contract was broken.
+        seed = api_state()["cards"][0]
+        source_steps = [
+            {"tool": "web_search", "arguments": {"query": "rrf"},
+             "result": [{"title": "RRF explained", "url": "https://example.com/rrf",
+                         "snippet": "reciprocal rank fusion, briefly"}]},
+            {"tool": "find_related", "arguments": {"text": "rrf"},
+             "result": [{"card": {"id": seed["id"], "title": seed["title"],
+                                  "columnId": seed["columnId"], "tags": []},
+                         "rank": 1}]},
+            {"tool": "recall_chat", "arguments": {"text": "rrf"},
+             "result": [{"text": "we discussed fusion last week", "score": 0.8,
+                         "metadata": {"role": "user"}}]},
+        ]
+        done = {"reply": "It is covered at https://example.com/rrf in detail.",
+                "mutated": False, "proposed": False, "steps": source_steps}
+        sse = "".join(f"event: step\ndata: {json.dumps(s)}\n\n" for s in source_steps)
+        sse += f"event: done\ndata: {json.dumps(done)}\n\n"
+        page.route("**/api/agent/chat/stream", lambda route: route.fulfill(
+            status=200, content_type="text/event-stream", body=sse))
+        n_before = page.locator(".chat-msg.assistant").count()
+        page.fill("#chat-input", "where is rrf explained?")
+        page.click("#chat-send")
+        page.wait_for_function(
+            f"document.querySelectorAll('.chat-msg.assistant').length > {n_before}")
+        # wait_until, not wait_for_selector: a missing sources list is the very
+        # thing under test, and it must read as red lines rather than a
+        # TimeoutError that abandons every check after this one.
+        cited = wait_until(lambda: page.locator(".chat-source").count() == 3)
+        reply = page.locator(".chat-msg.assistant").last
+
+        check("assistant: a url in the reply is a real link, not inert text",
+              reply.locator("a.chat-link").count() == 1
+              and reply.locator("a.chat-link").get_attribute("href")
+                  == "https://example.com/rrf"
+              and reply.locator("a.chat-link").get_attribute("rel") == "noopener noreferrer")
+        listed = reply.locator(".chat-source").all_inner_texts()
+        check("assistant: all three retrieval tools feed one sources list",
+              cited
+              and any("RRF explained" in t for t in listed)
+              and any(seed["title"] in t for t in listed)
+              and any("discussed fusion last week" in t for t in listed))
+        check("assistant: a web source links out, a recalled snippet does not",
+              reply.locator(".chat-source a[href='https://example.com/rrf']").count() == 1
+              and reply.locator(".chat-source a").count() == 1)
+
+        opens_card = reply.locator(".chat-source-card").count() == 1
+        if opens_card:
+            reply.locator(".chat-source-card").click()
+        check("assistant: a retrieved card source opens that card",
+              opens_card and wait_until(lambda: page.locator("#card-dialog[open]").count() == 1)
+              and page.input_value("#card-title") == seed["title"])
+        if opens_card:
+            page.keyboard.press("Escape")
+        page.unroute("**/api/agent/chat/stream")
+
+        # ---- Recall: /rag/recall has existed with no UI at all ---------------
+        # Until now the only route to a past conversation was to ask the agent
+        # and hope it chose the tool. Earlier turns in this run were recorded by
+        # the brain's in-memory Chroma, so there is real history to find.
+        # Every interaction below is behind `has_panel`: driving a control that
+        # is not there raises and abandons the rest of the suite, where what is
+        # wanted is one red line per broken expectation.
+        has_panel = page.locator(".chat-recall").count() == 1
+        check("assistant: the recall panel is closed until it is asked for",
+              has_panel and not page.locator("#recall-input").is_visible())
+
+        recalled = found_text = said_off = off_text = False
+        if has_panel:
+            page.locator(".chat-recall summary").click()
+            page.fill("#recall-input", "Leiden clustering")
+            page.click("#recall-search")
+            recalled = wait_until(lambda: page.locator(".recall-hit").count() > 0,
+                                  timeout=10.0)
+            found_text = "leiden" in page.locator(".chat-recall").inner_text().lower()
+        check("assistant: searching past conversations finds an earlier exchange",
+              recalled and found_text)
+
+        # An empty list means two opposite things, and the brain now says which.
+        # Reporting a switched-off memory as "no matches" sends the user hunting
+        # for a conversation that was never recordable.
+        if has_panel:
+            page.route("**/api/rag/recall", lambda route: route.fulfill(
+                status=200, content_type="application/json",
+                body='{"matches": [], "memory": false}'))
+            page.fill("#recall-input", "anything at all")
+            page.click("#recall-search")
+            said_off = wait_until(
+                lambda: "memory is off"
+                in page.locator(".chat-recall").inner_text().lower())
+            off_text = page.locator(".chat-recall").inner_text().lower()
+            page.unroute("**/api/rag/recall")
+        check("assistant: memory being off is not reported as 'no matches'",
+              said_off and "no matches" not in off_text
+              and page.locator(".recall-hit").count() == 0)
         check("gate: the proposed card is NOT on the board yet",
               not any(c["title"] == "What is Leiden clustering?"
                       for c in api_state()["cards"])
@@ -1143,7 +1262,7 @@ try:
         check("assistant: the remote text option says which API serves it",
               all("OpenRouter API" in label
                   for label in page.locator("#model-text option").all_inner_texts()))
-        with page.expect_request("**/api/agent/chat") as prov_req:
+        with page.expect_request("**/api/agent/chat/stream") as prov_req:
             page.fill("#chat-input", "provider ride-along probe")
             page.click("#chat-send")
         check("assistant: the chosen provider rides along on the chat request",
@@ -1177,7 +1296,7 @@ try:
 
         n_replies = page.locator(".chat-msg.assistant").count()
         page.fill("#chat-input", "model ride-along probe")
-        with page.expect_request("**/api/agent/chat") as req_info:
+        with page.expect_request("**/api/agent/chat/stream") as req_info:
             page.click("#chat-send")
         check("assistant: chat request carries the picked text model",
               f'"{DEFAULT_TEXT}"' in (req_info.value.post_data or ""))
@@ -1259,14 +1378,14 @@ try:
         page.locator('.view-switch button[data-view="assistant"]').click()
         page.wait_for_selector("#chat-input")
         n_before = len(errors)
-        page.route("**/api/agent/chat", lambda route: route.fulfill(
+        page.route("**/api/agent/chat/stream", lambda route: route.fulfill(
             status=503, content_type="application/json", body='{"error":"assistant unavailable"}'))
         page.fill("#chat-input", "This should fail")
         page.click("#chat-send")
         page.wait_for_selector(".chat-msg.assistant.error")
         check("assistant: a failed request shows the unavailable message",
               "assistant is unavailable" in page.locator(".chat-msg.assistant.error").last.inner_text())
-        page.unroute("**/api/agent/chat")
+        page.unroute("**/api/agent/chat/stream")
         # The 503 we deliberately provoked surfaces as a browser console error;
         # it's expected here, not a real bug, so it shouldn't fail the console check.
         # Scrub only the entries provoked by this block (by count), so an unrelated

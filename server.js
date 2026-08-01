@@ -18,6 +18,8 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { mkdirSync } from 'node:fs';
 import { spawn } from 'node:child_process';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -639,19 +641,33 @@ const server = createServer(async (req, res) => {
       }
     }
     try {
-      const upstream = await fetch(target, {
+      // Named `relayed` rather than shadowing `upstream`: the catch below reads
+      // the outer one for its `down` message, which only worked by block scope.
+      const relayed = await fetch(target, {
         method: req.method,
         headers: { 'content-type': req.headers['content-type'] || 'application/json' },
         body,
         signal: AbortSignal.timeout(120000),
       });
-      const text = await upstream.text();
-      res.writeHead(upstream.status, {
-        'Content-Type': upstream.headers.get('content-type') || 'application/json',
-      });
-      res.end(text);
+      const headers = {
+        'Content-Type': relayed.headers.get('content-type') || 'application/json',
+      };
+      // Forwarded because an event stream must not be cached: without it the
+      // same question asked twice can replay the first answer's frames.
+      const cache = relayed.headers.get('cache-control');
+      if (cache) headers['Cache-Control'] = cache;
+      res.writeHead(relayed.status, headers);
+      // Piped, never buffered. `await upstream.text()` waits for the last byte,
+      // so the assistant's own progress — the whole point of the SSE route —
+      // would arrive in one lump at the end, byte-identical and useless.
+      if (relayed.body) await pipeline(Readable.fromWeb(relayed.body), res);
+      else res.end();
     } catch {
-      sendJson(res, 503, { error: upstream.down });
+      // Once the headers are out there is no status left to fail with, and
+      // sendJson would throw on top of the original error. Dropping the socket
+      // is what tells the browser the stream ended early.
+      if (res.headersSent) res.destroy();
+      else sendJson(res, 503, { error: upstream.down });
     }
     return;
   }
