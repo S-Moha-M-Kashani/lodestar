@@ -3813,6 +3813,7 @@
     'The assistant is unavailable right now. Check that the brain service is running.';
   const CHAT_REFUSALS = {
     429: 'Too many assistant requests in a row — wait a moment, then try again.',
+    413: 'This conversation is too long for one turn — start a new chat.',
   };
 
   async function sendChat(text) {
