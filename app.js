@@ -3378,6 +3378,7 @@
     sheet.appendChild(head);
 
     sheet.appendChild(renderChatSettings());
+    sheet.appendChild(renderRecallPanel());
 
     // Nothing proposed, nothing shown — the section must not sit there empty.
     if (assistantState.proposals.length) sheet.appendChild(renderProposals());
@@ -3448,6 +3449,128 @@
 
     requestAnimationFrame(() => { log.scrollTop = log.scrollHeight; });
     return sheet;
+  }
+
+  // Chat memory has been searchable by HTTP since the brain gained a Chroma
+  // store, and reachable from the UI only by asking the agent and hoping it
+  // chose the tool. `matches: null` is "not asked yet", which is not the same
+  // as "asked and found nothing".
+  const recallState = { open: false, query: '', matches: null, memory: true,
+                        busy: false, failed: false, focused: false };
+
+  function renderRecallPanel() {
+    const box = document.createElement('details');
+    box.className = 'chat-recall';
+    box.open = recallState.open;
+    box.addEventListener('toggle', () => { recallState.open = box.open; });
+    const name = document.createElement('summary');
+    name.className = 'chat-recall-name';
+    name.textContent = 'Search past conversations';
+    box.appendChild(name);
+
+    const form = document.createElement('form');
+    form.className = 'chat-recall-form';
+    const input = document.createElement('input');
+    input.id = 'recall-input';
+    input.type = 'search';
+    input.placeholder = 'What did we say about…';
+    input.value = recallState.query;
+    input.addEventListener('input', () => { recallState.query = input.value; });
+    input.addEventListener('focus', () => { recallState.focused = true; });
+    input.addEventListener('blur', () => { recallState.focused = false; });
+    const go = document.createElement('button');
+    go.type = 'submit';
+    go.id = 'recall-search';
+    go.className = 'btn';
+    go.textContent = 'Search';
+    go.disabled = recallState.busy;
+    form.append(input, go);
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      recallChat(input.value.trim());
+    });
+    box.appendChild(form);
+    box.appendChild(renderRecallResults());
+
+    // render() rebuilds the whole sheet, and a streaming reply repaints it many
+    // times a second — so without this, typing here while a reply arrives loses
+    // the caret on the next frame.
+    if (recallState.focused) {
+      requestAnimationFrame(() => {
+        const live = document.getElementById('recall-input');
+        if (!live || document.activeElement === live) return;
+        live.focus();
+        live.setSelectionRange(live.value.length, live.value.length);
+      });
+    }
+    return box;
+  }
+
+  function renderRecallResults() {
+    const out = document.createElement('div');
+    out.className = 'chat-recall-results';
+    if (recallState.busy) { out.textContent = 'Searching…'; return out; }
+    if (recallState.failed) {
+      out.textContent = 'Could not reach the assistant to search.';
+      return out;
+    }
+    if (recallState.matches === null) {
+      out.textContent = 'Search what you and the assistant have said before.';
+      return out;
+    }
+    if (!recallState.memory) {
+      // Deliberately not "no matches": this is the service being switched off,
+      // not the history being empty, and the two send you to different places.
+      out.textContent = 'Chat memory is off, so nothing has been recorded. '
+        + 'Start the Chroma container to keep conversations.';
+      return out;
+    }
+    if (!recallState.matches.length) {
+      out.textContent = 'Nothing recorded about that yet.';
+      return out;
+    }
+    const list = document.createElement('ol');
+    list.className = 'recall-hits';
+    for (const hit of recallState.matches) {
+      const item = document.createElement('li');
+      item.className = 'recall-hit';
+      const said = document.createElement('p');
+      said.className = 'recall-hit-text';
+      said.textContent = hit.text;
+      const meta = document.createElement('p');
+      meta.className = 'recall-hit-meta';
+      meta.textContent = `${(hit.metadata && hit.metadata.role) || 'unknown'} · ${hit.score}`;
+      item.append(said, meta);
+      list.appendChild(item);
+    }
+    out.appendChild(list);
+    return out;
+  }
+
+  async function recallChat(text) {
+    if (!text) return;
+    recallState.busy = true;
+    recallState.failed = false;
+    render();
+    try {
+      const res = await fetch('/api/rag/recall', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, k: 5 }),
+      });
+      if (!res.ok) throw new Error(`recall ${res.status}`);
+      const data = await res.json();
+      recallState.matches = data.matches || [];
+      // Only an explicit false means off. A brain too old to send the field
+      // cannot be reported as having memory switched off — that would be a
+      // claim about the service made from its silence.
+      recallState.memory = data.memory !== false;
+    } catch {
+      recallState.failed = true;
+      recallState.matches = null;
+    }
+    recallState.busy = false;
+    render();
   }
 
   function renderChatMessage(msg) {

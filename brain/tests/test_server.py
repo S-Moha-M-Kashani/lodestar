@@ -299,18 +299,29 @@ def test_unreachable_chroma_does_not_stop_the_brain_from_serving():
     assert chat.status_code == 200
     res = client.post('/rag/recall', json={'text': 'hello', 'k': 3})
     assert res.status_code == 200
-    assert res.json() == {'matches': []}
+    assert res.json() == {'matches': [], 'memory': False}
 
 
+# This is an integration test.
 @respx.mock
-def test_recall_with_memory_off_returns_no_matches():
-    # Default Settings leave chroma_url empty: no store at all, no matches.
-    client = TestClient(fake_app())
-    client.post('/agent/chat', json={'messages': [
+def test_having_no_matches_and_having_no_memory_are_told_apart():
+    """Both answer with an empty list, and they mean opposite things.
+
+    "Nothing recorded about that" is a claim about the user's history;
+    "chat memory is off" is a claim about the service. Reporting the second as
+    the first sends someone hunting for a conversation the brain was never able
+    to store — the same objection that made /rag/communities 404 rather than
+    answer with an empty list.
+    """
+    off = TestClient(fake_app())          # default Settings: chroma_url is ''
+    off.post('/agent/chat', json={'messages': [
         {'role': 'user', 'content': 'hello brain'}]})
-    res = client.post('/rag/recall', json={'text': 'hello', 'k': 3})
-    assert res.status_code == 200
-    assert res.json() == {'matches': []}
+    assert off.post('/rag/recall', json={'text': 'hello', 'k': 3}).json() == {
+        'matches': [], 'memory': False}
+
+    on = TestClient(memory_app('chat-nothing-said'))
+    assert on.post('/rag/recall', json={'text': 'hello', 'k': 3}).json() == {
+        'matches': [], 'memory': True}
 
 
 def test_recall_requires_a_text_field(tmp_path):

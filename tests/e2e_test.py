@@ -1091,6 +1091,46 @@ try:
         if opens_card:
             page.keyboard.press("Escape")
         page.unroute("**/api/agent/chat/stream")
+
+        # ---- Recall: /rag/recall has existed with no UI at all ---------------
+        # Until now the only route to a past conversation was to ask the agent
+        # and hope it chose the tool. Earlier turns in this run were recorded by
+        # the brain's in-memory Chroma, so there is real history to find.
+        # Every interaction below is behind `has_panel`: driving a control that
+        # is not there raises and abandons the rest of the suite, where what is
+        # wanted is one red line per broken expectation.
+        has_panel = page.locator(".chat-recall").count() == 1
+        check("assistant: the recall panel is closed until it is asked for",
+              has_panel and not page.locator("#recall-input").is_visible())
+
+        recalled = found_text = said_off = off_text = False
+        if has_panel:
+            page.locator(".chat-recall summary").click()
+            page.fill("#recall-input", "Leiden clustering")
+            page.click("#recall-search")
+            recalled = wait_until(lambda: page.locator(".recall-hit").count() > 0,
+                                  timeout=10.0)
+            found_text = "leiden" in page.locator(".chat-recall").inner_text().lower()
+        check("assistant: searching past conversations finds an earlier exchange",
+              recalled and found_text)
+
+        # An empty list means two opposite things, and the brain now says which.
+        # Reporting a switched-off memory as "no matches" sends the user hunting
+        # for a conversation that was never recordable.
+        if has_panel:
+            page.route("**/api/rag/recall", lambda route: route.fulfill(
+                status=200, content_type="application/json",
+                body='{"matches": [], "memory": false}'))
+            page.fill("#recall-input", "anything at all")
+            page.click("#recall-search")
+            said_off = wait_until(
+                lambda: "memory is off"
+                in page.locator(".chat-recall").inner_text().lower())
+            off_text = page.locator(".chat-recall").inner_text().lower()
+            page.unroute("**/api/rag/recall")
+        check("assistant: memory being off is not reported as 'no matches'",
+              said_off and "no matches" not in off_text
+              and page.locator(".recall-hit").count() == 0)
         check("gate: the proposed card is NOT on the board yet",
               not any(c["title"] == "What is Leiden clustering?"
                       for c in api_state()["cards"])

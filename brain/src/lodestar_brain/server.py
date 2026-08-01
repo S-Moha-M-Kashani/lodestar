@@ -195,9 +195,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post('/rag/recall')
     def recall(body: RecallBody) -> dict:
+        """`memory` says whether there was anywhere to look.
+
+        Without it an empty list means both "nothing was ever recorded about
+        that" and "chat memory is switched off", which are opposite claims —
+        one about the user's history, one about the service. The same objection
+        made /rag/communities 404 rather than answer with an empty list."""
         if memory is None:
-            return {'matches': []}
-        return {'matches': memory.search(body.text, k=body.k)}
+            return {'matches': [], 'memory': False}
+        return {'matches': memory.search(body.text, k=body.k), 'memory': True}
 
     return app
 

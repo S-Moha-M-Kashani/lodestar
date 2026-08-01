@@ -2288,6 +2288,40 @@ kbd {
   border: 1px solid var(--card-line);
   border-radius: var(--radius);
 }
+/* Searching what was said before. Folded away by default: it is a way back to
+   something, not part of asking the next question. */
+.chat-recall { border: 1px solid var(--card-line); border-radius: var(--radius); padding: 6px 10px; }
+.chat-recall-name {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+  cursor: pointer;
+  list-style: none;
+}
+.chat-recall-name::-webkit-details-marker { display: none; }
+.chat-recall-name::before { content: '▸ '; }
+.chat-recall[open] .chat-recall-name::before { content: '▾ '; }
+.chat-recall-form { display: flex; gap: 6px; margin-top: 8px; }
+.chat-recall-form input {
+  flex: 1;
+  font: inherit;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper);
+  color: var(--ink);
+}
+.chat-recall-results {
+  margin-top: 8px;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--ink-soft);
+}
+.recall-hits { margin: 0; padding-left: 1.4em; }
+.recall-hit { margin-bottom: 6px; }
+.recall-hit-text { margin: 0; color: var(--ink); font-family: var(--body); font-size: 0.8rem; }
+.recall-hit-meta { margin: 0; font-size: 0.68rem; color: var(--ink-soft); }
+
 .chat-link { color: var(--rule-red); text-decoration: underline; }
 /* Where the answer came from. Kept quiet — it is the evidence behind the
    reply, not a second reply. */
