@@ -217,7 +217,7 @@ Lodestar is developed **test-first**: every feature or fix ships with tests in t
 | Server unit | `tests/server.test.js`, `tests/backup.test.js` (`node:test`, zero deps) | Every API branch: soft-delete and restore, 400/404/405, the payload cap, the brain proxy's 503, static serving, legacy-schema migration |
 | Brain unit | `brain/tests/` (pytest) | Agent loop, tool errors and step limits, the board tools' full-list contract, provider parsing, RAG |
 | Brain evals | `brain/tests/evals/` | Agent *behaviour* against JSON scenario files, plus RAG retrieval-quality thresholds |
-| Frontend e2e | `tests/e2e_test.py` (Playwright) | 160 checks — one per user-facing action — in headless Chrome |
+| Frontend e2e | `tests/e2e_test.py` (Playwright) | 343 checks — one per user-facing action — in headless Chrome |
 
 The e2e suite **starts both services itself** on temporary ports and a temporary database, so nothing needs to be running first (requires [uv](https://docs.astral.sh/uv/) and Node 23.4+):
 
@@ -543,6 +543,27 @@ authorisation check anywhere: anyone who can reach the port owns the board. The 
 cost guard, not a security boundary. Each machine keeps its own database and boards do not sync
 between laptops — moving one is copying a file or Export → Import. Deploying this to a public
 address without putting authentication in front of it would publish your diary.
+
+**The Docker image is 18.1 GB, and a cold container pays about nine minutes before it can
+embed anything.** Both measured on the first real `docker compose up --build` this project has
+ever done (2026-08-02). The size is not the Persian model — it is the CUDA stack `torch`
+installs by default, which cannot run on a Mac and is unused by a CPU-only deployment; pinning
+the CPU-only wheel is the obvious fix and has not been done.
+
+The wait was timed through the production seam — `make_embeddings(...)` then one
+`embed_query` — at **522.9 s cold against 0.15 s warm**. Almost all of it is the
+`heydariAI/persian-embeddings` download (~2.2 GB, unauthenticated, so rate-limited by
+HuggingFace); the embedding itself is the 0.15 s. Read it as a **lower bound on the first
+real retrieval** rather than a measurement of one: no `find_related` or `recall_chat` call was
+timed end to end, but every retrieval path blocks on exactly this, because `retrieval.py`'s
+lazy `model` property is what defers it. One sample, on one network.
+
+That deferral is the design working — `/health` answers throughout and readiness never blocks
+— but two consequences are not written down anywhere else. A fresh container's first
+retrieval-touching question sits for minutes with **no progress indication**, and the weights
+cache inside the container rather than on a volume, so the cost returns on **every container
+recreate**, not once ever. Mounting `~/.cache/huggingface`, pre-warming on boot, or simply
+telling the user what the wait is — all unbuilt.
 
 **CI is written but has never run.** `.github/workflows/ci.yml` runs the brain units and the
 full e2e suite on every push — and the repository has no git remote, so it has never executed
