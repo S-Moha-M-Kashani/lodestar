@@ -8,7 +8,7 @@ from pathlib import Path
 
 from langchain_core.messages import AIMessage
 
-from lodestar_brain.agent.registry import build_agent
+from lodestar_brain.agent import LodestarAgent
 from lodestar_brain.config import Settings
 from lodestar_brain.llm import FakeChat
 from lodestar_brain.tools.board import make_board_tools
@@ -82,9 +82,9 @@ def run_scenario(scenario):
     board = InMemoryBoard(scenario.get("board", []))
     tools = make_board_tools(board)
     script = [_turn_from_spec(t) for t in scenario["script"]]
-    agent = build_agent("default", settings=Settings(llm_provider='fake'),
-                        tools=tools, llm=FakeChat(script=script),
-                        max_steps=scenario.get("max_steps", 8))
+    agent = LodestarAgent(settings=Settings(llm_provider='fake'), tools=tools,
+                          llm=FakeChat(script=script),
+                          max_steps=scenario.get("max_steps", 8))
     result = agent.run(scenario["messages"])
     return result, board
 

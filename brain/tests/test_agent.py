@@ -11,8 +11,8 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 
-from lodestar_brain.agent.runner import (STEP_LIMIT_REPLY, AgentStep, LodestarAgent,
-                                         _steps_from)
+from lodestar_brain.agent import (STEP_LIMIT_REPLY, AgentStep, LodestarAgent,
+                                  _steps_from)
 from lodestar_brain.config import Settings
 from lodestar_brain.llm import FakeChat
 
