@@ -1462,6 +1462,121 @@ try:
                 errors.remove(e)
         page.locator('.view-switch button[data-view="board"]').click()
 
+        # ---- Chat transcript survives a reload (Session 6) -------------------
+        # This is an end-to-end test.
+        # The transcript is the one thing in the Assistant that was still lost on
+        # every refresh, which contradicts the project's never-lose-a-thought
+        # pillar as plainly as losing a card would. It follows the MODELS_KEY
+        # pattern: same 'lodestar:' prefix, same write-behind-try/catch so a
+        # private-mode quota error costs the session's history and never the
+        # session itself.
+        #
+        # Three ways this can break, so three asserts in one test rather than
+        # three tests. (1) The transcript does not come back at all. (2) `busy`
+        # is restored as true — the reload lands mid-stream, the composer is
+        # disabled forever and the view looks hung with no way out. (3) An
+        # errored or partial turn comes back *and is replayed to the model as
+        # history*: those turns are deliberately filtered from what is sent
+        # (Session 3), and a restore that persists the text while dropping the
+        # `error`/`partial` flag would silently undo that filter — the model
+        # would be asked to continue from something it never finished saying.
+        CHAT_KEY = "lodestar:chat"
+        page.evaluate("key => localStorage.removeItem(key)", CHAT_KEY)
+        page.reload()
+        page.wait_for_selector("#board")
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector("#chat-input")
+
+        page.fill("#chat-input", "remember this across a reload")
+        page.click("#chat-send")
+        wait_until(lambda: page.locator(".chat-msg.assistant").count() >= 1)
+        # An errored turn in the same transcript, so the restore is exercised
+        # against a history that must come back visible but unsendable.
+        n_errs = page.locator(".chat-msg.assistant.error").count()
+        page.route("**/api/agent/chat/stream", lambda route: route.fulfill(
+            status=503, content_type="application/json", body='{"error":"nope"}'))
+        n_before_err = len(errors)
+        page.fill("#chat-input", "this turn fails")
+        page.click("#chat-send")
+        wait_until(lambda: page.locator(".chat-msg.assistant.error").count() > n_errs)
+        page.unroute("**/api/agent/chat/stream")
+        for e in [e for e in errors[n_before_err:] if "503" in e]:
+            errors.remove(e)
+
+        before = page.locator(".chat-msg").count()
+        page.reload()
+        page.wait_for_selector("#board")
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector("#chat-input")
+        check("chat: the transcript survives a reload",
+              wait_until(lambda: page.locator(".chat-msg").count() == before)
+              and "remember this across a reload"
+              in page.locator(".chat-log").inner_text())
+        # A reload that lands mid-stream must not restore a disabled composer.
+        check("chat: a restored transcript never comes back busy",
+              not page.locator("#chat-input").is_disabled()
+              and not page.locator("#chat-send").is_disabled())
+        # The errored turn is shown again...
+        check("chat: a failed turn is restored as failed, not as an answer",
+              page.locator(".chat-msg.assistant.error").count() >= 1)
+        # ...but is still withheld from the model on the next turn.
+        with page.expect_request("**/api/agent/chat/stream") as req_info:
+            page.fill("#chat-input", "what did we say")
+            page.click("#chat-send")
+        sent = req_info.value.post_data or ""
+        check("chat: a restored failed turn is still not replayed to the model",
+              "remember this across a reload" in sent
+              and "nope" not in sent)
+        wait_until(lambda: not page.locator("#chat-input").is_disabled(), timeout=8.0)
+
+        # ---- Chat export, JSON and Markdown (Session 6) ----------------------
+        # This is an end-to-end test.
+        # Reuses the board's export dialog rather than adding a second one, so
+        # the copy/download fallback for browsers that block downloads is not
+        # reimplemented (and cannot drift from the original). Both formats are
+        # asserted in one test because they are one feature with a switch, not
+        # two features: the failure worth catching is a format that renders the
+        # wrong transcript or an empty one, and that is the same bug twice.
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector("#chat-input")
+        check("chat: the Assistant offers an export control",
+              page.locator("#chat-export-btn").count() == 1)
+        if page.locator("#chat-export-btn").count() == 1:
+            page.click("#chat-export-btn")
+            check("chat export: the shared export dialog opens",
+                  wait_until(lambda: page.locator("#export-dialog").is_visible()))
+            page.select_option("#chat-export-format", "json")
+            payload = page.input_value("#export-json")
+            try:
+                parsed = json.loads(payload)
+                roles = [m.get("role") for m in parsed.get("messages", [])]
+                texts = " ".join(str(m.get("content", ""))
+                                 for m in parsed.get("messages", []))
+            except (ValueError, AttributeError):
+                parsed, roles, texts = None, [], ""
+            check("chat export: JSON parses and carries the transcript",
+                  parsed is not None and "user" in roles and "assistant" in roles
+                  and "remember this across a reload" in texts)
+            page.select_option("#chat-export-format", "markdown")
+            md = page.input_value("#export-json")
+            check("chat export: Markdown names the speakers and keeps the text",
+                  "remember this across a reload" in md
+                  and md.lower().count("#") >= 2)
+            page.click("#cancel-export")
+            wait_until(lambda: not page.locator("#export-dialog").is_visible())
+            # The board's own export must still produce a board, not a chat.
+            page.locator('.view-switch button[data-view="board"]').click()
+            page.click("#menu-btn")
+            page.click("#export-btn")
+            wait_until(lambda: page.locator("#export-dialog").is_visible())
+            board_json = page.input_value("#export-json")
+            check("chat export: the board export is unchanged by it",
+                  '"cards"' in board_json)
+            page.click("#cancel-export")
+            wait_until(lambda: not page.locator("#export-dialog").is_visible())
+
+        page.locator('.view-switch button[data-view="board"]').click()
+
         # ---- RAG test lab ----------------------------------------------------
         # The lab is a page inside the platform, reached from the Assistant, and it
         # talks to a service (brain/tests/raglab) that this suite never starts and
