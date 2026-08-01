@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   Lodestar — "the question ledger"
+   Lodestar — "the card ledger"
    Quad-ruled engineering paper, index cards with a red top rule,
    typewritten labels, mono ledger IDs, card types as ink stamps, and
    life-area categories as coloured celluloid index tabs.
@@ -101,7 +101,7 @@
   --shadow-modal: 0 24px 60px rgba(23, 32, 41, 0.28);
 }
 
-/* Day mode also sets question text a step larger — legibility over density */
+/* Day mode also sets card text a step larger — legibility over density */
 [data-theme="white"] .card-title { font-size: 14px; }
 [data-theme="white"] .row-title { font-size: 14.5px; }
 
@@ -1126,7 +1126,7 @@ input, select, textarea { font: inherit; color: inherit; }
 
 /* ---------------------------------------------------------------------------
    Plotted views — Overview (semantic map) & Matrix, as plates on the grid.
-   The signature element is the "stamped question dot": a rotated ruled circle
+   The signature element is the "stamped card dot": a rotated ruled circle
    bearing the mono ledger number, inked in its column's accent.
 --------------------------------------------------------------------------- */
 .overview,
@@ -1179,7 +1179,7 @@ input, select, textarea { font: inherit; color: inherit; }
 }
 .plot-status::before { content: "▸ "; color: var(--rule-red); }
 
-/* Legend — colour reads as which column a question lives in */
+/* Legend — colour reads as which column a card lives in */
 .plot-legend {
   display: flex;
   flex-wrap: wrap;
@@ -1236,7 +1236,7 @@ input, select, textarea { font: inherit; color: inherit; }
 .plot-axis-x { right: 10px; top: calc(50% + 5px); }
 .plot-axis-y { left: calc(50% + 6px); top: 8px; }
 
-/* The stamped question dot */
+/* The stamped card dot */
 .plot-dot {
   position: absolute;
   transform: translate(-50%, -50%) rotate(-2deg);

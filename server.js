@@ -1,17 +1,17 @@
 // Lodestar server — serves the static app and persists the board to a
-// local SQLite file so questions survive restarts. Zero npm dependencies:
+// local SQLite file so cards survive restarts. Zero npm dependencies:
 // Node's built-in http server and node:sqlite do all the work.
 //
 //   node server.js                 # http://localhost:3000, board.db beside this file
 //   PORT=4000 BOARD_DB=/tmp/x.db node server.js
 //
-// The board is stored one row per question. The client sends its whole state
+// The board is stored one row per card. The client sends its whole state
 // on every change (PUT /api/state); the server upserts the rows it sees and
 // SOFT-deletes the rows it doesn't (marks them, never removes them) — so a
-// partial or buggy save can never lose a question. Soft-deleted rows live on in
+// partial or buggy save can never lose a card. Soft-deleted rows live on in
 // the Trash (GET /api/trash) and are recoverable until an explicit, deliberate
 // purge (DELETE /api/cards/:id). That purge is the ONLY thing that truly erases
-// a question from the database; otherwise the only way to lose data is to delete
+// a card from the database; otherwise the only way to lose data is to delete
 // the database file itself.
 
 import { createServer } from 'node:http';
@@ -34,7 +34,7 @@ const AGENT_URL = process.env.AGENT_URL || 'http://127.0.0.1:9000';
 // origin, exactly as it does for the brain.
 const RAGLAB_URL = process.env.RAGLAB_URL || 'http://127.0.0.1:9002';
 
-// A new question on the board is worth a snapshot of the database. Off only
+// A new card on the board is worth a snapshot of the database. Off only
 // when explicitly disabled — the test suites set this to '0' so they never add
 // throwaway boards to the user's real backup history.
 const BACKUP_ON_WRITE = process.env.LODESTAR_BACKUP_ON_WRITE !== '0';
@@ -190,7 +190,7 @@ db.exec(`
 
 // Migrate databases created before newer columns existed: add any that are
 // missing so older board.db files keep working untouched. deleted_at is NULL
-// for a live question and a timestamp once it has been soft-deleted (trashed).
+// for a live card and a timestamp once it has been soft-deleted (trashed).
 const columnNames = new Set(db.prepare('PRAGMA table_info(cards)').all().map((c) => c.name));
 if (!columnNames.has('importance')) db.exec("ALTER TABLE cards ADD COLUMN importance TEXT NOT NULL DEFAULT ''");
 if (!columnNames.has('urgency')) db.exec("ALTER TABLE cards ADD COLUMN urgency TEXT NOT NULL DEFAULT ''");
@@ -280,7 +280,7 @@ function safeTags(json) {
   }
 }
 
-// The live board is the questions that are neither soft-deleted nor still
+// The live board is the cards that are neither soft-deleted nor still
 // awaiting the user's approval.
 function readBoard() {
   const catIds = categoryIds();
@@ -297,7 +297,7 @@ function readProposals() {
   return { version: 1, cards: rows.map((r) => rowToCard(r, catIds)) };
 }
 
-// The Trash is the soft-deleted questions, newest deletion first. They are still
+// The Trash is the soft-deleted cards, newest deletion first. They are still
 // in the database and can be restored (re-added by the client) until purged.
 function readTrash() {
   const catIds = categoryIds();
@@ -342,9 +342,9 @@ const cryptoId = () => 'id-' + Math.random().toString(36).slice(2) + Date.now().
  * Reconcile the stored board with the `cards` the client currently shows:
  * upsert every card present, and SOFT-delete (archive) any live row that is
  * absent. Nothing is ever hard-deleted here — that is the whole safety net, so
- * a partial or accidental save can never destroy a question; it only moves to
+ * a partial or accidental save can never destroy a card; it only moves to
  * the Trash, from where it can be restored. Upserting a card clears its
- * deleted_at, so re-adding or restoring a question brings it back to life.
+ * deleted_at, so re-adding or restoring a card brings it back to life.
  *
  * Returns { board, created } — `created` is how many of these cards the database
  * had never seen, which is what triggers a backup.
@@ -465,7 +465,7 @@ function rejectProposal(id) {
 let backupInFlight = false;
 
 /**
- * Snapshot the database because a new question was just captured.
+ * Snapshot the database because a new card was just captured.
  *
  * Runs in a DETACHED CHILD PROCESS, never inline: runBackup shells out to
  * rclone with spawnSync, and this server is single-threaded, so an inline call
@@ -493,7 +493,7 @@ function backupAfterNewCards() {
 }
 
 /**
- * Permanently remove one question from the database. This is the deliberate
+ * Permanently remove one card from the database. This is the deliberate
  * second step ("delete from History") and the only operation that truly erases
  * data. Returns true if a row was removed.
  */
@@ -551,7 +551,7 @@ const server = createServer(async (req, res) => {
         if (cats) writeCategories(cats);
         const { board, created } = writeBoard(parsed.cards);
         sendJson(res, 200, board);
-        // After the response: one snapshot per save that brought new questions,
+        // After the response: one snapshot per save that brought new cards,
         // however many they were. Never before, or the backup would miss them.
         if (created > 0) backupAfterNewCards();
         return;
@@ -562,7 +562,7 @@ const server = createServer(async (req, res) => {
     return sendJson(res, 405, { error: 'Method not allowed' });
   }
 
-  // The Trash — soft-deleted questions, recoverable until purged.
+  // The Trash — soft-deleted cards, recoverable until purged.
   if (path === '/api/trash') {
     if (req.method === 'GET') return sendJson(res, 200, readTrash());
     return sendJson(res, 405, { error: 'Method not allowed' });
@@ -607,7 +607,7 @@ const server = createServer(async (req, res) => {
     return sendJson(res, 404, { error: 'Not found' });
   }
 
-  // Permanent delete of a single question (the deliberate second step).
+  // Permanent delete of a single card (the deliberate second step).
   if (path.startsWith('/api/cards/')) {
     const id = decodeURIComponent(path.slice('/api/cards/'.length));
     if (req.method === 'DELETE') {

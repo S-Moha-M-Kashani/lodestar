@@ -81,7 +81,7 @@
   // registry so custom categories survive the round trip.
   const catVal = (c, reg = categories) => (reg.some((x) => x.id === c) ? c : '');
 
-  // Importance & urgency are each High, Low, or unset ('') — a question needs
+  // Importance & urgency are each High, Low, or unset ('') — a card needs
   // both to be placed on the Eisenhower matrix.
   const iuVal = (v) => (v === 'high' || v === 'low' ? v : '');
 
@@ -265,7 +265,7 @@
     ].map((c, i) => ({ ...c, num: i + 1 }));
   }
 
-  // Every question keeps a permanent ledger number (Q-001, Q-002, …) in capture order.
+  // Every card keeps a permanent ledger number (Q-001, Q-002, …) in capture order.
   function ensureNums(cards) {
     let max = cards.reduce((m, c) => Math.max(m, c.num || 0), 0);
     [...cards]
@@ -275,7 +275,7 @@
     return cards;
   }
 
-  const qLabel = (card) => 'Q-' + String(card.num).padStart(3, '0');
+  const cardLabel = (card) => 'Q-' + String(card.num).padStart(3, '0');
 
   function sanitizeCard(raw, reg = categories) {
     if (!raw || typeof raw !== 'object' || typeof raw.title !== 'string' || !raw.title.trim()) return null;
@@ -399,7 +399,7 @@
   // --------------------------------------------------------------------------
   // Server sync — when a backend is reachable the board is persisted to its
   // SQLite database; otherwise the app runs entirely on localStorage. The
-  // whole board is pushed on every change, so deleting a question is the only
+  // whole board is pushed on every change, so deleting a card is the only
   // thing that removes its row server-side.
   // --------------------------------------------------------------------------
 
@@ -507,7 +507,7 @@
   }
 
   // --------------------------------------------------------------------------
-  // Trash — deleting a question from the board only hides it; the server keeps
+  // Trash — deleting a card from the board only hides it; the server keeps
   // the row (soft delete) so it stays recoverable even if this browser's local
   // history is cleared. Only an explicit "Delete permanently" purges it for
   // good. The Trash is server-backed, so it only appears when a backend is
@@ -533,14 +533,14 @@
     const revived = { ...card, columnId: COLUMNS.some((c) => c.id === card.columnId) ? card.columnId : 'inbox' };
     state.cards = [...state.cards, revived];
     ensureNums(state.cards);
-    commit(`Restored ${qLabel(revived)} “${short(revived.title)}”`); // re-adds the row server-side (clears deleted_at)
+    commit(`Restored ${cardLabel(revived)} “${short(revived.title)}”`); // re-adds the row server-side (clears deleted_at)
     announce(`Restored “${revived.title}”`);
   }
 
   async function purgeFromTrash(card) {
     const sure = await ask({
       title: 'Delete permanently?',
-      message: `${qLabel(card)} “${card.title}” will be erased from the database for good. This is the only action that truly deletes it, and it cannot be undone.`,
+      message: `${cardLabel(card)} “${card.title}” will be erased from the database for good. This is the only action that truly deletes it, and it cannot be undone.`,
       okLabel: 'Delete permanently',
       danger: true,
     });
@@ -558,7 +558,7 @@
     return true;
   }
 
-  // Once a question is purged, drop it from every local history snapshot too, so
+  // Once a card is purged, drop it from every local history snapshot too, so
   // time-travelling back through History can't resurrect what was deleted for good.
   function scrubFromTimeline(id) {
     let changed = false;
@@ -649,7 +649,7 @@
       if (lastInColumn === -1) index = state.cards.length;
     }
     state.cards.splice(index, 0, card);
-    commit(`Moved ${qLabel(card)} to ${columnTitle(columnId)}`);
+    commit(`Moved ${cardLabel(card)} to ${columnTitle(columnId)}`);
   }
 
   // --------------------------------------------------------------------------
@@ -796,7 +796,7 @@
         $('#search').value = '';
         $('#prio-filter').value = '';
       }
-      commit(`Added ${qLabel(card)} “${short(title)}”`);
+      commit(`Added ${cardLabel(card)} “${short(title)}”`);
       announce(`Added “${title}” to Inbox`);
       const fresh = $('#board .quick-add input');
       if (fresh) fresh.focus();
@@ -1107,7 +1107,7 @@
 
   function cardAria(card) {
     const cat = card.category ? `, ${catLabel(card.category)}` : '';
-    return `${qLabel(card)}: ${card.title} — ${TYPE_META[card.type].label}${cat}, in ${columnTitle(card.columnId)}`;
+    return `${cardLabel(card)}: ${card.title} — ${TYPE_META[card.type].label}${cat}, in ${columnTitle(card.columnId)}`;
   }
 
   function renderCard(card) {
@@ -1125,7 +1125,7 @@
 
     const num = document.createElement('span');
     num.className = 'card-num';
-    num.textContent = qLabel(card);
+    num.textContent = cardLabel(card);
     top.append(num);
 
     if (card.notes.trim()) {
@@ -1303,7 +1303,7 @@
 
     const num = document.createElement('span');
     num.className = 'row-num';
-    num.textContent = qLabel(card);
+    num.textContent = cardLabel(card);
 
     const badge = typeBadge(card);
 
@@ -1347,7 +1347,7 @@
   }
 
   // --------------------------------------------------------------------------
-  // Plotted views — shared "stamped question dots" on the engineering grid.
+  // Plotted views — shared "stamped card dots" on the engineering grid.
   // Overview (a semantic map) and the Matrix both place cards as dots that
   // reveal an index-card tooltip on hover and open the full editor on click.
   // Each dot is inked in its category's colour, so the map reads by life area.
@@ -1382,7 +1382,7 @@
     head.className = 'plot-tip-head';
     const num = document.createElement('span');
     num.className = 'card-num';
-    num.textContent = qLabel(card);
+    num.textContent = cardLabel(card);
     head.append(num, typeBadge(card));
 
     const title = document.createElement('p');
@@ -1485,7 +1485,7 @@
   }
 
   // --- Embeddings + PCA -----------------------------------------------------
-  // Each question becomes a vector; PCA projects those vectors to two dimensions
+  // Each card becomes a vector; PCA projects those vectors to two dimensions
   // (PC-1, PC-2). Real semantic vectors come from a HuggingFace model
   // (Transformers.js) loaded lazily from a CDN; until it's ready — or if it
   // can't load (offline) — a deterministic keyword vector stands in, so the map
@@ -1743,7 +1743,7 @@
     let base;
     switch (semanticState) {
       case 'ready': base = 'positioned by meaning · MiniLM sentence embeddings'; break;
-      case 'loading': base = 'positioned by keyword overlap — reading the questions…'; break;
+      case 'loading': base = 'positioned by keyword overlap — reading the cards…'; break;
       case 'unavailable': base = 'positioned by keyword overlap — language model offline'; break;
       default: base = 'positioned by keyword overlap';
     }
@@ -1784,7 +1784,7 @@
     return extractorPromise;
   }
 
-  // Load the model once, embed any not-yet-embedded questions, then slide the
+  // Load the model once, embed any not-yet-embedded cards, then slide the
   // dots to their semantic positions. Every failure degrades to the keyword
   // layout — the network is never required. Set window.QBOARD_DISABLE_SEMANTIC
   // to force the offline path (the e2e suite does this to stay network-free).
@@ -2155,14 +2155,14 @@
     return wheelRuler.getComputedTextLength() || text.length * 6;
   }
 
-  // Attention wheel — spoke length is open-question mass (high importance
+  // Attention wheel — spoke length is open-card mass (high importance
   // counts double). Purely derived from the board: no scoring ritual to keep up.
   function renderWheel(cats) {
     const SIZE = 260, CX = SIZE / 2, CY = SIZE / 2, R = 88, COLLAR = 18, MARGIN = 2;
     const svg = document.createElementNS(SVGNS, 'svg');
     svg.setAttribute('class', 'wheel');
     svg.setAttribute('role', 'img');
-    svg.setAttribute('aria-label', 'Attention wheel — open questions per life area');
+    svg.setAttribute('aria-label', 'Attention wheel — open cards per life area');
 
     for (const f of [0.5, 1]) {
       const ring = document.createElementNS(SVGNS, 'circle');
@@ -2358,7 +2358,7 @@
     b.dataset.id = card.id;
     const num = document.createElement('span');
     num.className = 'card-num';
-    num.textContent = qLabel(card);
+    num.textContent = cardLabel(card);
     const t = document.createElement('span');
     t.className = 'area-row-title';
     t.textContent = card.title;
@@ -2423,7 +2423,7 @@
   }
 
   // Learning progress — per co-tag answered-vs-open bars plus a burn-up of
-  // questions asked vs answered over time.
+  // cards captured vs answered over time.
   function renderLearningPanel(cards) {
     const panel = detailPanel('Learning progress', 'Per topic: answered vs still open.');
     panel.classList.add('area-learning');
@@ -2610,7 +2610,7 @@
     head.className = 'resurface-head';
     const num = document.createElement('span');
     num.className = 'card-num';
-    num.textContent = qLabel(card);
+    num.textContent = cardLabel(card);
     head.append(num, typeBadge(card));
     const age = document.createElement('span');
     age.className = 'resurface-age';
@@ -2634,7 +2634,7 @@
         const c = getCard(card.id);
         if (!c) return;
         c.updatedAt = Date.now();
-        commit(`Reviewed ${qLabel(c)} — still matters`);
+        commit(`Reviewed ${cardLabel(c)} — still matters`);
         announce(`Kept “${c.title}” — freshness stamped`);
       });
     }
@@ -4076,13 +4076,13 @@
     if (!card) return;
     const sure = await ask({
       title: 'Delete this card?',
-      message: `${qLabel(card)} “${card.title}” will be moved off the board. It stays recoverable — bring it back with Undo, or from the History panel — until you delete it permanently there.`,
+      message: `${cardLabel(card)} “${card.title}” will be moved off the board. It stays recoverable — bring it back with Undo, or from the History panel — until you delete it permanently there.`,
       okLabel: 'Delete card',
       danger: true,
     });
     if (!sure) return;
     state.cards = state.cards.filter((c) => c.id !== cardId);
-    commit(`Deleted ${qLabel(card)} “${short(card.title)}”`);
+    commit(`Deleted ${cardLabel(card)} “${short(card.title)}”`);
     announce(`Deleted “${card.title}”`);
   }
 
@@ -4245,7 +4245,7 @@
     syncHabitFields();
     const fmt = (ts) => new Date(ts).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
     $('#card-meta').textContent =
-      `${qLabel(card)} · in ${columnTitle(card.columnId)} · added ${fmt(card.createdAt)} · updated ${fmt(card.updatedAt)}`;
+      `${cardLabel(card)} · in ${columnTitle(card.columnId)} · added ${fmt(card.createdAt)} · updated ${fmt(card.updatedAt)}`;
     dialog.showModal();
     $('#card-title').focus();
   }
@@ -4279,7 +4279,7 @@
         .map((t) => t.trim().toLowerCase())
         .filter(Boolean);
       card.updatedAt = Date.now();
-      commit(`Edited ${qLabel(card)} “${short(card.title)}”`);
+      commit(`Edited ${cardLabel(card)} “${short(card.title)}”`);
     }
     dialog.close();
   });
@@ -4709,11 +4709,11 @@
       list.append(row);
     }
 
-    refreshTrash(); // populate the "Deleted questions" section from the server
+    refreshTrash(); // populate the "Deleted cards" section from the server
   }
 
   // Fill the Trash section of the History dialog with the server's soft-deleted
-  // questions. Hidden entirely when there's no backend or nothing is trashed.
+  // cards. Hidden entirely when there's no backend or nothing is trashed.
   async function refreshTrash() {
     const section = $('#trash-section');
     const list = $('#trash-list');
@@ -4731,7 +4731,7 @@
 
       const label = document.createElement('span');
       label.className = 'history-time';
-      label.textContent = qLabel(card);
+      label.textContent = cardLabel(card);
 
       const main = document.createElement('div');
       main.className = 'history-main';
