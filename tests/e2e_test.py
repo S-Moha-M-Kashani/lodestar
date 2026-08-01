@@ -1029,6 +1029,68 @@ try:
         check("assistant: expanding a step shows its arguments and its result",
               "arguments" in opened and "result" in opened
               and "leiden clustering" in opened and "pending" in opened)
+
+        # ---- Sources: three tools, three result shapes, one list -------------
+        # Stubbed rather than provoked through the fake model: web_search needs
+        # the network and each tool answers in its own shape, so a reader that
+        # misreads one is the way this breaks. The steps are repeated inside
+        # `done` because `done` is the record of the turn — the client replaces
+        # what it streamed with it, and a stub that omitted them would pass
+        # while the real contract was broken.
+        seed = api_state()["cards"][0]
+        source_steps = [
+            {"tool": "web_search", "arguments": {"query": "rrf"},
+             "result": [{"title": "RRF explained", "url": "https://example.com/rrf",
+                         "snippet": "reciprocal rank fusion, briefly"}]},
+            {"tool": "find_related", "arguments": {"text": "rrf"},
+             "result": [{"card": {"id": seed["id"], "title": seed["title"],
+                                  "columnId": seed["columnId"], "tags": []},
+                         "rank": 1}]},
+            {"tool": "recall_chat", "arguments": {"text": "rrf"},
+             "result": [{"text": "we discussed fusion last week", "score": 0.8,
+                         "metadata": {"role": "user"}}]},
+        ]
+        done = {"reply": "It is covered at https://example.com/rrf in detail.",
+                "mutated": False, "proposed": False, "steps": source_steps}
+        sse = "".join(f"event: step\ndata: {json.dumps(s)}\n\n" for s in source_steps)
+        sse += f"event: done\ndata: {json.dumps(done)}\n\n"
+        page.route("**/api/agent/chat/stream", lambda route: route.fulfill(
+            status=200, content_type="text/event-stream", body=sse))
+        n_before = page.locator(".chat-msg.assistant").count()
+        page.fill("#chat-input", "where is rrf explained?")
+        page.click("#chat-send")
+        page.wait_for_function(
+            f"document.querySelectorAll('.chat-msg.assistant').length > {n_before}")
+        # wait_until, not wait_for_selector: a missing sources list is the very
+        # thing under test, and it must read as red lines rather than a
+        # TimeoutError that abandons every check after this one.
+        cited = wait_until(lambda: page.locator(".chat-source").count() == 3)
+        reply = page.locator(".chat-msg.assistant").last
+
+        check("assistant: a url in the reply is a real link, not inert text",
+              reply.locator("a.chat-link").count() == 1
+              and reply.locator("a.chat-link").get_attribute("href")
+                  == "https://example.com/rrf"
+              and reply.locator("a.chat-link").get_attribute("rel") == "noopener noreferrer")
+        listed = reply.locator(".chat-source").all_inner_texts()
+        check("assistant: all three retrieval tools feed one sources list",
+              cited
+              and any("RRF explained" in t for t in listed)
+              and any(seed["title"] in t for t in listed)
+              and any("discussed fusion last week" in t for t in listed))
+        check("assistant: a web source links out, a recalled snippet does not",
+              reply.locator(".chat-source a[href='https://example.com/rrf']").count() == 1
+              and reply.locator(".chat-source a").count() == 1)
+
+        opens_card = reply.locator(".chat-source-card").count() == 1
+        if opens_card:
+            reply.locator(".chat-source-card").click()
+        check("assistant: a retrieved card source opens that card",
+              opens_card and wait_until(lambda: page.locator("#card-dialog[open]").count() == 1)
+              and page.input_value("#card-title") == seed["title"])
+        if opens_card:
+            page.keyboard.press("Escape")
+        page.unroute("**/api/agent/chat/stream")
         check("gate: the proposed card is NOT on the board yet",
               not any(c["title"] == "What is Leiden clustering?"
                       for c in api_state()["cards"])

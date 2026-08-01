@@ -3457,7 +3457,7 @@
     // textContent on the parent would wipe them.
     const body = document.createElement('div');
     body.className = 'chat-text';
-    body.textContent = msg.content;
+    appendLinked(body, msg.content);
     el.appendChild(body);
 
     const done = msg.steps || [];
@@ -3469,7 +3469,115 @@
       for (const call of running) steps.appendChild(renderChatStep(call, true));
       el.appendChild(steps);
     }
+    const sources = sourcesOf(done);
+    if (sources.length) el.appendChild(renderChatSources(sources));
     return el;
+  }
+
+  // Deliberately anchored on the scheme, so nothing but http(s) can become an
+  // href — a linkifier that accepted any "word:" would happily build a
+  // javascript: link out of a web-search snippet. The last character may not be
+  // punctuation, or a url ending a sentence swallows the full stop.
+  const URL_RE = /\bhttps?:\/\/[^\s<>()[\]{}"']*[^\s<>()[\]{}"'.,;:!?]/g;
+
+  function appendLinked(parent, text) {
+    let at = 0;
+    for (const match of String(text || '').matchAll(URL_RE)) {
+      if (match.index > at) {
+        parent.appendChild(document.createTextNode(text.slice(at, match.index)));
+      }
+      const link = document.createElement('a');
+      link.className = 'chat-link';
+      link.href = match[0];
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.textContent = match[0];
+      parent.appendChild(link);
+      at = match.index + match[0].length;
+    }
+    parent.appendChild(document.createTextNode(String(text || '').slice(at)));
+  }
+
+  // Where an answer came from. Each tool answers in its own shape, so the
+  // reader lives next to the tool it understands rather than one function
+  // guessing from the payload — a misread shape would cite the wrong thing,
+  // which is worse than citing nothing.
+  const SOURCE_READERS = {
+    web_search: (rows) => rows.map((row) => ({
+      label: row.title || row.url, url: row.url, note: row.snippet })),
+    find_related: (rows) => rows.map((row) => ({
+      label: (row.card && row.card.title) || '', cardId: row.card && row.card.id,
+      note: row.card && row.card.columnId })),
+    // No link: a recalled snippet is the transcript itself, and there is
+    // nowhere to send the user that shows more of it than this does.
+    recall_chat: (rows) => rows.map((row) => ({ label: row.text, note: '' })),
+  };
+
+  function sourcesOf(steps) {
+    const found = [];
+    const seen = new Set();
+    for (const step of steps) {
+      const read = SOURCE_READERS[step.tool];
+      if (!read || !Array.isArray(step.result)) continue;
+      for (const source of read(step.result)) {
+        // Two searches often surface the same page; listing it twice would
+        // read as two independent sources agreeing.
+        const key = source.url || source.cardId || source.label;
+        if (!source.label || seen.has(key)) continue;
+        seen.add(key);
+        found.push(source);
+      }
+    }
+    return found;
+  }
+
+  function renderChatSources(sources) {
+    const wrap = document.createElement('div');
+    wrap.className = 'chat-sources';
+    const heading = document.createElement('p');
+    heading.className = 'chat-sources-label';
+    heading.textContent = sources.length === 1 ? '1 source' : `${sources.length} sources`;
+    wrap.appendChild(heading);
+    const list = document.createElement('ol');
+    list.className = 'chat-source-list';
+    for (const source of sources) list.appendChild(renderChatSource(source));
+    wrap.appendChild(list);
+    return wrap;
+  }
+
+  function renderChatSource(source) {
+    const item = document.createElement('li');
+    item.className = 'chat-source';
+    if (source.url) {
+      const link = document.createElement('a');
+      link.className = 'chat-source-link';
+      link.href = source.url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.textContent = source.label;
+      item.appendChild(link);
+    } else if (source.cardId) {
+      // A button, not a link: it opens the card's editor in place rather than
+      // navigating, so the user does not lose the conversation to read it.
+      const open = document.createElement('button');
+      open.type = 'button';
+      open.className = 'chat-source-link chat-source-card';
+      open.textContent = source.label;
+      open.addEventListener('click', () => openDialog(source.cardId));
+      item.appendChild(open);
+    } else {
+      const said = document.createElement('span');
+      said.className = 'chat-source-said';
+      said.textContent = source.label;
+      item.appendChild(said);
+    }
+    if (source.note) {
+      const note = document.createElement('span');
+      note.className = 'chat-source-note';
+      note.textContent = source.note;
+      item.appendChild(note);
+    }
+    return item;
   }
 
   // A tool call, collapsed to its name and openable for the evidence. Still

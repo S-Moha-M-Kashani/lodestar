@@ -2288,6 +2288,43 @@ kbd {
   border: 1px solid var(--card-line);
   border-radius: var(--radius);
 }
+.chat-link { color: var(--rule-red); text-decoration: underline; }
+/* Where the answer came from. Kept quiet — it is the evidence behind the
+   reply, not a second reply. */
+.chat-sources { margin-top: 8px; border-top: 1px solid var(--card-line); padding-top: 6px; }
+.chat-sources-label {
+  margin: 0 0 4px;
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-soft);
+}
+.chat-source-list { margin: 0; padding-left: 1.4em; }
+.chat-source { font-size: 0.8rem; margin-bottom: 3px; }
+.chat-source-link { color: var(--rule-red); text-decoration: underline; }
+/* The card source is a button so it can open the editor in place; it has to
+   read as the link it behaves like, not as a form control. */
+button.chat-source-card {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.chat-source-said { color: var(--ink); }
+.chat-source-note {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--ink-soft);
+  /* One line: a snippet is a hint about the source, and three of them at full
+     length would bury the reply they are supposed to support. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .chat-composer { display: flex; gap: 8px; align-items: flex-end; }
 .chat-composer textarea {
   flex: 1;
