@@ -2830,6 +2830,50 @@
   // textarea, so anything typed (or dictated) has to live in state, not the DOM.
   const assistantState = { messages: [], busy: false, draft: '', proposals: [] };
 
+  // The transcript outlives the tab. Only `messages` is stored: `busy` must
+  // never come back true — a reload landing mid-stream would restore a disabled
+  // composer with nothing running to re-enable it, and the view would look hung
+  // with no way out. Same write-behind-try/catch as the model picks: a private
+  // window that refuses storage loses its history, never its session.
+  const CHAT_KEY = KEY_PREFIX + 'chat';
+  const CHAT_KEEP = 200;
+
+  const persistChat = () => {
+    try {
+      localStorage.setItem(CHAT_KEY,
+        JSON.stringify(assistantState.messages.slice(-CHAT_KEEP)));
+    } catch { /* private mode or quota — the transcript still holds this session */ }
+  };
+
+  /** One stored turn, read back defensively. Anything whose role or content is
+   *  not what it claims is dropped rather than rendered. */
+  function restoredMessage(msg) {
+    if (!msg || typeof msg !== 'object') return null;
+    if (msg.role !== 'user' && msg.role !== 'assistant') return null;
+    if (typeof msg.content !== 'string') return null;
+    const out = { role: msg.role, content: msg.content };
+    // `error` and `partial` are load-bearing, not decoration: sendChat filters
+    // both out of the history it replays to the model. Persisting the text and
+    // dropping the flag would silently undo that filter, and the model would be
+    // asked to continue from something it never finished saying.
+    if (msg.error) out.error = true;
+    if (msg.partial) out.partial = true;
+    if (Array.isArray(msg.steps)) out.steps = msg.steps;
+    if (Array.isArray(msg.sources)) out.sources = msg.sources;
+    if (msg.usage && typeof msg.usage === 'object') out.usage = msg.usage;
+    // `running` is never restored. It names tools awaiting an answer from a
+    // request that died with the old page, so a restored one is a spinner that
+    // can never stop.
+    return out;
+  }
+
+  try {
+    const saved = JSON.parse(localStorage.getItem(CHAT_KEY) || '[]');
+    if (Array.isArray(saved)) {
+      assistantState.messages = saved.map(restoredMessage).filter(Boolean);
+    }
+  } catch { /* unreadable transcript — start empty rather than fail the boot */ }
+
   // Model choices for the brain, one per capability. Only the text pick has
   // an effect today — it rides along on every /api/agent/chat request (the
   // brain forwards it to OpenRouter). The omni and embedding picks are stored
@@ -3399,6 +3443,17 @@
     labBtn.title = 'Tune and grade diary retrieval against the test fixtures';
     labBtn.addEventListener('click', () => setView('raglab'));
     head.appendChild(labBtn);
+    // Offered even with an empty transcript: a disabled control that appears
+    // only sometimes is harder to find than one that always sits in the same
+    // place and exports nothing.
+    const exportBtn = document.createElement('button');
+    exportBtn.type = 'button';
+    exportBtn.id = 'chat-export-btn';
+    exportBtn.className = 'btn ghost';
+    exportBtn.textContent = 'Export chat';
+    exportBtn.title = 'Save this conversation as JSON or Markdown';
+    exportBtn.addEventListener('click', () => openExportDialog('chat'));
+    head.appendChild(exportBtn);
     sheet.appendChild(head);
 
     sheet.appendChild(renderChatSettings());
@@ -3832,6 +3887,9 @@
 
   async function sendChat(text) {
     assistantState.messages.push({ role: 'user', content: text });
+    // Stored before the request, not after it: a question that costs a reload
+    // to lose is the thing this project promises not to do.
+    persistChat();
     assistantState.busy = true;
     render();
     // The turn being streamed into. `running` holds tools the model has asked
@@ -3906,6 +3964,10 @@
       announce(failure);
     }
     assistantState.busy = false;
+    // The turn has settled — whether it answered, failed, or died partway. The
+    // stream mutates `turn` in place, so this is the one point where what is
+    // written is what the user will see on the next load.
+    persistChat();
     render();
     const nextInput = document.getElementById('chat-input');
     if (nextInput) nextInput.focus();
@@ -4512,18 +4574,82 @@
   const exportDialog = $('#export-dialog');
   const exportJson = () => JSON.stringify({ ...state, categories }, null, 2);
 
-  $('#export-btn').addEventListener('click', () => {
-    $('#export-json').value = exportJson();
+  // Which subject the shared dialog is currently showing. Everything that
+  // differs — the title, the blurb, the format switch, the filename, what Copy
+  // puts on the clipboard — reads this, so the two exports cannot half-swap.
+  let exportMode = 'board';
+
+  const ROLE_LABEL = { user: 'You', assistant: 'Assistant' };
+
+  const chatExportJson = () => JSON.stringify({
+    exported: new Date().toISOString(),
+    messages: assistantState.messages.map((m) => ({
+      role: m.role,
+      content: m.content,
+      // Carried so an exported transcript cannot read as a clean conversation
+      // when part of it failed. Absent, not false, on an ordinary turn.
+      ...(m.error ? { error: true } : {}),
+      ...(m.partial ? { partial: true } : {}),
+    })),
+  }, null, 2);
+
+  const chatExportMarkdown = () => {
+    const lines = ['# Lodestar assistant transcript', '',
+                   `*Exported ${new Date().toLocaleString()}*`, ''];
+    for (const m of assistantState.messages) {
+      let heading = `## ${ROLE_LABEL[m.role] || m.role}`;
+      if (m.error) heading += ' — failed';
+      else if (m.partial) heading += ' — incomplete';
+      lines.push(heading, '', m.content || '*(no text)*', '');
+    }
+    return lines.join('\n');
+  };
+
+  const chatExportText = () =>
+    ($('#chat-export-format').value === 'markdown'
+      ? chatExportMarkdown() : chatExportJson());
+
+  /** What the dialog is currently offering, whichever subject it is showing. */
+  const currentExportText = () =>
+    (exportMode === 'chat' ? chatExportText() : exportJson());
+
+  const currentExportName = () =>
+    (exportMode !== 'chat' ? 'lodestar.json'
+      : $('#chat-export-format').value === 'markdown'
+        ? 'lodestar-chat.md' : 'lodestar-chat.json');
+
+  function openExportDialog(mode) {
+    exportMode = mode;
+    const chat = mode === 'chat';
+    $('#chat-export-format-row').hidden = !chat;
+    $('#export-title').textContent = chat ? 'Export chat' : 'Export board';
+    $('#export-copy').textContent = chat
+      ? 'Save the Assistant transcript. Markdown is for reading; JSON keeps the turn structure, including which turns failed. If your browser blocks the download, copy the text below instead.'
+      : 'Save the whole board as lodestar.json. If your browser blocks the download (some embedded viewers do), copy the JSON below and paste it into a file instead.';
+    $('#download-export').textContent = `Download ${currentExportName()}`;
+    $('#export-json').value = currentExportText();
     exportDialog.showModal();
-  });
+  }
+
+  $('#export-btn').addEventListener('click', () => openExportDialog('board'));
   $('#cancel-export').addEventListener('click', () => exportDialog.close());
 
+  // Switching format re-renders the same transcript; it never re-reads the
+  // board, so the two subjects cannot bleed into one another.
+  $('#chat-export-format').addEventListener('change', () => {
+    $('#export-json').value = chatExportText();
+    $('#download-export').textContent = `Download ${currentExportName()}`;
+  });
+
   $('#download-export').addEventListener('click', () => {
-    const blob = new Blob([exportJson()], { type: 'application/json' });
+    const name = currentExportName();
+    const blob = new Blob([currentExportText()], {
+      type: name.endsWith('.md') ? 'text/markdown' : 'application/json',
+    });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'lodestar.json';
+    a.download = name;
     a.rel = 'noopener';
     document.body.append(a);
     a.click();
@@ -4531,7 +4657,7 @@
     // download before the browser has started it (notably Firefox/Safari).
     setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 1000);
     exportDialog.close();
-    announce('Exported board as lodestar.json');
+    announce(`Exported ${exportMode === 'chat' ? 'chat' : 'board'} as ${name}`);
   });
 
   $('#copy-export').addEventListener('click', async () => {
@@ -4539,10 +4665,12 @@
     const done = () => {
       btn.textContent = 'Copied ✓';
       setTimeout(() => { btn.textContent = 'Copy JSON'; }, 1600);
-      announce('Board JSON copied to clipboard');
+      announce(exportMode === 'chat'
+        ? 'Chat transcript copied to clipboard'
+        : 'Board JSON copied to clipboard');
     };
     try {
-      await navigator.clipboard.writeText(exportJson());
+      await navigator.clipboard.writeText(currentExportText());
       done();
     } catch (_) {
       // Clipboard API blocked (e.g. sandboxed embed) — select the JSON and

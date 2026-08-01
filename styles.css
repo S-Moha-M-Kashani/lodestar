@@ -1663,6 +1663,20 @@ dialog::backdrop {
 
 #export-dialog { width: min(620px, calc(100vw - 32px)); }
 
+/* Only shown when the dialog is exporting a chat, so it sits between the blurb
+   and the text rather than in the action row — it changes what you are looking
+   at, which is not the same kind of control as Copy or Download. */
+.chat-export-format {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--ink-soft);
+  margin: 0 0 12px;
+}
+
+.chat-export-format[hidden] { display: none; }
+
 .export-json {
   display: block;
   width: 100%;
