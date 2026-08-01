@@ -3390,28 +3390,12 @@
       hint.textContent = 'Ask about your board — research a question, triage the inbox, or find connections.';
       log.appendChild(hint);
     }
-    for (const msg of assistantState.messages) {
-      const el = document.createElement('div');
-      el.className = `chat-msg ${msg.role}${msg.error ? ' error' : ''}`;
-      el.textContent = msg.content;
-      if (msg.steps && msg.steps.length) {
-        const steps = document.createElement('div');
-        steps.className = 'chat-steps';
-        for (const step of msg.steps) {
-          const chip = document.createElement('span');
-          chip.className = 'chat-step';
-          chip.textContent = step.tool;
-          steps.appendChild(chip);
-        }
-        el.appendChild(steps);
-      }
-      log.appendChild(el);
-    }
+    for (const msg of assistantState.messages) log.appendChild(renderChatMessage(msg));
     sheet.appendChild(log);
 
     const status = document.createElement('div');
     status.className = 'chat-status';
-    if (assistantState.busy) status.textContent = 'Thinking…';
+    if (assistantState.busy) status.textContent = busyLabel();
     else if (voiceState.phase === 'transcribing') status.textContent = 'Transcribing…';
     else if (voiceState.phase === 'recording') status.textContent = 'Listening…';
     sheet.appendChild(status);
@@ -3466,15 +3450,120 @@
     return sheet;
   }
 
+  function renderChatMessage(msg) {
+    const el = document.createElement('div');
+    el.className = `chat-msg ${msg.role}${msg.error ? ' error' : ''}`;
+    // The text is its own node now: the steps below are elements, and setting
+    // textContent on the parent would wipe them.
+    const body = document.createElement('div');
+    body.className = 'chat-text';
+    body.textContent = msg.content;
+    el.appendChild(body);
+
+    const done = msg.steps || [];
+    const running = msg.running || [];
+    if (done.length || running.length) {
+      const steps = document.createElement('div');
+      steps.className = 'chat-steps';
+      for (const step of done) steps.appendChild(renderChatStep(step, false));
+      for (const call of running) steps.appendChild(renderChatStep(call, true));
+      el.appendChild(steps);
+    }
+    return el;
+  }
+
+  // A tool call, collapsed to its name and openable for the evidence. Still
+  // `.chat-step` — the class is test-stable API, so this adds to it rather than
+  // renaming it.
+  function renderChatStep(step, running) {
+    const box = document.createElement('details');
+    box.className = `chat-step${running ? ' chat-step-running' : ''}`;
+    const name = document.createElement('summary');
+    name.className = 'chat-step-name';
+    name.textContent = running ? `${step.tool}…` : step.tool;
+    box.appendChild(name);
+    box.appendChild(chatStepField('arguments', step.arguments));
+    // A running call has no result yet, and an empty "result" row would read as
+    // a tool that answered with nothing.
+    if (!running) box.appendChild(chatStepField('result', step.result));
+    return box;
+  }
+
+  function chatStepField(label, value) {
+    const row = document.createElement('div');
+    row.className = 'chat-step-field';
+    const key = document.createElement('span');
+    key.className = 'chat-step-label';
+    key.textContent = label;
+    const val = document.createElement('pre');
+    val.className = 'chat-step-value';
+    val.textContent = typeof value === 'string' ? value
+      : value === undefined ? '—' : JSON.stringify(value, null, 2);
+    row.appendChild(key);
+    row.appendChild(val);
+    return row;
+  }
+
+  // What the assistant is doing right now, from the last event that arrived.
+  // A label that names the running tool is the difference between waiting and
+  // wondering whether it has hung.
+  function busyLabel() {
+    const last = assistantState.messages[assistantState.messages.length - 1];
+    if (!last || last.role !== 'assistant') return 'Thinking…';
+    const running = last.running || [];
+    if (running.length) return `Running ${running[running.length - 1].tool}…`;
+    return last.content ? 'Writing…' : 'Thinking…';
+  }
+
+  // Server-sent events over fetch, because EventSource is GET-only and the chat
+  // turn is a POST. A frame can be split across reads, so nothing is parsed
+  // until its blank-line terminator is in the buffer.
+  async function* sseFrames(response) {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let cut;
+      while ((cut = buffer.indexOf('\n\n')) !== -1) {
+        const frame = buffer.slice(0, cut);
+        buffer = buffer.slice(cut + 2);
+        let name = 'message';
+        let data = '';
+        for (const line of frame.split('\n')) {
+          if (line.startsWith('event: ')) name = line.slice(7);
+          else if (line.startsWith('data: ')) data += line.slice(6);
+        }
+        if (data) yield { name, data: JSON.parse(data) };
+      }
+    }
+  }
+
+  // One repaint per frame at most. A token-per-render would rebuild the whole
+  // view hundreds of times for one reply; coalescing costs nothing and keeps a
+  // single rendering path rather than a second one that can drift from render().
+  let chatPaint = 0;
+  function paintChatSoon() {
+    if (chatPaint) return;
+    chatPaint = requestAnimationFrame(() => { chatPaint = 0; render(); });
+  }
+
   async function sendChat(text) {
     assistantState.messages.push({ role: 'user', content: text });
     assistantState.busy = true;
     render();
+    // The turn being streamed into. `running` holds tools the model has asked
+    // for but that have not answered yet; `partial` marks a turn the stream
+    // abandoned, so it is shown but never replayed to the model as history.
+    const turn = { role: 'assistant', content: '', steps: [], running: [] };
     try {
       const history = assistantState.messages
-        .filter((m) => !m.error && (m.role === 'user' || m.role === 'assistant'))
+        .filter((m) => !m.error && !m.partial
+          && (m.role === 'user' || m.role === 'assistant'))
         .map(({ role, content }) => ({ role, content }));
-      const res = await fetch('/api/agent/chat', {
+      const res = await fetch('/api/agent/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -3487,19 +3576,44 @@
           provider: assistantModels.provider,
         }),
       });
-      if (!res.ok) throw new Error(`agent ${res.status}`);
-      const data = await res.json();
-      assistantState.messages.push({
-        role: 'assistant',
-        content: data.reply || '',
-        steps: data.steps || [],
-      });
+      if (!res.ok || !res.body) throw new Error(`agent ${res.status}`);
+      assistantState.messages.push(turn);
+      let data = null;
+      let failed = '';
+      for await (const { name, data: payload } of sseFrames(res)) {
+        if (name === 'calling') turn.running.push(payload);
+        // Steps answer in request order, so the oldest running call is this
+        // one. See _steps_from in the brain for why that holds.
+        else if (name === 'step') { turn.steps.push(payload); turn.running.shift(); }
+        else if (name === 'token') turn.content += payload.text;
+        else if (name === 'error') failed = payload.message;
+        else if (name === 'done') data = payload;
+        paintChatSoon();
+      }
+      if (failed) throw new Error(failed);
+      if (!data) throw new Error('the stream ended without a result');
+      // Tokens were provisional: text can arrive on a message that also
+      // requested tools, and the step-limit path abandons the transcript
+      // entirely. `done` is the record of the turn — see the brain's astream.
+      turn.content = data.reply || '';
+      turn.steps = data.steps || [];
+      turn.running = [];
       // Two distinct outcomes: an edit changed the board, a proposal did not.
       if (data.mutated) await adoptServerBoard();
       if (data.proposed) await refreshProposals();
       announce(data.proposed ? 'Assistant proposed a card for your approval'
         : 'Assistant replied');
     } catch {
+      // Whatever arrived before the failure is kept — a long answer that dies
+      // at the last frame should not vanish — but it is marked `partial` so a
+      // truncated reply is never sent back as if the assistant had finished it.
+      const arrived = assistantState.messages.indexOf(turn) !== -1;
+      if (arrived && (turn.content || turn.steps.length)) {
+        turn.running = [];
+        turn.partial = true;
+      } else if (arrived) {
+        assistantState.messages.splice(assistantState.messages.indexOf(turn), 1);
+      }
       assistantState.messages.push({
         role: 'assistant',
         content: 'The assistant is unavailable right now. Check that the brain service is running.',

@@ -1012,6 +1012,23 @@ try:
             "document.querySelectorAll('.chat-msg.assistant').length >= 2")
         check("assistant: tool chip shown for create_question",
               "create_question" in page.inner_text(".chat-log"))
+        # The chip used to be the whole story: a tool's name, with what it was
+        # asked and what it answered thrown away. Both are on the wire already.
+        step = page.locator(".chat-step").last
+        # Lowercased throughout: inner_text returns *rendered* text, and the
+        # field labels are uppercased by CSS. Asserting on the styling would
+        # make a design change look like a broken feature.
+        check("assistant: a tool step stays collapsed until it is asked to open",
+              "arguments" not in step.inner_text().lower())
+        # Guarded rather than clicked outright: a missing summary must be one red
+        # line, not a TimeoutError that abandons every check after this one.
+        expandable = step.locator("summary").count() == 1
+        if expandable:
+            step.locator("summary").click()
+        opened = step.inner_text().lower() if expandable else ""
+        check("assistant: expanding a step shows its arguments and its result",
+              "arguments" in opened and "result" in opened
+              and "leiden clustering" in opened and "pending" in opened)
         check("gate: the proposed card is NOT on the board yet",
               not any(c["title"] == "What is Leiden clustering?"
                       for c in api_state()["cards"])
@@ -1143,7 +1160,7 @@ try:
         check("assistant: the remote text option says which API serves it",
               all("OpenRouter API" in label
                   for label in page.locator("#model-text option").all_inner_texts()))
-        with page.expect_request("**/api/agent/chat") as prov_req:
+        with page.expect_request("**/api/agent/chat/stream") as prov_req:
             page.fill("#chat-input", "provider ride-along probe")
             page.click("#chat-send")
         check("assistant: the chosen provider rides along on the chat request",
@@ -1177,7 +1194,7 @@ try:
 
         n_replies = page.locator(".chat-msg.assistant").count()
         page.fill("#chat-input", "model ride-along probe")
-        with page.expect_request("**/api/agent/chat") as req_info:
+        with page.expect_request("**/api/agent/chat/stream") as req_info:
             page.click("#chat-send")
         check("assistant: chat request carries the picked text model",
               f'"{DEFAULT_TEXT}"' in (req_info.value.post_data or ""))
@@ -1259,14 +1276,14 @@ try:
         page.locator('.view-switch button[data-view="assistant"]').click()
         page.wait_for_selector("#chat-input")
         n_before = len(errors)
-        page.route("**/api/agent/chat", lambda route: route.fulfill(
+        page.route("**/api/agent/chat/stream", lambda route: route.fulfill(
             status=503, content_type="application/json", body='{"error":"assistant unavailable"}'))
         page.fill("#chat-input", "This should fail")
         page.click("#chat-send")
         page.wait_for_selector(".chat-msg.assistant.error")
         check("assistant: a failed request shows the unavailable message",
               "assistant is unavailable" in page.locator(".chat-msg.assistant.error").last.inner_text())
-        page.unroute("**/api/agent/chat")
+        page.unroute("**/api/agent/chat/stream")
         # The 503 we deliberately provoked surfaces as a browser console error;
         # it's expected here, not a real bug, so it shouldn't fail the console check.
         # Scrub only the entries provoked by this block (by count), so an unrelated

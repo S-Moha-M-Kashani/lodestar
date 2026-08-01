@@ -2239,13 +2239,54 @@ kbd {
 .chat-msg.assistant { align-self: flex-start; background: var(--card); }
 .chat-msg.error { border-color: var(--danger); color: var(--danger); }
 .chat-steps { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
-.chat-step {
+/* A tool call: a pill until you open it, then the evidence underneath. The
+   pill styling moved from .chat-step to its summary when the chip became a
+   <details> — the class name stays, because the e2e suite selects on it. */
+.chat-step { max-width: 100%; }
+.chat-step[open] { flex: 1 1 100%; }
+.chat-step-name {
+  display: inline-block;
   font-family: var(--mono);
   font-size: 0.7rem;
   padding: 1px 8px;
   border: 1px solid var(--line);
   border-radius: 999px;
   color: var(--ink-soft);
+  cursor: pointer;
+  list-style: none;
+}
+.chat-step-name::-webkit-details-marker { display: none; }
+.chat-step-name::before { content: '▸ '; }
+.chat-step[open] .chat-step-name::before { content: '▾ '; }
+/* Still waiting on this one. Same pulse as the recording dot rather than a
+   second animation that means the same thing. */
+.chat-step-running .chat-step-name {
+  border-color: var(--rule-red);
+  color: var(--rule-red);
+  animation: rec-pulse 1.4s ease-in-out infinite;
+}
+.chat-step-field { margin-top: 6px; }
+.chat-step-label {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-soft);
+}
+.chat-step-value {
+  margin: 2px 0 0;
+  padding: 6px 8px;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  /* Capped and scrollable: one web_search result is a couple of kilobytes of
+     JSON, and letting it run would push the reply off the screen. */
+  max-height: 14em;
+  overflow: auto;
+  background: var(--paper);
+  border: 1px solid var(--card-line);
+  border-radius: var(--radius);
 }
 .chat-composer { display: flex; gap: 8px; align-items: flex-end; }
 .chat-composer textarea {
