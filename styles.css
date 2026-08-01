@@ -2239,14 +2239,126 @@ kbd {
 .chat-msg.assistant { align-self: flex-start; background: var(--card); }
 .chat-msg.error { border-color: var(--danger); color: var(--danger); }
 .chat-steps { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
-.chat-step {
+/* A tool call: a pill until you open it, then the evidence underneath. The
+   pill styling moved from .chat-step to its summary when the chip became a
+   <details> — the class name stays, because the e2e suite selects on it. */
+.chat-step { max-width: 100%; }
+.chat-step[open] { flex: 1 1 100%; }
+.chat-step-name {
+  display: inline-block;
   font-family: var(--mono);
   font-size: 0.7rem;
   padding: 1px 8px;
   border: 1px solid var(--line);
   border-radius: 999px;
   color: var(--ink-soft);
+  cursor: pointer;
+  list-style: none;
 }
+.chat-step-name::-webkit-details-marker { display: none; }
+.chat-step-name::before { content: '▸ '; }
+.chat-step[open] .chat-step-name::before { content: '▾ '; }
+/* Still waiting on this one. Same pulse as the recording dot rather than a
+   second animation that means the same thing. */
+.chat-step-running .chat-step-name {
+  border-color: var(--rule-red);
+  color: var(--rule-red);
+  animation: rec-pulse 1.4s ease-in-out infinite;
+}
+.chat-step-field { margin-top: 6px; }
+.chat-step-label {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-soft);
+}
+.chat-step-value {
+  margin: 2px 0 0;
+  padding: 6px 8px;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  /* Capped and scrollable: one web_search result is a couple of kilobytes of
+     JSON, and letting it run would push the reply off the screen. */
+  max-height: 14em;
+  overflow: auto;
+  background: var(--paper);
+  border: 1px solid var(--card-line);
+  border-radius: var(--radius);
+}
+/* Searching what was said before. Folded away by default: it is a way back to
+   something, not part of asking the next question. */
+.chat-recall { border: 1px solid var(--card-line); border-radius: var(--radius); padding: 6px 10px; }
+.chat-recall-name {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+  cursor: pointer;
+  list-style: none;
+}
+.chat-recall-name::-webkit-details-marker { display: none; }
+.chat-recall-name::before { content: '▸ '; }
+.chat-recall[open] .chat-recall-name::before { content: '▾ '; }
+.chat-recall-form { display: flex; gap: 6px; margin-top: 8px; }
+.chat-recall-form input {
+  flex: 1;
+  font: inherit;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper);
+  color: var(--ink);
+}
+.chat-recall-results {
+  margin-top: 8px;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--ink-soft);
+}
+.recall-hits { margin: 0; padding-left: 1.4em; }
+.recall-hit { margin-bottom: 6px; }
+.recall-hit-text { margin: 0; color: var(--ink); font-family: var(--body); font-size: 0.8rem; }
+.recall-hit-meta { margin: 0; font-size: 0.68rem; color: var(--ink-soft); }
+
+.chat-link { color: var(--rule-red); text-decoration: underline; }
+/* Where the answer came from. Kept quiet — it is the evidence behind the
+   reply, not a second reply. */
+.chat-sources { margin-top: 8px; border-top: 1px solid var(--card-line); padding-top: 6px; }
+.chat-sources-label {
+  margin: 0 0 4px;
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-soft);
+}
+.chat-source-list { margin: 0; padding-left: 1.4em; }
+.chat-source { font-size: 0.8rem; margin-bottom: 3px; }
+.chat-source-link { color: var(--rule-red); text-decoration: underline; }
+/* The card source is a button so it can open the editor in place; it has to
+   read as the link it behaves like, not as a form control. */
+button.chat-source-card {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.chat-source-said { color: var(--ink); }
+.chat-source-note {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--ink-soft);
+  /* One line: a snippet is a hint about the source, and three of them at full
+     length would bury the reply they are supposed to support. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .chat-composer { display: flex; gap: 8px; align-items: flex-end; }
 .chat-composer textarea {
   flex: 1;
