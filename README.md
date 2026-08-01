@@ -217,7 +217,7 @@ Lodestar is developed **test-first**: every feature or fix ships with tests in t
 | Server unit | `tests/server.test.js`, `tests/backup.test.js` (`node:test`, zero deps) | Every API branch: soft-delete and restore, 400/404/405, the payload cap, the brain proxy's 503, static serving, legacy-schema migration |
 | Brain unit | `brain/tests/` (pytest) | Agent loop, tool errors and step limits, the board tools' full-list contract, provider parsing, RAG |
 | Brain evals | `brain/tests/evals/` | Agent *behaviour* against JSON scenario files, plus RAG retrieval-quality thresholds |
-| Frontend e2e | `tests/e2e_test.py` (Playwright) | 160 checks — one per user-facing action — in headless Chrome |
+| Frontend e2e | `tests/e2e_test.py` (Playwright) | 343 checks — one per user-facing action — in headless Chrome |
 
 The e2e suite **starts both services itself** on temporary ports and a temporary database, so nothing needs to be running first (requires [uv](https://docs.astral.sh/uv/) and Node 23.4+):
 
