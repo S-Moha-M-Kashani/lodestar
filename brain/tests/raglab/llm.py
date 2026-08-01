@@ -16,7 +16,7 @@ own environment.
 from langchain_core.messages import BaseMessage
 
 from lodestar_brain.config import Settings
-from lodestar_brain.llm.factory import make_chat_model
+from lodestar_brain.llm import make_chat_model
 
 from .config import LabSettings
 

@@ -10,7 +10,7 @@ from langchain_core.messages import AIMessage
 
 from lodestar_brain.agent.registry import build_agent
 from lodestar_brain.config import Settings
-from lodestar_brain.llm.fake import FakeChat
+from lodestar_brain.llm import FakeChat
 from lodestar_brain.tools.board import make_board_tools
 
 SCENARIO_DIR = Path(__file__).parent / "scenarios"

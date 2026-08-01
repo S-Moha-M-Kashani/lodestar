@@ -19,7 +19,7 @@ from langchain_core.tools import BaseTool
 from langgraph.errors import GraphRecursionError
 
 from ..config import Settings
-from ..llm.factory import make_chat_model
+from ..llm import make_chat_model
 
 SYSTEM_PROMPT = """You are Lodestar's assistant — a research companion and coach \
 for a personal life dashboard ("your compass for life"). The board \

@@ -14,7 +14,7 @@ from langchain_core.tools import tool
 from lodestar_brain.agent.runner import (STEP_LIMIT_REPLY, AgentStep, LodestarAgent,
                                          _steps_from)
 from lodestar_brain.config import Settings
-from lodestar_brain.llm.fake import FakeChat
+from lodestar_brain.llm import FakeChat
 
 SETTINGS = Settings(llm_provider='fake')
 

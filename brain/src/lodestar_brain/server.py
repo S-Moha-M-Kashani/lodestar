@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from .agent.registry import build_agent
 from .config import Settings, load_settings
-from .llm.factory import make_chat_model, served_models
+from .llm import make_chat_model, served_models
 from .retrieval import CardIndex, ChatStore, gate_llm, make_embeddings
 from .tools.board import BoardClient, make_board_tools
 from .tools.retrieve import make_recall_tool, make_retrieve_tool
