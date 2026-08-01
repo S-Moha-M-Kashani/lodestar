@@ -1,8 +1,8 @@
 # Lodestar
 
-*Your compass for life!* Lodestar is a place to get every open question out of your head, see what actually matters, and never lose a thought — so you can follow through, privately and at work. A kanban-style board that is one dashboard for your whole life — work questions, plans with your partner, sports, music, reading, holidays — everything in one place. Vanilla HTML/CSS/JavaScript front end, with an optional tiny server that persists the board to a local **SQLite** database. No build step and no npm dependencies — the server uses Node's built-in `node:sqlite` and `http`.
+*Your compass for life!* Lodestar is a place to get everything open out of your head, see what actually matters, and never lose a thought — so you can follow through, privately and at work. A kanban-style board that is one dashboard for your whole life — work questions, plans with your partner, sports, music, reading, holidays — everything in one place. Vanilla HTML/CSS/JavaScript front end, with an optional tiny server that persists the board to a local **SQLite** database. No build step and no npm dependencies — the server uses Node's built-in `node:sqlite` and `http`.
 
-The design is a "question ledger": quad-ruled engineering paper, cards as ruled index cards with permanent ledger IDs (`Q-001`, `Q-002`, …), card types as ink stamps, and life-area categories as coloured index tabs — every category gets its own ink, in all four themes.
+The design is a "card ledger": quad-ruled engineering paper, cards as ruled index cards with permanent ledger IDs (`C-001`, `C-002`, …), card types as ink stamps, and life-area categories as coloured index tabs — every category gets its own ink, in all four themes.
 
 ## Features
 
@@ -15,18 +15,18 @@ The design is a "question ledger": quad-ruled engineering paper, cards as ruled 
 - **Importance & urgency**: set each to High or Low on a card to place it on the **Matrix**
 - **Deadlines and automatic priority**: give a card an ISO date and it carries a deadline chip that turns red once overdue. Priority is **derived**, never stored — P1 urgent & important, P2 urgent, P3 important, P4 neither — so it can never disagree with the two judgements behind it; the toolbar filters by it
 - **Matrix — four lenses on the same cards**: importance is always the vertical axis, and the picker swaps what it is crossed with — **Eisenhower** (urgency; Answer now / Schedule / Delegate / Drop, urgent on the left), **Leverage** (effort — where a little work moves a lot), **Serenity** (control — what deserves action, and what you are allowed to put down), and **Follow-through** (time since a card was last touched)
-- **Overview map**: every question is plotted by meaning — it is embedded and reduced to two axes, so questions that read alike sit close together. What gets embedded is **the whole card as you filed it**: its tags, its category, its type, its title and its notes. The labels are part of the meaning, not decoration — two cards with the same words under *Health* and under *Work* are not the same thought, and on title and notes alone they landed on the same dot. Labels come first in the sentence, because the model truncates from the tail and a long note must never be able to push a card's category out of its own vector; the category contributes the name you gave it, so renaming an area re-embeds the cards in it. Toggle the projection between **PCA** (fast, stable global axes) and **t-SNE** (local neighbourhoods, so clusters of related thoughts pull together); t-SNE is seeded, so the same cards always land in the same spots. Embeddings come from a HuggingFace model ([Transformers.js](https://huggingface.co/docs/transformers.js), `Xenova/all-MiniLM-L6-v2`) loaded on demand from a CDN — **no login or API key needed**; the ~30 MB model downloads once and is cached by the browser. When it's still loading or the browser is offline, the map falls back to a keyword-overlap layout, so it always renders with no network. Hover a dot for details, click to open the full editor, and the tag/type/category/search filters apply just like the board. Dots are inked in their category's colour, so the map reads by life area.
-- **Areas view**: one small-multiples tile per life area plus an attention wheel whose spoke length is open-question mass, answering "which part of my life is starved?" at a glance. Click a tile to focus that area and open a category-aware detail panel — cooling-off (the 30-day rule), learning progress, serenity check, and what has been longest untouched
+- **Overview map**: every card is plotted by meaning — it is embedded and reduced to two axes, so cards that read alike sit close together. What gets embedded is **the whole card as you filed it**: its tags, its category, its type, its title and its notes. The labels are part of the meaning, not decoration — two cards with the same words under *Health* and under *Work* are not the same thought, and on title and notes alone they landed on the same dot. Labels come first in the sentence, because the model truncates from the tail and a long note must never be able to push a card's category out of its own vector; the category contributes the name you gave it, so renaming an area re-embeds the cards in it. Toggle the projection between **PCA** (fast, stable global axes) and **t-SNE** (local neighbourhoods, so clusters of related thoughts pull together); t-SNE is seeded, so the same cards always land in the same spots. Embeddings come from a HuggingFace model ([Transformers.js](https://huggingface.co/docs/transformers.js), `Xenova/all-MiniLM-L6-v2`) loaded on demand from a CDN — **no login or API key needed**; the ~30 MB model downloads once and is cached by the browser. When it's still loading or the browser is offline, the map falls back to a keyword-overlap layout, so it always renders with no network. Hover a dot for details, click to open the full editor, and the tag/type/category/search filters apply just like the board. Dots are inked in their category's colour, so the map reads by life area.
+- **Areas view**: one small-multiples tile per life area plus an attention wheel whose spoke length is open-card mass, answering "which part of my life is starved?" at a glance. Click a tile to focus that area and open a category-aware detail panel — cooling-off (the 30-day rule), learning progress, serenity check, and what has been longest untouched
 - **Review view**: GTD's weekly review as a screen — stat tiles (inbox, answered this week, new this week, open in total), week-over-week drift per area, the neglect list (important cards untouched for over a month), and three old thoughts resurfaced on purpose. The picks are seeded on the date and pinned for the day, so acting on one never reshuffles the others
 - **Quick capture**: write anything into the Inbox and press Enter
 - **Edit modal**: notes, type, category, tags, importance and urgency, effort, control, and a deadline per card. Tag a card `decision` and notes lines starting with `+` or `−` read back as a two-column pro/con balance sheet
 - **Search & filters**: free-text search, type filter, priority filter, category tabs, tag chips
-- **Persistence**: runs on localStorage on its own; when the server is running it also saves to a SQLite database, so questions survive restarts and reopen on any browser. See **How your data is stored** below for the exact durability guarantee. Export/Import as JSON for backups
+- **Persistence**: runs on localStorage on its own; when the server is running it also saves to a SQLite database, so cards survive restarts and reopen on any browser. See **How your data is stored** below for the exact durability guarantee. Export/Import as JSON for backups
 - **Database sync rule**: a browser that already has its own board keeps it (and pushes it to the server), so unsynced local edits are never clobbered; a fresh browser loads the board from the database
 - **One Menu button**: Undo, History, Export and Import fold into a single expanding menu in the toolbar
 - **Export dialog**: download `lodestar.json`, or copy the JSON when the browser blocks downloads
-- **Import with a documented schema**: the Import dialog shows the expected JSON format (copyable), so a valid board file can be written by hand — or generated by an AI; imported questions are **added** to the board by default, and substituting the whole board requires an extra are-you-sure confirmation
-- **Undo & History**: every change (add, edit, move, sort, delete, import, restore) is logged with a timestamp; Undo steps back one state, and the History dialog can restore *any* logged state, git-style. Deleting a question only moves it to the **Trash** in the History dialog, where it stays recoverable until you choose **Delete permanently** — the only action that truly erases it
+- **Import with a documented schema**: the Import dialog shows the expected JSON format (copyable), so a valid board file can be written by hand — or generated by an AI; imported cards are **added** to the board by default, and substituting the whole board requires an extra are-you-sure confirmation
+- **Undo & History**: every change (add, edit, move, sort, delete, import, restore) is logged with a timestamp; Undo steps back one state, and the History dialog can restore *any* logged state, git-style. Deleting a card only moves it to the **Trash** in the History dialog, where it stays recoverable until you choose **Delete permanently** — the only action that truly erases it
 - **Four themes**: Morning (ruled paper), Day (plain white, high-contrast for easy reading), Dusk (warm sepia), Night (dark); follows your system preference until you pick one
 - **Keyboard support**: fully usable without a mouse
 
@@ -52,7 +52,7 @@ docker compose up
 # then open http://localhost:3000
 ```
 
-The database is stored on a named Docker volume (`board-data`), **not** inside the container, so your questions survive restarts, upgrades, and `docker compose down`. Because the volume is local to each machine, a new laptop starts with a fresh, empty board. Removing the volume (`docker volume rm <project>_board-data`) is the only thing that erases the data.
+The database is stored on a named Docker volume (`board-data`), **not** inside the container, so your cards survive restarts, upgrades, and `docker compose down`. Because the volume is local to each machine, a new laptop starts with a fresh, empty board. Removing the volume (`docker volume rm <project>_board-data`) is the only thing that erases the data.
 
 **Deploy it online (free cloud):** any host that runs Node works — set the start command to `node server.js`, expose the platform's `$PORT`, and point `BOARD_DB` at a persistent disk (e.g. Render/Railway/Fly with an attached volume) so the SQLite file survives redeploys.
 
@@ -62,18 +62,18 @@ The database is stored on a named Docker volume (`board-data`), **not** inside t
 
 The application follows a **local-first** persistence model. The browser keeps a working copy of the board in `localStorage`, so the interface loads instantly and stays fully usable offline. A lightweight Node.js service, bound to a configurable port, persists every change to an **embedded SQLite database** — a single self-contained file on the host (`board.db` by default, or wherever `BOARD_DB` points; a Docker volume when run with Compose). There is no external database server and no cloud dependency.
 
-The database is the durable source of truth, with one deliberate guarantee: **a question is destroyed only by a two-step act — delete it from the board, then Delete permanently from the Trash in the History dialog.** Nothing else loses it:
+The database is the durable source of truth, with one deliberate guarantee: **a card is destroyed only by a two-step act — delete it from the board, then Delete permanently from the Trash in the History dialog.** Nothing else loses it:
 
-- Deleting a question from the board **soft-deletes** it: the row stays in the database, hidden from the board but listed in the Trash, and can be restored.
-- The server **never hard-deletes on a save**. If a save arrives missing some questions, those rows are archived to the Trash, not removed — so a partial or buggy write can never blank your board.
-- Because deleted questions live in SQLite (not just the browser), they remain recoverable **even if you clear the browser's localStorage**.
+- Deleting a card from the board **soft-deletes** it: the row stays in the database, hidden from the board but listed in the Trash, and can be restored.
+- The server **never hard-deletes on a save**. If a save arrives missing some cards, those rows are archived to the Trash, not removed — so a partial or buggy write can never blank your board.
+- Because deleted cards live in SQLite (not just the browser), they remain recoverable **even if you clear the browser's localStorage**.
 - The data lives only in the SQLite file. Clearing browser storage doesn't touch it; the single way to wipe it is deleting that file (or the Docker volume) yourself.
 
 Each machine keeps its own database — the board does not sync between laptops. To move a board deliberately, copy the SQLite file (or the volume), or use Export → Import.
 
 ## The brain (assistant service)
 
-The **Assistant** view talks to a separate Python service — the *brain* — that runs one function-calling agent with four jobs: research a question (web search, cited urls), operate the board in plain language ("triage my inbox"), break fuzzy questions into concrete sub-questions, and surface connections between questions using **Leiden community detection** over a similarity graph of your board. Each reply shows the tools the agent actually called, so its work is visible rather than magic, and the view has model pickers for text generation (live), plus media-to-text and embeddings (saved for the features they belong to).
+The **Assistant** view talks to a separate Python service — the *brain* — that runs one function-calling agent with four jobs: research a question (web search, cited urls), operate the board in plain language ("triage my inbox"), break fuzzy questions into concrete sub-questions, and surface connections between cards by **searching your board** — dense vectors and BM25 together, fused, reranked, and passed through a relevance gate that lets it answer *"I have nothing on that"* instead of inventing something. Each reply shows the tools the agent actually called, so its work is visible rather than magic, and the view has model pickers for text generation (live), plus media-to-text and embeddings (saved for the features they belong to).
 
 ```
 browser ── :3000 Node (board + SQLite + static) ──proxy /api/agent/*──▶ :9000 brain (FastAPI)
@@ -83,7 +83,7 @@ browser ── :3000 Node (board + SQLite + static) ──proxy /api/agent/*─�
 
 The brain **never touches SQLite directly** — every board change goes through the Node API, so the Trash/purge durability guarantee above applies to agent edits too. The browser never sees the LLM key; it stays in the brain's environment.
 
-**The assistant cannot put a card on your board by itself.** A card it invents is a **proposal**: it is saved immediately (a suggestion shouldn't be lost to a crash) but stays off the board until you accept it. Proposals appear in a *Proposed* section at the top of the Assistant view, with a count badge on the Assistant tab so you notice them from any view. **Approve** makes the card real — that is also the moment it earns its permanent `Q-0NN` ledger number and triggers a database snapshot. **Reject** sends it to the Trash, where it stays recoverable, because "Delete permanently" remains the only thing that truly erases a card. Agent *edits* to cards you already own are not gated — those apply straight away and are covered by Undo and History.
+**The assistant cannot put a card on your board by itself.** A card it invents is a **proposal**: it is saved immediately (a suggestion shouldn't be lost to a crash) but stays off the board until you accept it. Proposals appear in a *Proposed* section at the top of the Assistant view, with a count badge on the Assistant tab so you notice them from any view. **Approve** makes the card real — that is also the moment it earns its permanent `C-0NN` ledger number and triggers a database snapshot. **Reject** sends it to the Trash, where it stays recoverable, because "Delete permanently" remains the only thing that truly erases a card. Agent *edits* to cards you already own are not gated — those apply straight away and are covered by Undo and History.
 
 Every capability sits behind a small interface chosen by env vars, so each piece can be swapped without touching the rest:
 
@@ -94,7 +94,10 @@ Every capability sits behind a small interface chosen by env vars, so each piece
 | `BRAIN_MODEL` | `4skl/gemma4-e2b-mtp` | Text-generation default for the local Ollama backend. |
 | `BRAIN_LLM` | `ollama` | Text-generation route. The Assistant UI can explicitly switch to OpenRouter and GPT-5 Nano; use `fake` for deterministic tests. |
 | `BRAIN_OLLAMA_BASE_URL` | `http://localhost:11434/v1` | Where the local model server is. The `/v1` is part of the URL, so the same setting reaches llama.cpp or vLLM without a code change |
-| `BRAIN_EMBEDDER` | `hash` | `fastembed` (semantic, needs the `semantic` extra) or `hash` (offline token buckets). No fallback mode — a missing wheel is an error, not a silent downgrade |
+| `BRAIN_EMBEDDER` | `sentence-transformers` | The measured winner, and the largest single decision in the whole pipeline (~60× on recall — see the RAG section). Needs the `local-embeddings` extra and a ~2.2 GB download, paid on the first retrieval rather than at boot. Alternatives: `fastembed` (ONNX, the `semantic` extra) and `fake` (offline tests, lexical and never semantic). No fallback mode — a missing wheel is an error, not a silent downgrade, and `hash` is retired *by name* so an old config raises instead of quietly selecting its replacement |
+| `BRAIN_EMBED_MODEL` | *(empty)* | Empty means that backend's own default (`heydariAI/persian-embeddings` for sentence-transformers). A name you set explicitly is never overridden, so the configuration and the model that actually embedded can't disagree |
+| `BRAIN_GRADER` | `llm` | The relevance gate between retrieval and generation. `none` disables it. It follows `BRAIN_MODEL`, so it needs no model of its own, and it is one batched call per query rather than one per result |
+| `BRAIN_GRADE_THRESHOLD` | `0.4` | Below this a retrieved card is dropped before the model sees it. A reply the gate cannot parse means *no opinion* (0.5), never *irrelevant* — otherwise one change of output format silently empties every answer's evidence |
 | `BRAIN_MAX_STEPS` | `8` | Tool-call budget per chat turn |
 | `BRAIN_TRANSCRIBER` | `openrouter` | Voice-to-text backend. `openrouter` is the frontend default; `parakeet` is the local MLX alternative (Apple Silicon); `fake` is deterministic for tests. |
 | `BRAIN_OMNI_MODEL` | `openai/whisper-large-v3-turbo` | Audio → text (route: OpenRouter API), sent to its dedicated `/audio/transcriptions` endpoint. |
@@ -136,7 +139,7 @@ in **Chroma**, and the agent reaches it through a `recall_chat` tool — ask "wh
 decide about the mortgage?" and it searches past chat rather than guessing.
 
 Chroma runs as a separate service, so it is a **prerequisite** for chat memory (everything
-else — the board, the agent, web search, Leiden RAG — works without it; if Chroma is
+else — the board, the agent, web search, retrieval over your own cards — works without it; if Chroma is
 unreachable the brain logs a warning, disables recall, and serves on). One record holds the
 chunk and its vector together; real and non-real data are separated by database:
 
@@ -169,26 +172,27 @@ ollama pull deepseek-r1:8b        # optional slower reasoning alternative
 
 Set `BRAIN_LLM=ollama BRAIN_MODEL=4skl/gemma4-e2b-mtp` for local chat, and
 `RAGLAB_LLM=ollama RAGLAB_MODEL=4skl/gemma4-e2b-mtp` for local RAG Lab LLM
-stages. The RAG Lab’s default Qwen embeddings and Cohere reranker still use the
-OpenRouter API; choose a local embedder/reranker in its settings for a fully
-local experiment.
+stages. The RAG Lab’s default embedder (`heydariAI/persian-embeddings`, loaded
+locally through sentence-transformers) and its default lexical reranker never
+leave the machine, so with `RAGLAB_LLM=ollama` an experiment is fully local and
+needs no API key.
 
-With Compose, both services start together (`docker compose up`). Fully offline test mode is `BRAIN_LLM=fake BRAIN_EMBEDDER=hash`.
+With Compose, both services start together (`docker compose up`). Fully offline test mode is `BRAIN_LLM=fake BRAIN_EMBEDDER=fake`.
 
-Swap points, each one file: the chat model (`brain/src/lodestar_brain/llm/factory.py` — add a branch, e.g. `ChatOllama`, never edit a call site), the search provider (`tools/websearch.py`), the embedder (`rag/embedder.py`), and the agent itself (`agent/runner.py`, registered in `agent/registry.py`).
+Swap points, each one file: the chat model (`brain/src/lodestar_brain/llm/factory.py` — add a branch, never edit a call site), the search provider (`tools/websearch.py`), the embedder (`retrieval.py`'s `make_embeddings`, which returns a LangChain `Embeddings`, so a new backend is a class rather than a protocol of ours), and the agent itself (`agent/runner.py`, registered in `agent/registry.py`).
 
 ## Keyboard shortcuts (with a card focused)
 
 | Key | Action |
 | --- | --- |
-| `Enter` | Edit the question |
+| `Enter` | Edit the card |
 | `[` / `]` | Move to previous / next column |
 | `Alt` + `↑` / `↓` | Reorder within the column |
-| `Delete` | Delete the question (with confirmation) |
+| `Delete` | Delete the card (with confirmation) |
 
 ## Tests
 
-Lodestar is developed **test-first**: every feature or fix ships with tests in the same change, and the relevant suite passes before commit. There are four layers, and **all of them run fully offline** — the brain uses a deterministic fake LLM and a hash embedder, and the frontend's semantic map is forced to its keyword fallback, so there is no API key, no network, and no flakiness.
+Lodestar is developed **test-first**: every feature or fix ships with tests in the same change, and the relevant suite passes before commit. There are four layers, and **all of them run fully offline** — the brain uses a deterministic fake LLM and the `fake` embedder — lexical hashing, never semantic, so no model is downloaded — and the frontend's semantic map is forced to its keyword fallback, so there is no API key, no network, and no flakiness.
 
 | Layer | Where | What it covers |
 | --- | --- | --- |
@@ -263,24 +267,24 @@ Pick a strategy per stage and the panel grades it:
 | --- | --- |
 | Chunking | fixed 500 (what the brain ships), fixed+overlap, per-message, turn-pair, whole-session, semantic-drift (topic segmentation) — each optionally with Anthropic-style contextual headers |
 | Hierarchy | raw chunks plus, additively, session summaries, month digests, per-storyline digests, and a promise/deadline ledger; summaries extractive (offline) or LLM |
-| Embedding | **OpenRouter Qwen3-Embedding-8B** is the lab default: Text → embedding (route: OpenRouter API). Local alternatives remain fastembed and sentence-transformers (including Persian-tuned `heydariAI/persian-embeddings`); OpenAI embeddings remain optional. |
-| Reranking | **Cohere Rerank 4 Fast** is the lab default: Query + text → relevance score (route: OpenRouter API). Local lexical, recency, cross-encoder, and Ollama LLM alternatives remain available. |
-| Retrieval | dense, BM25, or hybrid with Reciprocal Rank Fusion; Farsi time expressions («آذر», «پارسال پاییز») resolved into a metadata date range; multi-query expansion; HyDE |
-| Reranking | none, lexical, recency, "agentic" (relevance + recency + emotional importance), multilingual cross-encoder, or LLM grading |
+| Embedding | **Persian-tuned `heydariAI/persian-embeddings`** (sentence-transformers, loaded locally) is the lab default — the corpus is a Farsi diary, and this was the one choice worth ~60×. Alternatives: fastembed's ONNX list, any HuggingFace checkpoint, OpenAI embeddings (needs `OPENAI_API_KEY`), and the hash embedders that exist to be measured against |
+| Retrieval | dense, BM25, or hybrid with Reciprocal Rank Fusion (the default); Farsi time expressions («آذر», «پارسال پاییز») resolved into a metadata date range; multi-query expansion; HyDE |
+| Reranking | none, **lexical (the default)**, recency, "agentic" (relevance + recency + emotional importance), multilingual cross-encoder, or LLM grading |
 | Gating | a relevance threshold — what makes an honest *"I have nothing on that"* possible — plus parent/session expansion and MMR diversification |
 | Scoring | recall/precision/MRR/nDCG@k over evidence sessions, verbatim **quote recall**, latest-state recall for facts that changed, abstention accuracy, and **RAGAS** — its non-LLM context metrics offline, its judged metrics (faithfulness, relevancy, factual correctness) with an API key |
 
 Everything is reported per question *type*, because a change that lifts single-hop
 recall while destroying temporal recall is not an improvement.
 
-`npm run raglab` starts the lab at `http://localhost:9002/`. Its defaults use
-`qwen/qwen3-embedding-8b` for embeddings and `cohere/rerank-4-fast` for
-reranking through OpenRouter, so a run requires `OPENROUTER_API_KEY`. The local
-alternatives stay useful for private/offline experiments. The command installs what the local embedder needs (the `local-embeddings`
-extra: sentence-transformers and torch, ~1 GB), and downloads the Persian model
-once (~2.2 GB) on the first index build. `tests/ports.test.js` checks that launcher
-against the configured default, so switching the default without switching the
-extra fails a test rather than a run.
+`npm run raglab` starts the lab at `http://localhost:9002/`. Its defaults embed with
+`heydariAI/persian-embeddings` and rerank lexically, both on this machine; only the
+LLM stages (answerer, summaries, relevance gate, RAGAS judge) reach out, to
+OpenRouter by default (`OPENROUTER_API_KEY`) or to a local model with
+`RAGLAB_LLM=ollama`. The command installs what the local embedder needs (the
+`local-embeddings` extra: sentence-transformers and torch, ~1 GB), and downloads the
+Persian model once (~2.2 GB) on the first index build. `tests/ports.test.js` checks
+that launcher against the configured default, so switching the default without
+switching the extra fails a test rather than a run.
 
 Four of the metrics that choose the architecture are LLM-judged, so a lab with no
 model can rank nothing. `RAGLAB_LLM=ollama` points every LLM stage — answerer,

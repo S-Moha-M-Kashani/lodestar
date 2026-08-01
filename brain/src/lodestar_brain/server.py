@@ -24,8 +24,8 @@ from .voice.base import TranscriptionError
 # `mutated` means the board changed and the client should adopt server state,
 # `proposed` means a card is waiting for the user's approval and only the
 # proposals list needs refreshing. Creating a card no longer changes the board.
-MUTATING_TOOLS = {'update_question'}
-PROPOSING_TOOLS = {'create_question'}
+MUTATING_TOOLS = {'update_card'}
+PROPOSING_TOOLS = {'create_card'}
 
 
 class ChatBody(BaseModel):

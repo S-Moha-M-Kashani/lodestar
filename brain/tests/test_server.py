@@ -66,7 +66,7 @@ def test_chat_accepts_the_providers_the_picker_offers_and_refuses_the_rest():
 
 @respx.mock
 def test_chat_add_proposes_a_card_without_mutating_the_board():
-    # create_question now proposes; the board is unchanged until the user
+    # create_card now proposes; the board is unchanged until the user
     # confirms. The two events are distinct flags because the frontend reacts
     # differently: `mutated` means adopt the board, `proposed` means refresh the
     # proposals list.
@@ -82,7 +82,7 @@ def test_chat_add_proposes_a_card_without_mutating_the_board():
     assert body['proposed'] is True
     assert body['mutated'] is False
     step, = body['steps']
-    assert step['tool'] == 'create_question'
+    assert step['tool'] == 'create_card'
     assert step['arguments'] == {'title': 'What is Leiden clustering?'}
     # `result` rides along with the name and the arguments: the Assistant shows
     # what each tool answered, and 'pending' is how the user learns this card is
@@ -94,10 +94,10 @@ def test_chat_add_proposes_a_card_without_mutating_the_board():
 
 def test_tool_classification_separates_proposing_from_mutating():
     from lodestar_brain.server import MUTATING_TOOLS, PROPOSING_TOOLS
-    assert PROPOSING_TOOLS == {'create_question'}
-    assert MUTATING_TOOLS == {'update_question'}
+    assert PROPOSING_TOOLS == {'create_card'}
+    assert MUTATING_TOOLS == {'update_card'}
     # An edit still applies immediately, so it must stay a mutation.
-    assert 'update_question' not in PROPOSING_TOOLS
+    assert 'update_card' not in PROPOSING_TOOLS
 
 
 @respx.mock
@@ -384,14 +384,14 @@ def test_the_streamed_turn_reports_each_tool_then_agrees_with_the_buffered_one()
     assert kinds.count('done') == 1 and kinds[-1] == 'done'
     assert kinds.index('step') < kinds.index('done'), 'the step arrived too late to be progress'
     step = next(data for name, data in events if name == 'step')
-    assert step['tool'] == 'create_question' and step['result']['id'] == 'n1'
+    assert step['tool'] == 'create_card' and step['result']['id'] == 'n1'
 
     # The tool is announced when it is *requested*, not only when it answers.
     # A web search runs for seconds, and without this the slowest stretch of a
     # research turn emits nothing at all — indistinguishable from a hang.
     assert kinds.index('calling') < kinds.index('step')
     assert next(data for name, data in events if name == 'calling') == {
-        'tool': 'create_question', 'arguments': {'title': 'What is RRF?'}}
+        'tool': 'create_card', 'arguments': {'title': 'What is RRF?'}}
 
     done = events[-1][1]
     assert done['reply'] == 'FAKE: created "What is RRF?"'
