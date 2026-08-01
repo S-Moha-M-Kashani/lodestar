@@ -6,7 +6,7 @@ import respx
 from fastapi.testclient import TestClient
 
 from lodestar_brain.config import Settings
-from lodestar_brain.server import create_app
+from lodestar_brain.server import MAX_CHARS, MAX_MESSAGES, create_app
 from lodestar_brain.voice.fake import FAKE_TRANSCRIPT
 
 
@@ -43,6 +43,11 @@ def test_chat_echo_roundtrip():
     assert body['reply'] == 'FAKE: hello brain'
     assert body['mutated'] is False
     assert body['steps'] == []
+    # What the turn spent, so the Assistant can show it. Reported by the offline
+    # backend too — otherwise the whole path is untestable without a paid model.
+    assert body['usage']['total_tokens'] == (body['usage']['input_tokens']
+                                             + body['usage']['output_tokens'])
+    assert body['usage']['output_tokens'] > 0
 
 
 @respx.mock
@@ -62,6 +67,30 @@ def test_chat_accepts_the_providers_the_picker_offers_and_refuses_the_rest():
         'messages': [{'role': 'user', 'content': 'hello brain'}],
         'provider': 'anthropic'})
     assert res.status_code == 422
+
+
+# This is an integration test.
+@respx.mock
+def test_both_chat_routes_refuse_a_conversation_past_the_caps():
+    """Two caps, because there are two ways to arrive with too much.
+
+    The browser sends the whole conversation on every turn, so a chat that runs
+    long is a bigger request each time. A thousand one-word messages and one
+    novel-length message both blow past a context window, and a character cap
+    alone lets the first through. Checked on both routes: a second route is a
+    second place to forget.
+    """
+    client = TestClient(fake_app())
+    too_many = [{'role': 'user', 'content': 'hi'} for _ in range(MAX_MESSAGES + 1)]
+    too_long = [{'role': 'user', 'content': 'x' * (MAX_CHARS + 1)}]
+    for path in ('/agent/chat', '/agent/chat/stream'):
+        for messages in (too_many, too_long):
+            res = client.post(path, json={'messages': messages})
+            assert res.status_code == 413, path
+    # And an ordinary turn still gets through — a cap that closes the door is
+    # not a cap.
+    assert client.post('/agent/chat', json={'messages': [
+        {'role': 'user', 'content': 'hello brain'}]}).status_code == 200
 
 
 @respx.mock
@@ -324,9 +353,14 @@ def test_having_no_matches_and_having_no_memory_are_told_apart():
         'matches': [], 'memory': True}
 
 
-def test_recall_requires_a_text_field(tmp_path):
+def test_recall_validates_its_body(tmp_path):
     client = TestClient(memory_app(tmp_path))
     assert client.post('/rag/recall', json={}).status_code == 422
+    # k is bounded exactly as RecallChatArgs' already was. Unbounded, one
+    # request reads out the whole collection — and this route is reachable from
+    # the browser, while the tool is only reachable through the model.
+    assert client.post('/rag/recall', json={'text': 'hi', 'k': 999}).status_code == 422
+    assert client.post('/rag/recall', json={'text': 'hi', 'k': 0}).status_code == 422
 
 
 @respx.mock
@@ -397,6 +431,9 @@ def test_the_streamed_turn_reports_each_tool_then_agrees_with_the_buffered_one()
     assert done['reply'] == 'FAKE: created "What is RRF?"'
     assert done['proposed'] is True and done['mutated'] is False
     assert done['steps'] == [step]
+    # Including what it spent: this turn made two model calls, so a `done` that
+    # reported one of them would understate every turn that used a tool.
+    assert done['usage']['output_tokens'] > 0
 
     tokens = ''.join(data['text'] for name, data in events if name == 'token')
     assert 'n1' not in tokens, 'tool output must not stream as reply text'

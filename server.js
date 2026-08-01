@@ -34,6 +34,41 @@ const AGENT_URL = process.env.AGENT_URL || 'http://127.0.0.1:9000';
 // origin, exactly as it does for the brain.
 const RAGLAB_URL = process.env.RAGLAB_URL || 'http://127.0.0.1:9002';
 
+// A token bucket in front of the brain. This is the only place that can refuse:
+// the brain answers whatever reaches it, so a client stuck in a retry loop would
+// spend real API credit or pin a local model for minutes. Capacity and refill
+// are separate settings because they answer different questions — how many
+// requests may land at once, and how fast they are earned back. The defaults sit
+// far above deliberate use (nobody types 60 questions in a burst) and far below
+// a runaway loop, which does thousands a minute.
+//
+// One bucket for the whole assistant surface, not one per client address: this
+// is a single-user local board, so a map keyed by a value that never varies
+// would be bookkeeping rather than protection.
+//
+// LangChain's `InMemoryRateLimiter` on the chat model was considered and is not
+// this: it paces calls by *sleeping*, so under a flood it turns a fast refusal
+// into a queue of held-open connections. Saying no is the point.
+const AGENT_BURST = Number(process.env.LODESTAR_AGENT_BURST) || 60;
+const AGENT_PER_MIN = Number(process.env.LODESTAR_AGENT_PER_MIN) || 240;
+const agentBucket = { tokens: AGENT_BURST, at: Date.now() };
+
+/** Spend one token. Returns null when there was one, otherwise the whole
+ *  seconds until the next — refill is continuous, so a pause of any length is
+ *  credited without a timer running. */
+function agentRetryAfter() {
+  const now = Date.now();
+  const perMs = AGENT_PER_MIN / 60000;
+  agentBucket.tokens = Math.min(AGENT_BURST,
+    agentBucket.tokens + (now - agentBucket.at) * perMs);
+  agentBucket.at = now;
+  if (agentBucket.tokens >= 1) {
+    agentBucket.tokens -= 1;
+    return null;
+  }
+  return Math.max(1, Math.ceil((1 - agentBucket.tokens) / perMs / 1000));
+}
+
 // A new card on the board is worth a snapshot of the database. Off only
 // when explicitly disabled — the test suites set this to '0' so they never add
 // throwaway boards to the user's real backup history.
@@ -512,9 +547,9 @@ const STATIC = {
   '/styles.css': ['styles.css', 'text/css; charset=utf-8'],
 };
 
-function sendJson(res, status, body) {
+function sendJson(res, status, body, headers = {}) {
   const text = JSON.stringify(body);
-  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', ...headers });
   res.end(text);
 }
 
@@ -625,9 +660,20 @@ const server = createServer(async (req, res) => {
   const upstream = path.startsWith('/api/raglab/')
     ? { url: RAGLAB_URL + '/api' + path.slice('/api/raglab'.length), down: 'RAG lab unavailable' }
     : path.startsWith('/api/agent/') || path.startsWith('/api/rag/')
-      ? { url: AGENT_URL + path.slice('/api'.length), down: 'assistant unavailable' }
+      ? { url: AGENT_URL + path.slice('/api'.length), down: 'assistant unavailable',
+          limited: true }
       : null;
   if (upstream) {
+    // Only the brain is metered, and it is metered before the body is read, so a
+    // flood costs nothing to refuse. The lab is left alone: it runs only when a
+    // developer starts it, and rate-limiting your own workbench is noise.
+    if (upstream.limited) {
+      const after = agentRetryAfter();
+      if (after !== null) {
+        return sendJson(res, 429, { error: 'Too many assistant requests' },
+          { 'Retry-After': String(after) });
+      }
+    }
     const target = upstream.url + url.search;
     let body;
     if (req.method !== 'GET' && req.method !== 'HEAD') {

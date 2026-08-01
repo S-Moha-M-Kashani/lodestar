@@ -21,6 +21,7 @@ from langgraph.errors import GraphRecursionError
 
 from .config import Settings
 from .llm import make_chat_model
+from .untrusted import PROMPT_RULE, UntrustedToolOutput, result_of
 
 SYSTEM_PROMPT = """You are Lodestar's assistant — a research companion and coach \
 for a personal life dashboard ("your compass for life"). The board \
@@ -45,7 +46,11 @@ Importance/urgency: high, low, or empty.
 Rules: never invent card ids — look them up with list_cards or \
 find_related first. When you change the board, say exactly what you changed. \
 When research produces an answer, offer to save it into the card's notes. \
-Keep replies short and concrete."""
+Keep replies short and concrete.
+
+""" + PROMPT_RULE
+# The clause is appended rather than written out, so the prompt and the wrapper
+# cannot disagree about what the fence looks like — see untrusted.py.
 
 STEP_LIMIT_REPLY = 'I hit my step limit before finishing — try a smaller request.'
 
@@ -61,6 +66,8 @@ class AgentStep:
 class AgentResult:
     reply: str
     steps: list[AgentStep] = field(default_factory=list)
+    # What the turn spent, or None when the model reported nothing.
+    usage: dict | None = None
 
 
 def _tool_error(exc: Exception, request: Any) -> str:
@@ -88,15 +95,6 @@ def _text(message: BaseMessage) -> str:
                    if isinstance(part, dict))
 
 
-def _decode(content: Any) -> object:
-    if not isinstance(content, str):
-        return content
-    try:
-        return json.loads(content)
-    except (ValueError, TypeError):
-        return content
-
-
 def _calls_in(messages: list[BaseMessage]) -> Iterator[dict]:
     """Every tool call the model has requested, in the order it requested them."""
     for message in messages:
@@ -121,8 +119,10 @@ def _steps_from(messages: list[BaseMessage]) -> list[AgentStep]:
         answer = results.get(call['id'])
         if answer is None:
             continue
+        # result_of, not the message content: the content is fenced text meant
+        # for the model, and the Assistant needs the rows the tool returned.
         steps.append(AgentStep(tool=call['name'], arguments=dict(call['args']),
-                               result=_decode(answer.content)))
+                               result=result_of(answer)))
     return steps
 
 
@@ -131,6 +131,42 @@ def _reply_from(messages: list[BaseMessage]) -> str:
         if isinstance(message, AIMessage) and not message.tool_calls:
             return _text(message)
     return ''
+
+
+def _usage_from(messages: list[BaseMessage]) -> dict | None:
+    """What the turn spent, summed over its model calls.
+
+    A turn that used tools is several calls, and each one re-sends the transcript
+    grown by the last tool's answer — so those input tokens really are paid
+    again, and summing them is the bill rather than double counting.
+
+    None instead of zeros when nothing was reported: a model that does not report
+    usage and a turn that cost nothing are different facts, and a turn shown as
+    "0 tokens" is a measurement nobody made.
+    """
+    totals = {'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0}
+    reported = False
+    for message in messages:
+        usage = getattr(message, 'usage_metadata', None)
+        if not usage:
+            continue
+        reported = True
+        for key in totals:
+            totals[key] += usage.get(key, 0)
+    return totals if reported else None
+
+
+def _result_from(messages: list[BaseMessage], reply: str | None = None) -> AgentResult:
+    """One place a turn's result is built.
+
+    Every method returns twice — once normally, once for the step limit — so
+    six construction sites is six chances for one path to report a field the
+    others forget. `reply` is passed only for the step-limit path, where the
+    transcript is abandoned but the steps and the spend still happened.
+    """
+    return AgentResult(reply=_reply_from(messages) if reply is None else reply,
+                       steps=_steps_from(messages),
+                       usage=_usage_from(messages))
 
 
 class LodestarAgent:
@@ -164,9 +200,13 @@ class LodestarAgent:
         key = (provider or self.settings.llm_provider, model or '')
         if key not in self._graphs:
             llm = self._llm or make_chat_model(self.settings, model, provider)
+            # UntrustedToolOutput sits outside the error middleware, so a tool's
+            # failure message is fenced too: the text in "board unreachable at …"
+            # is not ours either.
             self._graphs[key] = create_agent(
                 model=llm, tools=self.tools, system_prompt=self.system_prompt,
-                middleware=[ToolErrorMiddleware(_tool_error)])
+                middleware=[UntrustedToolOutput(),
+                            ToolErrorMiddleware(_tool_error)])
         return self._graphs[key]
 
     @property
@@ -186,8 +226,8 @@ class LodestarAgent:
                     stream_mode='values'):
                 seen = chunk['messages']
         except GraphRecursionError:
-            return AgentResult(reply=STEP_LIMIT_REPLY, steps=_steps_from(seen))
-        return AgentResult(reply=_reply_from(seen), steps=_steps_from(seen))
+            return _result_from(seen, STEP_LIMIT_REPLY)
+        return _result_from(seen)
 
     async def arun(self, messages: list[dict], model: str | None = None,
                    provider: str | None = None) -> AgentResult:
@@ -198,8 +238,8 @@ class LodestarAgent:
                     stream_mode='values'):
                 seen = chunk['messages']
         except GraphRecursionError:
-            return AgentResult(reply=STEP_LIMIT_REPLY, steps=_steps_from(seen))
-        return AgentResult(reply=_reply_from(seen), steps=_steps_from(seen))
+            return _result_from(seen, STEP_LIMIT_REPLY)
+        return _result_from(seen)
 
     async def astream(self, messages: list[dict], model: str | None = None,
                       provider: str | None = None
@@ -250,7 +290,6 @@ class LodestarAgent:
                 if isinstance(message, AIMessage) and (text := _text(message)):
                     yield 'token', text
         except GraphRecursionError:
-            yield 'done', AgentResult(reply=STEP_LIMIT_REPLY,
-                                      steps=_steps_from(seen))
+            yield 'done', _result_from(seen, STEP_LIMIT_REPLY)
             return
-        yield 'done', AgentResult(reply=_reply_from(seen), steps=_steps_from(seen))
+        yield 'done', _result_from(seen)

@@ -8,7 +8,7 @@ from typing import Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .agent import AgentResult, AgentStep, LodestarAgent
 from .config import Settings, load_settings
@@ -27,6 +27,23 @@ from .voice.base import TranscriptionError
 MUTATING_TOOLS = {'update_card'}
 PROPOSING_TOOLS = {'create_card'}
 
+# How much conversation one turn may carry. The browser sends the whole history
+# on every turn, so a chat that runs long is a bigger request each time, and
+# there is nothing above this that counts messages — Node's 5 MB body guard is
+# about bytes on the wire, not about what a context window costs.
+#
+# Two caps, because there are two ways to arrive with too much: a thousand
+# one-word messages and one novel-length message both overrun a context, and a
+# character cap alone lets the first through. MAX_CHARS is roughly 30k tokens of
+# English, which is generous for a remote model and already past what a small
+# local one will hold.
+#
+# Deliberately a refusal and not a silent trim of the oldest messages: dropping
+# the start of a conversation is the kind of quiet loss this project does not do.
+# The user is told to start a new chat, and keeps the old one on screen.
+MAX_MESSAGES = 80
+MAX_CHARS = 120_000
+
 
 class ChatBody(BaseModel):
     messages: list[dict]
@@ -44,7 +61,21 @@ class TranscribeBody(BaseModel):
 
 class RecallBody(BaseModel):
     text: str
-    k: int = 5
+    # Bounded exactly as RecallChatArgs' k already was. Unbounded, one request
+    # reads out the whole collection — and this route is reachable straight from
+    # the browser, where the tool is only reachable through the model.
+    k: int = Field(5, ge=1, le=20)
+
+
+def _refuse_if_oversized(messages: list[dict]) -> None:
+    """413 for a conversation past the caps. Called by every chat route."""
+    if len(messages) > MAX_MESSAGES:
+        raise HTTPException(413, f'this conversation carries more than '
+                                 f'{MAX_MESSAGES} messages — start a new chat')
+    total = sum(len(str(m.get('content', ''))) for m in messages)
+    if total > MAX_CHARS:
+        raise HTTPException(413, f'this conversation carries more than '
+                                 f'{MAX_CHARS} characters — start a new chat')
 
 
 def _step_json(step: AgentStep) -> dict:
@@ -59,7 +90,10 @@ def _turn_json(result: AgentResult) -> dict:
     return {'reply': result.reply,
             'mutated': any(s.tool in MUTATING_TOOLS for s in result.steps),
             'proposed': any(s.tool in PROPOSING_TOOLS for s in result.steps),
-            'steps': [_step_json(s) for s in result.steps]}
+            'steps': [_step_json(s) for s in result.steps],
+            # null when the model reported nothing, so the Assistant can stay
+            # silent rather than claim a turn cost zero.
+            'usage': result.usage}
 
 
 def _sse(event: str, data: dict) -> str:
@@ -131,6 +165,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Async because cycle 2's MCP tools are coroutine-only. Safe today: the
         # sync tools (board HTTP, ddgs, Chroma) run in LangChain's thread
         # executor, so nothing here blocks the event loop.
+        _refuse_if_oversized(body.messages)
         result = await agent.arun(body.messages, model=body.model,
                                   provider=body.provider)
         remember(body.messages, result.reply)
@@ -145,6 +180,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         answers with two different content types depending on a flag is worse
         than two routes.
         """
+        # Before the StreamingResponse exists, so an over-long conversation is a
+        # 413 the browser can read. Raised from inside the generator it would be
+        # a 200 that dies mid-stream.
+        _refuse_if_oversized(body.messages)
+
         async def events():
             try:
                 async for kind, payload in agent.astream(

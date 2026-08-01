@@ -3618,7 +3618,21 @@
     }
     const sources = sourcesOf(done);
     if (sources.length) el.appendChild(renderChatSources(sources));
+    if (msg.usage) el.appendChild(renderChatUsage(msg.usage));
     return el;
+  }
+
+  // What the turn spent. Tokens only, deliberately no money figure: a price per
+  // model is a number this app cannot verify, and one that has quietly gone
+  // stale is worse than none at all. Absent, not zero, when the model reported
+  // nothing — see _usage_from in the brain.
+  function renderChatUsage(usage) {
+    const line = document.createElement('p');
+    line.className = 'chat-usage';
+    const n = (v) => Number(v || 0).toLocaleString();
+    line.textContent = `${n(usage.total_tokens)} tokens · ${n(usage.input_tokens)} in`
+      + ` · ${n(usage.output_tokens)} out`;
+    return line;
   }
 
   // Deliberately anchored on the scheme, so nothing but http(s) can become an
@@ -3805,6 +3819,17 @@
     chatPaint = requestAnimationFrame(() => { chatPaint = 0; render(); });
   }
 
+  // What to tell the user when a turn never started. Kept apart from the generic
+  // message because a 429 is the board's own rate limit, not a dead brain: told
+  // to check that the service is running, the user would go restart something
+  // that works and never learn that waiting is the whole fix.
+  const CHAT_UNAVAILABLE =
+    'The assistant is unavailable right now. Check that the brain service is running.';
+  const CHAT_REFUSALS = {
+    429: 'Too many assistant requests in a row — wait a moment, then try again.',
+    413: 'This conversation is too long for one turn — start a new chat.',
+  };
+
   async function sendChat(text) {
     assistantState.messages.push({ role: 'user', content: text });
     assistantState.busy = true;
@@ -3813,6 +3838,7 @@
     // for but that have not answered yet; `partial` marks a turn the stream
     // abandoned, so it is shown but never replayed to the model as history.
     const turn = { role: 'assistant', content: '', steps: [], running: [] };
+    let failure = CHAT_UNAVAILABLE;
     try {
       const history = assistantState.messages
         .filter((m) => !m.error && !m.partial
@@ -3831,7 +3857,10 @@
           provider: assistantModels.provider,
         }),
       });
-      if (!res.ok || !res.body) throw new Error(`agent ${res.status}`);
+      if (!res.ok || !res.body) {
+        failure = CHAT_REFUSALS[res.status] || CHAT_UNAVAILABLE;
+        throw new Error(`agent ${res.status}`);
+      }
       assistantState.messages.push(turn);
       let data = null;
       let failed = '';
@@ -3853,6 +3882,10 @@
       turn.content = data.reply || '';
       turn.steps = data.steps || [];
       turn.running = [];
+      // Only from `done`: the tokens of a turn that died mid-stream were spent,
+      // but nothing on the wire says how many, and a partial count shown as the
+      // total would be wrong in the direction that flatters us.
+      turn.usage = data.usage || null;
       // Two distinct outcomes: an edit changed the board, a proposal did not.
       if (data.mutated) await adoptServerBoard();
       if (data.proposed) await refreshProposals();
@@ -3869,12 +3902,8 @@
       } else if (arrived) {
         assistantState.messages.splice(assistantState.messages.indexOf(turn), 1);
       }
-      assistantState.messages.push({
-        role: 'assistant',
-        content: 'The assistant is unavailable right now. Check that the brain service is running.',
-        error: true,
-      });
-      announce('Assistant unavailable');
+      assistantState.messages.push({ role: 'assistant', content: failure, error: true });
+      announce(failure);
     }
     assistantState.busy = false;
     render();
