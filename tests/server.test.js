@@ -208,6 +208,70 @@ test('/api/rag/* is also proxied (503 when brain down)', async () => {
   } finally { await s.stop(); }
 });
 
+// How long the stub upstream sits between its two SSE frames. Long enough that
+// the gap is unmistakable, short enough that the test costs half a second.
+const STREAM_HOLD_MS = 500;
+
+// A stub upstream that emits one SSE frame, waits, then emits a second and
+// ends. It holds on its own timer rather than on a signal from the test: a
+// buffering proxy never delivers the first frame, so a test that waited for it
+// before releasing the upstream would deadlock instead of failing.
+function startStubStream() {
+  return new Promise((resolve) => {
+    const srv = createServer(async (req, res) => {
+      for await (const _ of req) { /* drain the request body */ }
+      res.writeHead(200, { 'Content-Type': 'text/event-stream',
+                           'Cache-Control': 'no-cache' });
+      res.write('event: calling\ndata: {"tool":"web_search"}\n\n');
+      setTimeout(() => {
+        res.write('event: done\ndata: {"reply":"ok"}\n\n');
+        res.end();
+      }, STREAM_HOLD_MS);
+    });
+    srv.listen(0, '127.0.0.1', () => resolve({
+      url: `http://127.0.0.1:${srv.address().port}`,
+      stop: () => new Promise((done) => srv.close(done)),
+    }));
+  });
+}
+
+// This is an integration test — a real server process proxying a real upstream.
+test('an SSE upstream reaches the browser frame by frame, not all at the end', async () => {
+  // `await upstream.text()` returns a byte-identical response with none of the
+  // progress, and neither the status nor the body says so. The only observable
+  // difference is *when* the first frame lands, so that is what is asserted:
+  // piped, it arrives a hold ahead of the end; buffered, the two coincide.
+  const brain = await startStubStream();
+  const s = await startServer({ env: { AGENT_URL: brain.url } });
+  try {
+    const res = await fetch(s.base + '/api/agent/chat/stream', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ messages: [] }),
+    });
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get('content-type') || '', /text\/event-stream/);
+    // Without this an intermediary may cache an event stream, and asking the
+    // same question twice would replay the first answer's frames.
+    assert.equal(res.headers.get('cache-control'), 'no-cache');
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let first = '', rest = '', firstAt = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!firstAt) { firstAt = Date.now(); first = decoder.decode(value); }
+      else rest += decoder.decode(value);
+    }
+    const gap = Date.now() - firstAt;
+
+    assert.match(first, /event: calling/);
+    assert.match(first + rest, /event: done/);
+    assert.ok(gap > STREAM_HOLD_MS / 2,
+      `the first frame landed ${gap}ms before the end; the proxy buffered`);
+  } finally { await s.stop(); await brain.stop(); }
+});
+
 // ---- RAG lab proxy -------------------------------------------------------
 // The lab is a second upstream, separate from the brain: it runs only when a
 // developer starts it, and it must never be reached at AGENT_URL — a request
