@@ -20,19 +20,19 @@ def tools_by_name(client):
 
 
 @respx.mock
-def test_list_questions_filters():
+def test_list_cards_filters():
     respx.get(f'{BOARD}/api/state').mock(return_value=httpx.Response(200, json={
         'version': 1, 'cards': [card('a', 'RAG evals?', 'inbox'),
                                 card('b', 'GPU budget?', 'answered')]}))
     tools = tools_by_name(BoardClient(BOARD))
-    rows = tools['list_questions'].run({'column_id': 'inbox'})
+    rows = tools['list_cards'].run({'column_id': 'inbox'})
     assert [r['id'] for r in rows] == ['a']
-    rows = tools['list_questions'].run({'search': 'gpu'})
+    rows = tools['list_cards'].run({'search': 'gpu'})
     assert [r['id'] for r in rows] == ['b']
 
 
 @respx.mock
-def test_create_question_posts_a_proposal_not_a_board_save():
+def test_create_card_posts_a_proposal_not_a_board_save():
     # The agent may no longer write a card straight onto the board: it proposes
     # one, and the user confirms it. So this posts a single card to
     # /api/proposals and never touches PUT /api/state.
@@ -41,7 +41,7 @@ def test_create_question_posts_a_proposal_not_a_board_save():
     put = respx.put(f'{BOARD}/api/state').mock(return_value=httpx.Response(200, json={
         'version': 1, 'cards': []}))
     tools = tools_by_name(BoardClient(BOARD))
-    created = tools['create_question'].run({'title': 'Fresh question',
+    created = tools['create_card'].run({'title': 'Fresh question',
                                             'type': 'idea', 'category': 'work'})
     assert not put.called, 'a proposal must not go through the whole-board save'
     sent = json.loads(post.calls.last.request.content)
@@ -57,21 +57,21 @@ def test_create_question_posts_a_proposal_not_a_board_save():
 
 
 @respx.mock
-def test_create_question_tool_description_says_it_needs_approval():
+def test_create_card_tool_description_says_it_needs_approval():
     tools = tools_by_name(BoardClient(BOARD))
-    described = tools['create_question'].description.lower()
+    described = tools['create_card'].description.lower()
     assert 'propos' in described or 'approv' in described or 'confirm' in described
 
 
 @respx.mock
-def test_update_question_changes_only_named_fields():
+def test_update_card_changes_only_named_fields():
     existing = [card('a', 'Old', notes='keep me'), card('b', 'Other')]
     respx.get(f'{BOARD}/api/state').mock(return_value=httpx.Response(200, json={
         'version': 1, 'cards': existing}))
     put = respx.put(f'{BOARD}/api/state').mock(return_value=httpx.Response(200, json={
         'version': 1, 'cards': existing}))
     tools = tools_by_name(BoardClient(BOARD))
-    updated = tools['update_question'].run({'id': 'a', 'column_id': 'in-progress',
+    updated = tools['update_card'].run({'id': 'a', 'column_id': 'in-progress',
                                             'type': 'task', 'category': 'work'})
     assert updated['columnId'] == 'in-progress'
     assert updated['type'] == 'task'
@@ -94,7 +94,7 @@ def test_update_round_trips_effort_and_control_untouched():
     put = respx.put(f'{BOARD}/api/state').mock(return_value=httpx.Response(200, json={
         'version': 1, 'cards': existing}))
     tools = tools_by_name(BoardClient(BOARD))
-    tools['update_question'].run({'id': 'a', 'column_id': 'in-progress'})
+    tools['update_card'].run({'id': 'a', 'column_id': 'in-progress'})
     sent = {c['id']: c for c in json.loads(put.calls.last.request.content)['cards']}
     assert sent['a']['effort'] == 'high' and sent['a']['control'] == 'none'
     assert sent['a']['effortSrc'] == 'user' and sent['a']['controlSrc'] == 'user'
@@ -107,15 +107,15 @@ def test_update_unknown_id_errors_without_writing():
     respx.get(f'{BOARD}/api/state').mock(return_value=httpx.Response(200, json={
         'version': 1, 'cards': []}))
     tools = tools_by_name(BoardClient(BOARD))
-    assert 'error' in tools['update_question'].run({'id': 'nope', 'type': 'task'})
+    assert 'error' in tools['update_card'].run({'id': 'nope', 'type': 'task'})
 
 
 def test_tool_schemas_are_derived_from_the_signatures():
     # The wire format is LangChain's job now; what this file guards is that the
     # three board tools exist and each carries a schema and a description.
     tools = make_board_tools(BoardClient(BOARD))
-    assert {t.name for t in tools} == {'list_questions', 'create_question',
-                                       'update_question'}
+    assert {t.name for t in tools} == {'list_cards', 'create_card',
+                                       'update_card'}
     assert all(t.args_schema is not None and t.description for t in tools)
 
 
@@ -126,12 +126,12 @@ def test_tool_schemas_are_derived_from_the_signatures():
 
 
 @respx.mock
-def test_create_question_proposes_a_habit_with_its_cadence():
+def test_create_card_proposes_a_habit_with_its_cadence():
     post = respx.post(f'{BOARD}/api/proposals').mock(
         return_value=httpx.Response(200, json=card(
             'new', 'Meditate', type='habit', habitFreq='daily', habitCount=2, pending=1)))
     tools = tools_by_name(BoardClient(BOARD))
-    created = tools['create_question'].run({
+    created = tools['create_card'].run({
         'title': 'Meditate', 'type': 'habit',
         'frequency': 'daily', 'times_per_period': 2, 'category': 'health'})
     sent = json.loads(post.calls.last.request.content)
@@ -146,7 +146,7 @@ def test_a_non_habit_proposal_carries_no_cadence():
     post = respx.post(f'{BOARD}/api/proposals').mock(
         return_value=httpx.Response(200, json=card('new', 'A thought')))
     tools = tools_by_name(BoardClient(BOARD))
-    tools['create_question'].run({'title': 'A thought', 'type': 'idea'})
+    tools['create_card'].run({'title': 'A thought', 'type': 'idea'})
     sent = json.loads(post.calls.last.request.content)
     assert sent.get('habitFreq', '') == ''
 

@@ -179,7 +179,7 @@
         <button type="button" id="copy-export" class="btn ghost">Copy JSON</button>
         <span class="spacer"></span>
         <button type="button" id="cancel-export" class="btn ghost">Cancel</button>
-        <button type="button" id="download-export" class="btn primary">Download questions.json</button>
+        <button type="button" id="download-export" class="btn primary">Download lodestar.json</button>
       </div>
     </div>
   </dialog>
@@ -190,7 +190,7 @@
       <p class="import-copy">Choose a Lodestar JSON file. You'll then decide whether to <strong>add</strong> its cards to the board or <strong>substitute</strong> the whole board.</p>
       <p class="import-copy">Writing the file yourself, or asking an AI to generate one? It must match this shape:</p>
       <pre id="import-schema" class="import-schema" tabindex="0" aria-label="Expected JSON file format"></pre>
-      <p class="import-hint">Only "title" is required per card — everything else gets a default: cards land in the Inbox as questions, "num" (the permanent Q-012 ledger number) is assigned automatically, timestamps are Unix milliseconds. "categories" is optional too — it carries custom life areas ("h" is an oklch hue, 0–359), and importing adopts any your board doesn't have yet.</p>
+      <p class="import-hint">Only "title" is required per card — everything else gets a default: cards land in the Inbox as questions, "num" (the permanent C-012 ledger number) is assigned automatically, timestamps are Unix milliseconds. "categories" is optional too — it carries custom life areas ("h" is an oklch hue, 0–359), and importing adopts any your board doesn't have yet.</p>
       <div class="dialog-actions">
         <button type="button" id="copy-schema" class="btn ghost">Copy schema</button>
         <span class="spacer"></span>

@@ -137,7 +137,7 @@ class FakeChat(BaseChatModel):
     """Deterministic offline chat model for unit tests, e2e, and CI.
 
     Scripted mode pops pre-baked messages in order. Heuristic mode (no script):
-    - a user message starting with 'add:' yields one create_question tool call,
+    - a user message starting with 'add:' yields one create_card tool call,
       then a '... created ...' reply once a ToolMessage is in the transcript;
     - anything else echoes back as 'FAKE: <text>'.
 
@@ -176,7 +176,7 @@ class FakeChat(BaseChatModel):
             title = text[4:].strip()
             if not tool_ran:
                 return AIMessage(content='', tool_calls=[
-                    {'name': 'create_question', 'args': {'title': title},
+                    {'name': 'create_card', 'args': {'title': title},
                      'id': 'fake-1'}])
             return AIMessage(content=f'FAKE: created "{title}"')
         return AIMessage(content=f'FAKE: {text}')

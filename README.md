@@ -73,7 +73,7 @@ Each machine keeps its own database — the board does not sync between laptops.
 
 ## The brain (assistant service)
 
-The **Assistant** view talks to a separate Python service — the *brain* — that runs one function-calling agent with four jobs: research a question (web search, cited urls), operate the board in plain language ("triage my inbox"), break fuzzy questions into concrete sub-questions, and surface connections between questions using **Leiden community detection** over a similarity graph of your board. Each reply shows the tools the agent actually called, so its work is visible rather than magic, and the view has model pickers for text generation (live), plus media-to-text and embeddings (saved for the features they belong to).
+The **Assistant** view talks to a separate Python service — the *brain* — that runs one function-calling agent with four jobs: research a question (web search, cited urls), operate the board in plain language ("triage my inbox"), break fuzzy questions into concrete sub-questions, and surface connections between questions by **searching your board** — dense vectors and BM25 together, fused, reranked, and passed through a relevance gate that lets it answer *"I have nothing on that"* instead of inventing something. Each reply shows the tools the agent actually called, so its work is visible rather than magic, and the view has model pickers for text generation (live), plus media-to-text and embeddings (saved for the features they belong to).
 
 ```
 browser ── :3000 Node (board + SQLite + static) ──proxy /api/agent/*──▶ :9000 brain (FastAPI)
@@ -94,7 +94,10 @@ Every capability sits behind a small interface chosen by env vars, so each piece
 | `BRAIN_MODEL` | `4skl/gemma4-e2b-mtp` | Text-generation default for the local Ollama backend. |
 | `BRAIN_LLM` | `ollama` | Text-generation route. The Assistant UI can explicitly switch to OpenRouter and GPT-5 Nano; use `fake` for deterministic tests. |
 | `BRAIN_OLLAMA_BASE_URL` | `http://localhost:11434/v1` | Where the local model server is. The `/v1` is part of the URL, so the same setting reaches llama.cpp or vLLM without a code change |
-| `BRAIN_EMBEDDER` | `hash` | `fastembed` (semantic, needs the `semantic` extra) or `hash` (offline token buckets). No fallback mode — a missing wheel is an error, not a silent downgrade |
+| `BRAIN_EMBEDDER` | `sentence-transformers` | The measured winner, and the largest single decision in the whole pipeline (~60× on recall — see the RAG section). Needs the `local-embeddings` extra and a ~2.2 GB download, paid on the first retrieval rather than at boot. Alternatives: `fastembed` (ONNX, the `semantic` extra) and `fake` (offline tests, lexical and never semantic). No fallback mode — a missing wheel is an error, not a silent downgrade, and `hash` is retired *by name* so an old config raises instead of quietly selecting its replacement |
+| `BRAIN_EMBED_MODEL` | *(empty)* | Empty means that backend's own default (`heydariAI/persian-embeddings` for sentence-transformers). A name you set explicitly is never overridden, so the configuration and the model that actually embedded can't disagree |
+| `BRAIN_GRADER` | `llm` | The relevance gate between retrieval and generation. `none` disables it. It follows `BRAIN_MODEL`, so it needs no model of its own, and it is one batched call per query rather than one per result |
+| `BRAIN_GRADE_THRESHOLD` | `0.4` | Below this a retrieved card is dropped before the model sees it. A reply the gate cannot parse means *no opinion* (0.5), never *irrelevant* — otherwise one change of output format silently empties every answer's evidence |
 | `BRAIN_MAX_STEPS` | `8` | Tool-call budget per chat turn |
 | `BRAIN_TRANSCRIBER` | `openrouter` | Voice-to-text backend. `openrouter` is the frontend default; `parakeet` is the local MLX alternative (Apple Silicon); `fake` is deterministic for tests. |
 | `BRAIN_OMNI_MODEL` | `openai/whisper-large-v3-turbo` | Audio → text (route: OpenRouter API), sent to its dedicated `/audio/transcriptions` endpoint. |
@@ -136,7 +139,7 @@ in **Chroma**, and the agent reaches it through a `recall_chat` tool — ask "wh
 decide about the mortgage?" and it searches past chat rather than guessing.
 
 Chroma runs as a separate service, so it is a **prerequisite** for chat memory (everything
-else — the board, the agent, web search, Leiden RAG — works without it; if Chroma is
+else — the board, the agent, web search, retrieval over your own cards — works without it; if Chroma is
 unreachable the brain logs a warning, disables recall, and serves on). One record holds the
 chunk and its vector together; real and non-real data are separated by database:
 
@@ -169,13 +172,14 @@ ollama pull deepseek-r1:8b        # optional slower reasoning alternative
 
 Set `BRAIN_LLM=ollama BRAIN_MODEL=4skl/gemma4-e2b-mtp` for local chat, and
 `RAGLAB_LLM=ollama RAGLAB_MODEL=4skl/gemma4-e2b-mtp` for local RAG Lab LLM
-stages. The RAG Lab’s default Qwen embeddings and Cohere reranker still use the
-OpenRouter API; choose a local embedder/reranker in its settings for a fully
-local experiment.
+stages. The RAG Lab’s default embedder (`heydariAI/persian-embeddings`, loaded
+locally through sentence-transformers) and its default lexical reranker never
+leave the machine, so with `RAGLAB_LLM=ollama` an experiment is fully local and
+needs no API key.
 
-With Compose, both services start together (`docker compose up`). Fully offline test mode is `BRAIN_LLM=fake BRAIN_EMBEDDER=hash`.
+With Compose, both services start together (`docker compose up`). Fully offline test mode is `BRAIN_LLM=fake BRAIN_EMBEDDER=fake`.
 
-Swap points, each one file: the chat model (`brain/src/lodestar_brain/llm/factory.py` — add a branch, e.g. `ChatOllama`, never edit a call site), the search provider (`tools/websearch.py`), the embedder (`rag/embedder.py`), and the agent itself (`agent/runner.py`, registered in `agent/registry.py`).
+Swap points, each one file: the chat model (`brain/src/lodestar_brain/llm/factory.py` — add a branch, never edit a call site), the search provider (`tools/websearch.py`), the embedder (`retrieval.py`'s `make_embeddings`, which returns a LangChain `Embeddings`, so a new backend is a class rather than a protocol of ours), and the agent itself (`agent/runner.py`, registered in `agent/registry.py`).
 
 ## Keyboard shortcuts (with a card focused)
 
@@ -188,7 +192,7 @@ Swap points, each one file: the chat model (`brain/src/lodestar_brain/llm/factor
 
 ## Tests
 
-Lodestar is developed **test-first**: every feature or fix ships with tests in the same change, and the relevant suite passes before commit. There are four layers, and **all of them run fully offline** — the brain uses a deterministic fake LLM and a hash embedder, and the frontend's semantic map is forced to its keyword fallback, so there is no API key, no network, and no flakiness.
+Lodestar is developed **test-first**: every feature or fix ships with tests in the same change, and the relevant suite passes before commit. There are four layers, and **all of them run fully offline** — the brain uses a deterministic fake LLM and the `fake` embedder — lexical hashing, never semantic, so no model is downloaded — and the frontend's semantic map is forced to its keyword fallback, so there is no API key, no network, and no flakiness.
 
 | Layer | Where | What it covers |
 | --- | --- | --- |
@@ -263,24 +267,24 @@ Pick a strategy per stage and the panel grades it:
 | --- | --- |
 | Chunking | fixed 500 (what the brain ships), fixed+overlap, per-message, turn-pair, whole-session, semantic-drift (topic segmentation) — each optionally with Anthropic-style contextual headers |
 | Hierarchy | raw chunks plus, additively, session summaries, month digests, per-storyline digests, and a promise/deadline ledger; summaries extractive (offline) or LLM |
-| Embedding | **OpenRouter Qwen3-Embedding-8B** is the lab default: Text → embedding (route: OpenRouter API). Local alternatives remain fastembed and sentence-transformers (including Persian-tuned `heydariAI/persian-embeddings`); OpenAI embeddings remain optional. |
-| Reranking | **Cohere Rerank 4 Fast** is the lab default: Query + text → relevance score (route: OpenRouter API). Local lexical, recency, cross-encoder, and Ollama LLM alternatives remain available. |
-| Retrieval | dense, BM25, or hybrid with Reciprocal Rank Fusion; Farsi time expressions («آذر», «پارسال پاییز») resolved into a metadata date range; multi-query expansion; HyDE |
-| Reranking | none, lexical, recency, "agentic" (relevance + recency + emotional importance), multilingual cross-encoder, or LLM grading |
+| Embedding | **Persian-tuned `heydariAI/persian-embeddings`** (sentence-transformers, loaded locally) is the lab default — the corpus is a Farsi diary, and this was the one choice worth ~60×. Alternatives: fastembed's ONNX list, any HuggingFace checkpoint, OpenAI embeddings (needs `OPENAI_API_KEY`), and the hash embedders that exist to be measured against |
+| Retrieval | dense, BM25, or hybrid with Reciprocal Rank Fusion (the default); Farsi time expressions («آذر», «پارسال پاییز») resolved into a metadata date range; multi-query expansion; HyDE |
+| Reranking | none, **lexical (the default)**, recency, "agentic" (relevance + recency + emotional importance), multilingual cross-encoder, or LLM grading |
 | Gating | a relevance threshold — what makes an honest *"I have nothing on that"* possible — plus parent/session expansion and MMR diversification |
 | Scoring | recall/precision/MRR/nDCG@k over evidence sessions, verbatim **quote recall**, latest-state recall for facts that changed, abstention accuracy, and **RAGAS** — its non-LLM context metrics offline, its judged metrics (faithfulness, relevancy, factual correctness) with an API key |
 
 Everything is reported per question *type*, because a change that lifts single-hop
 recall while destroying temporal recall is not an improvement.
 
-`npm run raglab` starts the lab at `http://localhost:9002/`. Its defaults use
-`qwen/qwen3-embedding-8b` for embeddings and `cohere/rerank-4-fast` for
-reranking through OpenRouter, so a run requires `OPENROUTER_API_KEY`. The local
-alternatives stay useful for private/offline experiments. The command installs what the local embedder needs (the `local-embeddings`
-extra: sentence-transformers and torch, ~1 GB), and downloads the Persian model
-once (~2.2 GB) on the first index build. `tests/ports.test.js` checks that launcher
-against the configured default, so switching the default without switching the
-extra fails a test rather than a run.
+`npm run raglab` starts the lab at `http://localhost:9002/`. Its defaults embed with
+`heydariAI/persian-embeddings` and rerank lexically, both on this machine; only the
+LLM stages (answerer, summaries, relevance gate, RAGAS judge) reach out, to
+OpenRouter by default (`OPENROUTER_API_KEY`) or to a local model with
+`RAGLAB_LLM=ollama`. The command installs what the local embedder needs (the
+`local-embeddings` extra: sentence-transformers and torch, ~1 GB), and downloads the
+Persian model once (~2.2 GB) on the first index build. `tests/ports.test.js` checks
+that launcher against the configured default, so switching the default without
+switching the extra fails a test rather than a run.
 
 Four of the metrics that choose the architecture are LLM-judged, so a lab with no
 model can rank nothing. `RAGLAB_LLM=ollama` points every LLM stage — answerer,

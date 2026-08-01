@@ -42,9 +42,9 @@ health, mind, music, travel, home, money by default, but they can add or \
 remove areas, so check existing cards for the ids in use; '' = uncategorized. \
 Importance/urgency: high, low, or empty.
 
-Rules: never invent question ids — look them up with list_questions or \
+Rules: never invent card ids — look them up with list_cards or \
 find_related first. When you change the board, say exactly what you changed. \
-When research produces an answer, offer to save it into the question's notes. \
+When research produces an answer, offer to save it into the card's notes. \
 Keep replies short and concrete."""
 
 STEP_LIMIT_REPLY = 'I hit my step limit before finishing — try a smaller request.'

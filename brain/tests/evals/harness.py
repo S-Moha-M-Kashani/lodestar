@@ -23,9 +23,9 @@ class InMemoryBoard:
 
     Mirrors the real BoardClient contract (save_cards receives the FULL list).
     The real Node server assigns id/num to newly created cards (board tools'
-    create_question sends a card dict with no 'id' and relies on the server
+    create_card sends a card dict with no 'id' and relies on the server
     to add one) — this fake mirrors that by assigning an id to any card that
-    arrives without one, so create_question's post-save id lookup works the
+    arrives without one, so create_card's post-save id lookup works the
     same way it does against the real server."""
 
     def __init__(self, cards=None):

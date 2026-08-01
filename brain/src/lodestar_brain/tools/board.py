@@ -17,7 +17,7 @@ HABIT_FREQS = ['daily', 'weekly', 'monthly', 'yearly']
 # Node server) — so 'category' is a plain string here, validated server-side:
 # an id the registry doesn't know is stored as '' (uncategorized), never an error.
 CATEGORY_HELP = ("a category id from the user's own registry (e.g. work, love, "
-                 "health — list_questions shows what's in use), or '' for "
+                 "health — list_cards shows what's in use), or '' for "
                  "uncategorized")
 FREQUENCY_HELP = 'habits only: which calendar period the count applies to'
 
@@ -64,14 +64,14 @@ def _brief(c: dict) -> dict:
             'notes': c.get('notes', '')}
 
 
-class ListQuestionsArgs(BaseModel):
+class ListCardsArgs(BaseModel):
     # '' has to stay legal: the old schema let the model omit the filter, and a
     # model passing it explicitly must get the unfiltered board, not an error.
     column_id: Literal['inbox', 'in-progress', 'answered', ''] = ''
     search: str = Field('', description='match in title/notes/tags')
 
 
-class CreateQuestionArgs(BaseModel):
+class CreateCardArgs(BaseModel):
     title: str = Field(description="the card's text")
     notes: str = ''
     type: CardType = 'question'
@@ -84,7 +84,7 @@ class CreateQuestionArgs(BaseModel):
     tags: list[str] = []
 
 
-class UpdateQuestionArgs(BaseModel):
+class UpdateCardArgs(BaseModel):
     id: str
     title: str | None = None
     notes: str | None = None
@@ -97,8 +97,8 @@ class UpdateQuestionArgs(BaseModel):
 
 
 def make_board_tools(client: BoardClient) -> list[BaseTool]:
-    @tool('list_questions', args_schema=ListQuestionsArgs)
-    def list_questions(column_id: str = '', search: str = '') -> list[dict]:
+    @tool('list_cards', args_schema=ListCardsArgs)
+    def list_cards(column_id: str = '', search: str = '') -> list[dict]:
         """List cards on the board, optionally filtered by column or free text."""
         cards = client.list_cards()
         if column_id:
@@ -110,8 +110,8 @@ def make_board_tools(client: BoardClient) -> list[BaseTool]:
                      or any(q in t for t in (c.get('tags') or []))]
         return [_brief(c) for c in cards]
 
-    @tool('create_question', args_schema=CreateQuestionArgs)
-    def create_question(title: str, notes: str = '', type: str = 'question',
+    @tool('create_card', args_schema=CreateCardArgs)
+    def create_card(title: str, notes: str = '', type: str = 'question',
                         category: str = '', column_id: str = 'inbox',
                         tags: list | None = None, frequency: str = '',
                         times_per_period: int = 1) -> dict:
@@ -134,8 +134,8 @@ def make_board_tools(client: BoardClient) -> list[BaseTool]:
         # reports a proposal instead of claiming it added something.
         return {**_brief(proposal), 'pending': True}
 
-    @tool('update_question', args_schema=UpdateQuestionArgs)
-    def update_question(id: str, title: str | None = None, notes: str | None = None,
+    @tool('update_card', args_schema=UpdateCardArgs)
+    def update_card(id: str, title: str | None = None, notes: str | None = None,
                         type: str | None = None, category: str | None = None,
                         column_id: str | None = None,
                         importance: str | None = None, urgency: str | None = None,
@@ -145,7 +145,7 @@ def make_board_tools(client: BoardClient) -> list[BaseTool]:
         cards = client.list_cards()
         target = next((c for c in cards if c['id'] == id), None)
         if target is None:
-            return {'error': f'no card with id {id!r} — use list_questions first'}
+            return {'error': f'no card with id {id!r} — use list_cards first'}
         updates = {'title': title, 'notes': notes, 'type': type,
                    'category': category, 'columnId': column_id,
                    'importance': importance, 'urgency': urgency, 'tags': tags}
@@ -155,4 +155,4 @@ def make_board_tools(client: BoardClient) -> list[BaseTool]:
         client.save_cards(cards)  # full list — never partial
         return _brief(target)
 
-    return [list_questions, create_question, update_question]
+    return [list_cards, create_card, update_card]

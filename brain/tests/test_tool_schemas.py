@@ -16,7 +16,7 @@ from lodestar_brain.tools.board import COLUMNS, HABIT_FREQS, TYPES, make_board_t
 from lodestar_brain.tools.retrieve import make_recall_tool, make_retrieve_tool
 from lodestar_brain.tools.websearch import make_search_tool
 
-EXPECTED = {'list_questions', 'create_question', 'update_question',
+EXPECTED = {'list_cards', 'create_card', 'update_card',
             'web_search', 'find_related', 'recall_chat'}
 
 
@@ -74,60 +74,60 @@ def test_every_tool_exposes_an_args_schema():
 def test_the_column_enum_is_the_boards_three_columns():
     tools = tools_by_name()
     assert COLUMNS == ['inbox', 'in-progress', 'answered']
-    assert _enum(tools['create_question'], 'column_id') == COLUMNS
-    assert _enum(tools['update_question'], 'column_id') == COLUMNS
+    assert _enum(tools['create_card'], 'column_id') == COLUMNS
+    assert _enum(tools['update_card'], 'column_id') == COLUMNS
 
 
 def test_the_card_type_enum_is_the_boards_six_types():
     tools = tools_by_name()
     assert TYPES == ['question', 'problem', 'task', 'idea', 'plan', 'habit']
-    assert _enum(tools['create_question'], 'type') == TYPES
-    assert _enum(tools['update_question'], 'type') == TYPES
+    assert _enum(tools['create_card'], 'type') == TYPES
+    assert _enum(tools['update_card'], 'type') == TYPES
 
 
 def test_a_habits_cadence_is_offered_where_the_card_is_made():
     tools = tools_by_name()
     # '' is the sixth option: every non-habit card leaves the frequency unset.
-    assert _enum(tools['create_question'], 'frequency') == HABIT_FREQS + ['']
-    fields = tools['create_question'].args_schema.model_json_schema()['properties']
+    assert _enum(tools['create_card'], 'frequency') == HABIT_FREQS + ['']
+    fields = tools['create_card'].args_schema.model_json_schema()['properties']
     assert 'times_per_period' in fields
     # The cadence is set when the card is made, not edited afterwards, so
-    # update_question deliberately does not carry it.
-    assert 'frequency' not in tools['update_question'].args_schema.model_json_schema()['properties']
+    # update_card deliberately does not carry it.
+    assert 'frequency' not in tools['update_card'].args_schema.model_json_schema()['properties']
 
 
 def test_importance_and_urgency_keep_their_three_way_enum():
-    update = tools_by_name()['update_question']
+    update = tools_by_name()['update_card']
     assert _enum(update, 'importance') == ['high', 'low', '']
     assert _enum(update, 'urgency') == ['high', 'low', '']
 
 
-def test_list_questions_still_accepts_an_empty_column_filter():
+def test_list_cards_still_accepts_an_empty_column_filter():
     # The old schema let the model omit the filter; '' has to stay legal or a
     # model that passes it explicitly gets a validation error where it used to
     # get the unfiltered board.
-    assert '' in _enum(tools_by_name()['list_questions'], 'column_id')
+    assert '' in _enum(tools_by_name()['list_cards'], 'column_id')
 
 
 def test_required_fields_match_the_old_hand_written_schemas():
     schemas = {name: _schema(tool) for name, tool in tools_by_name().items()}
-    assert schemas['create_question']['required'] == ['title']
-    assert schemas['update_question']['required'] == ['id']
+    assert schemas['create_card']['required'] == ['title']
+    assert schemas['update_card']['required'] == ['id']
     assert schemas['web_search']['required'] == ['query']
     assert schemas['find_related']['required'] == ['text']
     assert schemas['recall_chat']['required'] == ['text']
-    assert schemas['list_questions'].get('required', []) == []
+    assert schemas['list_cards'].get('required', []) == []
 
 
-def test_create_question_still_tells_the_model_it_needs_approval():
-    described = tools_by_name()['create_question'].description.lower()
+def test_create_card_still_tells_the_model_it_needs_approval():
+    described = tools_by_name()['create_card'].description.lower()
     assert 'propos' in described or 'approv' in described or 'confirm' in described
 
 
 def test_category_stays_a_free_string_with_guidance():
     # Categories are the user's own registry, so this must not become an enum;
     # the description is how the model learns what ids are in use.
-    schema = _schema(tools_by_name()['create_question'])
+    schema = _schema(tools_by_name()['create_card'])
     category = schema['properties']['category']
     assert category['type'] == 'string'
     assert 'enum' not in category
