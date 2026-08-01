@@ -142,12 +142,9 @@ CHUNKERS = ('fixed', 'fixed-overlap', 'message', 'turn-pair', 'session',
 EMBEDDERS = ('ascii-hash', 'token-hash', 'char-hash', 'fastembed',
              'sentence-transformers', 'openai')
 MODEL_EMBEDDERS = ('fastembed', 'sentence-transformers', 'openai')
-SUMMARIZERS = ('extractive', 'llm')
-LAYERS = ('chunk', 'session', 'month', 'thread', 'commitment', 'habit')
 RETRIEVERS = ('dense', 'bm25', 'hybrid-rrf')
 RERANKERS = ('none', 'lexical', 'recency', 'agentic', 'cross-encoder', 'llm')
 GRADERS = ('none', 'lexical', 'llm')
-EXPANSIONS = ('none', 'neighbors', 'session')
 ANSWERERS = ('none', 'extractive', 'llm')
 # Ascending, and the order the remainder of an uneven sample is handed out in, so
 # a balanced selection is reproducible rather than merely proportionate.
@@ -201,19 +198,14 @@ class IndexConfig:
     # heydariAI/persian-embeddings.
     embedder: str = 'sentence-transformers'
     embed_model: str = ''       # model-backed kinds only; '' = backend default
-    summarizer: str = 'extractive'
-    summarizer_model: str = ''  # '' = LabSettings.llm_model; see models.ROLES
-    layers: tuple[str, ...] = LAYERS
 
     def normalized(self) -> 'IndexConfig':
-        # Models that are not consulted are blanked, because this object's
-        # fingerprint names the collection: a model nobody calls must not
-        # invalidate an index and cost a 157-session rebuild.
-        return replace(self, layers=tuple(l for l in LAYERS if l in self.layers),
-                       embed_model=(self.embed_model
-                                    if self.embedder in MODEL_EMBEDDERS else ''),
-                       summarizer_model=(self.summarizer_model
-                                         if self.summarizer == 'llm' else ''))
+        # A model that is not consulted is blanked, because this object's
+        # fingerprint names the index: a model nobody calls must not invalidate
+        # it and cost a 157-session rebuild.
+        return replace(self, embed_model=(self.embed_model
+                                          if self.embedder in MODEL_EMBEDDERS
+                                          else ''))
 
     def fingerprint(self) -> str:
         payload = json.dumps(asdict(self.normalized()), sort_keys=True)
@@ -230,8 +222,6 @@ class RetrievalConfig:
     k: int = 8                       # contexts handed to the answerer
     candidates: int = 40             # depth taken from each retriever
     rrf_k: int = 60
-    search_layers: tuple[str, ...] = LAYERS
-    rollup_boost: float = 1.0        # >1 favours summary layers over raw chunks
     time_filter: bool = True         # resolve Farsi time words into a date range
     # On by default because it is free and measured positive on this fixture:
     # quote recall 0.489 → 0.512 and precision 0.243 → 0.300, no LLM call.
@@ -247,14 +237,10 @@ class RetrievalConfig:
     grader: str = 'none'             # gate that makes abstention possible
     grade_threshold: float = 0.0
     grader_model: str = ''           # grader='llm' only
-    parent_expansion: str = 'none'
     max_context_chars: int = 6000
 
     def normalized(self) -> 'RetrievalConfig':
-        return replace(self,
-                       search_layers=tuple(l for l in LAYERS
-                                           if l in self.search_layers),
-                       agentic_weights=tuple(self.agentic_weights))
+        return replace(self, agentic_weights=tuple(self.agentic_weights))
 
 
 @dataclass(frozen=True)
@@ -294,24 +280,14 @@ class LabConfig:
         bad = []
         checks = ((self.index.chunker, CHUNKERS, 'chunker'),
                   (self.index.embedder, EMBEDDERS, 'embedder'),
-                  (self.index.summarizer, SUMMARIZERS, 'summarizer'),
                   (self.retrieval.retriever, RETRIEVERS, 'retriever'),
                   (self.retrieval.reranker, RERANKERS, 'reranker'),
                   (self.retrieval.grader, GRADERS, 'grader'),
-                  (self.retrieval.parent_expansion, EXPANSIONS, 'parent_expansion'),
                   (self.generation.answerer, ANSWERERS, 'answerer'))
         for value, allowed, name in checks:
             if value not in allowed:
                 bad.append(f'unknown {name}: {value!r} (expected one of '
                            f'{", ".join(allowed)})')
-        if not self.index.layers:
-            bad.append('at least one index layer is required')
-        if not self.retrieval.search_layers:
-            bad.append('at least one search layer is required')
-        missing = set(self.retrieval.search_layers) - set(self.index.layers)
-        if missing:
-            bad.append(f'searching layers that were never indexed: '
-                       f'{", ".join(sorted(missing))}')
         if self.retrieval.k < 1:
             bad.append('k must be >= 1')
         # A model belongs to exactly one backend. Loading the backend's default
@@ -354,7 +330,8 @@ HELP = {
     'index.contextual': (
         'Prepend a one-line header — date, mood, storyline — to every chunk '
         'before embedding it (Anthropic call this contextual retrieval). A diary '
-        'chunk that says "بهتر شد" is unsearchable without knowing what "it" was.'),
+        'chunk that says "بهتر شد" is unsearchable without knowing what "it" was. '
+        'Built from metadata alone, so it costs no model call and no summary.'),
     'index.embedder': (
         'Turns text into the vector the index is searched by, and the one choice that '
         'decides whether anything else matters. Each option says which languages '
@@ -379,19 +356,6 @@ HELP = {
         'the E5 family needs its "query:"/"passage:" prefixes, which the lab '
         'applies for you. Changing this rebuilds the index, because it changes '
         'what is stored.'),
-    'index.summarizer': (
-        '"extractive" picks the most informative real sentences out of a session '
-        '— free, deterministic, no model. "llm" writes new prose, which reads '
-        'better and paraphrases away the exact words a keyword search needs.'),
-    'index.layers': (
-        'Which rollups get stored beside the raw chunks. Layers are additive on '
-        'purpose: raw text always stays, because replacing it with a summary '
-        'makes "how many times did I say X" permanently unanswerable. '
-        '"session" and "month" digest time, "thread" digests one storyline, '
-        '"commitment" collects every promise-shaped sentence, and "habit" is an '
-        'adherence ledger per tracked habit — the diary side of the board\'s '
-        'punch card, stating each tally against its target so "did I keep it" '
-        'is one retrieval rather than counting across fifty chunks.'),
     'retrieval.retriever': (
         '"dense" searches vectors (meaning), "bm25" searches words (exact names, '
         'numbers, rare terms), "hybrid-rrf" runs both and fuses the two rankings '
@@ -409,15 +373,6 @@ HELP = {
         'The constant in Reciprocal Rank Fusion (1/(k+rank)). Higher flattens the '
         'ranking, so agreement between the two retrievers matters more than either '
         'one being confident.'),
-    'retrieval.search_layers': (
-        'Which layers a query is allowed to hit. Searching only summaries is fast '
-        'and vague; searching only raw chunks cannot answer "what happened in '
-        'آذر".'),
-    'retrieval.rollup_boost': (
-        'Multiplies the score of summary layers before the candidate cut, so a '
-        'session summary can compete with twenty raw chunks from the same day. '
-        'Applied before the cut deliberately: after it, a summary that had not '
-        'already survived could never be promoted.'),
     'retrieval.time_filter': (
         'Reads Farsi time words — «آذر», «تابستون», «سه ماه پیش» — as a Jalali '
         'date range and restricts the search to it. Without this, "what happened '
@@ -462,10 +417,6 @@ HELP = {
         'gate has no usable setting (0.6 caught 6 of 8 unanswerable questions but '
         'wrongly refused 52% of the answerable ones), while an LLM gate at 0.4 '
         'refused 5 of 5 with 3% false refusals.'),
-    'retrieval.parent_expansion': (
-        'Small-to-big: retrieve a precise little chunk, then hand the model the '
-        'text around it. "neighbors" adds the pieces either side; "session" adds '
-        'the rest of that day.'),
     'retrieval.max_context_chars': (
         'Budget for the assembled context. When it is exceeded whole chunks are '
         'dropped, never truncated — half a diary entry reads as a complete one '

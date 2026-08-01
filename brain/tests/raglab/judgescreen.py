@@ -66,7 +66,9 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from . import corpus, textnorm
+from lodestar_brain import textnorm
+
+from . import corpus
 from .config import load_lab_settings
 from .llm import judge_llm
 

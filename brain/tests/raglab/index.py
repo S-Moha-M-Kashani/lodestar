@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from . import embedding, summarize
+from . import embedding
 from .chunking import Chunk, chunk_session
 from .config import IndexConfig, LabSettings
 from .store import MemoryVectors
@@ -32,7 +32,6 @@ BATCH = 200
 class IndexStats:
     collection: str = ''
     chunks: int = 0
-    by_layer: dict = field(default_factory=dict)
     avg_chars: float = 0.0
     p95_chars: int = 0
     embed_dim: int = 0
@@ -40,7 +39,6 @@ class IndexStats:
     # Set by IndexRegistry, not by build(): "this process already had it", the
     # only reuse there is now that no store outlives the process.
     reused: bool = False
-    summarizer_failures: int = 0
     notes: list = field(default_factory=list)
 
 
@@ -63,15 +61,10 @@ class LabIndex:
 
     @classmethod
     def build(cls, cfg: IndexConfig, diary: dict, settings: LabSettings,
-              progress=None, summaries: summarize.SummaryCache | None = None
-              ) -> 'LabIndex':
+              progress=None) -> 'LabIndex':
         """Always a full build. There is no `force`: nothing persists, so every
         call embeds the corpus into a store of its own. Skipping the work is the
-        registry's decision, not this one's.
-
-        `summaries` is that decision's one exception: an LLM summariser costs a
-        call per session and produces the same text for every chunker, so a
-        caller that will build repeatedly passes a cache it owns."""
+        registry's decision, not this one's."""
         started = time.time()
         cfg = cfg.normalized()
         stats = IndexStats(collection=cfg.collection())
@@ -82,47 +75,15 @@ class LabIndex:
 
         sessions = diary['sessions']
         if progress:
-            progress('summarising', 0.05)
-        summarizer = summarize.ExtractiveSummarizer(summarize.build_idf(sessions))
-        if cfg.summarizer == 'llm':
-            summarizer = summarize.LLMSummarizer(
-                _lab_llm(settings),
-                cfg.summarizer_model or settings.llm_model, summarizer)
-        cache = summaries if summaries is not None else summarize.SummaryCache()
-        summaries = summarize.session_summaries(
-            sessions, summarizer, cache,
-            progress=(lambda i, n: progress('summarising', 0.05 + 0.35 * i / n))
-            if progress else None)
-        stats.summarizer_failures = getattr(summarizer, 'failures', 0)
-        if stats.summarizer_failures:
-            note(f'{stats.summarizer_failures} sessions fell back to extractive '
-                 'summaries (LLM errors)')
-
-        if progress:
-            progress('chunking', 0.45)
+            progress('chunking', 0.1)
         chunks: list[Chunk] = []
-        if 'chunk' in cfg.layers:
-            for session in sessions:
-                chunks.extend(chunk_session(session, cfg, embedder,
-                                            summaries[session['session_id']]))
-        if 'session' in cfg.layers:
-            chunks.extend(summarize.session_layer(sessions, summaries))
-        if 'month' in cfg.layers:
-            chunks.extend(summarize.month_layer(sessions, summaries))
-        if 'thread' in cfg.layers:
-            chunks.extend(summarize.thread_layer(sessions, summaries,
-                                                 diary.get('threads', {})))
-        if 'commitment' in cfg.layers:
-            chunks.extend(summarize.commitment_layer(sessions))
-        if 'habit' in cfg.layers:
-            chunks.extend(summarize.habit_layer(sessions, diary.get('habits', {})))
+        for session in sessions:
+            chunks.extend(chunk_session(session, cfg, embedder))
 
         lengths = np.array([len(c.text) for c in chunks]) if chunks else np.array([0])
         stats.chunks = len(chunks)
         stats.avg_chars = round(float(lengths.mean()), 1)
         stats.p95_chars = int(np.percentile(lengths, 95))
-        for chunk in chunks:
-            stats.by_layer[chunk.layer] = stats.by_layer.get(chunk.layer, 0) + 1
 
         # A fresh store every build, so there are no stale rows to detect: the
         # only reuse left is the registry handing back an index this process
@@ -183,8 +144,7 @@ class LabIndex:
 
     def neighbors(self, chunk: Chunk) -> list[Chunk]:
         """Chunks either side of this one inside the same session."""
-        siblings = [c for c in self.by_session.get(chunk.session_id, [])
-                    if c.layer == chunk.layer]
+        siblings = list(self.by_session.get(chunk.session_id, []))
         if chunk not in siblings:
             return []
         i = siblings.index(chunk)
@@ -194,9 +154,7 @@ class LabIndex:
         self.store.drop()
 
 
-# Re-exported: evaluate.py and server.py import _lab_llm from here. The body
-# moved to llm.py so summarize.py can reach it without importing this module,
-# which imports summarize.
+# Re-exported: evaluate.py and server.py import _lab_llm from here.
 from .llm import lab_llm as _lab_llm  # noqa: E402  (kept beside its callers)
 
 
@@ -210,17 +168,13 @@ class IndexRegistry:
         self.settings = settings
         self.diary = diary
         self._indexes: dict[str, LabIndex] = {}
-        # Shared across every build this process makes: summaries depend on the
-        # corpus and the summarizer, never on the chunker or the embedder, so a
-        # sweep would otherwise pay an LLM summariser once per candidate.
-        self.summaries = summarize.SummaryCache()
 
     def get(self, cfg: IndexConfig, progress=None, force: bool = False) -> LabIndex:
         key = cfg.normalized().fingerprint()
         if force or key not in self._indexes:
             self._indexes[key] = LabIndex.build(cfg, self.diary, self.settings,
                                                 progress=progress,
-                                                summaries=self.summaries)
+                                                )
         else:
             # The one form of reuse that still exists, reported where the panel
             # already looked for it: this process built it and still has it.
@@ -229,6 +183,6 @@ class IndexRegistry:
 
     def known(self) -> list[dict]:
         return [{'fingerprint': key, 'collection': ix.stats.collection,
-                 'chunks': ix.stats.chunks, 'by_layer': ix.stats.by_layer,
-                 'config': ix.cfg.__dict__ | {'layers': list(ix.cfg.layers)}}
+                 'chunks': ix.stats.chunks,
+                 'config': dict(ix.cfg.__dict__)}
                 for key, ix in self._indexes.items()]

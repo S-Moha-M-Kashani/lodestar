@@ -124,6 +124,29 @@ test('the RAG lab launcher installs the backend its default embedder needs', () 
   assert.match(scripts.raglab, new RegExp(`--extra\\s+${needed}\\b`));
 });
 
+test('the brain launcher installs the backend its default embedder needs', () => {
+  // The same pairing as the lab above, for the same reason: the brain defaults
+  // to a Persian-tuned sentence-transformers model, and without the extra it
+  // starts happily and fails on the first retrieval call. A script that names
+  // its own BRAIN_EMBEDDER is taken at its word — that is the escape hatch for
+  // a deliberately light brain, and `fake` needs nothing installed at all.
+  const cfg = read('brain/src/lodestar_brain/config.py');
+  const chosen = scripts['test-brain'].match(/BRAIN_EMBEDDER=(\S+)/)?.[1]
+    ?? cfg.match(/embedder: str = '([^']+)'/)?.[1];
+  assert.ok(chosen, 'could not tell which embedder `npm run test-brain` uses');
+  const needed = {
+    fastembed: 'semantic',
+    'sentence-transformers': 'local-embeddings',
+  }[chosen];
+  if (!needed) return;
+  assert.match(
+    scripts['test-brain'],
+    new RegExp(`--extra\\s+${needed}\\b`),
+    `test-brain runs the ${chosen} embedder but never installs the ` +
+      `'${needed}' extra it needs`,
+  );
+});
+
 test("the Node proxy's default RAGLAB_URL matches the port the lab binds", () => {
   const m = read('server.js').match(
     /RAGLAB_URL\s*=\s*process\.env\.RAGLAB_URL\s*\|\|\s*'http:\/\/127\.0\.0\.1:(\d+)'/,

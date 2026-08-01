@@ -26,8 +26,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from . import (embedding, evaluate, explain, metrics, models, pipeline,
                ragas_eval, retrieval)
 from .config import (ANSWERERS, BALANCES, CHUNKERS, DIFFICULTIES, EMBEDDERS,
-                     EXPANSIONS, GRADERS, LAYERS, RERANKERS, RETRIEVERS, ROOT,
-                     RUNS_DIR, STEPS, SUMMARIZERS, LabConfig, load_lab_settings)
+                     GRADERS, RERANKERS, RETRIEVERS, ROOT,
+                     RUNS_DIR, STEPS, LabConfig, load_lab_settings)
 from .corpus import load_diary, load_ground_truth
 from .index import IndexRegistry, _lab_llm
 
@@ -137,10 +137,8 @@ def create_app() -> FastAPI:
         missing is a bug report waiting to happen."""
         return {
             'chunkers': list(CHUNKERS), 'embedders': list(EMBEDDERS),
-            'summarizers': list(SUMMARIZERS), 'layers': list(LAYERS),
             'retrievers': list(RETRIEVERS), 'rerankers': list(RERANKERS),
-            'graders': list(GRADERS), 'expansions': list(EXPANSIONS),
-            'answerers': list(ANSWERERS),
+            'graders': list(GRADERS), 'answerers': list(ANSWERERS),
             'question_types': list(metrics.TYPES),
             'difficulties': list(DIFFICULTIES),
             # How a limited run picks its questions. Served because the sample is
@@ -221,7 +219,6 @@ def create_app() -> FastAPI:
             index = registry.get(cfg.index, progress=report, force=force)
             return {'collection': index.stats.collection,
                     'chunks': index.stats.chunks,
-                    'by_layer': index.stats.by_layer,
                     'avg_chars': index.stats.avg_chars,
                     'p95_chars': index.stats.p95_chars,
                     'embed_dim': index.stats.embed_dim,

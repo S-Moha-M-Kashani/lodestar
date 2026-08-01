@@ -1,20 +1,33 @@
 [project]
 name = "lodestar-brain"
 version = "0.1.0"
-description = "Lodestar brain — agent, tools, and Leiden GraphRAG service"
+description = "Lodestar brain — agent, tools, and hybrid retrieval"
 requires-python = ">=3.13"
 dependencies = [
   "fastapi>=0.115",
   "uvicorn>=0.30",
   "httpx>=0.27",
   "numpy>=2.0",
-  "igraph>=0.11",
-  "leidenalg>=0.10",
   "ddgs>=9.0",
   "chromadb>=1.5.9",
   "langchain>=1.0,<2.0",
   "langchain-core>=1.0,<2.0",
   "langchain-openai>=1.0,<2.0",
+  # Retrieval, all of it LangChain's rather than ours. EnsembleRetriever and
+  # MultiQueryRetriever live in langchain-classic: `langchain.retrievers` does
+  # not exist in 1.x, and the slim `langchain` package deliberately does not
+  # carry them.
+  "langchain-classic>=1.0,<2.0",
+  "langchain-chroma>=1.0,<2.0",
+  "langchain-text-splitters>=1.0,<2.0",
+  # BM25 is pure Python, tiny, and needs no extras, so the sparse half of hybrid
+  # retrieval works in the offline suite — which is what lets those tests assert
+  # on ranking at all. Deliberately *not* langchain-community's BM25Retriever:
+  # that package emits a sunset DeprecationWarning on import and is no longer
+  # maintained, and it is itself a thin wrapper over this. Ours is a
+  # langchain_core BaseRetriever, so EnsembleRetriever cannot tell the
+  # difference.
+  "rank-bm25>=0.2.2",
 ]
 
 [project.optional-dependencies]

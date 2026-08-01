@@ -114,23 +114,15 @@ def candidates() -> list[LabConfig]:
             cfg = replace(cfg, retrieval=replace(cfg.retrieval, **retrieval))
         out.append(replace(cfg, label=label))
 
-    # Is the summary hierarchy earning its keep, or would raw chunks alone do?
-    variant('B raw chunks only',
-            index={'layers': ('chunk',)}, retrieval={'search_layers': ('chunk',)})
     # k moves precision and recall in opposite directions; both are deciding
     # metrics, so this is the one knob whose optimum the four cannot agree on.
     variant('C tighter context k=5', retrieval={'k': 5})
     variant('D wider context k=12', retrieval={'k': 12})
-    # Small-to-big: retrieve precisely, then hand over the surrounding day.
-    variant('E parent expansion', retrieval={'parent_expansion': 'session'})
     # A gate is the only way an answer can be refused, and refusing instead of
     # inventing is what faithfulness rewards.
     variant('F llm relevance gate', retrieval={'grader': 'llm',
                                                'grade_threshold': 0.4,
                                                'grader_model': ANSWER_MODEL})
-    # The rollups — including the habit ledger — compete with twenty raw chunks
-    # from the same day unless they are boosted before the candidate cut.
-    variant('G rollups boosted', retrieval={'rollup_boost': 1.4})
     # One chunker alternative: whole sessions, maximum fidelity per hit.
     variant('H session chunks', index={'chunker': 'session'})
     return out

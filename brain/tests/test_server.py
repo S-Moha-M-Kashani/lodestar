@@ -11,14 +11,14 @@ from lodestar_brain.voice.fake import FAKE_TRANSCRIPT
 
 
 def test_health():
-    client = TestClient(create_app(Settings(llm_provider='fake', embedder='hash')))
+    client = TestClient(create_app(Settings(llm_provider='fake', embedder='fake')))
     res = client.get('/health')
     assert res.status_code == 200
     assert res.json() == {'ok': True, 'service': 'lodestar-brain'}
 
 
 def fake_app():
-    return create_app(Settings(llm_provider='fake', embedder='hash',
+    return create_app(Settings(llm_provider='fake', embedder='fake',
                                transcriber='fake',
                                board_api_url='http://board.test'))
 
@@ -164,7 +164,7 @@ def test_transcribe_forwards_the_picked_omni_model():
         return_value=httpx.Response(200, json={
             'choices': [{'message': {'content': 'spoken words'}}]}))
     client = TestClient(create_app(Settings(
-        llm_provider='fake', embedder='hash', transcriber='openrouter',
+        llm_provider='fake', embedder='fake', transcriber='openrouter',
         openrouter_api_key='sk-test', board_api_url='http://board.test')))
     res = client.post('/agent/transcribe', json={
         'audio': b64(WAV), 'format': 'wav', 'model': 'google/gemini-2.5-flash'})
@@ -187,7 +187,7 @@ def test_every_transcription_uses_the_one_chat_completions_wire_format():
         return_value=httpx.Response(200, json={
             'choices': [{'message': {'content': 'spoken words'}}]}))
     client = TestClient(create_app(Settings(
-        llm_provider='fake', embedder='hash', transcriber='openrouter',
+        llm_provider='fake', embedder='fake', transcriber='openrouter',
         openrouter_api_key='sk-test', board_api_url='http://board.test')))
     res = client.post('/agent/transcribe', json={
         'audio': b64(WAV), 'model': 'openai/whisper-large-v3-turbo'})
@@ -201,7 +201,7 @@ def test_transcribe_maps_upstream_failure_to_502():
     respx.post('https://openrouter.ai/api/v1/chat/completions').mock(
         return_value=httpx.Response(500, json={'error': 'nope'}))
     client = TestClient(create_app(Settings(
-        llm_provider='fake', embedder='hash', transcriber='openrouter',
+        llm_provider='fake', embedder='fake', transcriber='openrouter',
         openrouter_api_key='sk-test', board_api_url='http://board.test')))
     res = client.post('/agent/transcribe', json={'audio': b64(WAV)})
     assert res.status_code == 502
@@ -217,7 +217,7 @@ def test_a_model_that_drops_the_audio_is_reported_not_transcribed():
         return_value=httpx.Response(200, json={'choices': [{'message': {
             'content': "I'm sorry, but I need the audio file to transcribe it."}}]}))
     client = TestClient(create_app(Settings(
-        llm_provider='fake', embedder='hash', transcriber='openrouter',
+        llm_provider='fake', embedder='fake', transcriber='openrouter',
         openrouter_api_key='sk-test', board_api_url='http://board.test',
         omni_model='nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free')))
     res = client.post('/agent/transcribe', json={'audio': b64(WAV)})
@@ -232,7 +232,7 @@ def test_a_model_that_drops_the_audio_is_reported_not_transcribed():
 # Docker container. The HTTP path lives in test_chat_memory_server.py.
 
 def memory_app(collection):
-    return create_app(Settings(llm_provider='fake', embedder='hash',
+    return create_app(Settings(llm_provider='fake', embedder='fake',
                                transcriber='fake',
                                board_api_url='http://board.test',
                                chroma_url='memory',
@@ -280,7 +280,7 @@ def test_paired_stores_are_isolated_per_board():
 def test_unreachable_chroma_does_not_stop_the_brain_from_serving():
     # If the Docker Chroma is down, the brain must still boot and answer chat —
     # memory degrades to off rather than taking the whole service with it.
-    app = create_app(Settings(llm_provider='fake', embedder='hash',
+    app = create_app(Settings(llm_provider='fake', embedder='fake',
                               transcriber='fake',
                               board_api_url='http://board.test',
                               chroma_url='http://127.0.0.1:9',
@@ -312,16 +312,18 @@ def test_recall_requires_a_text_field(tmp_path):
 
 
 @respx.mock
-def test_rag_reindex_and_communities():
+def test_rag_reindex_says_whether_it_had_to_rebuild():
     respx.get('http://board.test/api/state').mock(return_value=board_state(
         [card('a', 'kubernetes pods scaling'), card('b', 'kubernetes pod limits')]))
     client = TestClient(fake_app())
-    res = client.post('/rag/reindex')
-    assert res.status_code == 200
-    assert res.json()['cards'] == 2
-    res = client.get('/rag/communities')
-    assert res.status_code == 200
-    assert isinstance(res.json()['communities'], list)
+    assert client.post('/rag/reindex').json() == {'cards': 2, 'rebuilt': True}
+    # The same board again is not re-embedded. That is the fingerprint, and it
+    # is what makes a rebuild-per-tool-call affordable with a real encoder.
+    assert client.post('/rag/reindex').json() == {'cards': 2, 'rebuilt': False}
+    # Community detection was removed on 2026-08-01, to be revisited. The route
+    # 404s rather than answering [] — an empty list reads as "no themes found",
+    # which is a claim about the board rather than about the feature.
+    assert client.get('/rag/communities').status_code == 404
 
 
 # --- which models this brain can serve --------------------------------------
@@ -333,7 +335,7 @@ def test_models_route_says_nothing_is_verified_on_a_remote_backend():
     settings render would be absurd, so `verified` is False and the frontend's
     curated list stands. False must not read as "serves nothing"."""
     client = TestClient(create_app(Settings(llm_provider='openrouter',
-                                            embedder='hash', transcriber='fake')))
+                                            embedder='fake', transcriber='fake')))
     body = client.get('/agent/models').json()
     assert body == {'provider': 'openrouter', 'default': 'openai/gpt-5-nano',
                     'verified': False, 'models': []}
@@ -346,7 +348,7 @@ def test_models_route_lists_what_the_local_daemon_serves():
                                                           {'name': 'gemma4:e2b'}]}))
     client = TestClient(create_app(Settings(llm_provider='ollama',
                                             model='gemma4:e2b',
-                                            embedder='hash', transcriber='fake')))
+                                            embedder='fake', transcriber='fake')))
     body = client.get('/agent/models').json()
     assert body['provider'] == 'ollama' and body['verified'] is True
     assert body['models'] == ['gemma4:e2b', 'qwen3.5:2b']
@@ -361,7 +363,7 @@ def test_a_local_daemon_that_is_down_claims_nothing_rather_than_an_empty_list():
     respx.get('http://localhost:11434/api/tags').mock(
         side_effect=httpx.ConnectError('nope'))
     client = TestClient(create_app(Settings(llm_provider='ollama',
-                                            embedder='hash', transcriber='fake')))
+                                            embedder='fake', transcriber='fake')))
     body = client.get('/agent/models').json()
     assert body['verified'] is False and body['models'] == []
 
@@ -374,6 +376,6 @@ def test_the_models_route_reads_the_configured_base_url():
     respx.get('http://gpu.lan:11434/api/tags').mock(
         return_value=httpx.Response(200, json={'models': [{'name': 'x:1b'}]}))
     client = TestClient(create_app(Settings(
-        llm_provider='ollama', embedder='hash', transcriber='fake',
+        llm_provider='ollama', embedder='fake', transcriber='fake',
         ollama_base_url='http://gpu.lan:11434/v1')))
     assert client.get('/agent/models').json()['models'] == ['x:1b']

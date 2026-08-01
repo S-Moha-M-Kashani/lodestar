@@ -41,11 +41,27 @@ class Settings:
     # pointing this at any other local OpenAI-compatible server (llama.cpp, vLLM)
     # then needs no code change at all.
     ollama_base_url: str = 'http://localhost:11434/v1'
-    # 'fastembed' | 'hash'. No 'auto': probing for the optional fastembed wheel
-    # and taking HashEmbedder when it was missing meant a machine without the
-    # 'semantic' extra ran token-overlap hashing while believing it had
-    # embeddings. Docker pins 'fastembed' (its image installs the extra).
-    embedder: str = 'hash'
+    # 'sentence-transformers' | 'fastembed' | 'fake'. No 'auto': probing for an
+    # optional wheel and silently taking the hash embedder when it was missing
+    # meant a machine without the extra ran token-overlap hashing while
+    # believing it had embeddings.
+    #
+    # The default is the *measured* winner, because the embedder is the
+    # architecture: hash embedding scored ~0.01 recall on the lab's Farsi corpus
+    # against 0.617 for heydariAI/persian-embeddings — a ~60× effect, where no
+    # other knob in the sweep was worth 2%. It costs the 'local-embeddings'
+    # extra and a ~2.2 GB download on first boot. 'fake' is the offline-test
+    # value: deterministic *lexical* hashing, never semantic.
+    embedder: str = 'sentence-transformers'
+    # '' = that backend's own default (retrieval.BACKEND_DEFAULTS). An
+    # explicitly named model is never replaced, or the configuration and the
+    # model that answered would disagree.
+    embed_model: str = ''
+    # 'llm' | 'none' — candidate F's relevance gate between retrieval and
+    # generation. It follows the main chat model, so it needs no model setting
+    # of its own; the threshold is the one the lab measured.
+    grader: str = 'llm'
+    grade_threshold: float = 0.4
     board_api_url: str = 'http://127.0.0.1:3000'
     # Chroma server for chat memory. '' = off, so Settings built directly in
     # code (unit tests, evals) reach no store at all; 'memory' = in-process
@@ -109,7 +125,10 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         llm_provider=provider,
         ollama_base_url=env.get('BRAIN_OLLAMA_BASE_URL',
                                 'http://localhost:11434/v1'),
-        embedder=env.get('BRAIN_EMBEDDER', 'hash'),
+        embedder=env.get('BRAIN_EMBEDDER', 'sentence-transformers'),
+        embed_model=env.get('BRAIN_EMBED_MODEL', ''),
+        grader=env.get('BRAIN_GRADER', 'llm'),
+        grade_threshold=float(env.get('BRAIN_GRADE_THRESHOLD', '0.4')),
         board_api_url=board_api_url,
         chroma_url=env.get('BRAIN_CHROMA_URL', 'http://localhost:8001'),
         chroma_database=env.get('BRAIN_CHROMA_DATABASE')
