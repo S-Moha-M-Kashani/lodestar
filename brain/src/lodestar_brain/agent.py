@@ -21,6 +21,7 @@ from langgraph.errors import GraphRecursionError
 
 from .config import Settings
 from .llm import make_chat_model
+from .untrusted import PROMPT_RULE, UntrustedToolOutput, result_of
 
 SYSTEM_PROMPT = """You are Lodestar's assistant — a research companion and coach \
 for a personal life dashboard ("your compass for life"). The board \
@@ -45,7 +46,11 @@ Importance/urgency: high, low, or empty.
 Rules: never invent card ids — look them up with list_cards or \
 find_related first. When you change the board, say exactly what you changed. \
 When research produces an answer, offer to save it into the card's notes. \
-Keep replies short and concrete."""
+Keep replies short and concrete.
+
+""" + PROMPT_RULE
+# The clause is appended rather than written out, so the prompt and the wrapper
+# cannot disagree about what the fence looks like — see untrusted.py.
 
 STEP_LIMIT_REPLY = 'I hit my step limit before finishing — try a smaller request.'
 
@@ -88,15 +93,6 @@ def _text(message: BaseMessage) -> str:
                    if isinstance(part, dict))
 
 
-def _decode(content: Any) -> object:
-    if not isinstance(content, str):
-        return content
-    try:
-        return json.loads(content)
-    except (ValueError, TypeError):
-        return content
-
-
 def _calls_in(messages: list[BaseMessage]) -> Iterator[dict]:
     """Every tool call the model has requested, in the order it requested them."""
     for message in messages:
@@ -121,8 +117,10 @@ def _steps_from(messages: list[BaseMessage]) -> list[AgentStep]:
         answer = results.get(call['id'])
         if answer is None:
             continue
+        # result_of, not the message content: the content is fenced text meant
+        # for the model, and the Assistant needs the rows the tool returned.
         steps.append(AgentStep(tool=call['name'], arguments=dict(call['args']),
-                               result=_decode(answer.content)))
+                               result=result_of(answer)))
     return steps
 
 
@@ -164,9 +162,13 @@ class LodestarAgent:
         key = (provider or self.settings.llm_provider, model or '')
         if key not in self._graphs:
             llm = self._llm or make_chat_model(self.settings, model, provider)
+            # UntrustedToolOutput sits outside the error middleware, so a tool's
+            # failure message is fenced too: the text in "board unreachable at …"
+            # is not ours either.
             self._graphs[key] = create_agent(
                 model=llm, tools=self.tools, system_prompt=self.system_prompt,
-                middleware=[ToolErrorMiddleware(_tool_error)])
+                middleware=[UntrustedToolOutput(),
+                            ToolErrorMiddleware(_tool_error)])
         return self._graphs[key]
 
     @property
