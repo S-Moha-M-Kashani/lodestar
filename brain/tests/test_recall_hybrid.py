@@ -30,7 +30,7 @@ from fastapi.testclient import TestClient
 from langchain_core.embeddings import Embeddings
 
 from lodestar_brain.config import Settings
-from lodestar_brain.retrieval import ChatStore, MEMORY_URL
+from lodestar_brain.retrieval import ChatStore, LexicalHashEmbeddings, MEMORY_URL
 from lodestar_brain.server import create_app
 
 BOARD = 'http://board.test'
@@ -118,6 +118,73 @@ def test_recall_searches_cards_and_chat_with_source_labels():
                for match in body['matches'])
     assert any(match['source'] == 'card' and 'fig tree' in match['text']
                for match in body['matches'])
+
+
+# --- cross-script search ------------------------------------------------
+# A user who types "mahsa" means «مهسا» (and the other way round), so every
+# recall query is expanded across scripts: Latin tokens grow Persian
+# transliteration variants and Persian tokens grow Latin ones, feeding the
+# same BM25-heavy fusion. Cards are searchable by every word the user gave
+# them: title, notes, tags, type and category.
+
+
+# This is a unit test.
+def test_expand_queries_bridges_scripts_both_ways():
+    from lodestar_brain.retrieval import expand_queries
+    assert any('مهسا' in v for v in expand_queries('mahsa')), (
+        'a Latin query must grow a Persian-script variant')
+    assert any('mahsa' in v for v in expand_queries('مهسا')), (
+        'a Persian query must grow a Latin-script variant')
+
+
+# This is a unit test.
+def test_card_text_covers_type_category_and_tags():
+    from lodestar_brain.retrieval import card_text
+    card = {'title': 'دعوا با مهسا', 'notes': 'سر برنامه‌ریزی',
+            'tags': ['family'], 'type': 'problem', 'category': 'love'}
+    text = card_text(card)
+    for term in ('family', 'problem', 'love'):
+        assert term in text, f'cards must be findable by their {term!r} field'
+
+
+# This is an integration test (in-process Chroma, no server, no disk).
+def test_latin_query_recalls_the_persian_chat_message_first():
+    store = ChatStore(MEMORY_URL, LexicalHashEmbeddings(),
+                      collection='chat-cross-script')
+    store.index_messages([row(1, 'امروز با مهسا دعوا کردم'),
+                          row(2, PASSWORD), row(3, DENTIST)])
+    hits = store.search('mahsa')
+    assert hits and 'مهسا' in hits[0]['text'], (
+        'the message naming مهسا must outrank script-blind dense noise')
+
+
+# This is an integration test.
+@respx.mock
+def test_latin_query_ranks_the_persian_card_first_with_a_real_score():
+    respx.get(f'{BOARD}/api/state').mock(return_value=httpx.Response(200, json={
+        'cards': [
+            {'id': 'c1', 'num': 1, 'title': 'دعوا با مهسا سر برنامه‌ریزی',
+             'columnId': 'inbox', 'type': 'problem', 'category': 'love',
+             'createdAt': ms(2026, 7, 1), 'updatedAt': ms(2026, 7, 1)},
+            {'id': 'c2', 'num': 2, 'title': 'Book the August ferry crossing',
+             'columnId': 'inbox', 'type': 'task', 'category': 'travel',
+             'createdAt': ms(2026, 7, 1), 'updatedAt': ms(2026, 7, 1)},
+            {'id': 'c3', 'num': 3, 'title': 'Learn the Spanish subjunctive',
+             'columnId': 'inbox', 'type': 'task', 'category': 'mind',
+             'createdAt': ms(2026, 7, 1), 'updatedAt': ms(2026, 7, 1)}]}))
+    respx.get(f'{BOARD}/api/chat/messages').mock(
+        return_value=httpx.Response(200, json={'messages': []}))
+    client = TestClient(create_app(Settings(
+        llm_provider='fake', embedder='fake', board_api_url=BOARD,
+        chroma_url='')))
+
+    body = client.post('/rag/recall', json={'text': 'mahsa'}).json()
+    assert body['matches'], 'the Persian card must be found from a Latin query'
+    top = body['matches'][0]
+    assert 'مهسا' in top['text'], 'the card about مهسا must come first'
+    assert top['score'] > 0, (
+        "a lexically matched card must not display a coverage of 0 — the "
+        "score must see the cross-script expansion the ranking saw")
 
 
 # This is an integration test.

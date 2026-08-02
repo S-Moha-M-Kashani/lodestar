@@ -13,7 +13,8 @@ from pydantic import BaseModel, Field
 from .agent import AgentResult, AgentStep, LodestarAgent
 from .config import Settings, load_settings
 from .llm import make_chat_model, served_models
-from .retrieval import CardIndex, ChatStore, coverage, gate_llm, make_embeddings
+from .retrieval import (CardIndex, ChatStore, coverage, expand_queries,
+                        gate_llm, make_embeddings)
 from .tools.board import BoardClient, make_board_tools
 from .tools.retrieve import make_recall_tool, make_retrieve_tool
 from .tools.websearch import DdgsSearch, make_search_tool
@@ -296,8 +297,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # llm=None: the search box answers directly, so it gets the fast
             # ungated pipeline — the gate exists for contexts a model reads.
             hits = index.search(body.text, k=body.k, llm=None)
+            # Coverage over the expanded query: a card matched through a
+            # synonym or another script must not display as covering nothing.
+            expanded = ' '.join(expand_queries(body.text))
             cards = [{'text': doc.page_content,
-                      'score': round(coverage(body.text, doc.page_content,
+                      'score': round(coverage(expanded, doc.page_content,
                                               index.bm25.idf), 4),
                       'metadata': dict(doc.metadata), 'source': 'card'}
                      for doc in hits]

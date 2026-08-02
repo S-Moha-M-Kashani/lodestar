@@ -45,7 +45,7 @@ from langchain_core.vectorstores import InMemoryVectorStore
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from rank_bm25 import BM25Okapi
 
-from . import textnorm
+from . import textnorm, translit
 
 # --- embeddings -------------------------------------------------------------
 
@@ -348,10 +348,12 @@ def flatten_metadata(metadata: dict) -> dict:
 
 
 def card_text(card: dict) -> str:
-    """What a card looks like to the retriever. Title, notes and tags — the
-    words the user actually wrote."""
+    """What a card looks like to the retriever: title, notes and tags — the
+    words the user actually wrote — plus the type and category labels they
+    filed it under, so "habit" or "love" finds the cards stamped that way."""
     parts = [card.get('title') or '', card.get('notes') or '',
-             ' '.join(card.get('tags') or [])]
+             ' '.join(card.get('tags') or []),
+             card.get('type') or '', card.get('category') or '']
     return ' '.join(part for part in parts if part).strip()
 
 
@@ -608,8 +610,9 @@ def keyword_query(question: str) -> str:
 
 
 def expand_queries(question: str) -> list[str]:
-    """Deterministic multi-query expansion: the question, its keyword form, and
-    one synonym-substituted variant. No model, so it can always be on — and the
+    """Deterministic multi-query expansion: the question, its keyword form, a
+    synonym-substituted variant, and a cross-script variant ("mahsa" also
+    searches «مهسا» and back). No model, so it can always be on — and the
     question itself always leads, so nothing is retrieved *instead* of it."""
     variants = [question]
     keywords = keyword_query(question)
@@ -620,6 +623,11 @@ def expand_queries(question: str) -> list[str]:
         swapped.extend(SYNONYMS.get(token, ()))
     if swapped:
         variants.append(f"{keywords} {' '.join(dict.fromkeys(swapped))}")
+    crossed: list[str] = []
+    for token in textnorm.tokens(question):
+        crossed.extend(translit.variants(token))
+    if crossed:
+        variants.append(f"{keywords} {' '.join(dict.fromkeys(crossed))}")
     return list(dict.fromkeys(variants))
 
 
@@ -933,9 +941,11 @@ class CardIndex:
         hybrid = hybrid_retriever(
             self.store.as_retriever(search_kwargs=search_kwargs),
             self.bm25.model_copy(update={'scope': scope}))
-        fused = rrf_fuse([hybrid.invoke(variant)
-                          for variant in expand_queries(query)])
-        ranked = lexical_rerank(query, fused, self.bm25.idf, k=k)
+        queries = expand_queries(query)
+        fused = rrf_fuse([hybrid.invoke(variant) for variant in queries])
+        # The reranker reads the expanded query: a card matched through a
+        # synonym or another script must not be scored as covering nothing.
+        ranked = lexical_rerank(' '.join(queries), fused, self.bm25.idf, k=k)
         if llm is None:
             return ranked
         return relevance_gate(llm, query, ranked, threshold)
@@ -1044,8 +1054,9 @@ class ChatStore:
     def search(self, text: str, k: int = 5,
                scope: TimeScope | None = None) -> list[dict]:
         """Hybrid, BM25-heavy: dense from Chroma, BM25 over the same chunks,
-        fused by weighted RRF (RECALL_WEIGHTS). Fused inline rather than via
-        `hybrid_retriever` because `EnsembleRetriever` discards the fused
+        each fused across the expanded queries (synonyms, cross-script), then
+        combined by weighted RRF (RECALL_WEIGHTS). Fused inline rather than
+        via `hybrid_retriever` because `EnsembleRetriever` discards the fused
         score, and this result carries one all the way to the UI."""
         total = self.count()
         if total == 0:
@@ -1055,20 +1066,26 @@ class ChatStore:
                   for id_, content, meta in zip(raw['ids'], raw['documents'],
                                                 raw['metadatas'])]
         depth = min(total, max(k, CANDIDATES))
-        dense = self.store.similarity_search(
-            text, k=depth, filter=where_clause(scope, fields=('created_day',)))
-        lexical = RankBM25Retriever.from_documents(
-            corpus, k=depth, scope=scope).invoke(text)
+        chroma_filter = where_clause(scope, fields=('created_day',))
+        bm25 = RankBM25Retriever.from_documents(corpus, k=depth, scope=scope)
+        queries = expand_queries(text)
+        dense_rankings = [self.store.similarity_search(q, k=depth,
+                                                       filter=chroma_filter)
+                          for q in queries]
+        lexical_rankings = [bm25.invoke(q) for q in queries]
         # Keyed on the text, not the chunk id: the dense half's documents come
         # back from Chroma and the lexical half's from the corpus above, and an
         # id only one side carries would count the same chunk twice.
         scores: dict[str, float] = {}
         seen: dict[str, Document] = {}
-        for weight, ranking in zip(RECALL_WEIGHTS, (dense, lexical)):
-            for rank, doc in enumerate(ranking, start=1):
-                seen.setdefault(doc.page_content, doc)
-                scores[doc.page_content] = (scores.get(doc.page_content, 0.0)
-                                            + weight / (RRF_K + rank))
+        for weight, rankings in zip(RECALL_WEIGHTS,
+                                    (dense_rankings, lexical_rankings)):
+            for ranking in rankings:
+                for rank, doc in enumerate(ranking, start=1):
+                    seen.setdefault(doc.page_content, doc)
+                    scores[doc.page_content] = (
+                        scores.get(doc.page_content, 0.0)
+                        + weight / (len(rankings) * (RRF_K + rank)))
         ordered = sorted(scores, key=lambda key: -scores[key])[:k]
         return [{'text': key, 'score': round(scores[key], 4),
                  'metadata': dict(seen[key].metadata)} for key in ordered]
