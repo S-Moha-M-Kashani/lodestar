@@ -10,8 +10,8 @@ standalone panel at / remains for running the lab on its own.
 can be down, which is why no route probes anything before creating a job.
 
 Runs are jobs, not requests: building a fastembed index over 157 sessions and
-scoring 100 questions takes longer than any sensible HTTP timeout, so POST /run
-returns a job id and the panel polls it. One job at a time — concurrent runs
+scoring 100 questions takes longer than any sensible HTTP timeout, so creating
+one answers 202 with a job id and a Location, and the panel polls that. One job at a time — concurrent runs
 would fight over the same index and produce numbers neither of them describes.
 """
 import threading
