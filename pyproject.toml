@@ -1,7 +1,11 @@
+# The root uv environment exists for one job: `uv run --with playwright python
+# tests/e2e_test.py` (run from the repo root, locally and by ci.yml) resolves
+# against this project, and uv.lock is what pins the playwright version.
+# The real Python project — the brain — is brain/pyproject.toml.
 [project]
 name = "lodestar"
-version = "0.1.0"
-description = "Add your description here"
+version = "1.0.0"
+description = "Root uv environment for the Playwright e2e runner; the application's Python service lives in brain/"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
