@@ -2889,6 +2889,27 @@ button.chat-source-card {
   color: var(--ink-soft);
   opacity: 0.8;
 }
+
+/* A knob the current pipeline would ignore. It has to read as *deliberately
+   off* rather than broken, so the label dims but its reason does not — the
+   sentence saying why is the one part still worth reading, and greying it with
+   everything else would hide the only thing that tells you what to change. The
+   control keeps its box: a field that vanishes moves everything below it every
+   time a dropdown changes. */
+.rag-field-off {
+  opacity: 0.5;
+}
+
+.rag-field-off .rag-when {
+  opacity: 1;
+  font-style: italic;
+}
+
+.rag-field-off select,
+.rag-field-off input {
+  cursor: not-allowed;
+  background: color-mix(in oklch, var(--paper) 88%, var(--ink) 12%);
+}
 /* The models panel is its own column on purpose: every language model the lab can
    call, read as one list, with each group wearing the ink of the step it drives.
    The widest labels in the lab are here, so keeping them out of the step grid

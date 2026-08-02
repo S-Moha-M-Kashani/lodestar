@@ -314,7 +314,22 @@ class EmbedderHint:
 
 
 EMBEDDER_HINTS = (
-    EmbedderHint('ascii-hash', 'ascii-hash — the brain default today',
+    EmbedderHint('sentence-transformers',
+                 'sentence-transformers — any HuggingFace model', BY_MODEL, True,
+                 'The lab default, because it is the only backend that can reach '
+                 'a Persian-tuned encoder: fastembed serves neither '
+                 'heydariAI/persian-embeddings nor Qwen3. Needs the '
+                 'local-embeddings extra and downloads the weights once.'),
+    EmbedderHint('fastembed', 'fastembed — a real transformer', BY_MODEL, True,
+                 'Embeds meaning rather than letters (0.612 recall measured), '
+                 'from its own short ONNX list. Which languages it covers is '
+                 'decided by the model below — pick a multilingual one or this '
+                 'becomes an English model reading a Farsi diary.'),
+    EmbedderHint('openai', 'openai — the embeddings API', BY_MODEL, True,
+                 'No download and no local compute, but it needs OPENAI_API_KEY '
+                 'and spends money on every build. Deliberately not the '
+                 'OpenRouter key: OpenRouter serves no embeddings endpoint.'),
+    EmbedderHint('ascii-hash', 'ascii-hash — the reference baseline',
                  LATIN_ONLY, False,
                  'tokenises [a-z0-9]+, so a Farsi sentence has no tokens and '
                  'every vector is zero: measured 0.014 session recall here, i.e. '
@@ -329,21 +344,6 @@ EMBEDDER_HINTS = (
                  'strongest option that downloads nothing: 0.386 recall against '
                  'ascii-hash\'s 0.014. Still lexical — a paraphrase with no '
                  'shared letters is invisible to it.'),
-    EmbedderHint('fastembed', 'fastembed — a real transformer', BY_MODEL, True,
-                 'Embeds meaning rather than letters (0.612 recall measured), '
-                 'from its own short ONNX list. Which languages it covers is '
-                 'decided by the model below — pick a multilingual one or this '
-                 'becomes an English model reading a Farsi diary.'),
-    EmbedderHint('sentence-transformers',
-                 'sentence-transformers — any HuggingFace model', BY_MODEL, True,
-                 'The lab default, because it is the only backend that can reach '
-                 'a Persian-tuned encoder: fastembed serves neither '
-                 'heydariAI/persian-embeddings nor Qwen3. Needs the '
-                 'local-embeddings extra and downloads the weights once.'),
-    EmbedderHint('openai', 'openai — the embeddings API', BY_MODEL, True,
-                 'No download and no local compute, but it needs OPENAI_API_KEY '
-                 'and spends money on every build. Deliberately not the '
-                 'OpenRouter key: OpenRouter serves no embeddings endpoint.'),
 )
 
 _HINTS = {hint.kind: hint for hint in EMBEDDER_HINTS}
