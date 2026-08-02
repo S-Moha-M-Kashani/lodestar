@@ -5050,7 +5050,7 @@
     // right-hand column rather than among the chunking knobs — still wearing the
     // index ink, because that is the step it decides.
     { group: 'index', key: 'embedder', label: 'Embedder', kind: 'embedder', panel: 'models' },
-    { group: 'index', key: 'embed_model', label: 'Embedding model', kind: 'embed-model', when: 'Embedder = fastembed, sentence-transformers or openai', panel: 'models' },
+    { group: 'index', key: 'embed_model', label: 'Embedding model', kind: 'embed-model', when: 'Embedder = fastembed or sentence-transformers', panel: 'models' },
     { group: 'index', key: 'contextual', label: 'Contextual chunk headers', kind: 'check' },
     { group: 'retrieval', key: 'retriever', label: 'Retriever', kind: 'select', from: 'retrievers' },
     { group: 'retrieval', key: 'k', label: 'Contexts (k)', kind: 'number', min: 1, max: 40, step: 1 },

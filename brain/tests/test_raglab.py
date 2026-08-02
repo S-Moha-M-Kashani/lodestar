@@ -1267,8 +1267,10 @@ def test_every_model_in_the_catalogue_declares_where_its_weights_stand():
     entries = models.catalogue(LAB_SETTINGS)
     assert entries[0]['id'] == ''          # the lab default stays the first choice
     assert all(e['source'] in ('default', 'open', 'closed') for e in entries)
-    assert any(e['source'] == 'open' for e in entries)
     assert any(e['source'] == 'closed' for e in entries)
+    # Every open-weight option the remote list had answered 404 on this account
+    # (2026-08-02), so 'open' lives on the local list now — still declared.
+    assert all(option.source == 'open' for option in models.OLLAMA_MODELS)
     assert all(e['label'] for e in entries)
 
 
@@ -2357,7 +2359,10 @@ def test_options_offers_a_model_choice_for_every_llm_task(client):
                for role in roles.values())
     ids = [m['id'] for m in body['models']]
     assert ids[0] == '' and '4skl/gemma4-e2b-mtp' in ids
-    assert {m['source'] for m in body['models']} >= {'default', 'open'}
+    # 'open' is no longer guaranteed here: the remote list kept only what this
+    # account can reach (all closed, measured 2026-08-02); open weights are the
+    # local list's business.
+    assert {m['source'] for m in body['models']} >= {'default', 'closed'}
 
 
 # This is an integration test.
@@ -2565,7 +2570,8 @@ def test_the_standalone_panel_takes_its_metric_definitions_from_the_service():
 # This is a unit test.
 def test_the_standalone_panel_says_which_backends_consult_the_model():
     """It said "fastembed only", which stopped being true the moment a second
-    backend could load a model."""
+    backend could load a model — and "or openai" stopped being true when that
+    backend left with its catalogue."""
     import re
 
     from .raglab.server import STATIC
@@ -2573,7 +2579,8 @@ def test_the_standalone_panel_says_which_backends_consult_the_model():
     label = re.search(r'<label>Embedding model.*?</label>', html, re.S)
     assert label, 'the standalone panel lost its embedding-model label'
     assert 'sentence-transformers' in label.group(0)
-    assert 'openai' in label.group(0)
+    assert 'fastembed' in label.group(0)
+    assert 'openai' not in label.group(0)
 
 
 # This is a unit test.
