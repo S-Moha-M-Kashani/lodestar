@@ -265,6 +265,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         cards = board.list_cards()
         return {'cards': len(cards), 'rebuilt': index.build(cards)}
 
+    @app.post('/rag/chat/reindex')
+    def chat_reindex() -> dict:
+        """The boot sync on demand — an import appends to the record while the
+        brain is already running. `memory: false` is the honest answer rather
+        than a 500: the import already succeeded into assistant.db, and the
+        next boot's sync indexes it."""
+        if memory is None:
+            return {'indexed': 0, 'memory': False}
+        return {'indexed': memory.sync(board.list_chat()), 'memory': True}
+
     @app.post('/rag/recall')
     def recall(body: RecallBody) -> dict:
         """`memory` says whether there was anywhere to look.

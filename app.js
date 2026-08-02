@@ -3454,6 +3454,27 @@
     exportBtn.title = 'Save this conversation as JSON or Markdown';
     exportBtn.addEventListener('click', () => openExportDialog('chat'));
     head.appendChild(exportBtn);
+    // Import — the missing half of export: a saved JSON transcript goes into
+    // the durable chat record (databases/assistant.db) through the Node API.
+    const importBtn = document.createElement('button');
+    importBtn.type = 'button';
+    importBtn.id = 'chat-import-btn';
+    importBtn.className = 'btn ghost';
+    importBtn.textContent = 'Import chat';
+    importBtn.title = 'Read a chat JSON export into the durable chat record';
+    const importFile = document.createElement('input');
+    importFile.type = 'file';
+    importFile.id = 'chat-import-file';
+    importFile.accept = 'application/json,.json';
+    importFile.hidden = true;
+    importFile.addEventListener('change', () => {
+      const file = importFile.files && importFile.files[0];
+      if (file) importChatFile(file);
+      importFile.value = '';   // same file again must re-fire the change event
+    });
+    importBtn.addEventListener('click', () => importFile.click());
+    head.appendChild(importBtn);
+    head.appendChild(importFile);
     sheet.appendChild(head);
 
     sheet.appendChild(renderChatSettings());
@@ -4637,6 +4658,57 @@
     $('#copy-export').textContent = copyLabel();
     $('#export-json').value = currentExportText();
     exportDialog.showModal();
+  }
+
+  /** Import a chat JSON export into the durable record. Errored and partial
+   *  turns are skipped exactly as they are withheld from the model (and from
+   *  `remember`): the record must not carry text the assistant never
+   *  successfully said. Import appends — it never rewrites what is there. */
+  async function importChatFile(file) {
+    let messages = null;
+    try {
+      const parsed = JSON.parse(await file.text());
+      if (Array.isArray(parsed?.messages)) messages = parsed.messages;
+    } catch { /* not JSON — announced below */ }
+    if (!messages) {
+      announce('That file is not a chat export — expected the JSON the export dialog saves');
+      return;
+    }
+    const clean = messages
+      .filter((m) => m && !m.error && !m.partial
+        && (m.role === 'user' || m.role === 'assistant')
+        && typeof m.content === 'string' && m.content.trim())
+      .map((m) => ({ role: m.role, content: m.content }));
+    const skipped = messages.length - clean.length;
+    if (!clean.length) {
+      announce('Nothing to import: that file has no completed turns');
+      return;
+    }
+    const go = await ask({
+      title: 'Import chat',
+      message: `Import ${clean.length} messages into the chat record?`
+        + (skipped ? ` ${skipped} failed, partial or empty turns will be skipped.` : ''),
+      okLabel: 'Import',
+    });
+    if (!go) return;
+    try {
+      const res = await fetch('/api/chat/messages', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ messages: clean }),
+      });
+      if (!res.ok) throw new Error(`the server refused the import (${res.status})`);
+    } catch (err) {
+      announce(`Import failed — ${err.message}`);
+      return;
+    }
+    // The record is the truth; the recall index catches up here — or at the
+    // brain's next start, which runs the same sync, if it is off or away.
+    let indexed = ' (recall index catches up at the next brain start)';
+    try {
+      const rag = await (await fetch('/api/rag/chat/reindex', { method: 'POST' })).json();
+      if (rag.memory) indexed = ` (${rag.indexed} indexed for recall)`;
+    } catch { /* the note above already says what happens */ }
+    announce(`Imported ${clean.length} messages into the chat record${indexed}`);
   }
 
   $('#export-btn').addEventListener('click', () => openExportDialog('board'));

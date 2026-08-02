@@ -47,8 +47,11 @@ def row(id, content, role='user', created=ms(2026, 7, 1)):
     return {'id': id, 'role': role, 'content': content, 'createdAt': created}
 
 
-def memory_store():
-    return ChatStore(MEMORY_URL, LexicalHashEmbeddings())
+def memory_store(collection):
+    # One collection per test: chromadb shares the in-process client across
+    # instances with identical settings, so the default 'chat' collection
+    # would leak rows between tests in the same pytest process.
+    return ChatStore(MEMORY_URL, LexicalHashEmbeddings(), collection=collection)
 
 
 # This is a unit test.
@@ -70,7 +73,7 @@ def test_board_client_records_and_lists_chat():
 
 # This is an integration test (in-process Chroma, no server, no disk).
 def test_index_messages_is_idempotent_and_dates_chunks_from_the_message():
-    store = memory_store()
+    store = memory_store('chat-idempotent')
     message = row(7, 'رفتم اداره مالیات و جریمه رو دادم', created=ms(2026, 7, 1))
     store.index_messages([message])
     count = store.count()
@@ -92,7 +95,7 @@ def test_index_messages_is_idempotent_and_dates_chunks_from_the_message():
 
 # This is an integration test (in-process Chroma, no server, no disk).
 def test_sync_indexes_only_what_the_index_missed():
-    store = memory_store()
+    store = memory_store('chat-sync')
     first = row(1, 'the wifi password is hunter2')
     missed = row(2, 'dentist appointment moved to friday')
     store.index_messages([first])
@@ -139,7 +142,7 @@ def test_boot_syncs_the_index_from_the_record():
         return_value=httpx.Response(200, json={'messages': []}))
     client = TestClient(create_app(Settings(
         llm_provider='fake', embedder='fake', board_api_url=BOARD,
-        chroma_url=MEMORY_URL)))
+        chroma_url=MEMORY_URL, chat_collection='chat-boot-sync')))
 
     res = client.post('/rag/recall', json={'text': 'wifi password'})
     assert res.status_code == 200
@@ -151,6 +154,41 @@ def test_boot_syncs_the_index_from_the_record():
 
 # This is an integration test.
 @respx.mock
+def test_reindex_route_rebuilds_the_index_from_the_record():
+    """Stage 4: an import appends to the record while the brain is already
+    running, so the boot sync has already happened. POST /rag/chat/reindex is
+    that same sync on demand — and it answers honestly when memory is off."""
+    record = respx.get(f'{BOARD}/api/chat/messages').mock(
+        return_value=httpx.Response(200, json={'messages': []}))
+    respx.post(f'{BOARD}/api/chat/messages').mock(
+        return_value=httpx.Response(200, json={'messages': []}))
+    client = TestClient(create_app(Settings(
+        llm_provider='fake', embedder='fake', board_api_url=BOARD,
+        chroma_url=MEMORY_URL, chat_collection='chat-reindex')))
+
+    # The record grows after boot — exactly what an import does.
+    record.mock(return_value=httpx.Response(200, json={'messages': [
+        row(1, 'the wifi password is hunter2')]}))
+    res = client.post('/rag/chat/reindex')
+    assert res.status_code == 200
+    assert res.json() == {'indexed': 1, 'memory': True}
+    matches = client.post('/rag/recall',
+                          json={'text': 'wifi password'}).json()['matches']
+    assert any('hunter2' in m['text'] for m in matches), (
+        'an imported message must be recallable after the reindex')
+    assert client.post('/rag/chat/reindex').json() == {'indexed': 0, 'memory': True}, (
+        'a second reindex must find nothing new')
+
+    # Memory off: the truthful answer, not a 500 — the import itself already
+    # succeeded into assistant.db and the next boot's sync will index it.
+    off = TestClient(create_app(Settings(
+        llm_provider='fake', embedder='fake', board_api_url=BOARD,
+        chroma_url='')))
+    assert off.post('/rag/chat/reindex').json() == {'indexed': 0, 'memory': False}
+
+
+# This is an integration test.
+@respx.mock
 def test_a_board_down_at_boot_does_not_take_the_brain_down():
     # The boot sync is best-effort: the brain must serve even when Node is
     # not up yet (compose starts them together, in no promised order).
@@ -158,5 +196,5 @@ def test_a_board_down_at_boot_does_not_take_the_brain_down():
         side_effect=httpx.ConnectError('board is down'))
     client = TestClient(create_app(Settings(
         llm_provider='fake', embedder='fake', board_api_url=BOARD,
-        chroma_url=MEMORY_URL)))
+        chroma_url=MEMORY_URL, chat_collection='chat-board-down')))
     assert client.get('/health').json()['ok'] is True
