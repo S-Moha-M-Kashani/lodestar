@@ -1,0 +1,142 @@
+"""Recall becomes hybrid and searches the board as well as the chat record.
+
+"Search past conversations" (POST /rag/recall) is today a dense-only query
+over chat memory. The desired contract under test:
+
+- `ChatStore.search` is hybrid: real BM25 over the stored chunks fused with
+  the dense half by weighted RRF, and **BM25 carries much more weight** —
+  `retrieval.RECALL_WEIGHTS = (dense, bm25)` with the bm25 weight at least
+  3x the dense one. Observable: when the two halves disagree about the top
+  hit, BM25's choice wins; a dense-only hit (no shared term) still surfaces,
+  so the dense half is fused in rather than replaced.
+- POST /rag/recall searches the board's cards too (through the app's
+  configured board API — never SQLite, never any other host; respx raises on
+  any unmocked request, which is what pins that here). Every match carries a
+  `source` label: 'chat' or 'card'.
+- Cards do not depend on Chroma: with memory off (chroma_url=''), recall
+  still returns card matches and reports memory: False.
+
+Which databases the paired test brain (:3001 board) reaches is already
+fenced by the pairing rules in config.py and their tests in test_config.py —
+board reads go to the brain's own `board_api_url`, chat memory to the
+'lodestar-test' Chroma database.
+"""
+import math
+from datetime import datetime, timezone
+
+import httpx
+import respx
+from fastapi.testclient import TestClient
+from langchain_core.embeddings import Embeddings
+
+from lodestar_brain.config import Settings
+from lodestar_brain.retrieval import ChatStore, MEMORY_URL
+from lodestar_brain.server import create_app
+
+BOARD = 'http://board.test'
+
+PASSWORD = 'the wifi password is hunter2'
+ROUTER = 'we changed the wifi router last week'
+DENTIST = 'dentist appointment moved to friday'
+
+
+def ms(year, month, day):
+    return int(datetime(year, month, day, 12, 0,
+                        tzinfo=timezone.utc).timestamp() * 1000)
+
+
+def row(id, content, role='user', created=ms(2026, 7, 1)):
+    return {'id': id, 'role': role, 'content': content, 'createdAt': created}
+
+
+class RiggedDense(Embeddings):
+    """The dense half under test control: cosine similarity to any query is
+    exactly the score set here, so the test decides the dense ranking while
+    BM25 stays real. [s, sqrt(1-s^2)] against a query of [1, 0] has cosine s."""
+    SCORES = {PASSWORD: 0.1, ROUTER: 0.9, DENTIST: 0.5}
+
+    def _vector(self, text):
+        s = self.SCORES.get(text, 0.0)
+        return [s, math.sqrt(1.0 - s * s)]
+
+    def embed_documents(self, texts):
+        return [self._vector(text) for text in texts]
+
+    def embed_query(self, text):
+        return [1.0, 0.0]
+
+
+# This is an integration test (in-process Chroma, no server, no disk).
+def test_chat_search_is_hybrid_and_bm25_outweighs_dense():
+    from lodestar_brain.retrieval import RECALL_WEIGHTS
+    assert RECALL_WEIGHTS[1] >= 3 * RECALL_WEIGHTS[0], (
+        'BM25 must carry much more weight than the dense half')
+
+    store = ChatStore(MEMORY_URL, RiggedDense(), collection='chat-hybrid-weights')
+    store.index_messages([row(1, PASSWORD), row(2, ROUTER), row(3, DENTIST)])
+
+    # Dense ranks ROUTER (0.9) far above PASSWORD (0.1); BM25 ranks PASSWORD
+    # first on the rare literal 'hunter2'. With BM25 weighted much higher the
+    # literal match must win — under equal weights or dense-only it loses.
+    hits = store.search('hunter2 wifi')
+    assert hits and 'hunter2' in hits[0]['text'], (
+        "BM25's top pick must beat the dense top pick")
+    assert all(isinstance(hit['score'], float) for hit in hits)
+
+    # DENTIST shares no term with the query, so BM25 alone would drop it;
+    # its presence proves the dense half is fused in, not replaced.
+    assert any('dentist' in hit['text'] for hit in hits), (
+        'a dense-only match must still surface — the search is hybrid')
+
+
+# This is an integration test.
+@respx.mock
+def test_recall_searches_cards_and_chat_with_source_labels():
+    # respx raises on any request this test does not mock, so every card hit
+    # below provably came from the app's own board_api_url — the same seam
+    # that points the paired test brain at :3001 and its test databases.
+    respx.get(f'{BOARD}/api/state').mock(return_value=httpx.Response(200, json={
+        'cards': [{'id': 'c1', 'num': 1,
+                   'title': 'buy a fig tree for the balcony',
+                   'columnId': 'inbox', 'type': 'task', 'category': 'home',
+                   'createdAt': ms(2026, 7, 1), 'updatedAt': ms(2026, 7, 1)}]}))
+    respx.get(f'{BOARD}/api/chat/messages').mock(
+        return_value=httpx.Response(200, json={'messages': [row(1, PASSWORD)]}))
+    client = TestClient(create_app(Settings(
+        llm_provider='fake', embedder='fake', board_api_url=BOARD,
+        chroma_url=MEMORY_URL, chat_collection='chat-recall-cards')))
+
+    res = client.post('/rag/recall',
+                      json={'text': 'wifi password fig tree', 'k': 5})
+    assert res.status_code == 200
+    body = res.json()
+    assert body['memory'] is True
+    sources = {match['source'] for match in body['matches']}
+    assert sources == {'chat', 'card'}, (
+        'recall must answer from both the chat record and the board')
+    assert any(match['source'] == 'chat' and 'hunter2' in match['text']
+               for match in body['matches'])
+    assert any(match['source'] == 'card' and 'fig tree' in match['text']
+               for match in body['matches'])
+
+
+# This is an integration test.
+@respx.mock
+def test_recall_returns_card_matches_even_with_memory_off():
+    respx.get(f'{BOARD}/api/state').mock(return_value=httpx.Response(200, json={
+        'cards': [{'id': 'c1', 'num': 1,
+                   'title': 'buy a fig tree for the balcony',
+                   'columnId': 'inbox', 'type': 'task', 'category': 'home',
+                   'createdAt': ms(2026, 7, 1), 'updatedAt': ms(2026, 7, 1)}]}))
+    respx.get(f'{BOARD}/api/chat/messages').mock(
+        return_value=httpx.Response(200, json={'messages': []}))
+    client = TestClient(create_app(Settings(
+        llm_provider='fake', embedder='fake', board_api_url=BOARD,
+        chroma_url='')))
+
+    body = client.post('/rag/recall', json={'text': 'fig tree'}).json()
+    # memory: False keeps meaning what it says — Chroma is off — while the
+    # board, which never depended on Chroma, still answers.
+    assert body['memory'] is False
+    assert body['matches'], 'cards must be searchable with chat memory off'
+    assert all(match['source'] == 'card' for match in body['matches'])
