@@ -22,7 +22,7 @@ services:
       - .:/app:ro
     restart: unless-stopped
 
-  # The "brain" — agent, web search, and Leiden RAG. Internal only: the browser
+  # The "brain" — agent, web search, and hybrid RAG. Internal only: the browser
   # reaches it through the Node proxy, and the OpenRouter key never leaves it.
   brain:
     build: ./brain

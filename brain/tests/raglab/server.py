@@ -10,8 +10,8 @@ standalone panel at / remains for running the lab on its own.
 can be down, which is why no route probes anything before creating a job.
 
 Runs are jobs, not requests: building a fastembed index over 157 sessions and
-scoring 100 questions takes longer than any sensible HTTP timeout, so POST /run
-returns a job id and the panel polls it. One job at a time — concurrent runs
+scoring 100 questions takes longer than any sensible HTTP timeout, so creating
+one answers 202 with a job id and a Location, and the panel polls that. One job at a time — concurrent runs
 would fight over the same index and produce numbers neither of them describes.
 """
 import threading
@@ -25,9 +25,10 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from . import (embedding, evaluate, explain, metrics, models, pipeline,
                ragas_eval, retrieval)
-from .config import (ANSWERERS, BALANCES, CHUNKERS, DIFFICULTIES, EMBEDDERS,
-                     GRADERS, RERANKERS, RETRIEVERS, ROOT,
-                     RUNS_DIR, STEPS, LabConfig, load_lab_settings)
+from .config import (ANSWERERS, BALANCES, CHUNKERS, DEPENDENCIES,
+                     DIFFICULTIES, EMBEDDERS, GRADERS, RERANKERS,
+                     RETRIEVERS, ROOT, RUNS_DIR, STEPS, LabConfig,
+                     load_lab_settings)
 from .corpus import load_diary, load_ground_truth
 from .index import IndexRegistry, _lab_llm
 
@@ -50,8 +51,19 @@ class Jobs:
     def start(self, kind: str, target) -> str:
         with self.lock:
             if self.current and self.jobs[self.current]['state'] in ('running', 'cancelling'):
-                raise HTTPException(409, f'a {self.jobs[self.current]["kind"]} job '
-                                         'is still stopping')
+                # One message per state, because they ask different things of the
+                # reader: wait, versus wait then retry. The old text said 'a index
+                # job is still stopping' for both — wrong article, and 'stopping'
+                # for a job that had not been asked to stop, which sends the
+                # reader hunting a cancellation nobody requested.
+                running = self.jobs[self.current]
+                article = 'an' if running['kind'][0] in 'aeiou' else 'a'
+                state = ('is still cancelling'
+                         if running['state'] == 'cancelling'
+                         else 'is already running')
+                raise HTTPException(
+                    409, f'{article} {running["kind"]} job {state} — '
+                         'wait for it to finish, or cancel it first')
             job_id = uuid.uuid4().hex[:10]
             self.jobs[job_id] = {'id': job_id, 'kind': kind, 'state': 'running',
                                  'stage': 'starting', 'progress': 0.0,
@@ -145,6 +157,11 @@ def create_app() -> FastAPI:
             # part of the measurement: two rows scored on different samples are
             # not two results, and the panel has to be able to say which.
             'balances': list(BALANCES),
+            # Which dependent controls are live under the defaults, and the
+            # rule behind each. Served so both panels grey out the same
+            # knobs for the same stated reason — a rule copied into two
+            # frontends is a rule that will disagree with itself.
+            'dependencies': DEPENDENCIES,
             'defaults': LabConfig().to_dict(),
             # The three steps, in pipeline order. The panel groups and colours
             # every control by these, so which step a thing belongs to is served
@@ -210,7 +227,15 @@ def create_app() -> FastAPI:
             'indexes': registry.known(),
         }
 
-    @app.post('/api/index')
+    def _accepted(job_id: str) -> JSONResponse:
+        """202, not 200: the work was accepted, not done, so the body is a
+        receipt rather than a result. Location points at the job, so no caller
+        has to build the polling url by string concatenation — the one place
+        that url is spelled is here."""
+        return JSONResponse({'job_id': job_id}, status_code=202,
+                            headers={'Location': f'/api/jobs/{job_id}'})
+
+    @app.post('/api/indexes')
     def build_index(payload: dict):
         cfg = LabConfig.from_dict(payload)
         force = bool(payload.get('force'))
@@ -225,10 +250,10 @@ def create_app() -> FastAPI:
                     'build_seconds': index.stats.build_seconds,
                     'reused': index.stats.reused, 'notes': index.stats.notes}
 
-        return {'job_id': jobs.start('index', work)}
+        return _accepted(jobs.start('index', work))
 
-    @app.post('/api/run')
-    def start_run(payload: dict):
+    @app.post('/api/evaluations')
+    def start_evaluation(payload: dict):
         cfg = LabConfig.from_dict(payload)
         problems = cfg.validate() + models.provider_problems(cfg, settings)
         if problems:
@@ -250,7 +275,7 @@ def create_app() -> FastAPI:
                 cancelled=check_cancelled)
             return result.as_dict()
 
-        return {'job_id': jobs.start('run', work)}
+        return _accepted(jobs.start('run', work))
 
     @app.get('/api/jobs/{job_id}')
     def job_status(job_id: str):
@@ -260,18 +285,18 @@ def create_app() -> FastAPI:
     def cancel_job(job_id: str):
         return jobs.cancel(job_id)
 
-    @app.get('/api/runs')
-    def runs(limit: int = 50):
+    @app.get('/api/evaluations')
+    def evaluations(limit: int = 50):
         return {'runs': evaluate.list_runs(limit)}
 
-    @app.get('/api/runs/{run_id}')
-    def run_detail(run_id: str):
+    @app.get('/api/evaluations/{run_id}')
+    def evaluation_detail(run_id: str):
         data = evaluate.load_run(run_id)
         if data is None:
             raise HTTPException(404, 'unknown run')
         return data
 
-    @app.post('/api/query')
+    @app.post('/api/queries')
     def ad_hoc_query(payload: dict):
         """Run one question through the current settings and return every stage.
         The fastest way to understand *why* a config scores the way it does."""
@@ -279,7 +304,12 @@ def create_app() -> FastAPI:
         question = (payload.get('question') or '').strip()
         if not question:
             raise HTTPException(400, 'question is required')
-        problems = cfg.validate()
+        # The same screen /api/evaluations applies. It used to be missing here,
+        # so one route refused a model the backend does not serve while the
+        # other ran it — and now that a dead grade stage raises instead of
+        # scoring everything 0.5, the difference between the two routes would
+        # be a 400 naming the model against a bare 500.
+        problems = cfg.validate() + models.provider_problems(cfg, settings)
         if problems:
             raise HTTPException(400, '; '.join(problems))
         index = registry.get(cfg.index)
@@ -310,6 +340,15 @@ def create_app() -> FastAPI:
     @app.exception_handler(ValueError)
     def value_error(_request, error: ValueError):
         return JSONResponse({'detail': str(error)}, status_code=400)
+
+    @app.exception_handler(retrieval.GradeUnavailable)
+    def grade_unavailable(_request, error: Exception):
+        """502, not 500: the lab is fine, the model it was told to grade with is
+        not. The gate refuses to score rather than passing everything at 0.5, so
+        this is the reply a caller gets — and it has to say which stage went
+        missing, or the panel shows a blank result and the reader blames
+        retrieval."""
+        return JSONResponse({'detail': str(error)}, status_code=502)
 
     return app
 

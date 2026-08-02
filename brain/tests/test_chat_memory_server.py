@@ -18,6 +18,7 @@ PRODUCTION_DATABASE = 'lodestar'   # board.db's memory — must stay untouched
 DATABASE = 'lodestar-test'
 
 
+# This is a configuration invariant: it guards the real board's memory from the test suite.
 def test_this_suite_never_targets_the_production_database():
     # Guard rail: a careless edit to DATABASE would let pytest write into the
     # real board's chat memory. Real data is only destroyed on purpose.
@@ -58,6 +59,7 @@ def store(collection: str) -> ChatStore:
 # Chroma does NOT auto-create databases (unlike collections), so the store must
 # POST it on first use or every fresh machine breaks.
 
+# This is an integration test: a real Chroma server over HTTP, skipped when it is down.
 def test_missing_database_is_created_on_first_use(collection_name):
     memory = store(collection_name)
     memory.record(['database bootstrap check'])
@@ -66,6 +68,7 @@ def test_missing_database_is_created_on_first_use(collection_name):
 
 # ---- real persistence across processes, the point of the server ------------
 
+# This is an integration test: a real Chroma server over HTTP, skipped when it is down.
 def test_records_persist_across_separate_client_instances(collection_name):
     store(collection_name).record(['the wifi password is hunter2'])
     reopened = store(collection_name)          # brand-new client, same server
@@ -73,6 +76,7 @@ def test_records_persist_across_separate_client_instances(collection_name):
     assert matches and 'hunter2' in matches[0]['text']
 
 
+# This is an integration test: a real Chroma server over HTTP, skipped when it is down.
 def test_search_ranks_by_relevance_on_the_server(collection_name):
     memory = store(collection_name)
     memory.record(['the wifi password is hunter2'], metadata={'role': 'user'})
@@ -85,6 +89,7 @@ def test_search_ranks_by_relevance_on_the_server(collection_name):
 
 # ---- board isolation on a shared server -----------------------------------
 
+# This is an integration test: a real Chroma server over HTTP, skipped when it is down.
 def test_two_board_collections_do_not_leak_on_the_server():
     a, b = f'chat-a-{uuid.uuid4().hex[:8]}', f'chat-b-{uuid.uuid4().hex[:8]}'
     try:
@@ -104,6 +109,7 @@ def test_two_board_collections_do_not_leak_on_the_server():
 
 # ---- graceful degradation: a down server must not take the brain with it ---
 
+# This is an integration test: a real Chroma server over HTTP, skipped when it is down.
 def test_unreachable_server_raises_a_clear_error():
     with pytest.raises(Exception) as err:
         ChatStore('http://127.0.0.1:9', LexicalHashEmbeddings(),

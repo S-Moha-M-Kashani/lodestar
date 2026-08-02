@@ -170,11 +170,22 @@
     </form>
   </dialog>
 
+  <!-- One dialog, two subjects: the board and the Assistant transcript. The
+       copy/download fallback for browsers that block downloads is the reason
+       chat export reuses this rather than adding a second dialog — that
+       fallback is fiddly and a duplicate would drift from it. Everything that
+       differs between the two is swapped by id at open time. -->
   <dialog id="export-dialog">
     <div class="dialog-body">
-      <h2>Export board</h2>
-      <p class="import-copy">Save the whole board as <code>lodestar.json</code>. If your browser blocks the download (some embedded viewers do), copy the JSON below and paste it into a file instead.</p>
-      <textarea id="export-json" class="export-json" readonly rows="9" aria-label="The board as JSON" spellcheck="false"></textarea>
+      <h2 id="export-title">Export board</h2>
+      <p class="import-copy" id="export-copy">Save the whole board as <code>lodestar.json</code>. If your browser blocks the download (some embedded viewers do), copy the JSON below and paste it into a file instead.</p>
+      <label class="chat-export-format" id="chat-export-format-row" hidden>Format
+        <select id="chat-export-format">
+          <option value="json">JSON</option>
+          <option value="markdown">Markdown</option>
+        </select>
+      </label>
+      <textarea id="export-json" class="export-json" readonly rows="9" aria-label="The export as text" spellcheck="false"></textarea>
       <div class="dialog-actions">
         <button type="button" id="copy-export" class="btn ghost">Copy JSON</button>
         <span class="spacer"></span>

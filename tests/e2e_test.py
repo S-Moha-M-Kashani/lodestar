@@ -1462,6 +1462,127 @@ try:
                 errors.remove(e)
         page.locator('.view-switch button[data-view="board"]').click()
 
+        # ---- Chat transcript survives a reload (Session 6) -------------------
+        # This is an end-to-end test.
+        # The transcript is the one thing in the Assistant that was still lost on
+        # every refresh, which contradicts the project's never-lose-a-thought
+        # pillar as plainly as losing a card would. It follows the MODELS_KEY
+        # pattern: same 'lodestar:' prefix, same write-behind-try/catch so a
+        # private-mode quota error costs the session's history and never the
+        # session itself.
+        #
+        # Three ways this can break, so three asserts in one test rather than
+        # three tests. (1) The transcript does not come back at all. (2) `busy`
+        # is restored as true — the reload lands mid-stream, the composer is
+        # disabled forever and the view looks hung with no way out. (3) An
+        # errored or partial turn comes back *and is replayed to the model as
+        # history*: those turns are deliberately filtered from what is sent
+        # (Session 3), and a restore that persists the text while dropping the
+        # `error`/`partial` flag would silently undo that filter — the model
+        # would be asked to continue from something it never finished saying.
+        CHAT_KEY = "lodestar:chat"
+        page.evaluate("key => localStorage.removeItem(key)", CHAT_KEY)
+        page.reload()
+        page.wait_for_selector("#board")
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector("#chat-input")
+
+        page.fill("#chat-input", "remember this across a reload")
+        page.click("#chat-send")
+        wait_until(lambda: page.locator(".chat-msg.assistant").count() >= 1)
+        # An errored turn in the same transcript, so the restore is exercised
+        # against a history that must come back visible but unsendable.
+        n_errs = page.locator(".chat-msg.assistant.error").count()
+        page.route("**/api/agent/chat/stream", lambda route: route.fulfill(
+            status=503, content_type="application/json", body='{"error":"nope"}'))
+        n_before_err = len(errors)
+        page.fill("#chat-input", "this turn fails")
+        page.click("#chat-send")
+        wait_until(lambda: page.locator(".chat-msg.assistant.error").count() > n_errs)
+        page.unroute("**/api/agent/chat/stream")
+        for e in [e for e in errors[n_before_err:] if "503" in e]:
+            errors.remove(e)
+
+        before = page.locator(".chat-msg").count()
+        page.reload()
+        page.wait_for_selector("#board")
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector("#chat-input")
+        check("chat: the transcript survives a reload",
+              wait_until(lambda: page.locator(".chat-msg").count() == before)
+              and "remember this across a reload"
+              in page.locator(".chat-log").inner_text())
+        # A reload that lands mid-stream must not restore a disabled composer.
+        check("chat: a restored transcript never comes back busy",
+              not page.locator("#chat-input").is_disabled()
+              and not page.locator("#chat-send").is_disabled())
+        # The errored turn is shown again...
+        check("chat: a failed turn is restored as failed, not as an answer",
+              page.locator(".chat-msg.assistant.error").count() >= 1)
+        # ...but is still withheld from the model on the next turn.
+        with page.expect_request("**/api/agent/chat/stream") as req_info:
+            page.fill("#chat-input", "what did we say")
+            page.click("#chat-send")
+        sent = req_info.value.post_data or ""
+        check("chat: a restored failed turn is still not replayed to the model",
+              "remember this across a reload" in sent
+              and "nope" not in sent)
+        wait_until(lambda: not page.locator("#chat-input").is_disabled(), timeout=8.0)
+
+        # ---- Chat export, JSON and Markdown (Session 6) ----------------------
+        # This is an end-to-end test.
+        # Reuses the board's export dialog rather than adding a second one, so
+        # the copy/download fallback for browsers that block downloads is not
+        # reimplemented (and cannot drift from the original). Both formats are
+        # asserted in one test because they are one feature with a switch, not
+        # two features: the failure worth catching is a format that renders the
+        # wrong transcript or an empty one, and that is the same bug twice.
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector("#chat-input")
+        check("chat: the Assistant offers an export control",
+              page.locator("#chat-export-btn").count() == 1)
+        if page.locator("#chat-export-btn").count() == 1:
+            page.click("#chat-export-btn")
+            check("chat export: the shared export dialog opens",
+                  wait_until(lambda: page.locator("#export-dialog").is_visible()))
+            page.select_option("#chat-export-format", "json")
+            payload = page.input_value("#export-json")
+            try:
+                parsed = json.loads(payload)
+                roles = [m.get("role") for m in parsed.get("messages", [])]
+                texts = " ".join(str(m.get("content", ""))
+                                 for m in parsed.get("messages", []))
+            except (ValueError, AttributeError):
+                parsed, roles, texts = None, [], ""
+            check("chat export: JSON parses and carries the transcript",
+                  parsed is not None and "user" in roles and "assistant" in roles
+                  and "remember this across a reload" in texts)
+            page.select_option("#chat-export-format", "markdown")
+            md = page.input_value("#export-json")
+            check("chat export: Markdown names the speakers and keeps the text",
+                  "remember this across a reload" in md
+                  and md.lower().count("#") >= 2)
+            # The copy button names what it will actually put on the clipboard.
+            # Found by looking at the dialog rather than by a failing check: it
+            # read "Copy JSON" while Markdown was selected, which is only
+            # discovered after pasting.
+            check("chat export: the copy button follows the chosen format",
+                  page.locator("#copy-export").inner_text().strip() == "Copy Markdown")
+            page.click("#cancel-export")
+            wait_until(lambda: not page.locator("#export-dialog").is_visible())
+            # The board's own export must still produce a board, not a chat.
+            page.locator('.view-switch button[data-view="board"]').click()
+            page.click("#menu-btn")
+            page.click("#export-btn")
+            wait_until(lambda: page.locator("#export-dialog").is_visible())
+            board_json = page.input_value("#export-json")
+            check("chat export: the board export is unchanged by it",
+                  '"cards"' in board_json)
+            page.click("#cancel-export")
+            wait_until(lambda: not page.locator("#export-dialog").is_visible())
+
+        page.locator('.view-switch button[data-view="board"]').click()
+
         # ---- RAG test lab ----------------------------------------------------
         # The lab is a page inside the platform, reached from the Assistant, and it
         # talks to a service (brain/tests/raglab) that this suite never starts and
@@ -1511,13 +1632,30 @@ try:
 
         # Now with the lab's API mocked, to exercise the working page.
         LAB_OPTIONS = {
-            "chunkers": ["fixed", "semantic-drift"],
-            "embedders": ["ascii-hash", "char-hash", "fastembed",
-                          "sentence-transformers", "openai"],
-            "retrievers": ["dense", "bm25", "hybrid-rrf"],
-            "rerankers": ["none", "lexical", "cross-encoder", "llm"],
+            # Every list leads with the value `defaults` below names, exactly as
+            # the served ones now do — a mock that keeps the old order would let
+            # the panel regress while this suite stayed green.
+            "chunkers": ["semantic-drift", "fixed"],
+            "embedders": ["char-hash", "sentence-transformers", "fastembed",
+                          "openai", "ascii-hash"],
+            "retrievers": ["hybrid-rrf", "dense", "bm25"],
+            "rerankers": ["lexical", "none", "cross-encoder", "llm"],
             "graders": ["none", "lexical", "llm"],
-            "answerers": ["none", "extractive", "llm"],
+            "answerers": ["extractive", "none", "llm"],
+            # The rules the panel greys out by, served rather than hard-coded in
+            # the frontend so both panels agree.
+            "dependencies": {
+                "index.overlap": {
+                    "field": "index.chunker", "on": ["fixed-overlap"],
+                    "reason": "only the fixed-overlap chunker slides a window"},
+                "index.embed_model": {
+                    "field": "index.embedder",
+                    "on": ["fastembed", "sentence-transformers", "openai"],
+                    "reason": "the hash embedders load no model"},
+                "retrieval.grade_threshold": {
+                    "field": "retrieval.grader", "on": ["lexical", "llm"],
+                    "reason": "the gate is off, so nothing is scored to threshold"},
+            },
             "question_types": ["single-hop", "temporal", "habit"],
             "defaults": {
                 "index": {"chunker": "semantic-drift", "chunk_chars": 500,
@@ -1538,7 +1676,7 @@ try:
             # thing about it: on this corpus the English-only options measure
             # nothing at all, and the panel has to say so before a run, not after.
             "embedder_hints": [
-                {"kind": "ascii-hash", "label": "ascii-hash (brain default)",
+                {"kind": "ascii-hash", "label": "ascii-hash (reference baseline)",
                  "languages": "Latin script only", "farsi": False,
                  "available": True,
                  "note": "tokenises [a-z0-9]+, so Farsi embeds to the zero vector"},
@@ -1831,10 +1969,19 @@ try:
 
         def lab_route(route):
             url = route.request.url
+            method = route.request.method
             payload = None
+            # GET and POST /evaluations are now one url telling two stories, so
+            # this branches on the method. That is the point of the rename: the
+            # old surface distinguished them by spelling (/run vs /runs), one
+            # character apart, which is exactly how a caller reaches the wrong one.
             if "/api/raglab/options" in url:
                 payload = LAB_OPTIONS
-            elif "/api/raglab/runs" in url:
+            elif "/api/raglab/evaluations" in url and method == "POST":
+                payload = {"job_id": "job-1"}
+            elif "/api/raglab/indexes" in url:
+                payload = {"job_id": "job-1"}
+            elif "/api/raglab/evaluations" in url:
                 # Deliberately out of order, and one row that could not be
                 # scored on all four: the page has to rank on the decision
                 # score and push the unranked run last without dropping it.
@@ -1869,7 +2016,7 @@ try:
                      "question_fa": "الان وضعیت کارم چیه؟",
                      "question_en": "What is my job situation?",
                      "answerable": True, "evidence_sessions": ["2026-05-12-a"]}]}
-            elif "/api/raglab/query" in url:
+            elif "/api/raglab/queries" in url:
                 payload = {
                     "question": "باشگاه هفته‌ای چند بار بود؟", "abstained": False,
                     "answer": "هفته‌ای سه بار.", "time_scope": None,
@@ -1904,8 +2051,6 @@ try:
                                "stage": "done", "progress": 1.0,
                                "detail": "done", "result": LAB_RESULT,
                                "error": None}
-            elif "/api/raglab/run" in url:
-                payload = {"job_id": "job-1"}
             if payload is None:
                 return route.continue_()
             return route.fulfill(status=200, content_type="application/json",
@@ -1922,6 +2067,27 @@ try:
         check("raglab: the strategy lists come from the lab, not from the browser",
               "semantic-drift" in offered and "hybrid-rrf" in offered
               and "cross-encoder" in offered)
+        # Every dropdown offers the default first. A default buried sixth reads
+        # as an exotic choice, and the embedder's was behind three hash
+        # embedders that exist only to be measured against it.
+        first_chunker = page.eval_on_selector(
+            ".rag-panel select", "s => s.options[0].value")
+        check("raglab: the chunking dropdown leads with the default",
+              first_chunker == "semantic-drift")
+
+        # A knob the pipeline would ignore is disabled, not merely captioned —
+        # and says why, because a greyed control with no reason is
+        # indistinguishable from a broken one.
+        off = page.locator(".rag-field-off")
+        check("raglab: controls the pipeline would ignore are disabled",
+              off.count() >= 1)
+        check("raglab: a disabled control gives its reason",
+              off.count() >= 1
+              and len(off.first.locator(".rag-when").inner_text().strip()) > 8)
+        check("raglab: the disabled control is genuinely not editable",
+              off.count() >= 1
+              and off.first.locator("select, input").first.is_disabled())
+
         corpus_line = page.locator(".rag-corpus").inner_text()
         check("raglab: the corpus under test is named on the page",
               "167 sessions" in corpus_line and "112 ground-truth questions" in corpus_line)
@@ -1972,8 +2138,16 @@ try:
               and "bge-small-en" in embed_models_text)
         check("raglab: an embedding model that is not served is offered as NA",
               "bge-m3" in embed_models_text and "NA" in embed_models_text)
-        check("raglab: the panel says when the embedding model is consulted",
-              "Embedder = fastembed" in page.locator(".rag-models").inner_text())
+        # This used to assert the caption "Embedder = fastembed, sentence-
+        # transformers or openai" beside a control you could still edit. The rule
+        # is now enforced rather than described, so the assertion moved with it:
+        # under the mock's char-hash default the picker is off and says why.
+        embed_row = page.locator(".rag-models label:has(select.rag-embed-model)")
+        check("raglab: the embedding-model picker is off under a hash embedder",
+              "rag-field-off" in (embed_row.get_attribute("class") or "")
+              and page.locator("select.rag-embed-model").is_disabled())
+        check("raglab: and it says why it is off",
+              "load no model" in embed_row.inner_text())
 
         page.locator('.rag-panel .rag-why[data-topic="index.embed_model"]').click()
         page.wait_for_selector(".rag-help")
@@ -2002,12 +2176,14 @@ try:
         check("raglab: a backend that cannot run yet is offered as NA, not hidden",
               page.locator('select.rag-embedder option[value="openai"]')
               .inner_text().find("NA") >= 0)
-        check("raglab: the model knob says which backends consult it",
-              "sentence-transformers" in page.locator(
-                  ".rag-models label:has(select.rag-embed-model) .rag-when"
-              ).inner_text())
-
+        # Picking a backend that does load a model brings the picker back — the
+        # other half of the rule, and the half that would silently rot if only
+        # the disabled case were covered.
         page.select_option("select.rag-embedder", "sentence-transformers")
+        wait_until(lambda: not page.locator("select.rag-embed-model").is_disabled())
+        check("raglab: a real backend re-enables the embedding-model picker",
+              not page.locator("select.rag-embed-model").is_disabled())
+
         page.select_option("select.rag-embed-model", "heydariAI/persian-embeddings")
         page.reload()
         page.wait_for_selector(".rag-grid")
@@ -2016,8 +2192,13 @@ try:
               == "heydariAI/persian-embeddings"
               and page.input_value("select.rag-embedder") == "sentence-transformers")
         page.screenshot(path=shot("raglab-embedders.png"))
+        # Back to a hash embedder for the layout checks below. The embedding
+        # model is deliberately *not* set here any more: under a hash embedder
+        # that picker is disabled, because a hash loads no model. Setting one
+        # used to be possible and did nothing — which is the bug the disabling
+        # fixes, so a test that still did it would be asserting the old
+        # behaviour back into existence.
         page.select_option("select.rag-embedder", "char-hash")
-        page.select_option("select.rag-embed-model", "intfloat/multilingual-e5-large")
 
         # Twenty-eight knobs on one sheet are navigable only if the sheet says
         # which of the three steps each one belongs to, and colour is the fastest

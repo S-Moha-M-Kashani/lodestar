@@ -19,6 +19,7 @@ def tools_by_name(client):
     return {t.name: t for t in make_board_tools(client)}
 
 
+# This is a unit test.
 @respx.mock
 def test_list_cards_filters():
     respx.get(f'{BOARD}/api/state').mock(return_value=httpx.Response(200, json={
@@ -31,6 +32,7 @@ def test_list_cards_filters():
     assert [r['id'] for r in rows] == ['b']
 
 
+# This is a unit test.
 @respx.mock
 def test_create_card_posts_a_proposal_not_a_board_save():
     # The agent may no longer write a card straight onto the board: it proposes
@@ -56,6 +58,7 @@ def test_create_card_posts_a_proposal_not_a_board_save():
     assert created['pending'] is True
 
 
+# This is a unit test.
 @respx.mock
 def test_create_card_tool_description_says_it_needs_approval():
     tools = tools_by_name(BoardClient(BOARD))
@@ -63,6 +66,7 @@ def test_create_card_tool_description_says_it_needs_approval():
     assert 'propos' in described or 'approv' in described or 'confirm' in described
 
 
+# This is a unit test.
 @respx.mock
 def test_update_card_changes_only_named_fields():
     existing = [card('a', 'Old', notes='keep me'), card('b', 'Other')]
@@ -81,6 +85,7 @@ def test_update_card_changes_only_named_fields():
     assert {c['id'] for c in sent['cards']} == {'a', 'b'}
 
 
+# This is a unit test.
 @respx.mock
 def test_update_round_trips_effort_and_control_untouched():
     # The agent doesn't set effort/control (LLM estimation is out of scope for
@@ -102,6 +107,7 @@ def test_update_round_trips_effort_and_control_untouched():
     assert sent['a']['columnId'] == 'in-progress'
 
 
+# This is a unit test.
 @respx.mock
 def test_update_unknown_id_errors_without_writing():
     respx.get(f'{BOARD}/api/state').mock(return_value=httpx.Response(200, json={
@@ -110,6 +116,7 @@ def test_update_unknown_id_errors_without_writing():
     assert 'error' in tools['update_card'].run({'id': 'nope', 'type': 'task'})
 
 
+# This is a unit test.
 def test_tool_schemas_are_derived_from_the_signatures():
     # The wire format is LangChain's job now; what this file guards is that the
     # three board tools exist and each carries a schema and a description.
@@ -125,6 +132,7 @@ def test_tool_schemas_are_derived_from_the_signatures():
 # write into is not a record of anything.
 
 
+# This is a unit test.
 @respx.mock
 def test_create_card_proposes_a_habit_with_its_cadence():
     post = respx.post(f'{BOARD}/api/proposals').mock(
@@ -141,6 +149,7 @@ def test_create_card_proposes_a_habit_with_its_cadence():
     assert created['pending'] is True
 
 
+# This is a unit test.
 @respx.mock
 def test_a_non_habit_proposal_carries_no_cadence():
     post = respx.post(f'{BOARD}/api/proposals').mock(
@@ -151,6 +160,7 @@ def test_a_non_habit_proposal_carries_no_cadence():
     assert sent.get('habitFreq', '') == ''
 
 
+# This is a unit test.
 @respx.mock
 def test_the_agent_has_no_tool_for_ticking_a_habit():
     names = {t.name for t in make_board_tools(BoardClient(BOARD))}

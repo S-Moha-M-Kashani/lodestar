@@ -11,6 +11,7 @@ class StubSearch:
                  'snippet': 'community detection'}]
 
 
+# This is a unit test.
 def test_web_search_tool_delegates_to_provider():
     provider = StubSearch()
     tool = make_search_tool(provider)
@@ -20,6 +21,7 @@ def test_web_search_tool_delegates_to_provider():
     assert out[0]['url'] == 'https://x.test/leiden'
 
 
+# This is a unit test.
 def test_web_search_schema():
     tool = make_search_tool(StubSearch())
     schema = tool.args_schema.model_json_schema()

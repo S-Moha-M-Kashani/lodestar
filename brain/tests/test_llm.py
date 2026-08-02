@@ -21,16 +21,19 @@ def _settings(**over) -> Settings:
     return Settings(**{**base, **over})
 
 
+# This is a unit test.
 def test_factory_builds_fake_chat():
     assert isinstance(make_chat_model(_settings()), FakeChat)
 
 
+# This is a unit test.
 def test_factory_builds_chat_openai_with_base_url_and_model():
     llm = make_chat_model(_settings(llm_provider='openrouter'))
     assert isinstance(llm, ChatOpenAI)
     assert llm.model_name == 'openai/gpt-5-nano'
 
 
+# This is a unit test.
 def test_factory_honours_the_per_request_model_override():
     # The Assistant view's model picker sends a model per request, so the
     # factory has to take one that overrides BRAIN_MODEL.
@@ -39,6 +42,7 @@ def test_factory_honours_the_per_request_model_override():
     assert llm.model_name == 'anthropic/claude-sonnet-4.5'
 
 
+# This is a unit test.
 def test_factory_builds_a_model_even_with_no_api_key():
     # create_app builds the agent at import time; a brain with no key must
     # still boot and serve the board tools. The 401 comes at call time.
@@ -47,6 +51,7 @@ def test_factory_builds_a_model_even_with_no_api_key():
     assert isinstance(llm, ChatOpenAI)
 
 
+# This is a unit test.
 def test_factory_builds_ollama_against_the_local_base_url():
     llm = make_chat_model(_settings(llm_provider='ollama',
                                     model='qwen3.5:2b',
@@ -56,6 +61,7 @@ def test_factory_builds_ollama_against_the_local_base_url():
     assert str(llm.openai_api_base) == 'http://localhost:11434/v1'
 
 
+# This is a unit test.
 def test_factory_never_sends_the_openrouter_key_to_a_local_model():
     # The request leaves for localhost. A real credential must not go somewhere
     # it was not issued for, however harmless the listener — and Ollama
@@ -65,6 +71,7 @@ def test_factory_never_sends_the_openrouter_key_to_a_local_model():
     assert llm.openai_api_key.get_secret_value() == 'ollama'
 
 
+# This is a unit test.
 def test_factory_gives_a_local_model_a_far_longer_timeout():
     # Measured: a local judge under three concurrent requests took 80–92s per
     # call, so the 90s that suits a remote API is the exact reason a judged run
@@ -76,6 +83,7 @@ def test_factory_gives_a_local_model_a_far_longer_timeout():
     assert LOCAL_TIMEOUT > REMOTE_TIMEOUT
 
 
+# This is a unit test.
 def test_factory_honours_the_per_request_model_override_on_ollama():
     # The lab names the judge's model per stage, and RAGAS binds it at
     # construction — so this override is the only way a judge slug reaches the
@@ -85,6 +93,7 @@ def test_factory_honours_the_per_request_model_override_on_ollama():
     assert llm.model_name == 'qwen3.5:2b'
 
 
+# This is a unit test.
 def test_factory_can_switch_a_local_default_to_nano_per_request():
     """The UI may opt into a remote model without changing the local default."""
     llm = make_chat_model(_settings(llm_provider='ollama',
@@ -95,6 +104,7 @@ def test_factory_can_switch_a_local_default_to_nano_per_request():
     assert llm.request_timeout == REMOTE_TIMEOUT
 
 
+# This is a unit test.
 def test_a_ui_provider_with_no_model_gets_that_providers_own_default():
     """Switching provider in the picker without naming a model must not carry the
     other backend's slug across: it is the same rule BRAIN_LLM already follows."""
@@ -104,6 +114,7 @@ def test_a_ui_provider_with_no_model_gets_that_providers_own_default():
     assert llm.model_name == 'openai/gpt-5-nano'
 
 
+# This is a unit test.
 def test_an_unknown_ui_provider_raises_instead_of_falling_back():
     """The no-auto-modes rule reaches the per-request seam too. A browser sending
     a provider this brain cannot serve is a bug to surface, not something to
@@ -113,6 +124,7 @@ def test_an_unknown_ui_provider_raises_instead_of_falling_back():
                         provider='anthropic')
 
 
+# This is a unit test.
 def test_the_fake_backend_ignores_a_ui_provider_so_offline_stays_offline():
     """`fake` is the backend the whole suite and the e2e board run on. A browser
     naming 'ollama' must not move a brain configured as fake onto a real daemon.
@@ -125,6 +137,7 @@ def test_the_fake_backend_ignores_a_ui_provider_so_offline_stays_offline():
                                       'anything', provider='openrouter'), FakeChat)
 
 
+# This is a unit test.
 def test_choosing_the_local_backend_is_enough_to_get_a_local_default_model():
     # BRAIN_LLM=ollama on its own has to produce a working brain. The remote
     # default slug is not something the daemon can load, so every chat turn
@@ -135,12 +148,14 @@ def test_choosing_the_local_backend_is_enough_to_get_a_local_default_model():
     assert make_chat_model(settings).model_name == PROVIDER_MODELS['ollama']
 
 
+# This is a unit test.
 def test_an_explicit_brain_model_survives_the_provider_default():
     from lodestar_brain.config import load_settings
     settings = load_settings({'BRAIN_LLM': 'ollama', 'BRAIN_MODEL': 'gemma4:e2b'})
     assert settings.model == 'gemma4:e2b'
 
 
+# This is a unit test.
 def test_factory_raises_on_unknown_provider():
     # No auto modes (CLAUDE.md): a typo must not silently become openrouter,
     # which is what the old create_app branch did.
@@ -148,12 +163,14 @@ def test_factory_raises_on_unknown_provider():
         make_chat_model(_settings(llm_provider='typo'))
 
 
+# This is a unit test.
 def test_fake_chat_scripted_pops_turns_in_order():
     llm = FakeChat(script=[AIMessage(content='first'), AIMessage(content='second')])
     assert llm.invoke([HumanMessage(content='x')]).content == 'first'
     assert llm.invoke([HumanMessage(content='x')]).content == 'second'
 
 
+# This is a unit test.
 def test_fake_chat_add_heuristic_calls_create_card_then_replies():
     # tests/e2e_test.py:961,1001 drive this path through the real UI.
     llm = FakeChat()
@@ -167,12 +184,14 @@ def test_fake_chat_add_heuristic_calls_create_card_then_replies():
     assert llm.invoke(msgs).content == 'FAKE: created "What is Leiden clustering?"'
 
 
+# This is a unit test.
 def test_fake_chat_echoes_everything_else():
     # tests/e2e_test.py:955 asserts this exact string.
     llm = FakeChat()
     assert llm.invoke([HumanMessage(content='hello brain')]).content == 'FAKE: hello brain'
 
 
+# This is a unit test.
 def test_fake_chat_accepts_bind_tools():
     # create_agent calls bind_tools on the model; BaseChatModel's default
     # implementation raises, which would break every offline test.

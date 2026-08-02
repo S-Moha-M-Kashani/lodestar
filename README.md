@@ -32,31 +32,137 @@ The design is a "card ledger": quad-ruled engineering paper, cards as ruled inde
 
 ## Run it
 
-**With the database (recommended)** — needs Node 23.4+ (for built-in `node:sqlite`):
+Needs **Node 23.4+** (for built-in `node:sqlite`) and **uv** (for the brain). Out of the
+box every model runs on your machine and no API key is required — the only thing that
+leaves it is web search, when the agent chooses to use it.
+
+The board alone is enough to capture and organise cards. The brain adds the Assistant;
+Chroma adds its memory of past chats; the lab is developer tooling. Start as little or
+as much as you need — a missing piece degrades, it does not break the board.
+
+### The ports
+
+| Port | Service | Started by | You need it for |
+| --- | --- | --- | --- |
+| **3000** | board — Node, SQLite, static files, proxy | `npm start` | everything |
+| **9000** | brain — agent, retrieval, voice | `uvicorn`, see below | the Assistant view |
+| **3001** | test board — its own `board-3001.db` | `npm run test-board` | trying things without touching real cards |
+| **9001** | test brain — writes only to :3001 | `npm run test-brain` | the Assistant on the test board |
+| **9002** | RAG lab — retrieval workbench (test-only) | `npm run lab` | retrieval experiments |
+| **8001** | Chroma — chat memory | separate stack, see below | "what did we say about X last month" |
+| **11434** | Ollama — local models | `ollama serve` | local chat with no API key |
+
+Boards pair with brains by last digit, and the test brain writes only to the test board.
+`tests/ports.test.js` fails if that ever drifts.
+
+### The runners
+
+| Command | Starts | Notes |
+| --- | --- | --- |
+| `npm start` | board on :3000 | `PORT` and `BOARD_DB` override the port and database path |
+| `set -a; . ./.env; set +a` | — | **run this before either brain.** `.env` is read by Docker Compose only, never by uvicorn |
+| `uv run --project brain --extra local-embeddings uvicorn lodestar_brain.server:app --reload --port 9000` | brain on :9000 | the extra is ~1 GB of torch; `BRAIN_EMBEDDER=fake uv run --project brain uvicorn …` skips it and makes retrieval lexical |
+| `npm run test-board` | board on :3001 | separate database, separate Chroma database |
+| `npm run test-brain` | brain on :9001 | carries the extra already; still needs `.env` exported |
+| `npm run lab` | the lab's suite, then :9002 | won't open the panel on a red suite. `-- --no-test`, `-- --all`, `-- --test-only` |
+| `docker compose up --build` | board **and** brain | not Chroma, not Ollama — see below |
+
+Open the board, then **Assistant** for chat and **Assistant → RAG lab** for the workbench.
+
+### The databases
+
+| Store | Holds | Starts itself? |
+| --- | --- | --- |
+| SQLite `board.db` | your cards — the record | **yes, always.** Created and migrated on boot; no daemon, no setup |
+| Chroma on :8001 | chat memory | **no.** External, optional, degrades cleanly |
+| the lab's index | experiment chunks and vectors | it isn't a database — process memory, discarded on exit |
+
+Chroma is deliberately **not** in this repo's compose file: one store, so the composed
+brain and a native one share the same memory. Start it yourself first —
 
 ```sh
-npm start
+cd ~/vectordb-lab && docker compose up -d      # Chroma on :8001
+```
+
+— because the brain probes it **once, at boot**. Start Chroma afterwards and the brain
+never notices until you restart it. Without it the brain logs `chat memory disabled`,
+drops the `recall_chat` tool, and serves everything else normally: board tools, web
+search, card retrieval and the agent all work. Chroma auto-creates its database and
+collections, so there is no schema step; the board on :3000 gets the `lodestar`
+database and every other board gets `lodestar-test`, which is what keeps the test brain
+out of your real chat history. `BRAIN_CHROMA_URL=memory` runs it in-process for one boot.
+
+### Local models — the default, and what stays on the machine
+
+Install [Ollama](https://ollama.com), then pull what the project names:
+
+```sh
+ollama pull 4skl/gemma4-e2b-mtp   # fast local chat and RAG answerer — BRAIN_MODEL default
+ollama pull gemma4:e2b            # stronger local RAG judge
+ollama pull deepseek-r1:8b        # optional, slower, better at reasoning
+```
+
+That is all. `BRAIN_LLM` already defaults to `ollama` and `BRAIN_OLLAMA_BASE_URL` to
+`http://localhost:11434/v1` — the `/v1` is part of the setting, so the same variable
+reaches llama.cpp or vLLM without a code change. With the defaults:
+
+| Stage | Default backend | Where it runs |
+| --- | --- | --- |
+| chat and tool calls | `ollama` | your machine |
+| relevance gate | follows `BRAIN_MODEL` | your machine |
+| embeddings | `sentence-transformers`, `heydariAI/persian-embeddings` | your machine (~2.2 GB, fetched on the **first retrieval**, not at boot, so `/health` answers while it is still cold) |
+| voice → text | `parakeet` (MLX) | your machine, Apple Silicon only (2.5 GB on first use) |
+| chat memory | Chroma | your machine |
+| web search | DuckDuckGo | **leaves the machine** — that is what a web search is |
+
+So an unmodified checkout needs no API key. A key is needed only if you switch a stage
+to a hosted model: `OPENROUTER_API_KEY` for `BRAIN_LLM=openrouter` or
+`BRAIN_TRANSCRIBER=openrouter`, and `OPENAI_API_KEY` — deliberately a *different* key,
+since the OpenRouter one buys chat completions only — for the lab's `openai` embedder.
+It lives in the brain's environment and the browser never sees it, which is why the
+board proxies rather than the page calling out.
+
+**If you keep a `.env`, it wins.** These are code defaults; anything set in `.env` or
+your shell overrides them, and it is worth reading yours before concluding a stage is
+local. The full variable table is in [The brain](#the-brain-assistant-service).
+
+If `BRAIN_LLM=ollama` and the daemon is down, every chat replies with a connection
+error and the Assistant renders it as *"check that the brain service is running"* —
+pointing at the one service that is fine. Check `ollama serve` first.
+
+The RAG lab is local on the same terms: `RAGLAB_LLM=ollama` with the default embedder
+and the default lexical reranker means a full experiment costs nothing and needs no key.
+Fully offline mode, for tests and CI, is `BRAIN_LLM=fake BRAIN_EMBEDDER=fake
+BRAIN_CHROMA_URL=memory`.
+
+### With Docker
+
+```sh
+docker compose up --build
 # then open http://localhost:3000
 ```
 
-The board is stored in `board.db` next to `server.js`. Change the port or database path with `PORT` and `BOARD_DB`:
+Two services, `lodestar` and `brain`. **Chroma and Ollama are not among them** — the
+brain reaches both on your host through `host.docker.internal`, so start Chroma as
+above and leave Ollama running, or accept a board with no chat memory and no local
+chat. Two settings also differ from a native run, and both are forced by the image
+rather than chosen: `BRAIN_TRANSCRIBER=openrouter`, because parakeet-mlx is
+Apple-Silicon only, and the embedding weights are re-downloaded whenever the container
+is recreated, because they are not on a volume yet.
 
-```sh
-PORT=4000 BOARD_DB=/path/to/board.db npm start
-```
+Cards live on the named volume `board-data`, **not** in the container, so they survive
+restarts, upgrades and `docker compose down`. The volume is local to the machine, so a
+new laptop starts with an empty board, and `docker volume rm <project>_board-data` is
+the only thing that erases it.
 
-**With Docker (recommended for a new laptop)** — no Node install needed, just Docker:
+### Two smaller ways to run it
 
-```sh
-docker compose up
-# then open http://localhost:3000
-```
+**Deploy online (free tier):** any Node host works — start command `node server.js`,
+expose the platform's `$PORT`, and point `BOARD_DB` at a persistent disk (Render,
+Railway, Fly with an attached volume) so the SQLite file survives redeploys.
 
-The database is stored on a named Docker volume (`board-data`), **not** inside the container, so your cards survive restarts, upgrades, and `docker compose down`. Because the volume is local to each machine, a new laptop starts with a fresh, empty board. Removing the volume (`docker volume rm <project>_board-data`) is the only thing that erases the data.
-
-**Deploy it online (free cloud):** any host that runs Node works — set the start command to `node server.js`, expose the platform's `$PORT`, and point `BOARD_DB` at a persistent disk (e.g. Render/Railway/Fly with an attached volume) so the SQLite file survives redeploys.
-
-**Front end only (no persistence server):** open `index.html` directly, or `python3 -m http.server`. It runs entirely on localStorage; it just won't share a database across browsers.
+**Front end only:** open `index.html` directly, or `python3 -m http.server`. Runs
+entirely on localStorage — no Assistant, and no database shared across browsers.
 
 ## How your data is stored
 
@@ -99,8 +205,8 @@ Every capability sits behind a small interface chosen by env vars, so each piece
 | `BRAIN_GRADER` | `llm` | The relevance gate between retrieval and generation. `none` disables it. It follows `BRAIN_MODEL`, so it needs no model of its own, and it is one batched call per query rather than one per result |
 | `BRAIN_GRADE_THRESHOLD` | `0.4` | Below this a retrieved card is dropped before the model sees it. A reply the gate cannot parse means *no opinion* (0.5), never *irrelevant* — otherwise one change of output format silently empties every answer's evidence |
 | `BRAIN_MAX_STEPS` | `8` | Tool-call budget per chat turn |
-| `BRAIN_TRANSCRIBER` | `openrouter` | Voice-to-text backend. `openrouter` is the frontend default; `parakeet` is the local MLX alternative (Apple Silicon); `fake` is deterministic for tests. |
-| `BRAIN_OMNI_MODEL` | `openai/whisper-large-v3-turbo` | Audio → text (route: OpenRouter API), sent to its dedicated `/audio/transcriptions` endpoint. |
+| `BRAIN_TRANSCRIBER` | `parakeet` | Voice-to-text backend. `parakeet` is local MLX (Apple Silicon, nothing leaves the machine); `openrouter` is the hosted alternative; `fake` is deterministic for tests. No `auto` mode — an unknown value raises at boot rather than silently picking the one that sends your audio away |
+| `BRAIN_OMNI_MODEL` | `google/gemini-2.5-flash-lite` | Audio → text for the *remote* transcriber only. Parakeet owns its own checkpoint and ignores this |
 | `BRAIN_PARAKEET_MODEL` | `mlx-community/parakeet-tdt-0.6b-v3` | Local checkpoint for the Parakeet backend (2.5 GB, fetched on first use) |
 | `BOARD_API_URL` | `http://127.0.0.1:3000` | Where the brain finds the board API |
 | `AGENT_URL` | `http://127.0.0.1:9000` | Where the Node proxy finds the brain |
@@ -108,6 +214,16 @@ Every capability sits behind a small interface chosen by env vars, so each piece
 | `BRAIN_CHROMA_DATABASE` | paired with the board | `lodestar` for the board on `:3000`, `lodestar-test` for every other board |
 | `BRAIN_CHAT_COLLECTION` | `chat-board-<port>` | One collection per board, so recall never leaks between boards |
 | `LANGSMITH_TRACING` | *(never set)* | Deliberately not enabled and not defaulted anywhere in this repo. LangChain's tracing would upload whole conversations — marriage, health, money — to a third-party cloud. Set it yourself only if you accept that |
+| `LODESTAR_AGENT_BURST` | `60` | How many assistant requests may land at once before the board starts refusing with `429` plus a `Retry-After`. Set on the **Node** server, not the brain |
+| `LODESTAR_AGENT_PER_MIN` | `240` | How fast that budget is earned back. Separate from the burst because they answer different questions — how big a spike is tolerated, and what the sustained rate is |
+
+The rate limit covers `/api/agent/*` **and** `/api/rag/*` — both are the brain, and an unbounded
+recall loop costs embeddings just as an unbounded chat loop costs tokens. It is one bucket for
+the whole assistant surface rather than one per client address: this is a single-user local
+board, so keying a map on a value that never varies would be bookkeeping, not protection.
+Requests are metered *before* the body is read (a flood should cost nothing to refuse), and
+**the board API is never metered** — being over the assistant's limit must not make your own
+cards unreachable. The developer-only `/api/raglab/*` proxy is deliberately unmetered too.
 
 ### Voice input
 
@@ -115,9 +231,14 @@ The mic beside Send dictates into the composer: the browser records, decodes to 
 WAV and posts it to the brain, and the transcript lands in the textarea as **editable text
 that is never auto-sent** — a misheard word must be fixable before it reaches the agent.
 
-Two backends sit behind the same seam. **Local Parakeet** (`nvidia/parakeet-tdt-0.6b-v3` via
-MLX) is free, offline and private — no key and no audio leave the machine — and is what
-`auto` picks whenever it is installed:
+Two backends sit behind the same seam, and you name the one you want — **there is no `auto`
+mode**. It used to prefer local Parakeet when `mlx` was importable and fall back to OpenRouter
+when it was not, which meant an audio file could leave the machine because a wheel failed to
+install. Naming the backend outright makes that a boot error instead of a silent privacy
+change, so an unknown value raises rather than choosing for you.
+
+**Local Parakeet** (`nvidia/parakeet-tdt-0.6b-v3` via MLX) is the default — free, offline and
+private, with no key and no audio leaving the machine:
 
 ```sh
 uv sync --project brain --extra voice     # Apple Silicon only
@@ -126,11 +247,14 @@ uv sync --project brain --extra voice     # Apple Silicon only
 The checkpoint is a 2.5 GB download on the first dictation (cached in
 `~/.cache/huggingface` afterwards, and held in memory for the life of the brain process).
 
-With the OpenRouter backend, the default is **`openai/whisper-large-v3-turbo`**
-(route: OpenRouter API), sent to the dedicated `/audio/transcriptions` endpoint.
-Other audio-capable chat models use `input_audio` on chat completions. The brain
-detects providers that drop audio and reports the offending model rather than
-filing its apology as your words.
+With the OpenRouter backend (`BRAIN_TRANSCRIBER=openrouter`) the default is
+**`google/gemini-2.5-flash-lite`**. The audio rides in as an `input_audio` content part on an
+ordinary chat completion, so any audio-capable chat model works without a second code path.
+The brain detects providers that silently drop the audio part and reports the offending model
+rather than filing its "I can't hear audio" apology as your words.
+
+The Assistant's model picker chooses the *omni model*, not the backend: with the default
+`BRAIN_TRANSCRIBER=parakeet` the brain dictates locally and ignores that pick entirely.
 
 ### Chat memory
 
@@ -152,34 +276,21 @@ database "lodestar-test"   ├── chat-board-3001     ← the paired test boa
 Tests never touch the server: they run with `BRAIN_CHROMA_URL=memory`, an in-process client
 that writes nothing to disk.
 
-Run it locally (requires uv; deps install on first run):
+The commands to start it, and which stages run locally, are in [Run it](#run-it) —
+kept in one place so the two cannot drift. Two details belong here rather than there:
 
-```sh
-uv run --project brain uvicorn lodestar_brain.server:app --reload --port 9000
-# in another terminal: npm start, then open http://localhost:3000 → Assistant
-```
+Torch is deliberately kept out of `brain/.venv`, which is what lets the brain test suite
+run fully offline with no extras. So `BRAIN_EMBEDDER=fake uv run --project brain
+uvicorn …` is the lighter of the two launch lines unless you specifically need real
+semantic retrieval — and plain `uv run --project brain uvicorn …` with neither the extra
+nor the variable **fails at boot**, because `make_embeddings` raises on a missing wheel
+rather than downgrading silently.
 
-### Local Ollama option
+`--reload` is worth adding while working on the brain (`uvicorn … --reload --port 9000`).
+The composed brain has no reload: a change to `brain/src` needs `docker compose restart
+brain`, not a rebuild, because the source is bind-mounted and installed editable.
 
-Install Ollama from [ollama.com](https://ollama.com), start it with `ollama serve`,
-then pull the local models this project exposes:
-
-```sh
-ollama pull 4skl/gemma4-e2b-mtp   # fast local chat / RAG answerer
-ollama pull gemma4:e2b            # stronger local RAG judge
-ollama pull deepseek-r1:8b        # optional slower reasoning alternative
-```
-
-Set `BRAIN_LLM=ollama BRAIN_MODEL=4skl/gemma4-e2b-mtp` for local chat, and
-`RAGLAB_LLM=ollama RAGLAB_MODEL=4skl/gemma4-e2b-mtp` for local RAG Lab LLM
-stages. The RAG Lab’s default embedder (`heydariAI/persian-embeddings`, loaded
-locally through sentence-transformers) and its default lexical reranker never
-leave the machine, so with `RAGLAB_LLM=ollama` an experiment is fully local and
-needs no API key.
-
-With Compose, both services start together (`docker compose up`). Fully offline test mode is `BRAIN_LLM=fake BRAIN_EMBEDDER=fake`.
-
-Swap points, each one file: the chat model (`brain/src/lodestar_brain/llm/factory.py` — add a branch, never edit a call site), the search provider (`tools/websearch.py`), the embedder (`retrieval.py`'s `make_embeddings`, which returns a LangChain `Embeddings`, so a new backend is a class rather than a protocol of ours), and the agent itself (`agent/runner.py`, registered in `agent/registry.py`).
+Swap points, each one file: the chat model (`brain/src/lodestar_brain/llm.py`'s `make_chat_model` — add a branch, never edit a call site), the search provider (`tools/websearch.py`), the embedder (`retrieval.py`'s `make_embeddings`, which returns a LangChain `Embeddings`, so a new backend is a class rather than a protocol of ours), the relevance gate (`retrieval.py`'s `gate_llm`), and the transcriber (`voice/`). The agent itself is deliberately *not* a swap point: a second agent is a second `LodestarAgent` (`agent.py`) constructed with its own tools and prompt at the call site. The one-entry builder registry that used to sit there was removed on 2026-08-01 — one name behind one constructor established no extension direction, so it was ceremony rather than a seam.
 
 ## Keyboard shortcuts (with a card focused)
 
@@ -199,7 +310,7 @@ Lodestar is developed **test-first**: every feature or fix ships with tests in t
 | Server unit | `tests/server.test.js`, `tests/backup.test.js` (`node:test`, zero deps) | Every API branch: soft-delete and restore, 400/404/405, the payload cap, the brain proxy's 503, static serving, legacy-schema migration |
 | Brain unit | `brain/tests/` (pytest) | Agent loop, tool errors and step limits, the board tools' full-list contract, provider parsing, RAG |
 | Brain evals | `brain/tests/evals/` | Agent *behaviour* against JSON scenario files, plus RAG retrieval-quality thresholds |
-| Frontend e2e | `tests/e2e_test.py` (Playwright) | 160 checks — one per user-facing action — in headless Chrome |
+| Frontend e2e | `tests/e2e_test.py` (Playwright) | 343 checks — one per user-facing action — in headless Chrome |
 
 The e2e suite **starts both services itself** on temporary ports and a temporary database, so nothing needs to be running first (requires [uv](https://docs.astral.sh/uv/) and Node 23.4+):
 
@@ -238,9 +349,15 @@ service on :9002 that the board proxies to. Start the service, open the board, a
 page finds it:
 
 ```sh
-npm run raglab      # the lab service on :9002 (test-only)
+npm run lab         # the lab's suite, then the lab service on :9002 (test-only)
 npm run test-board  # the board on :3001 → Assistant → RAG test lab
 ```
+
+`npm run lab` will not open the panel on a red suite — the lab's whole claim is that
+retrieval choices here were decided by measurement, and that is worth what the tests
+behind it are worth. `-- --no-test` skips the suite, `-- --all` runs the whole brain
+suite instead of the lab's, `-- --test-only` stops after it. `npm run raglab` still
+starts the service on its own.
 
 The page says how to start the service if it is not running, so a board with no lab
 behind it is a normal state rather than a broken screen. The service also serves a
@@ -461,6 +578,95 @@ Full write-ups, with run ids, real Farsi model outputs and every metric table:
 - `report/rag-candidates-abcd.html` — the evidence, candidate by candidate.
 - `docs/rag-architecture.md` and `docs/rag-chosen-architecture.md` — the measured
   argument and the recorded decision.
+
+## Known limitations and next steps
+
+Written from the measurements rather than around them. Each entry says what is known, how
+well it is known, and what would move it.
+
+**The answerer is the bottleneck, and nothing built so far touches it.** Context precision is
+**0.9338** while answer relevancy is **0.4886** — retrieval hands over almost entirely
+relevant context and the generation step fails to use it. Across the eight-candidate sweep,
+retrieval recall varies by 0.1098 while the composite meant to score the whole pipeline varies
+by 0.0116: retrieval differences arrive at the answer roughly **9.5× attenuated**. All eight
+candidates varied retrieval and **not one varied generation**. So the next candidate worth
+building is a *different answerer* — and note that answer relevancy is partly a formatting
+artifact, because a bulleted `date: fact [session-id]` reply reverse-engineers to a vague
+question, which is exactly what the metric punishes. The answer prompt has never been varied
+and is the cheapest untested lever in the system.
+
+**Counting and streak questions are not retrieval problems.** The `pattern` question failed
+identically in every candidate, and habit questions scored perfect recall even in the
+configuration that indexes no habit ledger at all. A habit card already holds the answer as
+structured fields (`habitCount`, `habitFreq`, `habitHistory`), so the fix is **query routing** —
+send counts, streaks and date ranges to a deterministic lookup and leave dense retrieval for
+narrative questions. Candidate G tested the retrieval-flavoured fix instead, boosting the
+rollup layers ×1.4, and it measurably *failed*: recall 0.617 → 0.576, quote recall 0.636 →
+0.545, the habit ledger still retrieved once in 24, and month digests promoted in its place.
+Routing is untested — it is the change most likely to move a number next, and it is outside
+everything measured so far.
+
+**Every deciding number rests on 30 judged questions**, ten per difficulty band, against a
+112-question ground-truth set. The full run has never been done. At that sample the sweep
+**could not separate its candidates**: F beats A by 0.0153 against a combined error of 0.0477,
+which is a tie, and the chosen architecture is chosen on cost and reasoning rather than on
+score. Two further caveats on the same numbers: the local judge (`gemma4:e2b`) shares a model
+family with the local answerer (`4skl/gemma4-e2b-mtp`), so it can agree with itself about a
+wrong answer, and rows judged by different judges are not comparable at all — which is why
+`npm run raglab:leaderboard` refuses to rank across them. One metric is known to punish the
+right answer: on an adversarial question with a false premise, a candidate that correctly said
+the event never happened scored 0.0, because `abstained_correctly` checks whether a refusal was
+emitted, not whether it was correct.
+
+**The English half of the time filter is unmeasured.** Farsi time expressions come from
+`resolve_time_scope`, ported verbatim from the lab and measured there. The English half — bare
+years, yesterday, last week/month/year, season names — was written for production and has no
+run behind it. It is covered by unit tests, which is not the same as being measured on a
+corpus.
+
+**Prompt injection is fenced, not tested.** Untrusted tool output — web snippets, recalled
+chat, card text — is wrapped in delimiters with a "this is data, never instructions" clause,
+and the markers are stripped from the payload first. That is a structural mitigation with no
+measurement behind it: there is **no injection eval** in `brain/tests/evals/`. The missing
+fixture is hostile snippets planted in web results and card notes, scored on how often the
+agent obeys them. Build that before reaching for a classifier.
+
+**A hierarchy over board cards has never been measured.** Every layer number in these docs came
+from the Farsi diary corpus. The summary layers were removed on the evidence (candidate B, every
+rollup deleted, scored within 0.006 of the six-layer baseline), but that evidence is about diary
+chat, not cards. If the idea returns, the first step is a card-corpus experiment with its own
+ground truth — not a revert.
+
+**No auth, single user, one machine.** There is no login, no multi-user model and no
+authorisation check anywhere: anyone who can reach the port owns the board. The rate limit is a
+cost guard, not a security boundary. Each machine keeps its own database and boards do not sync
+between laptops — moving one is copying a file or Export → Import. Deploying this to a public
+address without putting authentication in front of it would publish your diary.
+
+**The Docker image is 18.1 GB, and a cold container pays about nine minutes before it can
+embed anything.** Both measured on the first real `docker compose up --build` this project has
+ever done (2026-08-02). The size is not the Persian model — it is the CUDA stack `torch`
+installs by default, which cannot run on a Mac and is unused by a CPU-only deployment; pinning
+the CPU-only wheel is the obvious fix and has not been done.
+
+The wait was timed through the production seam — `make_embeddings(...)` then one
+`embed_query` — at **522.9 s cold against 0.15 s warm**. Almost all of it is the
+`heydariAI/persian-embeddings` download (~2.2 GB, unauthenticated, so rate-limited by
+HuggingFace); the embedding itself is the 0.15 s. Read it as a **lower bound on the first
+real retrieval** rather than a measurement of one: no `find_related` or `recall_chat` call was
+timed end to end, but every retrieval path blocks on exactly this, because `retrieval.py`'s
+lazy `model` property is what defers it. One sample, on one network.
+
+That deferral is the design working — `/health` answers throughout and readiness never blocks
+— but two consequences are not written down anywhere else. A fresh container's first
+retrieval-touching question sits for minutes with **no progress indication**, and the weights
+cache inside the container rather than on a volume, so the cost returns on **every container
+recreate**, not once ever. Mounting `~/.cache/huggingface`, pre-warming on boot, or simply
+telling the user what the wait is — all unbuilt.
+
+**CI is written but has never run.** `.github/workflows/ci.yml` runs the brain units and the
+full e2e suite on every push — and the repository has no git remote, so it has never executed
+once. The suites are run locally before each commit instead.
 
 ## More
 
