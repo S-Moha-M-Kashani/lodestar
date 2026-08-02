@@ -3,17 +3,6 @@ revision = 3
 requires-python = ">=3.13"
 
 [[package]]
-name = "lodestar"
-version = "0.1.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "playwright" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "playwright", specifier = ">=1.61.0" }]
-
-[[package]]
 name = "greenlet"
 version = "3.5.4"
 source = { registry = "https://pypi.org/simple" }
@@ -69,6 +58,17 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/e3/cd/3f77a4cce3bae631b08eb52f53a82a976669600337e21dfdba811cb50267/greenlet-3.5.4-cp315-cp315t-win_amd64.whl", hash = "sha256:f680e549edb3eaf21eea4e7fe101e15ec180c74b7879ab46adc080f22d4015d2", size = 251977, upload-time = "2026-07-22T11:41:38.125Z" },
     { url = "https://files.pythonhosted.org/packages/93/e8/65e8707d00fe2a49bf12f609a9b2b39ba6dd23c2810eacad877c4fc94bfe/greenlet-3.5.4-cp315-cp315t-win_arm64.whl", hash = "sha256:08fc36de8442d5c3e95b044550dbea9bf144d31ec0cc58e36fb241cb6ef6a994", size = 250538, upload-time = "2026-07-22T11:40:17.985Z" },
 ]
+
+[[package]]
+name = "lodestar"
+version = "1.0.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "playwright" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "playwright", specifier = ">=1.61.0" }]
 
 [[package]]
 name = "playwright"
