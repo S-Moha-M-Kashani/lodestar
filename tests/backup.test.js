@@ -1,7 +1,7 @@
 // tests/backup.test.js
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, existsSync, readdirSync, chmodSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, chmodSync, readFileSync } from 'node:fs';
   import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -26,6 +26,53 @@ test('no DB → status no-db, exits without throwing', () => {
   const r = runBackup({ dbPath: join(dir, 'missing.db'), backupsDir: join(dir, 'backups') });
   assert.equal(r.status, 'no-db');
   assert.equal(r.pushed, false);
+  // Same answer when the databases/ folder is missing or holds no .db at all.
+  const empty = runBackup({ databasesDir: join(dir, 'no-such-databases'),
+                            backupsDir: join(dir, 'backups') });
+  assert.equal(empty.status, 'no-db');
+  assert.equal(empty.pushed, false);
+});
+
+// This is an integration test: real files on disk and a stub rclone binary.
+test('a databases/ run snapshots every .db, prunes per name, skips chroma-data', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bk-'));
+  const databasesDir = join(dir, 'databases');
+  const backupsDir = join(dir, 'backups');
+  const missingRclone = join(dir, 'no-such-rclone');
+  mkdirSync(databasesDir, { recursive: true });
+  writeFileSync(join(databasesDir, 'board.db'), 'BOARD');
+
+  // Only board.db exists yet (the Stage 1 reality): one snapshot, no invented
+  // assistant one.
+  const first = runBackup({ databasesDir, backupsDir, rcloneBin: missingRclone,
+                            now: new Date('2026-08-02T10:00:00Z') });
+  assert.equal(first.localPaths.length, 1);
+  let files = readdirSync(backupsDir);
+  assert.equal(files.filter((f) => f.startsWith('board-')).length, 1);
+  assert.ok(!files.some((f) => f.startsWith('assistant-')));
+
+  // assistant.db appears (Stage 2) and chroma-data/ appears (Stage 3): both
+  // .db files are snapshotted; chroma-data is derived bulk and never backed up.
+  writeFileSync(join(databasesDir, 'assistant.db'), 'ASSISTANT');
+  mkdirSync(join(databasesDir, 'chroma-data'), { recursive: true });
+  writeFileSync(join(databasesDir, 'chroma-data', 'chroma.sqlite3'), 'CHROMA');
+  const both = runBackup({ databasesDir, backupsDir, rcloneBin: missingRclone,
+                           now: new Date('2026-08-02T10:01:00Z') });
+  assert.equal(both.localPaths.length, 2);
+  files = readdirSync(backupsDir);
+  assert.equal(readFileSync(join(backupsDir, files.find((f) => f.startsWith('assistant-'))), 'utf8'),
+    'ASSISTANT');
+  assert.ok(!files.some((f) => f.includes('chroma')), 'chroma-data is never backed up');
+
+  // Prune applies per database name: board's snapshots must not be able to
+  // evict assistant's (lexically, assistant-* sorts before every board-*).
+  for (let i = 2; i <= 5; i++) {
+    runBackup({ databasesDir, backupsDir, rcloneBin: missingRclone, keep: 3,
+                now: new Date(`2026-08-02T10:0${i}:00Z`) });
+  }
+  files = readdirSync(backupsDir).filter((f) => f.endsWith('.db'));
+  assert.equal(files.filter((f) => f.startsWith('board-')).length, 3);
+  assert.equal(files.filter((f) => f.startsWith('assistant-')).length, 3);
 });
 
 // This is an integration test: real files on disk and a stub rclone binary.

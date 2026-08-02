@@ -248,6 +248,42 @@ test('no brain mount shadows the container virtualenv', () => {
   }
 });
 
+// --- The project's own Chroma (Session 7, stage 3) --------------------------
+// Chat-memory chunks and their vectors are derived data (rebuilt from
+// assistant.db) and live beside the other databases, in databases/chroma-data.
+// A bind mount rather than a named volume deliberately: "where is my data" has
+// one answer — the databases/ folder — and stage 1's backup exclusion of
+// chroma-data/ actually covers it.
+
+// This is a configuration invariant.
+test('compose runs the project Chroma over databases/chroma-data', () => {
+  const block = serviceBlock('chroma');
+  assert.ok(
+    mountsOf(block).some((m) => m.startsWith('./databases/chroma-data:')),
+    `the chroma service must bind-mount ./databases/chroma-data — a named ` +
+      `volume would move the derived store back out of the databases/ folder. ` +
+      `Got [${mountsOf(block).join(', ')}]`,
+  );
+  assert.match(block, /IS_PERSISTENT/,
+    'chroma persistence must be pinned on, or the store silently becomes per-boot');
+});
+
+// This is a configuration invariant.
+test('the composed brain dials the project Chroma service, and only after it starts', () => {
+  const mapping = serviceBlock('chroma').match(/"(\d+):(\d+)"/);
+  assert.ok(mapping, 'could not read a port mapping out of the chroma service');
+  const pinned = brainEnvPin('BRAIN_CHROMA_URL');
+  assert.ok(
+    pinned && pinned.includes(`http://chroma:${mapping[2]}`),
+    `BRAIN_CHROMA_URL is ${pinned ?? 'unset'} — the composed brain must dial ` +
+      `the chroma service on its container port ${mapping[2]}, not a host URL`,
+  );
+  // Start order matters more than usual here: a brain that boots first
+  // disables chat memory until its next restart.
+  assert.match(serviceBlock('brain'), /depends_on:[^-]*-\s*chroma/,
+    'the brain service must depends_on chroma');
+});
+
 // This is a configuration invariant.
 test('the source mount targets exactly where the Dockerfile puts the source', () => {
   // A WORKDIR change would otherwise leave the tree mounted in a directory the
