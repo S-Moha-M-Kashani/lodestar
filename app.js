@@ -2876,8 +2876,15 @@
 
   // Model choices for the brain, one per capability. Only the text pick has
   // an effect today — it rides along on every /api/agent/chat request (the
-  // brain forwards it to OpenRouter). The omni and embedding picks are stored
-  // preferences for the media-ingestion and remote-embedder features to come.
+  // brain forwards it to OpenRouter). The omni pick is a stored preference
+  // for the media-ingestion feature to come. Embedding is deliberately NOT a
+  // pick: the brain runs exactly one embedder (BRAIN_EMBEDDER's default,
+  // heydariAI/persian-embeddings), the old dropdown was a preference nothing
+  // ever read, and a dead control teaches the user not to trust the live
+  // ones — so the panel states the fixed model instead (renderChatSettings).
+  // A saved `embed` key from that dropdown may linger in localStorage; the
+  // load sweep below iterates DEFAULT_MODELS keys, so it is ignored, and the
+  // next persist drops it.
   const MODELS_KEY = KEY_PREFIX + 'models';
   // Every omni option has to be a model that genuinely receives audio.
   // nemotron-3-nano-omni:free is listed as audio-capable but the provider
@@ -2892,20 +2899,19 @@
   // usable audio model in the catalogue.
   const DEFAULT_MODELS = {
     // Local-first is the normal Assistant experience. Nano stays one click
-    // away under the explicit OpenRouter provider selector below. The omni and
-    // embedding picks are the remote route by definition — local dictation is
-    // Parakeet's job inside the brain, which ignores this pick entirely.
+    // away under the explicit OpenRouter provider selector below. The omni
+    // pick is the remote route by definition — local dictation is Parakeet's
+    // job inside the brain, which ignores this pick entirely.
     text: '4skl/gemma4-e2b-mtp',
     omni: 'google/gemini-2.5-flash-lite',
-    embed: 'nvidia/llama-nemotron-embed-vl-1b-v2:free',
   };
+  // The one embedder the brain actually runs — shown in the panel, never picked.
+  const FIXED_EMBEDDER = 'heydariAI/persian-embeddings';
   const MODEL_PICKERS = [
     { key: 'text', id: 'model-text', label: 'Text generation',
       options: [DEFAULT_MODELS.text, 'gemma4:e2b', 'deepseek-r1:8b'] },
     { key: 'omni', id: 'model-omni', label: 'Audio → text (route: OpenRouter API)',
       options: [DEFAULT_MODELS.omni, 'openai/gpt-audio-mini'] },
-    { key: 'embed', id: 'model-embed', label: 'Text → embedding (route: OpenRouter API)',
-      options: [DEFAULT_MODELS.embed, 'openai/text-embedding-3-small'] },
   ];
   const modelRoute = (slug) =>
     (slug.startsWith('4skl/') || !slug.includes('/')) ? 'local' : 'OpenRouter API';
@@ -2994,7 +3000,7 @@
 
   // The options for one picker: the backend's own list when it verified one,
   // otherwise the presets. Only the text pick is served by the chat model, so
-  // the omni and embedding pickers keep their curated lists either way.
+  // the omni picker keeps its curated list either way.
   function pickerOptions(picker) {
     if (picker.key === 'text') {
       if (assistantModels.provider === 'openrouter') return TEXT_MODELS_BY_PROVIDER.openrouter;
@@ -3083,9 +3089,30 @@
       label.appendChild(sel);
       panel.appendChild(label);
     }
+    // The embedder is a fact, not a pick: the brain runs exactly one model,
+    // locally. A filled-in ledger cell where the dropdown used to stand —
+    // same footprint as the selects, no affordance — so nobody hunts for a
+    // control that shouldn't exist.
+    const embedField = document.createElement('div');
+    embedField.className = 'field model-fixed';
+    embedField.id = 'model-embed-fixed';
+    embedField.append('Text → embedding (route: local, fixed)');
+    const embedValue = document.createElement('span');
+    embedValue.className = 'model-fixed-value';
+    const embedName = document.createElement('span');
+    embedName.textContent = FIXED_EMBEDDER;
+    const embedStamp = document.createElement('span');
+    embedStamp.className = 'model-fixed-stamp';
+    embedStamp.textContent = 'built-in';
+    embedValue.append(embedName, embedStamp);
+    const embedNote = document.createElement('span');
+    embedNote.className = 'model-fixed-note';
+    embedNote.textContent = 'Persian-tuned · embeds your cards inside the brain, never remote';
+    embedField.append(embedValue, embedNote);
+    panel.appendChild(embedField);
     const hint = document.createElement('p');
     hint.className = 'field-hint';
-    hint.textContent = 'Text generation applies to the chat. Ollama uses models pulled on this machine; OpenRouter currently offers GPT-5 Nano and requires an API key. The omni model transcribes your voice, unless the brain is dictating locally with Parakeet — that ignores this pick. The embedding pick is saved for upcoming retrieval features.';
+    hint.textContent = 'Text generation applies to the chat. Ollama uses models pulled on this machine; OpenRouter currently offers GPT-5 Nano and requires an API key. The omni model transcribes your voice, unless the brain is dictating locally with Parakeet — that ignores this pick.';
     panel.appendChild(hint);
     // Where the chat model runs, when the brain told us. Worth saying out loud:
     // a local backend is free and private but answers in tens of seconds, and
