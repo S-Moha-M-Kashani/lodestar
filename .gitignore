@@ -26,6 +26,9 @@ node_modules/
 *.db
 *.db-journal
 *.db-wal
+# Every database's home — board.db, assistant.db, and Chroma's chroma-data/,
+# whose files are not *.db and would otherwise be committed.
+databases/
 
 .idea
 

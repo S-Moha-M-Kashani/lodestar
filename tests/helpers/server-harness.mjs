@@ -35,6 +35,9 @@ function waitForLine(proc, regex, timeoutMs = 10000) {
 export async function startServer({ env = {} } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'lodestar-srv-'));
   const dbPath = join(dir, 'board.db');
+  // Both databases point into the temp dir: without ASSISTANT_DB a spawned
+  // test server would write chat rows into the repo's real databases/.
+  const assistantDbPath = join(dir, 'assistant.db');
   // Pick a port unlikely to collide; retry once on early exit.
   const port = 20000 + Math.floor((Date.now() % 40000));
   const proc = spawn('node', ['server.js'], {
@@ -43,7 +46,8 @@ export async function startServer({ env = {} } = {}) {
     // and each one would otherwise drop a snapshot of a temp board into the
     // user's real backups/ and evict a genuine one. The backup tests opt in
     // explicitly via `env`, pointing at a temp directory.
-    env: { ...process.env, PORT: String(port), BOARD_DB: dbPath, NODE_NO_WARNINGS: '1',
+    env: { ...process.env, PORT: String(port), BOARD_DB: dbPath,
+           ASSISTANT_DB: assistantDbPath, NODE_NO_WARNINGS: '1',
            LODESTAR_BACKUP_ON_WRITE: '0', ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -54,7 +58,7 @@ export async function startServer({ env = {} } = {}) {
     proc.kill('SIGKILL');
     try { rmSync(dir, { recursive: true, force: true }); } catch {}
   };
-  return { port, dbPath, dir, base, proc, stop };
+  return { port, dbPath, assistantDbPath, dir, base, proc, stop };
 }
 
 export { waitForLine };

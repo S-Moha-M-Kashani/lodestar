@@ -1005,6 +1005,37 @@ class ChatStore:
         payload |= flatten_metadata(metadata or {})
         self.store.add_texts(chunks, metadatas=[dict(payload)] * len(chunks))
 
+    def index_messages(self, rows: list[dict]) -> None:
+        """Chunk recorded messages (assistant.db rows, via the Node API) into
+        the index. Chunk ids derive from the message id, so Chroma *upserts*:
+        indexing the same row twice never duplicates it — what makes a rebuild
+        safe to run at every boot. created_day comes from the message's own
+        createdAt, never from today, so time-scoped recall works on imported
+        history too."""
+        texts, ids, metadatas = [], [], []
+        for row in rows:
+            payload = {'message_id': int(row['id']), 'role': row.get('role', ''),
+                       'created_day': day_int(row.get('createdAt'))}
+            for n, chunk in enumerate(split_text(row.get('content', ''))):
+                texts.append(chunk)
+                ids.append(f"{row['id']}:{n}")
+                metadatas.append(dict(payload))
+        if texts:
+            self.store.add_texts(texts, metadatas=metadatas, ids=ids)
+
+    def sync(self, rows: list[dict]) -> int:
+        """Index every recorded message this index does not know yet; returns
+        how many were missing. The rebuild path: a turn recorded while Chroma
+        was down becomes recallable the next time a brain boots and syncs."""
+        known = set()
+        for chunk_id in self.store.get()['ids']:
+            head, sep, _ = chunk_id.partition(':')
+            if sep and head.isdigit():   # pre-record chunks keep uuid ids
+                known.add(int(head))
+        missing = [row for row in rows if int(row['id']) not in known]
+        self.index_messages(missing)
+        return len(missing)
+
     def search(self, text: str, k: int = 5,
                scope: TimeScope | None = None) -> list[dict]:
         if self.count() == 0:

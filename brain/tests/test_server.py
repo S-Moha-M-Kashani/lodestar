@@ -1,4 +1,5 @@
 import base64
+import itertools
 import json
 
 import httpx
@@ -292,9 +293,28 @@ def memory_app(collection):
                                chat_collection=str(collection)))
 
 
+def stub_chat_record():
+    """A board stub speaking the chat record (Session 7): POST echoes rows
+    back with ids, GET has nothing recorded before the test. Chat reaches the
+    Chroma index only through the record now, so a memory test without this
+    stub records nothing — loudly in the logs, silently in its asserts."""
+    counter = itertools.count(1)
+
+    def echo(request):
+        sent = json.loads(request.content)['messages']
+        return httpx.Response(200, json={'messages': [
+            {'id': next(counter), 'role': m['role'], 'content': m['content'],
+             'createdAt': m.get('createdAt', 1754130000000)} for m in sent]})
+
+    respx.get('http://board.test/api/chat/messages').mock(
+        return_value=httpx.Response(200, json={'messages': []}))
+    respx.post('http://board.test/api/chat/messages').mock(side_effect=echo)
+
+
 # This is an integration test.
 @respx.mock
 def test_chat_records_both_sides_and_recall_finds_them():
+    stub_chat_record()
     client = TestClient(memory_app('chat-both-sides'))
     client.post('/agent/chat', json={'messages': [
         {'role': 'user', 'content': 'the wifi password is hunter2'}]})
@@ -310,6 +330,7 @@ def test_chat_records_both_sides_and_recall_finds_them():
 # This is an integration test.
 @respx.mock
 def test_recall_orders_by_relevance():
+    stub_chat_record()
     client = TestClient(memory_app('chat-ordering'))
     for text in ['the wifi password is hunter2',
                  'dentist appointment moved to friday']:
@@ -324,10 +345,15 @@ def test_recall_orders_by_relevance():
 def test_paired_stores_are_isolated_per_board():
     # Two brains, two collections — the board.db brain must never see chat
     # recorded by the board-3001.db brain, and vice versa.
+    stub_chat_record()
     main = TestClient(memory_app('chat-board-3000'))
     test = TestClient(memory_app('chat-board-3001'))
     main.post('/agent/chat', json={'messages': [
         {'role': 'user', 'content': 'production secret rotation is tuesday'}]})
+    # The positive half first, so this test can never pass vacuously with a
+    # brain that records nothing at all.
+    own = main.post('/rag/recall', json={'text': 'secret rotation', 'k': 5})
+    assert any('rotation' in m['text'] for m in own.json()['matches'])
     res = test.post('/rag/recall', json={'text': 'secret rotation', 'k': 5})
     assert all('rotation' not in m['text'] for m in res.json()['matches'])
 
@@ -433,6 +459,7 @@ def test_the_streamed_turn_reports_each_tool_then_agrees_with_the_buffered_one()
     """
     respx.post('http://board.test/api/proposals').mock(
         return_value=httpx.Response(200, json=card('n1', 'What is RRF?')))
+    stub_chat_record()
     client = TestClient(memory_app('chat-stream'))
     events = sse_events(client, {'messages': [
         {'role': 'user', 'content': 'add: What is RRF?'}]})

@@ -1150,6 +1150,9 @@ test('package.json pairs the test board with its own brain', async () => {
   const board = pkg.scripts['test-board'];
   assert.match(board, /PORT=3001/);
   assert.match(board, /BOARD_DB=board-3001\.db/);
+  // The chat record needs the same pairing: without it the test board's
+  // chats would be recorded into the real databases/assistant.db.
+  assert.match(board, /ASSISTANT_DB=assistant-3001\.db/);
   // Without this, the :3001 board talks to the default brain, whose writes
   // land in board.db — the bug this pairing exists to prevent.
   assert.match(board, /AGENT_URL=http:\/\/127\.0\.0\.1:9001/);

@@ -130,7 +130,9 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         grader=env.get('BRAIN_GRADER', 'llm'),
         grade_threshold=float(env.get('BRAIN_GRADE_THRESHOLD', '0.4')),
         board_api_url=board_api_url,
-        chroma_url=env.get('BRAIN_CHROMA_URL', 'http://localhost:8001'),
+        # The project's own Chroma (compose service `chroma`, npm run chroma) —
+        # :8003 because 8001/8002 belong to the unrelated ~/vectordb-lab stack.
+        chroma_url=env.get('BRAIN_CHROMA_URL', 'http://localhost:8003'),
         chroma_database=env.get('BRAIN_CHROMA_DATABASE')
                         or _chroma_database_for(board_api_url),
         chat_collection=env.get('BRAIN_CHAT_COLLECTION')

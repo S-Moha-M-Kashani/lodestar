@@ -43,6 +43,21 @@ class BoardClient:
         res.raise_for_status()
         return res.json()['cards']
 
+    def list_chat(self) -> list[dict]:
+        """The live chat record, oldest first."""
+        res = httpx.get(f'{self.base_url}/api/chat/messages', timeout=self.timeout)
+        res.raise_for_status()
+        return res.json()['messages']
+
+    def record_chat(self, messages: list[dict]) -> list[dict]:
+        """Append to the durable chat record (assistant.db) — through the Node
+        API like every write, never SQLite directly. Returns the inserted rows
+        with their ids, which is what the Chroma index chunks are keyed on."""
+        res = httpx.post(f'{self.base_url}/api/chat/messages',
+                         json={'messages': messages}, timeout=self.timeout)
+        res.raise_for_status()
+        return res.json()['messages']
+
     def create_proposal(self, card: dict) -> dict:
         """Offer one card for the user's approval.
 

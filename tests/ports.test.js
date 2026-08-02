@@ -18,12 +18,16 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (...p) => readFileSync(join(ROOT, ...p), 'utf8');
 const scripts = JSON.parse(read('package.json')).scripts;
 
-// Owned by the Chroma stack (docker compose in ~/vectordb-lab):
+// Owned by the *external* Chroma stack (docker compose in ~/vectordb-lab):
 //   8001 = Chroma REST API, 8002 = the browsing viewer.
 // The brain deliberately lives in the 9000 block instead, so it can never
 // collide with that stack as it grows. Boards pair with brains by last digit:
 //   3000 board <-> 9000 brain,  3001 test board <-> 9001 test brain.
 const CHROMA_PORTS = [8001, 8002];
+// Lodestar's own Chroma (the compose `chroma` service, Session 7): published
+// on the host so a native brain reaches the same store the composed one does.
+// Next free slot in the 8000 block — both stacks must be able to run at once.
+const PROJECT_CHROMA_PORT = 8003;
 const MAIN_BRAIN_PORT = 9000;
 const MAIN_BOARD_PORT = 3000;
 
@@ -72,12 +76,55 @@ test('every long-running port is distinct', () => {
     testBoardPort(),
     testBrainPort(),
     ...CHROMA_PORTS,
+    PROJECT_CHROMA_PORT,
   ];
   assert.equal(
     new Set(ports).size,
     ports.length,
     `port collision among [${ports.join(', ')}]`,
   );
+});
+
+// The project's own Chroma, three ways it can drift: the compose service
+// binding a port the ~/vectordb-lab stack owns (one of the two stacks then
+// cannot start), the native brain's default dialling a different Chroma than
+// the composed one persists to, and `npm run chroma` respelling the service
+// instead of delegating to it.
+const projectChromaHostPort = () => {
+  const block = read('docker-compose.yml').match(
+    /\n  chroma:\n([\s\S]*?)(?=\n  \S|\n\S|$)/);
+  assert.ok(block, 'docker-compose.yml has no chroma service');
+  const m = block[1].match(/"(\d+):(\d+)"/);
+  assert.ok(m, 'could not read a port mapping out of the chroma service');
+  return Number(m[1]);
+};
+
+// This is a configuration invariant.
+test("the project Chroma binds :8003, never the vectordb-lab stack's ports", () => {
+  const host = projectChromaHostPort();
+  assert.equal(host, PROJECT_CHROMA_PORT);
+  assert.ok(!CHROMA_PORTS.includes(host),
+    `:${host} belongs to ~/vectordb-lab — the two stacks must run at once`);
+});
+
+// This is a configuration invariant.
+test("the brain's native BRAIN_CHROMA_URL default dials the port compose publishes", () => {
+  const m = read('brain/src/lodestar_brain/config.py').match(
+    /BRAIN_CHROMA_URL', *\n? *'http:\/\/localhost:(\d+)'/);
+  assert.ok(m, 'could not read the BRAIN_CHROMA_URL default out of config.py');
+  assert.equal(Number(m[1]), projectChromaHostPort(),
+    'a native brain and the composed brain would persist to different stores');
+});
+
+// This is a configuration invariant.
+test('npm run chroma delegates to the compose service instead of respelling it', () => {
+  // The service definition carries the port and the bind mount; a second copy
+  // in package.json is the copy that drifts (the same rule as `npm run lab`).
+  assert.ok(scripts.chroma, 'package.json has no "chroma" script');
+  assert.match(scripts.chroma, /docker compose up/);
+  assert.match(scripts.chroma, /chroma/);
+  assert.ok(!/docker run|-p |--publish|:\d{4}/.test(scripts.chroma),
+    'the chroma script respells the port or mount — the compose service is the one definition');
 });
 
 // This is a configuration invariant.

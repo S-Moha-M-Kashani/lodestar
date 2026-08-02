@@ -27,6 +27,9 @@ BRAIN_PORT = int(os.environ.get("TEST_BRAIN_PORT", "8798"))
 RAGLAB_PORT = int(os.environ.get("TEST_RAGLAB_PORT", "8797"))
 URL = f"http://localhost:{PORT}"
 DB_PATH = os.path.join(tempfile.mkdtemp(prefix="qboard-test-"), "board.db")
+# The chat record beside it — without this the spawned server would write chat
+# rows into the repo's real databases/ folder.
+ASSISTANT_DB_PATH = os.path.join(os.path.dirname(DB_PATH), "assistant.db")
 
 # Write-triggered backups are exercised against a throwaway directory, and with
 # rclone pointed at a path that does not exist. The suite must never add to the
@@ -99,7 +102,8 @@ def start_server():
     proc = subprocess.Popen(
         ["node", "server.js"],
         cwd=ROOT,
-        env={**os.environ, "PORT": str(PORT), "BOARD_DB": DB_PATH, "NODE_NO_WARNINGS": "1",
+        env={**os.environ, "PORT": str(PORT), "BOARD_DB": DB_PATH,
+             "ASSISTANT_DB": ASSISTANT_DB_PATH, "NODE_NO_WARNINGS": "1",
              "AGENT_URL": f"http://127.0.0.1:{BRAIN_PORT}",
              "RAGLAB_URL": f"http://127.0.0.1:{RAGLAB_PORT}",
              "LODESTAR_BACKUP_ON_WRITE": "1", "LODESTAR_BACKUP_DIR": BACKUP_DIR,
@@ -1245,16 +1249,22 @@ try:
         # was kept selectable only for being free. It is gone now: OpenRouter has
         # exactly one free audio-input model and that is it, so "free" was never
         # a working choice — free dictation is Parakeet's job, locally and offline
-        # (BRAIN_TRANSCRIBER defaults to parakeet). Voxtral replaces it: a
-        # purpose-built speech model at the same price as the default.
+        # (BRAIN_TRANSCRIBER defaults to parakeet).
+        # voxtral-small was nemotron's replacement and is retired too, for cost:
+        # its text prices match the default's, which is what hid that its *audio*
+        # rate is $100/M tokens against the default's $0.30/M — measured
+        # 2026-08-02, the most expensive audio-input model in the catalogue,
+        # ~330x the default for the tokens dictation is made of.
         # openai/whisper-large-v3-turbo was briefly the default and is not one:
         # measured on 2026-07-31, OpenRouter's published catalogue is 337 models
         # and holds no whisper, embedding or rerank entry, so it can transcribe
         # nothing. The picker is the remote route by definition — local dictation
         # is Parakeet's job inside the brain, which ignores this pick entirely, so
         # the local checkpoint is not an option here either.
+        # The default IS the cheapest usable audio model in the catalogue
+        # (2026-08-02): $0.10/M in, $0.30/M audio.
         DEFAULT_OMNI = "google/gemini-2.5-flash-lite"
-        ALT_OMNI = ["openai/gpt-audio-mini", "mistralai/voxtral-small-24b-2507"]
+        ALT_OMNI = ["openai/gpt-audio-mini"]
         BROKEN_OMNI = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
         DEFAULT_EMBED = "nvidia/llama-nemotron-embed-vl-1b-v2:free"
         page.locator('.view-switch button[data-view="assistant"]').click()
@@ -1580,6 +1590,61 @@ try:
                   '"cards"' in board_json)
             page.click("#cancel-export")
             wait_until(lambda: not page.locator("#export-dialog").is_visible())
+
+        # ---- Chat import (Session 7, stage 4) --------------------------------
+        # This is an end-to-end test.
+        # The missing half of export: a JSON export chosen from disk lands in the
+        # durable record (assistant.db) and the Chroma index is asked to catch up
+        # (POST /api/rag/chat/reindex). The file imported here is this browser's
+        # own transcript — the agenda's first test case — which includes the
+        # earlier failed turn, so the skip rule runs against real data: an
+        # errored or partial turn is withheld from the record exactly as it is
+        # withheld from the model.
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector("#chat-input")
+        check("chat import: the Assistant offers an import control",
+              page.locator("#chat-import-btn").count() == 1
+              and page.locator("#chat-import-file").count() == 1)
+        if page.locator("#chat-import-btn").count() == 1:
+            # This browser's own transcript, read back out of the export dialog.
+            page.click("#chat-export-btn")
+            wait_until(lambda: page.locator("#export-dialog").is_visible())
+            page.select_option("#chat-export-format", "json")
+            import_payload = page.input_value("#export-json")
+            page.click("#cancel-export")
+            wait_until(lambda: not page.locator("#export-dialog").is_visible())
+            exported_msgs = json.loads(import_payload)["messages"]
+            clean_msgs = [m for m in exported_msgs
+                          if not m.get("error") and not m.get("partial")
+                          and str(m.get("content", "")).strip()]
+            failed_texts = {m["content"] for m in exported_msgs
+                            if m.get("error") and m.get("content")}
+            check("chat import: the transcript carries a failed turn to exercise the skip",
+                  len(failed_texts) > 0)
+
+            def record_messages():
+                with urllib.request.urlopen(f"{URL}/api/chat/messages") as r:
+                    return json.load(r)["messages"]
+
+            before_import = len(record_messages())
+            page.set_input_files("#chat-import-file", [{
+                "name": "lodestar-chat.json", "mimeType": "application/json",
+                "buffer": import_payload.encode(),
+            }])
+            check("chat import: a confirm dialog states how many turns will import",
+                  wait_until(lambda: page.locator("#confirm-dialog").is_visible())
+                  and str(len(clean_msgs)) in page.locator("#confirm-copy").inner_text())
+            with page.expect_request("**/api/rag/chat/reindex"):
+                page.click("#confirm-ok")
+            check("chat import: the clean turns land in the record",
+                  wait_until(lambda: len(record_messages()) == before_import + len(clean_msgs)))
+            imported_rows = record_messages()[before_import:]
+            check("chat import: imported rows keep their role and content",
+                  [r["role"] for r in imported_rows] == [m["role"] for m in clean_msgs]
+                  and all(r["content"] == m["content"]
+                          for r, m in zip(imported_rows, clean_msgs)))
+            check("chat import: a failed turn's text is never recorded",
+                  not any(r["content"] in failed_texts for r in imported_rows))
 
         page.locator('.view-switch button[data-view="board"]').click()
 
