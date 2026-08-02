@@ -2881,9 +2881,9 @@
   // so the panel states it instead of offering a dead dropdown. A stale saved
   // `embed` key is ignored by the load sweep and dropped on the next persist.
   const MODELS_KEY = KEY_PREFIX + 'models';
-  // Every omni option must genuinely receive audio at a sane price; slugs that
-  // fail that test go to RETIRED_MODELS, never just delisted. Free dictation
-  // is the local Parakeet backend's job (BRAIN_TRANSCRIBER defaults to it).
+  // Every omni option must genuinely receive audio at a sane price. Free
+  // dictation is the local Parakeet backend's job (BRAIN_TRANSCRIBER
+  // defaults to it).
   const DEFAULT_MODELS = {
     // Local-first is the normal Assistant experience. Nano stays one click
     // away under the explicit OpenRouter provider selector below. The omni
@@ -2902,22 +2902,6 @@
   ];
   const modelRoute = (slug) =>
     (slug.startsWith('4skl/') || !slug.includes('/')) ? 'local' : 'OpenRouter API';
-  // Slugs retired *for cause*. Dropping a model from MODEL_PICKERS does not
-  // deselect it — a saved pick that left the list is re-added and stays
-  // selected — so a broken or overpriced slug must be listed here to be swept
-  // back to the default on load.
-  const RETIRED_MODELS = new Set([
-    // Advertises audio input, but its provider discards the audio.
-    'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
-    // Audio at $100/M tokens, ~330x the default's rate.
-    'mistralai/voxtral-small-24b-2507',
-    // ~50x the default's price per turn, ~11s per answer, and absent from the
-    // OpenRouter key's allowlist.
-    'moonshotai/kimi-k3',
-    'openai/gpt-4o-mini',
-    // Deprecated router; the model it resolves to is unattributable.
-    'openrouter/auto',
-  ]);
   const assistantModels = { ...DEFAULT_MODELS };
   assistantModels.provider = 'ollama';
   const TEXT_MODELS_BY_PROVIDER = {
@@ -2931,9 +2915,8 @@
   //
   // This exists because the text pick rides on every chat request. With
   // BRAIN_LLM=ollama the brain forwards that slug to a daemon that cannot load
-  // `openai/gpt-5-nano`, so every turn would fail with a picker offering no way
-  // out — the RETIRED_MODELS lesson again: a pick that cannot work has to be
-  // deselected, not merely delisted.
+  // `openai/gpt-5-nano`, so every turn would fail with a picker offering no
+  // way out — an unservable pick has to be deselected, not merely delisted.
   const brainModels = { provider: '', verified: false, models: [], default: '' };
 
   async function probeBrainModels() {
@@ -2991,21 +2974,14 @@
   let savedTextProvider = false;
   try {
     const saved = JSON.parse(localStorage.getItem(MODELS_KEY) || '{}');
-    let swept = false;
     for (const k of Object.keys(DEFAULT_MODELS)) {
       if (typeof saved[k] !== 'string' || !saved[k]) continue;
-      // Leave the default in place for a retired pick; keep anything else,
-      // including an off-list slug that was chosen on purpose.
-      if (RETIRED_MODELS.has(saved[k])) { swept = true; continue; }
       assistantModels[k] = saved[k];
     }
     if (saved.provider === 'ollama' || saved.provider === 'openrouter') {
       assistantModels.provider = saved.provider;
       savedTextProvider = true;
     }
-    // Write the sweep back rather than re-running it every load: left in storage,
-    // a dead slug would return the moment a later version trimmed the list above.
-    if (swept) persistModels();
   } catch { /* corrupted or private mode — keep defaults */ }
 
   function renderChatSettings() {
