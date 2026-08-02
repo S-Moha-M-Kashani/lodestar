@@ -18,7 +18,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from lodestar_brain.llm import FakeChat
 
 from lodestar_brain import textnorm
 

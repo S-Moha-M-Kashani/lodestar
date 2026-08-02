@@ -135,7 +135,6 @@
   const effortVal = (v) => (v === 'low' || v === 'high' ? v : 'medium');
   const controlVal = (v) => (v === 'act' || v === 'none' ? v : 'influence');
   const srcVal = (v) => (v === 'user' || v === 'ai' ? v : 'default');
-  const EFFORT_LABEL = { low: 'Low', medium: 'Medium', high: 'High' };
   const CONTROL_LABEL = { act: 'I can act', influence: 'I can influence', none: 'Out of my hands' };
 
   // --------------------------------------------------------------------------

@@ -26,7 +26,7 @@ subject — «بلاخره جواب داد» is meaningless until you know it is
 office, in January. The header is built from metadata alone, so it costs no LLM
 call and no summary.
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 
