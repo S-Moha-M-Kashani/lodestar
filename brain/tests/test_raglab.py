@@ -1372,9 +1372,9 @@ def test_the_explainers_cover_the_model_roles_too():
 # is how a run ends up measuring nothing — so language coverage is part of every
 # entry, and the Farsi-capable models are offered by name.
 
-FARSI_MODELS = ('heydariAI/persian-embeddings',
-                'intfloat/multilingual-e5-small',
-                'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
+FARSI_MODELS = ('intfloat/multilingual-e5-large',
+                'sentence-transformers/paraphrase-multilingual-mpnet-base-v2',
+                'BAAI/bge-m3')
 
 
 class FakeTextEmbedding:
@@ -1451,19 +1451,14 @@ def test_an_english_only_model_is_offered_but_says_so(monkeypatch):
 
 
 # This is a unit test.
-def test_a_model_this_fastembed_cannot_serve_reads_NA(monkeypatch):
-    """NA now means one thing only: *this installation* cannot load it. An older
-    fastembed serves a shorter list, and the panel has to say so rather than
-    promise a wheel that is not there."""
-    _fastembed_serving(
-        monkeypatch,
-        {'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'})
+def test_a_model_fastembed_cannot_serve_stays_in_the_list_as_unavailable(monkeypatch):
+    """Same rule as the chat models: NA says "worth trying, nobody measured it
+    here", while dropping it hides the option altogether."""
+    _fastembed_serving(monkeypatch, {'intfloat/multilingual-e5-large'})
     entries = embedding.embed_model_catalogue(LAB_SETTINGS)
     by_id = {entry['id']: entry for entry in entries}
-    assert by_id[
-        'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'][
-            'available'] is True
-    assert by_id['BAAI/bge-small-en-v1.5']['available'] is False
+    assert by_id['intfloat/multilingual-e5-large']['available'] is True
+    assert by_id['BAAI/bge-m3']['available'] is False
     flags = [entry['available'] for entry in entries]
     assert flags == sorted(flags, reverse=True), 'usable models come first'
 
@@ -1478,11 +1473,11 @@ def test_fastembed_models_are_NA_until_the_semantic_extra_is_installed(monkeypat
                         lambda: frozenset(embedding.MODEL_IDS))
     monkeypatch.setattr(embedding, 'fastembed_available', lambda: False)
     absent = {e['id']: e for e in embedding.embed_model_catalogue(LAB_SETTINGS)}
-    assert absent['sentence-transformers/all-MiniLM-L6-v2']['available'] is False
+    assert absent['BAAI/bge-m3']['available'] is False
     assert absent['BAAI/bge-small-en-v1.5']['available'] is False
     monkeypatch.setattr(embedding, 'fastembed_available', lambda: True)
     present = {e['id']: e for e in embedding.embed_model_catalogue(LAB_SETTINGS)}
-    assert present['BAAI/bge-small-en-v1.5']['available'] is True
+    assert present['BAAI/bge-m3']['available'] is True
 
 
 # This is a unit test.
@@ -1490,19 +1485,18 @@ def test_e5_models_carry_the_prefixes_they_were_trained_with():
     """E5 was trained with "query: " / "passage: ". Dropping the prefixes is a
     silent quality loss, so they belong to the model entry, not to a caller."""
     by_id = {e['id']: e for e in embedding.embed_model_catalogue(LAB_SETTINGS)}
-    e5 = by_id['intfloat/multilingual-e5-small']
+    e5 = by_id['intfloat/multilingual-e5-large']
     assert (e5['query_prefix'], e5['passage_prefix']) == ('query: ', 'passage: ')
-    plain = by_id['sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2']
-    assert (plain['query_prefix'], plain['passage_prefix']) == ('', '')
+    mpnet = by_id['sentence-transformers/paraphrase-multilingual-mpnet-base-v2']
+    assert (mpnet['query_prefix'], mpnet['passage_prefix']) == ('', '')
 
 
 # This is a unit test.
 def test_a_prefixed_embedder_marks_queries_and_passages_apart():
     fake = FakeTextEmbedding()
     embedder = embedding.FastEmbedMultilingual(
-        'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2',
-        query_prefix='query: ', passage_prefix='passage: ',
-        factory=lambda name: fake)
+        'intfloat/multilingual-e5-large', query_prefix='query: ',
+        passage_prefix='passage: ', factory=lambda name: fake)
     embedder.embed(['دعوا با مهسا سر خونه'])
     embedder.embed_queries(['دعوا با مهسا'])
     assert 'passage: دعوا با مهسا سر خونه' in fake.seen
@@ -1564,10 +1558,10 @@ def test_the_embedding_model_names_the_collection_only_when_it_is_used():
     an index and cost a 157-session rebuild."""
     hashed = IndexConfig(embedder='char-hash')
     assert hashed.fingerprint() == \
-        replace(hashed, embed_model='BAAI/bge-small-en-v1.5').fingerprint()
+        replace(hashed, embed_model='BAAI/bge-m3').fingerprint()
     real = IndexConfig(embedder='fastembed')
     assert real.fingerprint() != \
-        replace(real, embed_model='BAAI/bge-small-en-v1.5').fingerprint()
+        replace(real, embed_model='BAAI/bge-m3').fingerprint()
 
 
 # This is a unit test.
@@ -1578,10 +1572,10 @@ def test_the_chosen_embedding_model_is_the_one_that_gets_loaded(monkeypatch):
         seen.update({'model': model_name} | kwargs)
         return object()
 
-    monkeypatch.setattr(embedding, 'SentenceTransformerEmbedder', spy)
-    embedding.make_embedder('sentence-transformers', LAB_SETTINGS,
-                            model='intfloat/multilingual-e5-small')
-    assert seen['model'] == 'intfloat/multilingual-e5-small'
+    monkeypatch.setattr(embedding, 'FastEmbedMultilingual', spy)
+    embedding.make_embedder('fastembed', LAB_SETTINGS,
+                            model='intfloat/multilingual-e5-large')
+    assert seen['model'] == 'intfloat/multilingual-e5-large'
     assert seen['query_prefix'] == 'query: '
     assert seen['passage_prefix'] == 'passage: '
 
@@ -1609,10 +1603,10 @@ def test_the_index_builds_with_the_embedding_model_from_its_config(monkeypatch,
 
     monkeypatch.setattr(index_module.embedding, 'make_embedder', spy)
     cfg = IndexConfig(chunker='session', embedder='fastembed',
-                      embed_model='BAAI/bge-small-en-v1.5')
+                      embed_model='BAAI/bge-m3')
     LabIndex.build(cfg, {'sessions': diary['sessions'][:2], 'threads': {}},
                    LAB_SETTINGS)
-    assert seen == [('fastembed', 'BAAI/bge-small-en-v1.5')]
+    assert seen == [('fastembed', 'BAAI/bge-m3')]
 
 
 # This is a unit test.
@@ -1645,105 +1639,21 @@ def test_the_embedding_model_knob_explains_itself():
     assert 'farsi' in topics['index.embedder'].lower()
 
 
-# --- the catalogue offers only what has run on this machine -----------------
-#
-# The rule used to be that a model nobody had measured stayed listed as NA —
-# "worth trying, nobody scored it yet". Checked against the wire on 2026-08-02
-# that had rotted into something else: six of the ten remote chat models answered
-# 404, and the embedder list offered a 16 GB download whose weights had been
-# half-fetched and abandoned twice. NA had stopped meaning "unmeasured" and
-# started meaning "broken", which is the one thing a dropdown must not hide. What
-# is listed now is what answered here.
-#
-# The local list keeps the old rule, because there NA is honest: a tag that is
-# merely not pulled yet is one `ollama pull` away, and the daemon is asked
-# directly rather than guessed at.
-
-REACHABLE_CHAT = ('openai/gpt-5-nano', 'openai/gpt-5-mini',
-                  'anthropic/claude-haiku-4.5', 'google/gemini-2.5-flash')
-
-# All six answered 404 "No endpoints available matching your guardrail
-# restrictions and data policy" on this account, measured 2026-08-02. They are
-# every open-weight option the remote list had.
-UNREACHABLE_CHAT = ('openai/gpt-5', 'meta-llama/llama-3.3-70b-instruct',
-                    'qwen/qwen-2.5-72b-instruct', 'google/gemma-3-27b-it',
-                    'mistralai/mistral-nemo', 'deepseek/deepseek-chat')
-
-# Each of these embedded a Farsi sentence here on 2026-08-02, through the backend
-# it names. Dropped with them: Qwen3-Embedding-8B (three of four shards were
-# incomplete downloads), BAAI/bge-m3 (this fastembed serves neither it nor
-# e5-small), both OpenAI models with their backend, and e5-large / mpnet-base-v2 /
-# jina-embeddings-v3, which nothing here has ever loaded.
-VERIFIED_EMBED = {
-    'heydariAI/persian-embeddings': 'sentence-transformers',
-    'intfloat/multilingual-e5-small': 'sentence-transformers',
-    'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2': 'fastembed',
-    'BAAI/bge-small-en-v1.5': 'fastembed',
-    'sentence-transformers/all-MiniLM-L6-v2': 'fastembed',
-}
-
-
-# This is a unit test.
-def test_the_remote_catalogue_offers_only_models_this_account_can_reach():
-    ids = {option.id for option in models.CHAT_MODELS}
-    assert ids == set(REACHABLE_CHAT)
-    assert not ids & set(UNREACHABLE_CHAT)
-    # And the local list is deliberately untouched: llama3.1:8b is not installed,
-    # reads NA, and stays, because pulling it is a one-line fix by the user.
-    assert 'llama3.1:8b' in {option.id for option in models.OLLAMA_MODELS}
-
-
-# This is a unit test.
-def test_the_embedding_catalogue_offers_only_models_that_loaded_here():
-    assert {m.id: m.backend for m in embedding.EMBED_MODELS} == VERIFIED_EMBED
-
-
-# This is a unit test.
-def test_the_lab_has_no_openai_embedding_backend():
-    """It went with its two models. A backend whose whole catalogue is gone is
-    still selectable, and would have built an embedder with no model and dim 0 —
-    worse than the API bill it was there to offer."""
-    assert 'openai' not in EMBEDDERS
-    assert 'openai' not in embedding.BACKENDS
-    assert 'openai' not in embedding.BACKEND_DEFAULTS
-    assert not hasattr(embedding, 'OpenAIEmbedder')
-    assert 'openai' not in {hint['kind'] for hint in embedding.embedder_hints()}
-    with pytest.raises(ValueError):
-        embedding.make_embedder('openai', LAB_SETTINGS)
-    # The key goes too, rather than sitting in the settings advertising a backend
-    # that is not there.
-    assert not hasattr(LabSettings(), 'openai_api_key')
-
-
-# This is a unit test.
-def test_e5_small_is_offered_through_the_backend_that_can_load_it():
-    """Its weights were already on disk and unreachable anyway: the entry named
-    fastembed, which does not serve it, so `validate()` refused the one backend
-    that could. The prefixes come along — they belong to the model, not to the
-    backend that happens to load it."""
-    entry = {m.id: m for m in embedding.EMBED_MODELS}[
-        'intfloat/multilingual-e5-small']
-    assert entry.backend == 'sentence-transformers'
-    assert (entry.query_prefix, entry.passage_prefix) == ('query: ', 'passage: ')
-    assert LabConfig(index=IndexConfig(
-        embedder='sentence-transformers',
-        embed_model='intfloat/multilingual-e5-small')).validate() == []
-    assert LabConfig(index=IndexConfig(
-        embedder='fastembed',
-        embed_model='intfloat/multilingual-e5-small')).validate()
-
-
 # --- models fastembed cannot serve -----------------------------------------
 #
-# The Persian-tuned encoder is not in fastembed's list — it is a HuggingFace
-# checkpoint — so each model names the backend that serves it and the lab grows a
-# second one. Everything here runs offline: the local backend is exercised
-# through an injected factory, because a test that needs a 2 GB download is a
-# test nobody runs.
+# The strongest candidates for Persian are not in fastembed's list: Qwen3 and
+# heydariAI/persian-embeddings are HuggingFace checkpoints, and OpenAI's are an
+# API call. Listing them as permanently NA would be honest and useless, so each
+# model names the backend that serves it and the lab grows two more of them.
+# Everything here runs offline: the local backend is exercised through an injected
+# factory and the API backend through an injected transport, because a test that
+# needs a 16 GB download is a test nobody runs.
 
 REQUESTED_MODELS = {
+    'Qwen/Qwen3-Embedding-8B': ('sentence-transformers', 4096, 'open'),
     'heydariAI/persian-embeddings': ('sentence-transformers', 1024, 'open'),
-    'intfloat/multilingual-e5-small': ('sentence-transformers', 384, 'open'),
+    'openai/text-embedding-3-small': ('openai', 1536, 'closed'),
+    'openai/text-embedding-3-large': ('openai', 3072, 'closed'),
 }
 
 
@@ -1805,11 +1715,10 @@ def test_every_model_names_a_backend_the_lab_actually_has():
 
 
 # This is a unit test.
-def test_the_persian_tuned_model_is_the_default():
+def test_the_persian_tuned_model_is_the_default_and_qwen3_the_ceiling():
     """The lab defaults to a Persian-tuned encoder — a Farsi corpus deserves one,
-    and at ~2.2 GB it is the cheapest real encoder here. Qwen3 was listed above it
-    as the recommended ceiling until 2026-08-02, when it turned out never to have
-    loaded on this machine at all."""
+    and at ~2.2 GB it is the cheapest real encoder here. Qwen3 stays the
+    recommended ceiling rather than the default: 16 GB is not a default."""
     assert IndexConfig().embedder == 'sentence-transformers'
     assert IndexConfig().embed_model == ''      # '' = the backend's default
     assert embedding.BACKEND_DEFAULTS['sentence-transformers'] == \
@@ -1817,8 +1726,11 @@ def test_the_persian_tuned_model_is_the_default():
     assert embedding.resolve_model('sentence-transformers', LAB_SETTINGS, '') == \
         'heydariAI/persian-embeddings'
     by_id = {m.id: m for m in embedding.EMBED_MODELS}
+    qwen = by_id['Qwen/Qwen3-Embedding-8B']
+    assert 'recommend' in qwen.note.lower()
     # Visible in the option itself, not only behind the explainer: the standing is
     # what you are looking for while the dropdown is open.
+    assert qwen.tag == 'recommended'
     assert by_id['heydariAI/persian-embeddings'].tag == 'lab default'
     # RAGLAB_FASTEMBED_MODEL still drives the fastembed backend, untouched.
     assert embedding.resolve_model('fastembed', LAB_SETTINGS, '') == \
@@ -1832,11 +1744,11 @@ def test_the_persian_tuned_model_says_which_language_it_was_tuned_for():
 
 
 # This is a unit test.
-def test_the_local_backend_is_offered_as_an_embedder_with_its_coverage():
-    assert 'sentence-transformers' in EMBEDDERS
+def test_both_new_backends_are_offered_as_embedders_with_their_coverage():
+    assert {'sentence-transformers', 'openai'} <= set(EMBEDDERS)
     hints = {hint['kind']: hint for hint in embedding.embedder_hints()}
     assert set(hints) == set(EMBEDDERS)
-    for kind in ('sentence-transformers', 'fastembed'):
+    for kind in ('sentence-transformers', 'openai'):
         assert hints[kind]['farsi'] is True
         assert hints[kind]['languages'] and hints[kind]['note']
 
@@ -1845,78 +1757,150 @@ def test_the_local_backend_is_offered_as_an_embedder_with_its_coverage():
 def test_a_local_model_is_offered_as_NA_until_its_library_is_installed(monkeypatch):
     monkeypatch.setattr(embedding, 'sentence_transformers_available', lambda: False)
     absent = {e['id']: e for e in embedding.embed_model_catalogue(LAB_SETTINGS)}
-    assert absent['intfloat/multilingual-e5-small']['available'] is False
+    assert absent['Qwen/Qwen3-Embedding-8B']['available'] is False
     assert absent['heydariAI/persian-embeddings']['available'] is False
     monkeypatch.setattr(embedding, 'sentence_transformers_available', lambda: True)
     present = {e['id']: e for e in embedding.embed_model_catalogue(LAB_SETTINGS)}
-    assert present['intfloat/multilingual-e5-small']['available'] is True
+    assert present['Qwen/Qwen3-Embedding-8B']['available'] is True
 
 
 # This is a unit test.
-def test_the_local_backend_applies_the_prefixes_the_model_was_trained_with():
-    """The same guarantee the fastembed side keeps, on the backend that now
-    serves the E5 model: query and passage are marked apart, and getting that
-    backwards is a silent accuracy loss."""
-    fake = FakeSentenceTransformer('intfloat/multilingual-e5-small')
+def test_an_api_model_is_offered_as_NA_until_there_is_a_key():
+    """Availability stays verified rather than guessed: without a key the call
+    would fail at the first chunk of a 40-minute sweep."""
+    without = {e['id']: e for e in embedding.embed_model_catalogue(LAB_SETTINGS)}
+    assert without['openai/text-embedding-3-small']['available'] is False
+    keyed = replace(LAB_SETTINGS, openai_api_key='sk-test')
+    with_key = {e['id']: e for e in embedding.embed_model_catalogue(keyed)}
+    assert with_key['openai/text-embedding-3-small']['available'] is True
+    assert with_key['openai/text-embedding-3-large']['available'] is True
+
+
+# This is a unit test.
+def test_the_lab_reads_an_openai_key_of_its_own():
+    """Separate from OPENROUTER_API_KEY on purpose: OpenRouter serves no
+    embeddings endpoint, so the chat key cannot stand in for this one."""
+    settings = config.load_lab_settings({'OPENAI_API_KEY': 'sk-lab',
+                                         'OPENAI_BASE_URL': 'http://proxy/v1'})
+    assert settings.openai_api_key == 'sk-lab'
+    assert settings.openai_base_url == 'http://proxy/v1'
+    assert LabSettings().openai_api_key == ''
+    assert LabSettings().openai_base_url.endswith('/v1')
+
+
+# This is a unit test.
+def test_the_local_embedder_asks_qwen3_the_way_qwen3_expects():
+    """Qwen3 is instruction-tuned: the query side carries an instruction and the
+    document side does not. Getting that backwards is a silent accuracy loss of
+    exactly the kind the E5 prefixes taught us to test for."""
+    fake = FakeSentenceTransformer('Qwen/Qwen3-Embedding-8B')
     embedder = embedding.SentenceTransformerEmbedder(
-        'intfloat/multilingual-e5-small', query_prefix='query: ',
-        passage_prefix='passage: ', factory=lambda name: fake)
+        'Qwen/Qwen3-Embedding-8B', query_prefix='Instruct: find it\nQuery: ',
+        factory=lambda name: fake)
     fake.seen.clear()                      # drop anything the probe encoded
     passages = embedder.embed(['امروز جلسه داشتم'])
     queries = embedder.embed_queries(['جلسه کی بود؟'])
-    assert fake.seen == ['passage: امروز جلسه داشتم', 'query: جلسه کی بود؟']
+    assert fake.seen == ['امروز جلسه داشتم',
+                         'Instruct: find it\nQuery: جلسه کی بود؟']
     assert embedder.dim == fake.dim == passages.shape[1] == queries.shape[1]
-    assert 'intfloat/multilingual-e5-small' in embedder.name
+    assert 'Qwen/Qwen3-Embedding-8B' in embedder.name
 
 
 # This is a unit test.
-def test_make_embedder_builds_the_local_backend(monkeypatch):
+def test_the_api_embedder_sends_the_model_and_normalises_what_comes_back():
+    calls = []
+
+    def post(url, payload, headers):
+        calls.append((url, payload, headers))
+        return {'data': [{'embedding': [3.0, 4.0]} for _ in payload['input']]}
+
+    keyed = replace(LAB_SETTINGS, openai_api_key='sk-test')
+    embedder = embedding.OpenAIEmbedder('openai/text-embedding-3-small', keyed,
+                                        post=post)
+    vectors = embedder.embed(['یک', 'دو'])
+    assert vectors.shape == (2, 2)
+    assert np.allclose(np.linalg.norm(vectors, axis=1), 1.0)
+    url, payload, headers = calls[-1]
+    assert url.endswith('/embeddings')
+    # The panel shows an OpenRouter-shaped slug; OpenAI's own API wants the bare
+    # model name, so the prefix is stripped on the wire.
+    assert payload['model'] == 'text-embedding-3-small'
+    assert 'sk-test' in headers['Authorization']
+    # Declared, not probed: a network call in the constructor would make building
+    # an index config cost money.
+    assert embedder.dim == 1536
+
+
+# This is a unit test.
+def test_the_api_embedder_batches_so_a_whole_corpus_fits():
+    calls = []
+
+    def post(url, payload, headers):
+        calls.append(payload['input'])
+        return {'data': [{'embedding': [1.0, 0.0]} for _ in payload['input']]}
+
+    keyed = replace(LAB_SETTINGS, openai_api_key='sk-test')
+    embedder = embedding.OpenAIEmbedder('openai/text-embedding-3-small', keyed,
+                                        batch_size=2, post=post)
+    embedder.embed(['a', 'b', 'c'])
+    assert [len(batch) for batch in calls] == [2, 1]
+
+
+# This is a unit test.
+def test_the_api_embedder_says_what_is_missing_instead_of_failing_mid_sweep():
+    with pytest.raises(ValueError) as raised:
+        embedding.OpenAIEmbedder('openai/text-embedding-3-small', LAB_SETTINGS)
+    assert 'OPENAI_API_KEY' in str(raised.value)
+
+
+# This is a unit test.
+def test_make_embedder_builds_both_new_backends(monkeypatch):
     monkeypatch.setattr(embedding, '_sentence_transformer',
                         lambda name: FakeSentenceTransformer(name))
     local = embedding.make_embedder('sentence-transformers', LAB_SETTINGS,
-                                    'intfloat/multilingual-e5-small')
-    assert 'intfloat/multilingual-e5-small' in local.name
+                                    'Qwen/Qwen3-Embedding-8B')
+    assert 'Qwen/Qwen3-Embedding-8B' in local.name
     # Blank means "the default model for the backend you chose", the same rule as
     # '' meaning RAGLAB_FASTEMBED_MODEL for fastembed.
     default = embedding.make_embedder('sentence-transformers', LAB_SETTINGS, '')
     assert 'heydariAI/persian-embeddings' in default.name
+    keyed = replace(LAB_SETTINGS, openai_api_key='sk-test')
+    api = embedding.make_embedder('openai', keyed, 'openai/text-embedding-3-large')
+    assert 'text-embedding-3-large' in api.name and api.dim == 3072
 
 
 # This is a unit test.
 def test_the_chosen_model_survives_the_fingerprint_for_every_model_backend():
     """The model is part of what got stored, so it has to reach the collection
     name — for all three backends, not just the first one the lab had."""
-    for kind in ('fastembed', 'sentence-transformers'):
+    for kind in ('fastembed', 'sentence-transformers', 'openai'):
         kept = IndexConfig(embedder=kind, embed_model='some/model').normalized()
         assert kept.embed_model == 'some/model', kind
     dropped = IndexConfig(embedder='char-hash', embed_model='some/model').normalized()
     assert dropped.embed_model == ''
-    a = IndexConfig(embedder='sentence-transformers',
-                    embed_model='heydariAI/persian-embeddings')
-    b = IndexConfig(embedder='sentence-transformers',
-                    embed_model='intfloat/multilingual-e5-small')
+    a = IndexConfig(embedder='openai', embed_model='openai/text-embedding-3-small')
+    b = IndexConfig(embedder='openai', embed_model='openai/text-embedding-3-large')
     assert a.fingerprint() != b.fingerprint()
 
 
 # This is a unit test.
 def test_a_model_from_the_wrong_backend_is_refused_before_the_run():
-    """Picking a HuggingFace checkpoint while the embedder is fastembed used to
-    mean "load the default instead" — a run labelled with one model that had
-    measured another."""
+    """Picking Qwen3 while the embedder is fastembed used to mean "load the
+    default instead" — a run labelled Qwen3 that measured something else."""
     problems = LabConfig(index=IndexConfig(
         embedder='fastembed',
-        embed_model='heydariAI/persian-embeddings')).validate()
+        embed_model='Qwen/Qwen3-Embedding-8B')).validate()
     assert any('sentence-transformers' in problem for problem in problems)
     assert LabConfig(index=IndexConfig(
         embedder='sentence-transformers',
-        embed_model='heydariAI/persian-embeddings')).validate() == []
+        embed_model='Qwen/Qwen3-Embedding-8B')).validate() == []
 
 
 # This is a unit test.
 def test_the_embedder_explainer_says_how_to_reach_a_model_it_cannot_download():
-    """Two backends is a choice nobody can make from the kind names alone."""
+    """Three backends is a choice nobody can make from the kind names alone."""
     text = explain.topics()['index.embedder'].lower()
-    assert 'sentence-transformers' in text and 'fastembed' in text
+    assert 'sentence-transformers' in text and 'openai' in text
 
 
 # --- what each number on the dashboard actually means -----------------------
@@ -2387,9 +2371,8 @@ def test_a_per_task_model_is_accepted_by_the_query_endpoint(client):
         'question': 'آذر چه خبر بود؟',
         'index': {'chunker': 'message', 'embedder': 'char-hash', 'layers': ['chunk']},
         'retrieval': {'k': 4,
-                      'grader_model': 'anthropic/claude-haiku-4.5'},
-        'generation': {'answerer': 'extractive',
-                       'judge_model': 'openai/gpt-5-mini'}})
+                      'grader_model': 'meta-llama/llama-3.3-70b-instruct'},
+        'generation': {'answerer': 'extractive', 'judge_model': 'openai/gpt-5'}})
     assert res.status_code == 200
     assert res.json()['contexts']
 
@@ -2459,7 +2442,7 @@ def test_options_offer_farsi_capable_embedding_models(client):
     body = client.get('/api/options').json()
     assert body['embed_models'][0]['id'] == ''
     by_id = {entry['id']: entry for entry in body['embed_models']}
-    assert by_id['intfloat/multilingual-e5-small']['farsi'] is True
+    assert by_id['intfloat/multilingual-e5-large']['farsi'] is True
     assert by_id['BAAI/bge-small-en-v1.5']['farsi'] is False
     assert body['defaults']['index']['embed_model'] == ''
     assert body['help']['index.embed_model']
@@ -2472,7 +2455,7 @@ def test_an_embedding_model_is_accepted_by_the_query_endpoint(client):
     res = client.post('/api/queries', json={
         'question': 'آذر چه خبر بود؟',
         'index': {'chunker': 'message', 'embedder': 'char-hash',
-                  'embed_model': 'intfloat/multilingual-e5-small',
+                  'embed_model': 'intfloat/multilingual-e5-large',
                   'layers': ['chunk']},
         'retrieval': {'k': 4},
         'generation': {'answerer': 'extractive'}})
@@ -2521,10 +2504,9 @@ def test_options_colour_code_the_pipeline_steps(client):
 
 
 # This is an integration test.
-def test_options_offer_the_local_backend_and_its_models(client):
+def test_options_offer_the_two_new_backends_and_their_models(client):
     body = client.get('/api/options').json()
-    assert 'sentence-transformers' in set(body['embedders'])
-    assert 'openai' not in set(body['embedders'])
+    assert {'sentence-transformers', 'openai'} <= set(body['embedders'])
     by_id = {entry['id']: entry for entry in body['embed_models']}
     for model_id, (backend, dim, _) in REQUESTED_MODELS.items():
         assert model_id in by_id, model_id
@@ -2534,7 +2516,7 @@ def test_options_offer_the_local_backend_and_its_models(client):
     # download or an API call that cannot happen.
     caps = body['capabilities']
     assert isinstance(caps['sentence_transformers'], bool)
-    assert 'openai_embeddings' not in caps
+    assert isinstance(caps['openai_embeddings'], bool)
 
 
 # This is a unit test.
