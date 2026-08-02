@@ -2368,6 +2368,7 @@ kbd {
 .recall-hit { margin-bottom: 6px; }
 .recall-hit-text { margin: 0; color: var(--ink); font-family: var(--body); font-size: 0.8rem; }
 .recall-hit-meta { margin: 0; font-size: 0.68rem; color: var(--ink-soft); }
+.chat-recall-note { margin: 6px 0 0; font-size: 0.68rem; color: var(--ink-soft); }
 
 .chat-link { color: var(--rule-red); text-decoration: underline; }
 /* Where the answer came from. Kept quiet — it is the evidence behind the
