@@ -1256,11 +1256,13 @@ try:
         # exactly one free audio-input model and that is it, so "free" was never
         # a working choice — free dictation is Parakeet's job, locally and offline
         # (BRAIN_TRANSCRIBER defaults to parakeet).
-        # voxtral-small was nemotron's replacement, was retired for cost on
-        # 2026-08-02 (audio at $100/M tokens against the default's $0.30/M —
-        # ~330x, a rate its default-matching text prices hid), and is
-        # reinstated the same day by explicit decision, cost accepted: offered
-        # and honoured again, no longer swept as retired-for-cause.
+        # voxtral-small was nemotron's replacement and is retired too, for cost:
+        # its text prices match the default's, which is what hid that its *audio*
+        # rate is $100/M tokens against the default's $0.30/M — measured
+        # 2026-08-02, the most expensive audio-input model in the catalogue,
+        # ~330x the default for the tokens dictation is made of. It came back
+        # for a few hours that day through a misread confirmation and is now
+        # retired permanently — do not offer it again.
         # openai/whisper-large-v3-turbo was briefly the default and is not one:
         # measured on 2026-07-31, OpenRouter's published catalogue is 337 models
         # and holds no whisper, embedding or rerank entry, so it can transcribe
@@ -1270,8 +1272,7 @@ try:
         # The default IS the cheapest usable audio model in the catalogue
         # (2026-08-02): $0.10/M in, $0.30/M audio.
         DEFAULT_OMNI = "google/gemini-2.5-flash-lite"
-        VOXTRAL = "mistralai/voxtral-small-24b-2507"
-        ALT_OMNI = ["openai/gpt-audio-mini", VOXTRAL]
+        ALT_OMNI = ["openai/gpt-audio-mini"]
         BROKEN_OMNI = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
         # The one embedder the brain actually runs — fixed, local, not a pick.
         FIXED_EMBED = "heydariAI/persian-embeddings"
@@ -1434,20 +1435,6 @@ try:
         check("assistant: a still-valid saved pick survives the sweep",
               page.input_value("#model-text") == ALT_TEXT
               and page.input_value("#model-omni") == DEFAULT_OMNI)
-
-        # This is an end-to-end test. Reinstating voxtral is two changes, and
-        # the second is the one a list-only revert would miss: it must leave
-        # RETIRED_MODELS, or the sweep resets the very pick this reinstates.
-        page.evaluate(
-            "([key, omni]) => localStorage.setItem(key, JSON.stringify({ omni }))",
-            [MODELS_KEY, VOXTRAL])
-        page.reload()
-        page.wait_for_selector("#board")
-        page.locator('.view-switch button[data-view="assistant"]').click()
-        page.wait_for_selector("#model-text")
-        check("assistant: a saved voxtral pick survives the retirement sweep",
-              page.input_value("#model-omni") == VOXTRAL
-              and VOXTRAL in option_values("#model-omni"))
 
         # The escape hatch: a slug that was never retired, merely unknown to the
         # preset list, is still selected and still offered.
