@@ -1637,7 +1637,7 @@ try:
             # the panel regress while this suite stayed green.
             "chunkers": ["semantic-drift", "fixed"],
             "embedders": ["char-hash", "sentence-transformers", "fastembed",
-                          "openai", "ascii-hash"],
+                          "ascii-hash"],
             "retrievers": ["hybrid-rrf", "dense", "bm25"],
             "rerankers": ["lexical", "none", "cross-encoder", "llm"],
             "graders": ["none", "lexical", "llm"],
@@ -1650,7 +1650,7 @@ try:
                     "reason": "only the fixed-overlap chunker slides a window"},
                 "index.embed_model": {
                     "field": "index.embedder",
-                    "on": ["fastembed", "sentence-transformers", "openai"],
+                    "on": ["fastembed", "sentence-transformers"],
                     "reason": "the hash embedders load no model"},
                 "retrieval.grade_threshold": {
                     "field": "retrieval.grader", "on": ["lexical", "llm"],
@@ -1686,52 +1686,25 @@ try:
                  "note": "character n-grams recover Persian stems"},
                 {"kind": "fastembed", "label": "fastembed (real model)",
                  "languages": "English + Farsi, depends on the model below",
-                 "farsi": True, "available": True,
-                 "note": "a real multilingual transformer"},
+                 "farsi": True, "available": False,
+                 "note": "a real multilingual transformer, from its own ONNX list"},
                 {"kind": "sentence-transformers",
                  "label": "sentence-transformers (any HuggingFace model)",
                  "languages": "English + Farsi, depends on the model below",
                  "farsi": True, "available": True,
-                 "note": "reaches Qwen3 and the Persian-tuned models fastembed "
-                         "does not serve"},
-                {"kind": "openai", "label": "openai (API)",
-                 "languages": "English + Farsi, depends on the model below",
-                 "farsi": True, "available": False,
-                 "note": "no download, but it needs OPENAI_API_KEY and spends money"},
+                 "note": "reaches the Persian-tuned models fastembed does not "
+                         "serve"},
             ],
+            # One backend NA and one available, because the panel has to render
+            # both: NA means "this installation cannot load it", which is the
+            # only thing NA still means.
             "embed_models": [
-                {"id": "", "label": "lab default (paraphrase-multilingual-MiniLM-L12-v2)",
-                 "languages": "English + Farsi (50+ languages)", "farsi": True,
-                 "source": "default", "available": True, "dim": 384,
-                 "backend": "fastembed",
-                 "note": "follows RAGLAB_FASTEMBED_MODEL",
+                {"id": "", "label": "the backend's own default",
+                 "languages": "English + Farsi, depends on the model below",
+                 "farsi": True, "source": "default", "available": True, "dim": 0,
+                 "backend": "", "tag": "",
+                 "note": "sentence-transformers \u2192 persian-embeddings",
                  "query_prefix": "", "passage_prefix": ""},
-                {"id": "intfloat/multilingual-e5-large", "label": "multilingual-e5-large",
-                 "languages": "English + Farsi (100+ languages)", "farsi": True,
-                 "source": "open", "available": True, "dim": 1024,
-                 "backend": "fastembed",
-                 "note": "strongest widely available multilingual retriever",
-                 "query_prefix": "query: ", "passage_prefix": "passage: "},
-                {"id": "BAAI/bge-small-en-v1.5", "label": "bge-small-en-v1.5",
-                 "languages": "English only", "farsi": False, "source": "open",
-                 "available": True, "dim": 384, "backend": "fastembed",
-                 "note": "what the brain hardwires today — here as the baseline",
-                 "query_prefix": "", "passage_prefix": ""},
-                {"id": "BAAI/bge-m3", "label": "bge-m3", "languages":
-                 "English + Farsi (100+ languages)", "farsi": True, "source": "open",
-                 "available": False, "dim": 1024, "backend": "fastembed",
-                 "note": "strong on Persian in public evals, not served here yet",
-                 "query_prefix": "", "passage_prefix": ""},
-                # Neither of these is a fastembed model: one is a HuggingFace
-                # checkpoint, the other an API call. The backend is part of the
-                # option because it decides what picking it actually costs.
-                {"id": "Qwen/Qwen3-Embedding-8B", "label": "Qwen3-Embedding-8B",
-                 "languages": "English + Farsi (100+ languages)", "farsi": True,
-                 "source": "open", "available": False, "dim": 4096,
-                 "backend": "sentence-transformers", "tag": "recommended",
-                 "note": "the recommended pick for Farsi retrieval; ~16 GB",
-                 "query_prefix": "Instruct: retrieve the diary passage\nQuery: ",
-                 "passage_prefix": ""},
                 {"id": "heydariAI/persian-embeddings",
                  "label": "persian-embeddings",
                  "languages": "Farsi + English (Persian-tuned)", "farsi": True,
@@ -1739,34 +1712,39 @@ try:
                  "backend": "sentence-transformers", "tag": "lab default",
                  "note": "trained on Persian text specifically",
                  "query_prefix": "", "passage_prefix": ""},
-                {"id": "openai/text-embedding-3-small",
-                 "label": "text-embedding-3-small",
+                {"id": "intfloat/multilingual-e5-small",
+                 "label": "multilingual-e5-small",
                  "languages": "English + Farsi (100+ languages)", "farsi": True,
-                 "source": "closed", "available": False, "dim": 1536,
-                 "backend": "openai",
-                 "note": "cheapest strong multilingual option; needs OPENAI_API_KEY",
+                 "source": "open", "available": True, "dim": 384,
+                 "backend": "sentence-transformers", "tag": "",
+                 "note": "the same recipe as e5-large at a fifth of the size",
+                 "query_prefix": "query: ", "passage_prefix": "passage: "},
+                {"id": "BAAI/bge-small-en-v1.5", "label": "bge-small-en-v1.5",
+                 "languages": "English only", "farsi": False, "source": "open",
+                 "available": False, "dim": 384, "backend": "fastembed",
+                 "tag": "",
+                 "note": "what the brain hardwires today \u2014 here as the baseline",
                  "query_prefix": "", "passage_prefix": ""},
-                {"id": "openai/text-embedding-3-large",
-                 "label": "text-embedding-3-large",
-                 "languages": "English + Farsi (100+ languages)", "farsi": True,
-                 "source": "closed", "available": False, "dim": 3072,
-                 "backend": "openai",
-                 "note": "the strongest API option; needs OPENAI_API_KEY",
+                {"id": "sentence-transformers/all-MiniLM-L6-v2",
+                 "label": "all-MiniLM-L6-v2", "languages": "English only",
+                 "farsi": False, "source": "open", "available": False, "dim": 384,
+                 "backend": "fastembed", "tag": "",
+                 "note": "the most-copied embedder on the internet, and wrong here",
                  "query_prefix": "", "passage_prefix": ""},
             ],
             # Every stage that can call a model offers the whole catalogue, with
             # the licence spelled out and unverified models kept as NA rather
             # than hidden.
             "models": [
-                {"id": "", "label": "lab default (openai/gpt-5-nano)",
+                {"id": "", "label": "lab default (4skl/gemma4-e2b-mtp)",
                  "source": "default", "available": True, "note": "RAGLAB_MODEL"},
+                {"id": "4skl/gemma4-e2b-mtp", "label": "Gemma 4 E2B (MTP)",
+                 "source": "open", "available": True,
+                 "note": "open weights, and it runs on this machine"},
                 {"id": "openai/gpt-5-nano", "label": "GPT-5 nano", "source": "closed",
                  "available": True, "note": "every grade so far was measured on this"},
-                {"id": "meta-llama/llama-3.3-70b-instruct", "label": "Llama 3.3 70B",
-                 "source": "open", "available": True, "note": "open weights"},
-                {"id": "qwen/qwen-2.5-72b-instruct", "label": "Qwen2.5 72B",
-                 "source": "open", "available": False,
-                 "note": "strong on Farsi, never run here"},
+                {"id": "llama3.1:8b", "label": "Llama 3.1 8B", "source": "open",
+                 "available": False, "note": "not pulled yet — `ollama pull` it"},
             ],
             # The three steps of the pipeline, in order. The panel groups and
             # colours every control by these, so they are served rather than
@@ -1908,8 +1886,7 @@ try:
                        "questions": 112, "query_date": "2026-07-28"},
             "capabilities": {"fastembed": True, "cross_encoder": False, "llm": True,
                              "sentence_transformers": True,
-                             "openai_embeddings": False,
-                             "llm_model": "openai/gpt-5-nano",
+                             "llm_model": "4skl/gemma4-e2b-mtp",
                              "ragas": {"installed": True, "llm_ready": False,
                                        "version": "0.4.3", "notes": []},
                              # The lab keeps no database: its index is process
@@ -2117,8 +2094,8 @@ try:
         options_text = page.locator('.rag-models select.rag-model[data-role="answer"]').inner_text()
         check("raglab: model options say whether the weights are open or closed",
               "(open source)" in options_text and "(closed source)" in options_text)
-        check("raglab: a model worth trying but unverified is offered as NA, not hidden",
-              "NA" in options_text and "Qwen2.5 72B" in options_text)
+        check("raglab: a model this machine cannot serve is offered as NA, not hidden",
+              "NA" in options_text and "Llama 3.1 8B" in options_text)
         check("raglab: the lab default is the first choice in every role",
               options_text.strip().startswith("lab default"))
 
@@ -2131,15 +2108,16 @@ try:
               and "English + Farsi" in embedder_text)
         embed_models_text = page.locator("select.rag-embed-model").inner_text()
         check("raglab: a Farsi-capable embedding model can be picked by name",
-              "multilingual-e5-large" in embed_models_text
+              "multilingual-e5-small" in embed_models_text
               and "English + Farsi" in embed_models_text)
         check("raglab: an English-only embedding model is labelled English-only",
               "English only" in embed_models_text
               and "bge-small-en" in embed_models_text)
-        check("raglab: an embedding model that is not served is offered as NA",
-              "bge-m3" in embed_models_text and "NA" in embed_models_text)
-        # This used to assert the caption "Embedder = fastembed, sentence-
-        # transformers or openai" beside a control you could still edit. The rule
+        check("raglab: an embedding model this backend cannot serve reads NA",
+              "all-MiniLM-L6-v2" in embed_models_text
+              and "NA" in embed_models_text)
+        # This used to assert the caption "Embedder = fastembed or sentence-
+        # transformers" beside a control you could still edit. The rule
         # is now enforced rather than described, so the assertion moved with it:
         # under the mock's char-hash default the picker is off and says why.
         embed_row = page.locator(".rag-models label:has(select.rag-embed-model)")
@@ -2155,26 +2133,21 @@ try:
               "farsi" in page.locator(".rag-help").first.inner_text().lower())
         page.locator('.rag-panel .rag-why[data-topic="index.embed_model"]').click()
 
-        # The strongest Persian models are not fastembed models: two are
-        # HuggingFace checkpoints and two are an API call. They are offered with
-        # the backend that serves them, because that is what picking one costs.
-        check("raglab: the Qwen3 model is offered and marked as the recommendation",
-              "Qwen3-Embedding-8B" in embed_models_text
-              and "recommended" in embed_models_text.lower())
-        check("raglab: a Persian-tuned model is offered by name",
+        # The Persian-tuned model is not a fastembed model — it is a HuggingFace
+        # checkpoint — so it is offered with the backend that serves it, because
+        # that is what picking it actually costs.
+        check("raglab: a Persian-tuned model is offered by name and tagged",
               "persian-embeddings" in embed_models_text
-              and "Persian-tuned" in embed_models_text)
-        check("raglab: both OpenAI embedding models are offered as closed source",
-              "text-embedding-3-small" in embed_models_text
-              and "text-embedding-3-large" in embed_models_text
-              and "(closed source)" in embed_models_text)
+              and "Persian-tuned" in embed_models_text
+              and "lab default" in embed_models_text)
         check("raglab: each option says which backend would serve it",
               "sentence-transformers" in embed_models_text
-              and "openai" in embed_models_text.lower())
-        check("raglab: the two new backends are pickable as embedders",
-              "sentence-transformers" in embedder_text and "openai" in embedder_text)
-        check("raglab: a backend that cannot run yet is offered as NA, not hidden",
-              page.locator('select.rag-embedder option[value="openai"]')
+              and "fastembed" in embed_models_text.lower())
+        check("raglab: both backends are pickable as embedders",
+              "sentence-transformers" in embedder_text
+              and "fastembed" in embedder_text)
+        check("raglab: a backend that cannot run here is offered as NA, not hidden",
+              page.locator('select.rag-embedder option[value="fastembed"]')
               .inner_text().find("NA") >= 0)
         # Picking a backend that does load a model brings the picker back — the
         # other half of the rule, and the half that would silently rot if only
@@ -2308,12 +2281,12 @@ try:
         page.locator('.rag-panel .field.rag-inline .rag-why').first.click()
 
         page.select_option('select.rag-model[data-role="grade"]',
-                           "meta-llama/llama-3.3-70b-instruct")
+                           "4skl/gemma4-e2b-mtp")
         page.reload()
         page.wait_for_selector(".rag-grid")
         check("raglab: a per-task model choice survives a reload",
               page.input_value('select.rag-model[data-role="grade"]')
-              == "meta-llama/llama-3.3-70b-instruct")
+              == "4skl/gemma4-e2b-mtp")
         page.screenshot(path=shot("raglab-models.png"))
 
         # The lab is a page like any other, so a reload lands back on it rather
