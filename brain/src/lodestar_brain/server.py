@@ -297,14 +297,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # llm=None: the search box answers directly, so it gets the fast
             # ungated pipeline — the gate exists for contexts a model reads.
             hits = index.search(body.text, k=body.k, llm=None)
-            # Coverage over the expanded query: a card matched through a
-            # synonym or another script must not display as covering nothing.
+            # Coverage over the expanded query (synonyms, other scripts) is
+            # both the displayed score and the floor: a card sharing no term
+            # with any spelling of the query is dense noise, not a match.
             expanded = ' '.join(expand_queries(body.text))
-            cards = [{'text': doc.page_content,
-                      'score': round(coverage(expanded, doc.page_content,
-                                              index.bm25.idf), 4),
+            scored = ((doc, round(coverage(expanded, doc.page_content,
+                                           index.bm25.idf), 4))
+                      for doc in hits)
+            cards = [{'text': doc.page_content, 'score': score,
                       'metadata': dict(doc.metadata), 'source': 'card'}
-                     for doc in hits]
+                     for doc, score in scored if score > 0]
         except Exception as exc:
             logging.getLogger(__name__).warning(
                 'recall: cards unsearchable, answering from chat only (%s)', exc)

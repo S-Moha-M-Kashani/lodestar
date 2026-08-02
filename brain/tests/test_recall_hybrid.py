@@ -83,10 +83,11 @@ def test_chat_search_is_hybrid_and_bm25_outweighs_dense():
         "BM25's top pick must beat the dense top pick")
     assert all(isinstance(hit['score'], float) for hit in hits)
 
-    # DENTIST shares no term with the query, so BM25 alone would drop it;
-    # its presence proves the dense half is fused in, not replaced.
-    assert any('dentist' in hit['text'] for hit in hits), (
-        'a dense-only match must still surface — the search is hybrid')
+    # DENTIST shares no term with the query: it is dense-floor noise, and
+    # noise presented as a match is what makes a search feel broken. Dense
+    # only orders the lexical survivors, it never introduces rows.
+    assert not any('dentist' in hit['text'] for hit in hits), (
+        'a no-shared-term document must not be presented as a match')
 
 
 # This is an integration test.
@@ -156,6 +157,44 @@ def test_latin_query_recalls_the_persian_chat_message_first():
     hits = store.search('mahsa')
     assert hits and 'مهسا' in hits[0]['text'], (
         'the message naming مهسا must outrank script-blind dense noise')
+
+
+# This is an integration test (in-process Chroma, no server, no disk).
+def test_chat_search_returns_nothing_when_nothing_matches():
+    store = ChatStore(MEMORY_URL, LexicalHashEmbeddings(),
+                      collection='chat-no-noise')
+    store.index_messages([row(1, PASSWORD), row(2, DENTIST)])
+    assert store.search('mahsa') == [], (
+        'a query matching no recorded term must return nothing, not the '
+        'k nearest pieces of dense-floor noise')
+
+
+# This is an integration test.
+@respx.mock
+def test_recall_says_nothing_rather_than_noise():
+    """The reproduction for the mahsa screenshot on the :3001 sandbox: a
+    board with no mahsa anywhere returned ten irrelevant rows. A query that
+    matches nothing must say so — the UI already renders the empty list as
+    'Nothing recorded about that yet.'"""
+    respx.get(f'{BOARD}/api/state').mock(return_value=httpx.Response(200, json={
+        'cards': [
+            {'id': 'c1', 'num': 1, 'title': 'Book the August ferry crossing',
+             'columnId': 'inbox', 'type': 'task', 'category': 'travel',
+             'createdAt': ms(2026, 7, 1), 'updatedAt': ms(2026, 7, 1)},
+            {'id': 'c2', 'num': 2, 'title': 'Which Stoic should I read?',
+             'columnId': 'inbox', 'type': 'question', 'category': 'mind',
+             'createdAt': ms(2026, 7, 1), 'updatedAt': ms(2026, 7, 1)}]}))
+    respx.get(f'{BOARD}/api/chat/messages').mock(
+        return_value=httpx.Response(200, json={'messages': [row(1, PASSWORD)]}))
+    client = TestClient(create_app(Settings(
+        llm_provider='fake', embedder='fake', board_api_url=BOARD,
+        chroma_url=MEMORY_URL, chat_collection='chat-recall-no-noise')))
+
+    body = client.post('/rag/recall', json={'text': 'mahsa', 'k': 10}).json()
+    assert body['memory'] is True
+    assert body['matches'] == [], (
+        'no card or message names mahsa in any script — showing anything '
+        'here is presenting noise as an answer')
 
 
 # This is an integration test.

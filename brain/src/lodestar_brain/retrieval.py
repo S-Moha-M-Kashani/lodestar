@@ -726,6 +726,12 @@ def _minmax(values: np.ndarray) -> np.ndarray:
     return (values - low) / (high - low)
 
 
+# The weight floor for coverage. BM25Okapi assigns a *negative* IDF to a term
+# present in most of a small corpus (one card, two chunks), and a shared term
+# counting against a match would read "board too small" as "no match".
+MIN_TERM_WEIGHT = 0.1
+
+
 def coverage(query: str, text: str, idf: dict) -> float:
     """IDF-weighted term coverage: what share of the question's informative
     words this text actually contains. Bounded to [0,1], so it can be
@@ -736,7 +742,7 @@ def coverage(query: str, text: str, idf: dict) -> float:
     if not terms:
         return 0.0
     present = set(textnorm.tokens(text))
-    weights = {term: idf.get(term, 1.0) for term in terms}
+    weights = {term: max(idf.get(term, 1.0), MIN_TERM_WEIGHT) for term in terms}
     total = sum(weights.values()) or 1.0
     return float(sum(w for term, w in weights.items() if term in present) / total)
 
@@ -1086,7 +1092,18 @@ class ChatStore:
                     scores[doc.page_content] = (
                         scores.get(doc.page_content, 0.0)
                         + weight / (len(rankings) * (RRF_K + rank)))
-        ordered = sorted(scores, key=lambda key: -scores[key])[:k]
+        # Lexical evidence is the floor: dense similarity orders the matches
+        # but never invents one. Without it, a query matching nothing is
+        # padded to k with its nearest noise — which reads as a broken search.
+        # Evidence means sharing an informative term with any spelling of the
+        # query — deliberately not "a positive BM25 score", which a tiny
+        # corpus denies even to an exact match (negative IDF).
+        query_terms = ({token for q in queries for token in textnorm.tokens(q)}
+                       - QUESTION_WORDS)
+        evidenced = {key for key in scores
+                     if query_terms & set(textnorm.tokens(key))}
+        ordered = [key for key in sorted(scores, key=lambda key: -scores[key])
+                   if key in evidenced][:k]
         return [{'text': key, 'score': round(scores[key], 4),
                  'metadata': dict(seen[key].metadata)} for key in ordered]
 
