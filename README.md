@@ -32,31 +32,137 @@ The design is a "card ledger": quad-ruled engineering paper, cards as ruled inde
 
 ## Run it
 
-**With the database (recommended)** — needs Node 23.4+ (for built-in `node:sqlite`):
+Needs **Node 23.4+** (for built-in `node:sqlite`) and **uv** (for the brain). Out of the
+box every model runs on your machine and no API key is required — the only thing that
+leaves it is web search, when the agent chooses to use it.
+
+The board alone is enough to capture and organise cards. The brain adds the Assistant;
+Chroma adds its memory of past chats; the lab is developer tooling. Start as little or
+as much as you need — a missing piece degrades, it does not break the board.
+
+### The ports
+
+| Port | Service | Started by | You need it for |
+| --- | --- | --- | --- |
+| **3000** | board — Node, SQLite, static files, proxy | `npm start` | everything |
+| **9000** | brain — agent, retrieval, voice | `uvicorn`, see below | the Assistant view |
+| **3001** | test board — its own `board-3001.db` | `npm run test-board` | trying things without touching real cards |
+| **9001** | test brain — writes only to :3001 | `npm run test-brain` | the Assistant on the test board |
+| **9002** | RAG lab — retrieval workbench (test-only) | `npm run lab` | retrieval experiments |
+| **8001** | Chroma — chat memory | separate stack, see below | "what did we say about X last month" |
+| **11434** | Ollama — local models | `ollama serve` | local chat with no API key |
+
+Boards pair with brains by last digit, and the test brain writes only to the test board.
+`tests/ports.test.js` fails if that ever drifts.
+
+### The runners
+
+| Command | Starts | Notes |
+| --- | --- | --- |
+| `npm start` | board on :3000 | `PORT` and `BOARD_DB` override the port and database path |
+| `set -a; . ./.env; set +a` | — | **run this before either brain.** `.env` is read by Docker Compose only, never by uvicorn |
+| `uv run --project brain --extra local-embeddings uvicorn lodestar_brain.server:app --reload --port 9000` | brain on :9000 | the extra is ~1 GB of torch; `BRAIN_EMBEDDER=fake uv run --project brain uvicorn …` skips it and makes retrieval lexical |
+| `npm run test-board` | board on :3001 | separate database, separate Chroma database |
+| `npm run test-brain` | brain on :9001 | carries the extra already; still needs `.env` exported |
+| `npm run lab` | the lab's suite, then :9002 | won't open the panel on a red suite. `-- --no-test`, `-- --all`, `-- --test-only` |
+| `docker compose up --build` | board **and** brain | not Chroma, not Ollama — see below |
+
+Open the board, then **Assistant** for chat and **Assistant → RAG lab** for the workbench.
+
+### The databases
+
+| Store | Holds | Starts itself? |
+| --- | --- | --- |
+| SQLite `board.db` | your cards — the record | **yes, always.** Created and migrated on boot; no daemon, no setup |
+| Chroma on :8001 | chat memory | **no.** External, optional, degrades cleanly |
+| the lab's index | experiment chunks and vectors | it isn't a database — process memory, discarded on exit |
+
+Chroma is deliberately **not** in this repo's compose file: one store, so the composed
+brain and a native one share the same memory. Start it yourself first —
 
 ```sh
-npm start
+cd ~/vectordb-lab && docker compose up -d      # Chroma on :8001
+```
+
+— because the brain probes it **once, at boot**. Start Chroma afterwards and the brain
+never notices until you restart it. Without it the brain logs `chat memory disabled`,
+drops the `recall_chat` tool, and serves everything else normally: board tools, web
+search, card retrieval and the agent all work. Chroma auto-creates its database and
+collections, so there is no schema step; the board on :3000 gets the `lodestar`
+database and every other board gets `lodestar-test`, which is what keeps the test brain
+out of your real chat history. `BRAIN_CHROMA_URL=memory` runs it in-process for one boot.
+
+### Local models — the default, and what stays on the machine
+
+Install [Ollama](https://ollama.com), then pull what the project names:
+
+```sh
+ollama pull 4skl/gemma4-e2b-mtp   # fast local chat and RAG answerer — BRAIN_MODEL default
+ollama pull gemma4:e2b            # stronger local RAG judge
+ollama pull deepseek-r1:8b        # optional, slower, better at reasoning
+```
+
+That is all. `BRAIN_LLM` already defaults to `ollama` and `BRAIN_OLLAMA_BASE_URL` to
+`http://localhost:11434/v1` — the `/v1` is part of the setting, so the same variable
+reaches llama.cpp or vLLM without a code change. With the defaults:
+
+| Stage | Default backend | Where it runs |
+| --- | --- | --- |
+| chat and tool calls | `ollama` | your machine |
+| relevance gate | follows `BRAIN_MODEL` | your machine |
+| embeddings | `sentence-transformers`, `heydariAI/persian-embeddings` | your machine (~2.2 GB, fetched on the **first retrieval**, not at boot, so `/health` answers while it is still cold) |
+| voice → text | `parakeet` (MLX) | your machine, Apple Silicon only (2.5 GB on first use) |
+| chat memory | Chroma | your machine |
+| web search | DuckDuckGo | **leaves the machine** — that is what a web search is |
+
+So an unmodified checkout needs no API key. A key is needed only if you switch a stage
+to a hosted model: `OPENROUTER_API_KEY` for `BRAIN_LLM=openrouter` or
+`BRAIN_TRANSCRIBER=openrouter`, and `OPENAI_API_KEY` — deliberately a *different* key,
+since the OpenRouter one buys chat completions only — for the lab's `openai` embedder.
+It lives in the brain's environment and the browser never sees it, which is why the
+board proxies rather than the page calling out.
+
+**If you keep a `.env`, it wins.** These are code defaults; anything set in `.env` or
+your shell overrides them, and it is worth reading yours before concluding a stage is
+local. The full variable table is in [The brain](#the-brain-assistant-service).
+
+If `BRAIN_LLM=ollama` and the daemon is down, every chat replies with a connection
+error and the Assistant renders it as *"check that the brain service is running"* —
+pointing at the one service that is fine. Check `ollama serve` first.
+
+The RAG lab is local on the same terms: `RAGLAB_LLM=ollama` with the default embedder
+and the default lexical reranker means a full experiment costs nothing and needs no key.
+Fully offline mode, for tests and CI, is `BRAIN_LLM=fake BRAIN_EMBEDDER=fake
+BRAIN_CHROMA_URL=memory`.
+
+### With Docker
+
+```sh
+docker compose up --build
 # then open http://localhost:3000
 ```
 
-The board is stored in `board.db` next to `server.js`. Change the port or database path with `PORT` and `BOARD_DB`:
+Two services, `lodestar` and `brain`. **Chroma and Ollama are not among them** — the
+brain reaches both on your host through `host.docker.internal`, so start Chroma as
+above and leave Ollama running, or accept a board with no chat memory and no local
+chat. Two settings also differ from a native run, and both are forced by the image
+rather than chosen: `BRAIN_TRANSCRIBER=openrouter`, because parakeet-mlx is
+Apple-Silicon only, and the embedding weights are re-downloaded whenever the container
+is recreated, because they are not on a volume yet.
 
-```sh
-PORT=4000 BOARD_DB=/path/to/board.db npm start
-```
+Cards live on the named volume `board-data`, **not** in the container, so they survive
+restarts, upgrades and `docker compose down`. The volume is local to the machine, so a
+new laptop starts with an empty board, and `docker volume rm <project>_board-data` is
+the only thing that erases it.
 
-**With Docker (recommended for a new laptop)** — no Node install needed, just Docker:
+### Two smaller ways to run it
 
-```sh
-docker compose up
-# then open http://localhost:3000
-```
+**Deploy online (free tier):** any Node host works — start command `node server.js`,
+expose the platform's `$PORT`, and point `BOARD_DB` at a persistent disk (Render,
+Railway, Fly with an attached volume) so the SQLite file survives redeploys.
 
-The database is stored on a named Docker volume (`board-data`), **not** inside the container, so your cards survive restarts, upgrades, and `docker compose down`. Because the volume is local to each machine, a new laptop starts with a fresh, empty board. Removing the volume (`docker volume rm <project>_board-data`) is the only thing that erases the data.
-
-**Deploy it online (free cloud):** any host that runs Node works — set the start command to `node server.js`, expose the platform's `$PORT`, and point `BOARD_DB` at a persistent disk (e.g. Render/Railway/Fly with an attached volume) so the SQLite file survives redeploys.
-
-**Front end only (no persistence server):** open `index.html` directly, or `python3 -m http.server`. It runs entirely on localStorage; it just won't share a database across browsers.
+**Front end only:** open `index.html` directly, or `python3 -m http.server`. Runs
+entirely on localStorage — no Assistant, and no database shared across browsers.
 
 ## How your data is stored
 
@@ -170,47 +276,19 @@ database "lodestar-test"   ├── chat-board-3001     ← the paired test boa
 Tests never touch the server: they run with `BRAIN_CHROMA_URL=memory`, an in-process client
 that writes nothing to disk.
 
-Run it locally (requires uv; deps install on first run):
+The commands to start it, and which stages run locally, are in [Run it](#run-it) —
+kept in one place so the two cannot drift. Two details belong here rather than there:
 
-```sh
-# The brain reads .env only under Docker, so export it yourself when running natively —
-# otherwise BRAIN_LLM falls back to its `ollama` default and every chat needs Ollama up.
-set -a; . ./.env; set +a
+Torch is deliberately kept out of `brain/.venv`, which is what lets the brain test suite
+run fully offline with no extras. So `BRAIN_EMBEDDER=fake uv run --project brain
+uvicorn …` is the lighter of the two launch lines unless you specifically need real
+semantic retrieval — and plain `uv run --project brain uvicorn …` with neither the extra
+nor the variable **fails at boot**, because `make_embeddings` raises on a missing wheel
+rather than downgrading silently.
 
-# --extra local-embeddings is required: BRAIN_EMBEDDER defaults to sentence-transformers
-# and the bare project venv has no torch, so the service raises at boot without it.
-uv run --project brain --extra local-embeddings uvicorn lodestar_brain.server:app --reload --port 9000
-
-# Or skip the ~1 GB install and run with the offline embedder — chat still works,
-# retrieval is lexical rather than semantic:
-BRAIN_EMBEDDER=fake uv run --project brain uvicorn lodestar_brain.server:app --reload --port 9000
-
-# in another terminal: npm start, then open http://localhost:3000 → Assistant
-```
-
-Torch is deliberately kept out of `brain/.venv` — that is what lets the brain test suite run
-fully offline with no extras — so the `fake` line is the lighter of the two unless you
-specifically need real semantic retrieval.
-
-### Local Ollama option
-
-Install Ollama from [ollama.com](https://ollama.com), start it with `ollama serve`,
-then pull the local models this project exposes:
-
-```sh
-ollama pull 4skl/gemma4-e2b-mtp   # fast local chat / RAG answerer
-ollama pull gemma4:e2b            # stronger local RAG judge
-ollama pull deepseek-r1:8b        # optional slower reasoning alternative
-```
-
-Set `BRAIN_LLM=ollama BRAIN_MODEL=4skl/gemma4-e2b-mtp` for local chat, and
-`RAGLAB_LLM=ollama RAGLAB_MODEL=4skl/gemma4-e2b-mtp` for local RAG Lab LLM
-stages. The RAG Lab’s default embedder (`heydariAI/persian-embeddings`, loaded
-locally through sentence-transformers) and its default lexical reranker never
-leave the machine, so with `RAGLAB_LLM=ollama` an experiment is fully local and
-needs no API key.
-
-With Compose, both services start together (`docker compose up`). Fully offline test mode is `BRAIN_LLM=fake BRAIN_EMBEDDER=fake`.
+`--reload` is worth adding while working on the brain (`uvicorn … --reload --port 9000`).
+The composed brain has no reload: a change to `brain/src` needs `docker compose restart
+brain`, not a rebuild, because the source is bind-mounted and installed editable.
 
 Swap points, each one file: the chat model (`brain/src/lodestar_brain/llm.py`'s `make_chat_model` — add a branch, never edit a call site), the search provider (`tools/websearch.py`), the embedder (`retrieval.py`'s `make_embeddings`, which returns a LangChain `Embeddings`, so a new backend is a class rather than a protocol of ours), the relevance gate (`retrieval.py`'s `gate_llm`), and the transcriber (`voice/`). The agent itself is deliberately *not* a swap point: a second agent is a second `LodestarAgent` (`agent.py`) constructed with its own tools and prompt at the call site. The one-entry builder registry that used to sit there was removed on 2026-08-01 — one name behind one constructor established no extension direction, so it was ceremony rather than a seam.
 
