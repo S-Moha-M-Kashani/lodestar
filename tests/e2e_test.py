@@ -1222,10 +1222,16 @@ try:
               any(c["title"] == "A thought I do not want" for c in api_trash()["cards"]))
 
         # ---- Assistant model settings ----------------------------------------
-        # A "Models" panel with three pickers. Only the text-generation pick
-        # changes behaviour today (it rides along on every chat request); the
-        # omni and embedding picks are stored preferences for the brain's
-        # coming media/RAG features. All three persist in localStorage.
+        # A "Models" panel with two pickers (text, omni) plus a fixed embedder
+        # display. Only the text-generation pick changes behaviour today (it
+        # rides along on every chat request); the omni pick is a stored
+        # preference for the brain's coming media features. Both persist in
+        # localStorage. The embedding row is deliberately NOT a picker: the
+        # brain embeds with heydariAI/persian-embeddings (the
+        # sentence-transformers default), the old dropdown was a stored
+        # preference nothing read, and a control that does nothing teaches the
+        # user not to trust the ones that do. The row now states the real,
+        # fixed model instead.
         # The text picker is local-first: it offers the models pulled on this
         # machine, and OpenRouter is one explicit selector away. All three local
         # slugs were verified against `ollama list` rather than assumed.
@@ -1266,18 +1272,29 @@ try:
         DEFAULT_OMNI = "google/gemini-2.5-flash-lite"
         ALT_OMNI = ["openai/gpt-audio-mini"]
         BROKEN_OMNI = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
-        DEFAULT_EMBED = "nvidia/llama-nemotron-embed-vl-1b-v2:free"
+        # The one embedder the brain actually runs — fixed, local, not a pick.
+        FIXED_EMBED = "heydariAI/persian-embeddings"
         page.locator('.view-switch button[data-view="assistant"]').click()
         page.wait_for_selector("#chat-input")
-        check("assistant: settings panel offers the three model pickers",
+        check("assistant: settings panel offers the two model pickers",
               page.locator(".chat-settings").count() == 1
               and page.locator("#model-text").count() == 1
-              and page.locator("#model-omni").count() == 1
-              and page.locator("#model-embed").count() == 1)
+              and page.locator("#model-omni").count() == 1)
+        check("assistant: the embedding dropdown is gone",
+              page.locator("#model-embed").count() == 0)
+        # The row is informative, not interactive: it names the real model and
+        # says it runs locally, in the panel where the old picker stood.
+        check("assistant: the fixed embedder display names the real model",
+              page.locator(".chat-settings #model-embed-fixed").count() == 1
+              and FIXED_EMBED in page.locator("#model-embed-fixed").inner_text())
+        check("assistant: the fixed embedder says it runs locally",
+              "local" in page.locator("#model-embed-fixed").inner_text().lower())
+        check("assistant: the stale embedding-pick hint sentence is gone",
+              "embedding pick is saved"
+              not in page.locator(".chat-settings").inner_text())
         check("assistant: pickers default to the chosen slugs",
               page.input_value("#model-text") == DEFAULT_TEXT
-              and page.input_value("#model-omni") == DEFAULT_OMNI
-              and page.input_value("#model-embed") == DEFAULT_EMBED)
+              and page.input_value("#model-omni") == DEFAULT_OMNI)
         omni_options = option_values("#model-omni")
         check("assistant: the audio-dropping free model is gone from the picker",
               BROKEN_OMNI not in omni_options)
@@ -1323,10 +1340,9 @@ try:
         # openrouter/auto is gone from every picker, not just the text one: it is
         # deprecated, and the resolved model was never read back out of the
         # response, so no picker should be able to hand the brain a router.
-        embed_options = option_values("#model-embed")
         check("assistant: no picker offers the deprecated openrouter/auto router",
               all("openrouter/auto" not in opts
-                  for opts in (text_options, omni_options, embed_options)))
+                  for opts in (text_options, omni_options)))
         # The brain now says which models it can serve, because the text pick
         # rides on every chat turn: pointed at a local backend, a picker offering
         # `openai/gpt-5-nano` would fail every turn with no way out from the UI.
@@ -1378,6 +1394,9 @@ try:
         # future version trimmed the retirement list.
         MODELS_KEY = "lodestar:models"
         for retired_text in RETIRED_TEXT:
+            # The payload keeps a saved `embed` key on purpose: every browser
+            # that used the old embedding picker still has one, and it must be
+            # inert — no resurrected dropdown, no broken sweep.
             page.evaluate(
                 "([key, text, omni]) => localStorage.setItem(key, JSON.stringify("
                 "{ text, omni, embed: 'openai/text-embedding-3-small' }))",
@@ -1399,9 +1418,21 @@ try:
                   page.input_value("#model-omni") == DEFAULT_OMNI)
             check("assistant: the audio-dropping omni pick is not offered",
                   BROKEN_OMNI not in option_values("#model-omni"))
-            # A live pick in the same payload must be left exactly as it was.
-            check("assistant: a still-valid saved pick survives the sweep",
-                  page.input_value("#model-embed") == "openai/text-embedding-3-small")
+            # The stale embed key from the retired picker never brings it back.
+            check("assistant: a stale saved embed pick resurrects no dropdown",
+                  page.locator("#model-embed").count() == 0
+                  and page.locator("#model-embed-fixed").count() == 1)
+        # A live pick in the sweep's payload must be left exactly as it was.
+        page.evaluate(
+            "([key, text, omni]) => localStorage.setItem(key, JSON.stringify("
+            "{ text, omni }))", [MODELS_KEY, ALT_TEXT, BROKEN_OMNI])
+        page.reload()
+        page.wait_for_selector("#board")
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector("#model-text")
+        check("assistant: a still-valid saved pick survives the sweep",
+              page.input_value("#model-text") == ALT_TEXT
+              and page.input_value("#model-omni") == DEFAULT_OMNI)
 
         # The escape hatch: a slug that was never retired, merely unknown to the
         # preset list, is still selected and still offered.
