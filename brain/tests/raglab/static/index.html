@@ -5,6 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Lodestar RAG Lab</title>
 <style>
+/* A knob the current pipeline would ignore: dimmed and locked, but its reason
+   stays at full contrast, because that sentence is the only part still worth
+   reading. The control keeps its box so nothing below it shifts when a dropdown
+   changes. */
+.rag-field-off { opacity: 0.5; }
+.rag-field-off .rag-when-dep { opacity: 1; font-style: italic; display: block; }
+.rag-field-off input, .rag-field-off select { cursor: not-allowed; }
+
   :root {
     --paper: #f7f4ea; --ink: #22201b; --ink-soft: #6b665c; --rule: #cfc7b2;
     --rule-red: #c0533f; --grid: #dfd8c4; --good: #3f7d4f; --bad: #b0442f;
@@ -249,7 +257,7 @@
       <span class="step-tag">Index</span>
       <label>Embedder</label>
       <select id="embedder"></select>
-      <label>Embedding model <span class="muted">· fastembed, sentence-transformers or openai</span></label>
+      <label>Embedding model <span class="muted">· fastembed or sentence-transformers</span></label>
       <select id="embed_model"></select>
       <div id="modelRoles-index"></div>
     </div>
@@ -459,6 +467,48 @@ function readConfig() {
   return cfg;
 }
 
+// Which controls the current pipeline would actually consult. The rules are
+// served (/api/options -> dependencies) rather than written here, so this panel
+// and the in-board one grey out the same knobs for the same stated reason.
+// Editing a knob the pipeline ignores is how you spend an afternoon tuning a
+// number that was never read.
+function applyDependencies() {
+  const rules = OPTIONS.dependencies || {};
+  const cfg = readConfig();
+  for (const [path, rule] of Object.entries(rules)) {
+    const el = controlFor(path);
+    if (!el) continue;
+    const [group, name] = rule.field.split('.');
+    const current = (cfg[group] || {})[name];
+    const enabled = rule.on_true ? Boolean(current)
+      : (rule.on || []).indexOf(current) !== -1;
+    el.disabled = !enabled;
+    const holder = el.closest('div') || el.parentElement;
+    if (!holder) continue;
+    holder.classList.toggle('rag-field-off', !enabled);
+    holder.title = enabled ? '' : 'Disabled because ' + rule.reason;
+    let note = holder.querySelector('.rag-when-dep');
+    if (!enabled) {
+      if (!note) {
+        note = document.createElement('span');
+        note.className = 'rag-when rag-when-dep';
+        holder.appendChild(note);
+      }
+      note.textContent = rule.reason;
+    } else if (note) {
+      note.remove();
+    }
+  }
+}
+
+// A dependent field is either a plain control whose id is its field name, or one
+// of the model dropdowns, which carry the full dotted path in data-field.
+function controlFor(path) {
+  const name = path.split('.')[1];
+  return document.getElementById(name)
+      || document.querySelector('.rag-model[data-field="' + path + '"]');
+}
+
 function applyDefaults(d) {
   $('chunker').value = d.index.chunker; $('chunk_chars').value = d.index.chunk_chars;
   $('overlap').value = d.index.overlap; $('contextual').checked = d.index.contextual;
@@ -493,8 +543,10 @@ async function boot() {
   fill($('grader'), o.graders);
   fill($('answerer'), o.answerers);
   checkboxes($('types'), o.question_types, []);
+  document.addEventListener('change', applyDependencies);
   fillModels();
   applyDefaults(o.defaults);
+  applyDependencies();
   decorateExplainers();
 
   const c = o.corpus;
@@ -574,7 +626,7 @@ $('rebuild').onclick = () => doBuild(true);
 async function doBuild(force) {
   try {
     const body = Object.assign(readConfig(), { force });
-    const { job_id } = await api('/api/index', body);
+    const { job_id } = await api('/api/indexes', body);
     poll(job_id, (result) => {
       $('indexInfo').innerHTML =
         `<b>${result.collection}</b> — ${result.chunks} chunks, avg ${result.avg_chars} chars, ` +
@@ -593,7 +645,7 @@ $('run').onclick = async () => {
     types: selected($('types')),
   });
   try {
-    const { job_id } = await api('/api/run', body);
+    const { job_id } = await api('/api/evaluations', body);
     poll(job_id, (result) => { renderResult(result); loadBoard(); });
   } catch (e) { $('jobBox').innerHTML = `<div class="note">${e.message}</div>`; }
 };
@@ -680,7 +732,7 @@ $('ask').onclick = async () => {
   const body = Object.assign(readConfig(), { question: $('question').value });
   $('queryOut').innerHTML = '<div class="muted">retrieving…</div>';
   try {
-    const out = await api('/api/query', body);
+    const out = await api('/api/queries', body);
     const scope = out.time_scope
       ? `time scope <b>${out.time_scope.label}</b> ${out.time_scope.from} → ${out.time_scope.to} (${out.time_scope.kind})`
       : 'no time scope detected';
@@ -703,7 +755,7 @@ function escapeHtml(s) {
 }
 
 async function loadBoard() {
-  const { runs } = await api('/api/runs');
+  const { runs } = await api('/api/evaluations');
   if (!runs.length) { $('board').innerHTML = '<div class="muted">no runs yet</div>'; return; }
   // Ranked by the RAGAS decision score, because that is the number the
   // architecture is chosen by. Rows it could not be measured on — offline runs,
@@ -744,7 +796,7 @@ async function loadBoard() {
 }
 
 window.showRun = async (runId) => {
-  renderResult(await api('/api/runs/' + runId));
+  renderResult(await api('/api/evaluations/' + runId));
   $('resultCard').scrollIntoView({ behavior: 'smooth' });
 };
 

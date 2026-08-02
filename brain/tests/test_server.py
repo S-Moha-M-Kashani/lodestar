@@ -10,6 +10,7 @@ from lodestar_brain.server import MAX_CHARS, MAX_MESSAGES, create_app
 from lodestar_brain.voice.fake import FAKE_TRANSCRIPT
 
 
+# This is an integration test.
 def test_health():
     client = TestClient(create_app(Settings(llm_provider='fake', embedder='fake')))
     res = client.get('/health')
@@ -33,6 +34,7 @@ def card(id, title):
             'tags': [], 'createdAt': 1, 'updatedAt': 1}
 
 
+# This is an integration test.
 @respx.mock
 def test_chat_echo_roundtrip():
     client = TestClient(fake_app())
@@ -50,6 +52,7 @@ def test_chat_echo_roundtrip():
     assert body['usage']['output_tokens'] > 0
 
 
+# This is an integration test.
 @respx.mock
 def test_chat_accepts_the_providers_the_picker_offers_and_refuses_the_rest():
     """The Assistant's provider selector rides along on every chat turn, so the
@@ -93,6 +96,7 @@ def test_both_chat_routes_refuse_a_conversation_past_the_caps():
         {'role': 'user', 'content': 'hello brain'}]}).status_code == 200
 
 
+# This is an integration test.
 @respx.mock
 def test_chat_add_proposes_a_card_without_mutating_the_board():
     # create_card now proposes; the board is unchanged until the user
@@ -121,6 +125,7 @@ def test_chat_add_proposes_a_card_without_mutating_the_board():
     assert step['result']['pending'] is True
 
 
+# This is a unit test.
 def test_tool_classification_separates_proposing_from_mutating():
     from lodestar_brain.server import MUTATING_TOOLS, PROPOSING_TOOLS
     assert PROPOSING_TOOLS == {'create_card'}
@@ -129,6 +134,7 @@ def test_tool_classification_separates_proposing_from_mutating():
     assert 'update_card' not in PROPOSING_TOOLS
 
 
+# This is an integration test.
 @respx.mock
 def test_chat_echo_reports_neither_flag():
     client = TestClient(fake_app())
@@ -147,6 +153,7 @@ def b64(raw):
     return base64.b64encode(raw).decode()
 
 
+# This is an integration test.
 def test_transcribe_returns_text():
     client = TestClient(fake_app())
     res = client.post('/agent/transcribe', json={'audio': b64(WAV), 'format': 'wav'})
@@ -154,6 +161,7 @@ def test_transcribe_returns_text():
     assert res.json() == {'text': FAKE_TRANSCRIPT}
 
 
+# This is an integration test.
 def test_transcribe_defaults_to_wav():
     client = TestClient(fake_app())
     res = client.post('/agent/transcribe', json={'audio': b64(WAV)})
@@ -161,12 +169,14 @@ def test_transcribe_defaults_to_wav():
     assert res.json()['text'] == FAKE_TRANSCRIPT
 
 
+# This is an integration test.
 def test_transcribe_rejects_malformed_base64():
     client = TestClient(fake_app())
     res = client.post('/agent/transcribe', json={'audio': 'not!valid!base64!'})
     assert res.status_code == 400
 
 
+# This is an integration test.
 def test_transcribe_rejects_unsupported_format():
     client = TestClient(fake_app())
     res = client.post('/agent/transcribe',
@@ -174,17 +184,20 @@ def test_transcribe_rejects_unsupported_format():
     assert res.status_code == 400
 
 
+# This is an integration test.
 def test_transcribe_rejects_empty_audio():
     client = TestClient(fake_app())
     res = client.post('/agent/transcribe', json={'audio': ''})
     assert res.status_code == 400
 
 
+# This is an integration test.
 def test_transcribe_requires_an_audio_field():
     client = TestClient(fake_app())
     assert client.post('/agent/transcribe', json={}).status_code == 422
 
 
+# This is an integration test.
 def test_transcribe_never_touches_the_board():
     # Transcription is stateless: no board read, no board write. respx with no
     # routes registered means any outbound call at all raises.
@@ -194,6 +207,7 @@ def test_transcribe_never_touches_the_board():
     assert res.status_code == 200
 
 
+# This is an integration test.
 @respx.mock
 def test_transcribe_forwards_the_picked_omni_model():
     route = respx.post('https://openrouter.ai/api/v1/chat/completions').mock(
@@ -209,6 +223,7 @@ def test_transcribe_forwards_the_picked_omni_model():
     assert json.loads(route.calls.last.request.content)['model'] == 'google/gemini-2.5-flash'
 
 
+# This is an integration test.
 @respx.mock
 def test_every_transcription_uses_the_one_chat_completions_wire_format():
     """One wire format, as the module's own docstring states: audio rides in as an
@@ -232,6 +247,7 @@ def test_every_transcription_uses_the_one_chat_completions_wire_format():
     assert route.called
 
 
+# This is an integration test.
 @respx.mock
 def test_transcribe_maps_upstream_failure_to_502():
     respx.post('https://openrouter.ai/api/v1/chat/completions').mock(
@@ -243,6 +259,7 @@ def test_transcribe_maps_upstream_failure_to_502():
     assert res.status_code == 502
 
 
+# This is an integration test.
 @respx.mock
 def test_a_model_that_drops_the_audio_is_reported_not_transcribed():
     # The nemotron omni free model answers an apology instead of a transcript
@@ -275,6 +292,7 @@ def memory_app(collection):
                                chat_collection=str(collection)))
 
 
+# This is an integration test.
 @respx.mock
 def test_chat_records_both_sides_and_recall_finds_them():
     client = TestClient(memory_app('chat-both-sides'))
@@ -289,6 +307,7 @@ def test_chat_records_both_sides_and_recall_finds_them():
     assert {'user', 'assistant'} <= roles  # reply is recorded too (FAKE: echo)
 
 
+# This is an integration test.
 @respx.mock
 def test_recall_orders_by_relevance():
     client = TestClient(memory_app('chat-ordering'))
@@ -300,6 +319,7 @@ def test_recall_orders_by_relevance():
     assert 'dentist' in res.json()['matches'][0]['text']
 
 
+# This is an integration test.
 @respx.mock
 def test_paired_stores_are_isolated_per_board():
     # Two brains, two collections — the board.db brain must never see chat
@@ -312,6 +332,7 @@ def test_paired_stores_are_isolated_per_board():
     assert all('rotation' not in m['text'] for m in res.json()['matches'])
 
 
+# This is an integration test.
 @respx.mock
 def test_unreachable_chroma_does_not_stop_the_brain_from_serving():
     # If the Docker Chroma is down, the brain must still boot and answer chat —
@@ -353,6 +374,7 @@ def test_having_no_matches_and_having_no_memory_are_told_apart():
         'matches': [], 'memory': True}
 
 
+# This is an integration test.
 def test_recall_validates_its_body(tmp_path):
     client = TestClient(memory_app(tmp_path))
     assert client.post('/rag/recall', json={}).status_code == 422
@@ -363,6 +385,7 @@ def test_recall_validates_its_body(tmp_path):
     assert client.post('/rag/recall', json={'text': 'hi', 'k': 0}).status_code == 422
 
 
+# This is an integration test.
 @respx.mock
 def test_rag_reindex_says_whether_it_had_to_rebuild():
     respx.get('http://board.test/api/state').mock(return_value=board_state(
@@ -465,6 +488,7 @@ def test_a_stream_that_dies_says_so_instead_of_going_quiet(monkeypatch):
 # The browser sends a model with every chat turn, so a picker offering slugs the
 # backend cannot load is a broken Assistant with no way out of it from the UI.
 
+# This is an integration test.
 def test_models_route_says_nothing_is_verified_on_a_remote_backend():
     """OpenRouter is a paid API with hundreds of models; probing it on every
     settings render would be absurd, so `verified` is False and the frontend's
@@ -476,6 +500,7 @@ def test_models_route_says_nothing_is_verified_on_a_remote_backend():
                     'verified': False, 'models': []}
 
 
+# This is an integration test.
 @respx.mock
 def test_models_route_lists_what_the_local_daemon_serves():
     respx.get('http://localhost:11434/api/tags').mock(
@@ -490,6 +515,7 @@ def test_models_route_lists_what_the_local_daemon_serves():
     assert body['default'] == 'gemma4:e2b'
 
 
+# This is an integration test.
 @respx.mock
 def test_a_local_daemon_that_is_down_claims_nothing_rather_than_an_empty_list():
     """A daemon that is not running is a normal state, not an error. Reporting
@@ -503,6 +529,7 @@ def test_a_local_daemon_that_is_down_claims_nothing_rather_than_an_empty_list():
     assert body['verified'] is False and body['models'] == []
 
 
+# This is an integration test.
 @respx.mock
 def test_the_models_route_reads_the_configured_base_url():
     """So the same setting reaches a daemon on another host without a code

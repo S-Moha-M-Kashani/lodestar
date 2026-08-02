@@ -16,10 +16,12 @@ unlike bge-small-en, which the brain hardwires today).
 below carries that as text the panel shows next to the dropdown. On a Farsi diary
 this is not a footnote: most of the famous embedders — bge-small-en,
 all-MiniLM-L6 — are English-only models that would produce a full set of
-plausible-looking numbers measuring nothing at all. The same rule as the chat
-models applies to the model list: an option nobody has run here stays listed as
-NA rather than being dropped, and availability is *verified* against what
-fastembed actually serves instead of guessed.
+plausible-looking numbers measuring nothing at all. **The catalogue offers only
+models that have embedded a sentence on this machine** (checked 2026-08-02):
+"worth trying, nobody measured it" had rotted into half-fetched downloads and
+models no backend here serves, so NA now means one thing — *this installation*
+cannot load it — and availability is *verified* against what fastembed actually
+serves instead of guessed.
 
 **Queries and passages are embedded separately** because the E5 family was
 trained that way ("query: " / "passage: "). Omitting the prefixes is a silent
@@ -66,22 +68,17 @@ TOKEN_DIM = 512
 CHAR_DIM = 1024
 DEFAULT_FASTEMBED = 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'
 DEFAULT_LOCAL = 'heydariAI/persian-embeddings'
-DEFAULT_API = 'openai/text-embedding-3-small'
 
 # Which kind serves a model, and which model that kind loads when nothing is
-# pinned — the same rule as '' meaning RAGLAB_MODEL for the chat roles.
-BACKENDS = ('fastembed', 'sentence-transformers', 'openai')
+# pinned — the same rule as '' meaning RAGLAB_MODEL for the chat roles. The
+# openai backend and its two API models left 2026-08-02: a backend whose whole
+# catalogue is gone stays selectable and would build an embedder with no model
+# and dim 0, worse than the API bill it was there to offer.
+BACKENDS = ('fastembed', 'sentence-transformers')
 BACKEND_DEFAULTS = {
     'fastembed': DEFAULT_FASTEMBED,
     'sentence-transformers': DEFAULT_LOCAL,
-    'openai': DEFAULT_API,
 }
-
-# Qwen3's embedding models are instruction-tuned: the query side carries a task
-# instruction and the document side is left plain. Same shape as the E5 prefixes,
-# same reason for keeping it beside the model entry.
-QWEN3_INSTRUCT = ('Instruct: Given a question about a personal diary, retrieve '
-                  'the diary passages that answer it\nQuery: ')
 
 # The vocabulary the panel says language coverage in. Kept as constants because
 # the words matter: "any script" means the embedder is not *blind* to Farsi, not
@@ -187,7 +184,7 @@ class SentenceTransformerEmbedder:
     """Any HuggingFace checkpoint, through sentence-transformers.
 
     This is the backend that reaches the models fastembed does not serve — the
-    Persian-tuned encoders and Qwen3 — which on a Farsi diary are the ones worth
+    Persian-tuned encoders — which on a Farsi diary are the ones worth
     measuring. The model's own `modules.json` decides pooling, so a checkpoint
     that ships an ST configuration is used the way its authors intended rather
     than mean-pooled by us and quietly mis-scored.
@@ -230,60 +227,6 @@ class SentenceTransformerEmbedder:
         return self._vectors(list(texts), self.query_prefix)
 
 
-class OpenAIEmbedder:
-    """OpenAI's embedding API: no download, but a key and a bill.
-
-    Deliberately not routed through OpenRouter — it serves chat completions only,
-    so the lab's LLM key cannot pay for this. The dimension is *declared* from the
-    catalogue rather than probed, because building an index configuration must not
-    cost an API call.
-
-    `post` exists so the wire format is testable offline; production leaves it
-    alone.
-    """
-    name = 'openai'
-
-    def __init__(self, model_name: str, settings, batch_size: int = 256,
-                 post=None):
-        key = getattr(settings, 'openai_api_key', '') or ''
-        if not key:
-            raise ValueError(
-                f'{model_name} needs an OpenAI key: set OPENAI_API_KEY (the '
-                'OpenRouter key cannot be used — OpenRouter serves no '
-                'embeddings endpoint)')
-        self.model_name = model_name
-        # The panel shows OpenRouter-shaped slugs so every model list reads the
-        # same way; OpenAI's own API wants the bare name.
-        self.wire_name = model_name.split('/', 1)[-1]
-        self.key = key
-        self.base_url = (getattr(settings, 'openai_base_url', '')
-                         or 'https://api.openai.com/v1').rstrip('/')
-        self.batch_size = batch_size
-        self._post = post or _post_json
-        self.name = f'openai:{model_name}'
-        entry = _MODELS.get(model_name)
-        self.dim = entry.dim if entry else 0
-
-    def embed(self, texts: list[str]) -> np.ndarray:
-        texts = list(texts)
-        out: list[list[float]] = []
-        for start in range(0, len(texts), self.batch_size):
-            batch = texts[start:start + self.batch_size]
-            body = self._post(f'{self.base_url}/embeddings',
-                              {'model': self.wire_name, 'input': batch},
-                              {'Authorization': f'Bearer {self.key}',
-                               'Content-Type': 'application/json'})
-            out.extend(item['embedding'] for item in body['data'])
-        return _normalize(np.asarray(out, dtype=np.float32))
-
-
-def _post_json(url: str, payload: dict, headers: dict) -> dict:
-    import httpx
-    res = httpx.post(url, json=payload, headers=headers, timeout=120.0)
-    res.raise_for_status()
-    return res.json()
-
-
 def query_vectors(embedder, texts: list[str]) -> np.ndarray:
     """Embed questions as questions when the model distinguishes them.
 
@@ -314,7 +257,18 @@ class EmbedderHint:
 
 
 EMBEDDER_HINTS = (
-    EmbedderHint('ascii-hash', 'ascii-hash — the brain default today',
+    EmbedderHint('sentence-transformers',
+                 'sentence-transformers — any HuggingFace model', BY_MODEL, True,
+                 'The lab default, because it is the only backend that can reach '
+                 'a Persian-tuned encoder: fastembed does not serve '
+                 'heydariAI/persian-embeddings. Needs the local-embeddings extra '
+                 'and downloads the weights once.'),
+    EmbedderHint('fastembed', 'fastembed — a real transformer', BY_MODEL, True,
+                 'Embeds meaning rather than letters (0.612 recall measured), '
+                 'from its own short ONNX list. Which languages it covers is '
+                 'decided by the model below — pick a multilingual one or this '
+                 'becomes an English model reading a Farsi diary.'),
+    EmbedderHint('ascii-hash', 'ascii-hash — the reference baseline',
                  LATIN_ONLY, False,
                  'tokenises [a-z0-9]+, so a Farsi sentence has no tokens and '
                  'every vector is zero: measured 0.014 session recall here, i.e. '
@@ -329,21 +283,6 @@ EMBEDDER_HINTS = (
                  'strongest option that downloads nothing: 0.386 recall against '
                  'ascii-hash\'s 0.014. Still lexical — a paraphrase with no '
                  'shared letters is invisible to it.'),
-    EmbedderHint('fastembed', 'fastembed — a real transformer', BY_MODEL, True,
-                 'Embeds meaning rather than letters (0.612 recall measured), '
-                 'from its own short ONNX list. Which languages it covers is '
-                 'decided by the model below — pick a multilingual one or this '
-                 'becomes an English model reading a Farsi diary.'),
-    EmbedderHint('sentence-transformers',
-                 'sentence-transformers — any HuggingFace model', BY_MODEL, True,
-                 'The lab default, because it is the only backend that can reach '
-                 'a Persian-tuned encoder: fastembed serves neither '
-                 'heydariAI/persian-embeddings nor Qwen3. Needs the '
-                 'local-embeddings extra and downloads the weights once.'),
-    EmbedderHint('openai', 'openai — the embeddings API', BY_MODEL, True,
-                 'No download and no local compute, but it needs OPENAI_API_KEY '
-                 'and spends money on every build. Deliberately not the '
-                 'OpenRouter key: OpenRouter serves no embeddings endpoint.'),
 )
 
 _HINTS = {hint.kind: hint for hint in EMBEDDER_HINTS}
@@ -383,6 +322,12 @@ class EmbedModel:
 # Deliberately short, and deliberately including the two English-only models: the
 # lab has to be able to *measure* the choice the brain ships with, and a reader
 # comparing rows needs to see why that row scored nothing.
+#
+# Every entry embedded a Farsi sentence on this machine, through the backend it
+# names (checked 2026-08-02). Dropped in that audit: Qwen3-Embedding-8B (three of
+# four shards were incomplete downloads), BAAI/bge-m3 (this fastembed serves
+# neither it nor e5-small), both OpenAI API models with their backend, and
+# e5-large / mpnet-base-v2 / jina-embeddings-v3, which nothing here ever loaded.
 EMBED_MODELS = (
     # The lab default. Persian-tuned rather than Persian-capable: an XLM-RoBERTa
     # fine-tuned on Persian, which is a different bet from a multilingual model
@@ -398,56 +343,20 @@ EMBED_MODELS = (
                'to try on this corpus. Loaded through sentence-transformers, '
                'which is what its model card recommends. ~512-token context.',
                backend='sentence-transformers', tag='lab default'),
-    EmbedModel('Qwen/Qwen3-Embedding-8B', 'Qwen3-Embedding-8B', MULTI_100, True,
-               'open', 4096,
-               'the recommended ceiling: top of the public multilingual '
-               'retrieval boards, 40k context, instruction-tuned (the lab sends '
-               'the instruction on the query side for you). ~16 GB and slow on a '
-               'laptop, so measure the default first.',
-               backend='sentence-transformers', tag='recommended',
-               query_prefix=QWEN3_INSTRUCT),
-    EmbedModel(DEFAULT_API, 'text-embedding-3-small', MULTI_100, True, 'closed',
-               1536,
-               'no download and no local compute: the cheapest way to get a '
-               'strong multilingual encoder onto this corpus, at the cost of '
-               'sending the diary to an API. Needs OPENAI_API_KEY.',
-               backend='openai'),
-    EmbedModel(DEFAULT_FASTEMBED, 'paraphrase-multilingual-MiniLM-L12-v2',
-               MULTI_50, True, 'open', 384,
-               'the lab default: smallest multilingual option, ~120 MB, 384 dims. '
-               'Fine as a floor, and the weakest of the Farsi-capable models.'),
-    EmbedModel('sentence-transformers/paraphrase-multilingual-mpnet-base-v2',
-               'paraphrase-multilingual-mpnet-base-v2', MULTI_50, True, 'open',
-               768,
-               'twice the width of the default over the same languages — the '
-               'cheapest A/B worth running first.'),
-    EmbedModel('intfloat/multilingual-e5-large', 'multilingual-e5-large',
-               MULTI_100, True, 'open', 1024,
-               'the strongest widely served multilingual retriever; trained for '
-               'retrieval specifically, not paraphrase similarity. ~2 GB on first '
-               'use, and it needs its query/passage prefixes to perform — the lab '
-               'applies them for you.',
-               query_prefix='query: ', passage_prefix='passage: '),
     EmbedModel('intfloat/multilingual-e5-small', 'multilingual-e5-small',
                MULTI_100, True, 'open', 384,
-               'a fifth of e5-large\'s size with the same recipe — worth '
-               'measuring before paying for the big one.',
+               'the e5 retrieval recipe at a fifth of e5-large\'s size, and its '
+               'weights are already on disk here. Served through '
+               'sentence-transformers — this fastembed does not carry it — and '
+               'it needs its query/passage prefixes to perform, which the lab '
+               'applies for you.',
+               backend='sentence-transformers',
                query_prefix='query: ', passage_prefix='passage: '),
-    EmbedModel('BAAI/bge-m3', 'bge-m3', MULTI_100, True, 'open', 1024,
-               'the best-regarded multilingual retriever on Persian in public '
-               'evals. fastembed serves it for sparse/hybrid search and dense '
-               'support varies by version, so NA here means "check your '
-               'fastembed", not "not worth it".'),
-    EmbedModel('jinaai/jina-embeddings-v3', 'jina-embeddings-v3', MULTI_100,
-               True, 'open', 1024,
-               'task-specific adapters and 8k context, so a whole diary session '
-               'fits in one vector without being cut.'),
-    EmbedModel('openai/text-embedding-3-large', 'text-embedding-3-large',
-               MULTI_100, True, 'closed', 3072,
-               'the strongest API option and the widest vector here (3072 dims). '
-               'Same trade as its small sibling — a key, a bill, and the diary '
-               'leaving the machine — for a few points more.',
-               backend='openai'),
+    EmbedModel(DEFAULT_FASTEMBED, 'paraphrase-multilingual-MiniLM-L12-v2',
+               MULTI_50, True, 'open', 384,
+               'the fastembed default: smallest multilingual option, ~120 MB, '
+               '384 dims. Fine as a floor, and the weakest of the Farsi-capable '
+               'models.'),
     EmbedModel('BAAI/bge-small-en-v1.5', 'bge-small-en-v1.5', ENGLISH_ONLY,
                False, 'open', 384,
                'what the brain hardwires today. Here as the baseline: it will '
@@ -495,22 +404,15 @@ def sentence_transformers_available() -> bool:
     return True
 
 
-def openai_embeddings_available(settings=None) -> bool:
-    """A key is the whole requirement — there is nothing to install. Checked
-    because a missing key would otherwise fail on the first chunk of a build."""
-    return bool(getattr(settings, 'openai_api_key', '') or '')
-
-
 def backend_availability(settings=None) -> dict:
-    """Which of the three model backends can be used right now."""
+    """Which of the two model backends can be used right now."""
     return {'fastembed': fastembed_available(),
-            'sentence-transformers': sentence_transformers_available(),
-            'openai': openai_embeddings_available(settings)}
+            'sentence-transformers': sentence_transformers_available()}
 
 
 def embedder_hints(settings=None) -> list[dict]:
     """One hint per embedder kind, in registry order. The hash embedders are
-    always available; the three model backends answer for themselves, so a kind
+    always available; the two model backends answer for themselves, so a kind
     that cannot run says NA instead of failing when a run starts."""
     live = backend_availability(settings)
     return [hint.as_dict(live.get(hint.kind, True)) for hint in EMBEDDER_HINTS]
@@ -548,8 +450,7 @@ def embed_model_catalogue(settings=None) -> list[dict]:
              'dim': 0, 'available': True, 'backend': '', 'tag': '',
              'note': 'sentence-transformers → '
                      f'{_short(DEFAULT_LOCAL)}; fastembed → '
-                     f'{_short(default_id)} (RAGLAB_FASTEMBED_MODEL); openai → '
-                     f'{_short(DEFAULT_API)}',
+                     f'{_short(default_id)} (RAGLAB_FASTEMBED_MODEL)',
              'query_prefix': '', 'passage_prefix': ''}] + entries
 
 
@@ -602,7 +503,5 @@ def make_embedder(kind: str, settings=None, model: str = ''):
                     'passage_prefix': entry.passage_prefix if entry else ''}
         if kind == 'fastembed':
             return FastEmbedMultilingual(name, **prefixes)
-        if kind == 'sentence-transformers':
-            return SentenceTransformerEmbedder(name, **prefixes)
-        return OpenAIEmbedder(name, settings)
+        return SentenceTransformerEmbedder(name, **prefixes)
     raise ValueError(f'unknown lab embedder: {kind!r}')

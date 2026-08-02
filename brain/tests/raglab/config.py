@@ -68,11 +68,6 @@ class LabSettings:
     # picked. A default that cannot run is a broken default, not a strict one.
     llm_model: str = ''
     fastembed_model: str = 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'
-    # Its own key, deliberately not the OpenRouter one: OpenRouter serves no
-    # /embeddings endpoint, so the chat key cannot stand in here. Absent means the
-    # OpenAI embedding models show as NA rather than failing mid-sweep.
-    openai_api_key: str = ''
-    openai_base_url: str = 'https://api.openai.com/v1'
     # Multilingual on purpose: fastembed's default rerankers (ms-marco-MiniLM,
     # jina-reranker-v1-*-en) are English-only and score Farsi pairs as noise.
     # ~1.1 GB on first use; override with RAGLAB_CROSS_ENCODER.
@@ -126,31 +121,114 @@ def load_lab_settings(env: dict | None = None) -> LabSettings:
         fastembed_model=env.get(
             'RAGLAB_FASTEMBED_MODEL',
             'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'),
-        openai_api_key=env.get('OPENAI_API_KEY', ''),
-        openai_base_url=env.get('OPENAI_BASE_URL', 'https://api.openai.com/v1'),
         cross_encoder_model=env.get('RAGLAB_CROSS_ENCODER',
                                     'jinaai/jina-reranker-v2-base-multilingual'),
     )
 
 
-CHUNKERS = ('fixed', 'fixed-overlap', 'message', 'turn-pair', 'session',
-            'semantic-drift')
-# Three of these load a named model: 'fastembed' (its own ONNX list),
+# Every option tuple below leads with the value the lab actually defaults to.
+# That is not cosmetic ordering: these tuples are what both panels render, so a
+# default buried sixth reads as an exotic choice while three hash embedders that
+# exist only to be measured *against* sit at the top of the list. The measured
+# winner should be the first thing offered. `test_every_option_list_leads_with_
+# the_default` holds the two in step, so changing a default without moving it
+# fails rather than quietly demoting it.
+CHUNKERS = ('semantic-drift', 'fixed', 'fixed-overlap', 'message', 'turn-pair',
+            'session')
+# Which chunkers actually read chunk_chars and overlap. Read off chunking.py's
+# own branches rather than assumed: 'semantic-drift' passes chunk_chars to
+# _semantic_segments as its max_chars cap ("or where the segment would outgrow
+# max_chars"), so it belongs here even though it cuts on meaning rather than
+# length. 'message', 'turn-pair' and 'session' emit one piece per message, pair
+# or day and ignore both numbers entirely.
+CHAR_SIZED_CHUNKERS = ('semantic-drift', 'fixed', 'fixed-overlap')
+OVERLAP_CHUNKERS = ('fixed-overlap',)
+# Two of these load a named model: 'fastembed' (its own ONNX list) and
 # 'sentence-transformers' (any HuggingFace checkpoint — the only way to reach
-# Qwen3 and the Persian-tuned encoders) and 'openai' (an API call, no download).
-# The hash embedders take no model at all.
-EMBEDDERS = ('ascii-hash', 'token-hash', 'char-hash', 'fastembed',
-             'sentence-transformers', 'openai')
-MODEL_EMBEDDERS = ('fastembed', 'sentence-transformers', 'openai')
-RETRIEVERS = ('dense', 'bm25', 'hybrid-rrf')
-RERANKERS = ('none', 'lexical', 'recency', 'agentic', 'cross-encoder', 'llm')
+# the Persian-tuned encoders). The hash embedders take no model at all. The
+# 'openai' API backend left 2026-08-02 with its whole catalogue.
+EMBEDDERS = ('sentence-transformers', 'fastembed',
+             'ascii-hash', 'token-hash', 'char-hash')
+MODEL_EMBEDDERS = ('fastembed', 'sentence-transformers')
+RETRIEVERS = ('hybrid-rrf', 'dense', 'bm25')
+RERANKERS = ('lexical', 'none', 'recency', 'agentic', 'cross-encoder', 'llm')
 GRADERS = ('none', 'lexical', 'llm')
-ANSWERERS = ('none', 'extractive', 'llm')
+ANSWERERS = ('extractive', 'none', 'llm')
 # Ascending, and the order the remainder of an uneven sample is handed out in, so
 # a balanced selection is reproducible rather than merely proportionate.
 DIFFICULTIES = ('easy', 'medium', 'hard')
 # How a limited run picks its questions. See evaluate.select_questions.
 BALANCES = ('stride', 'difficulty')
+
+
+# Which controls are live, and under what. Served rather than duplicated in each
+# panel for the same reason STEPS is: two copies of a rule drift, and a panel
+# that greys out the wrong knob teaches the reader something false about the
+# pipeline. Each entry names the field it depends on, the values that switch it
+# on, and — the part that matters — *why*, because a control that is greyed out
+# with no reason is indistinguishable from one that is broken.
+#
+# `on` lists the enabling values; `on_true` means a boolean must be set. The
+# reason is written to complete the sentence "disabled because …".
+DEPENDENCIES = {
+    'index.chunk_chars': {
+        'field': 'index.chunker', 'on': list(CHAR_SIZED_CHUNKERS),
+        'reason': 'the message, turn-pair and session chunkers cut on structure, '
+                  'not on length'},
+    'index.overlap': {
+        'field': 'index.chunker', 'on': list(OVERLAP_CHUNKERS),
+        'reason': 'only the fixed-overlap chunker slides a window'},
+    'index.embed_model': {
+        'field': 'index.embedder', 'on': list(MODEL_EMBEDDERS),
+        'reason': 'the hash embedders load no model'},
+    'retrieval.rrf_k': {
+        'field': 'retrieval.retriever', 'on': ['hybrid-rrf'],
+        'reason': 'only hybrid-rrf fuses two rankings'},
+    'retrieval.rerank_depth': {
+        'field': 'retrieval.reranker', 'on': [r for r in RERANKERS if r != 'none'],
+        'reason': 'nothing is reranked'},
+    'retrieval.reranker_model': {
+        'field': 'retrieval.reranker', 'on': ['llm'],
+        'reason': 'only the llm reranker calls a model'},
+    'retrieval.recency_half_life_days': {
+        'field': 'retrieval.reranker', 'on': ['recency', 'agentic'],
+        'reason': 'only the recency and agentic rerankers weigh age'},
+    'retrieval.agentic_weights': {
+        'field': 'retrieval.reranker', 'on': ['agentic'],
+        'reason': 'only the agentic reranker has weights to balance'},
+    'retrieval.grade_threshold': {
+        'field': 'retrieval.grader', 'on': [g for g in GRADERS if g != 'none'],
+        'reason': 'the gate is off, so nothing is scored to threshold'},
+    'retrieval.grader_model': {
+        'field': 'retrieval.grader', 'on': ['llm'],
+        'reason': 'only the llm gate calls a model'},
+    'retrieval.expansion_model': {
+        'field': 'retrieval.hyde', 'on_true': True,
+        'reason': 'HyDE is off — multi-query expansion is rule-based and uses no '
+                  'model'},
+    'generation.model': {
+        'field': 'generation.answerer', 'on': ['llm'],
+        'reason': 'only the llm answerer calls a model'},
+    'generation.judge_model': {
+        'field': 'generation.key_facts_judge', 'on_true': True,
+        'reason': 'the key-facts judge is off'},
+}
+
+
+def dependency_state(cfg_dict: dict) -> dict:
+    """For one config, which dependent fields are live and why not.
+
+    Returns `{'<group>.<field>': {'enabled': bool, 'reason': str}}`. Shared by
+    both panels and by the tests, so what the UI greys out and what the pipeline
+    ignores cannot disagree."""
+    state = {}
+    for key, rule in DEPENDENCIES.items():
+        group, _, name = rule['field'].partition('.')
+        current = (cfg_dict.get(group) or {}).get(name)
+        enabled = (bool(current) if rule.get('on_true')
+                   else current in rule.get('on', ()))
+        state[key] = {'enabled': enabled, 'reason': '' if enabled else rule['reason']}
+    return state
 
 
 @dataclass(frozen=True)
@@ -338,13 +416,12 @@ HELP = {
         'it can represent: "ascii-hash" is what the brain ships today and reads '
         'Latin script only, so Farsi embeds to the zero vector — measured at 0.01 '
         'recall, i.e. chance. The other two hash embedders see any script but '
-        'only as letters, never as meaning. Three options load a real model, and '
+        'only as letters, never as meaning. Two options load a real model, and '
         'they differ in what that costs: "fastembed" runs its own short ONNX list '
         'locally; "sentence-transformers" runs any HuggingFace checkpoint, which '
-        'is the only way to reach the Persian-tuned encoders and Qwen3 — it needs '
-        'the local-embeddings extra and downloads weights; "openai" downloads '
-        'nothing but calls an API, so it needs OPENAI_API_KEY and spends money '
-        'per run. Whichever you pick, the model below decides the languages.'),
+        'is the only way to reach the Persian-tuned encoders — it needs '
+        'the local-embeddings extra and downloads weights. Whichever you pick, '
+        'the model below decides the languages.'),
     'index.embed_model': (
         'Which real embedding model the chosen backend loads. This is where Farsi '
         'is won '

@@ -60,6 +60,7 @@ function sourceMount() {
   return mounts.find((m) => /^\.\/?:/.test(m) && m.split(':')[1] === dir);
 }
 
+// This is a configuration invariant.
 test('compose mounts the source tree over the image app directory', () => {
   const dir = workdir();
   assert.ok(
@@ -72,6 +73,7 @@ test('compose mounts the source tree over the image app directory', () => {
   );
 });
 
+// This is a configuration invariant.
 test('the source mount is read-only', () => {
   // The container must never be able to write back over the working tree.
   const mount = sourceMount();
@@ -83,6 +85,7 @@ test('the source mount is read-only', () => {
   );
 });
 
+// This is a configuration invariant.
 test('every file the server serves is inside the mounted tree', () => {
   // Keeps the mount honest as the server grows: a served file that lives outside
   // the repo root would not be covered by mounting the root.
@@ -100,6 +103,7 @@ test('every file the server serves is inside the mounted tree', () => {
   }
 });
 
+// This is a configuration invariant.
 test('the database still lives on its own named volume, not the source tree', () => {
   // The durability promise: adding a source mount must not displace board-data,
   // and BOARD_DB must stay on it — a tree mount is read-only, so a board.db
@@ -144,6 +148,7 @@ const brainSourceMount = () => {
   );
 };
 
+// This is a configuration invariant.
 test('compose mounts the brain source over the image copy', () => {
   const { host, target } = brainSourceDir();
   assert.ok(
@@ -177,6 +182,7 @@ const EMBEDDER_EXTRA = {
 const brainExtras = () =>
   new Set([...read('brain/Dockerfile').matchAll(/--extra\s+(\S+)/g)].map((m) => m[1]));
 
+// This is a configuration invariant.
 test('compose pins the brain embedder to the one its image installs', () => {
   const pinned = brainEnvPin('BRAIN_EMBEDDER');
   assert.ok(
@@ -197,6 +203,7 @@ test('compose pins the brain embedder to the one its image installs', () => {
   );
 });
 
+// This is a configuration invariant.
 test('compose pins the brain transcriber away from Parakeet', () => {
   const pinned = brainEnvPin('BRAIN_TRANSCRIBER');
   assert.ok(
@@ -208,6 +215,7 @@ test('compose pins the brain transcriber away from Parakeet', () => {
   );
 });
 
+// This is a configuration invariant.
 test('the brain source mount is read-only', () => {
   const mount = brainSourceMount();
   assert.ok(mount, 'the brain source is not mounted at all');
@@ -218,6 +226,7 @@ test('the brain source mount is read-only', () => {
   );
 });
 
+// This is a configuration invariant.
 test('no brain mount shadows the container virtualenv', () => {
   // The trap this guards: the host's brain/.venv holds macOS binaries, so a
   // mount over the workdir (or straight onto .venv) hides the image's Linux
@@ -239,6 +248,7 @@ test('no brain mount shadows the container virtualenv', () => {
   }
 });
 
+// This is a configuration invariant.
 test('the source mount targets exactly where the Dockerfile puts the source', () => {
   // A WORKDIR change would otherwise leave the tree mounted in a directory the
   // server does not run from, and :3000 would go back to serving stale assets

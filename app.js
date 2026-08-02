@@ -2830,6 +2830,50 @@
   // textarea, so anything typed (or dictated) has to live in state, not the DOM.
   const assistantState = { messages: [], busy: false, draft: '', proposals: [] };
 
+  // The transcript outlives the tab. Only `messages` is stored: `busy` must
+  // never come back true — a reload landing mid-stream would restore a disabled
+  // composer with nothing running to re-enable it, and the view would look hung
+  // with no way out. Same write-behind-try/catch as the model picks: a private
+  // window that refuses storage loses its history, never its session.
+  const CHAT_KEY = KEY_PREFIX + 'chat';
+  const CHAT_KEEP = 200;
+
+  const persistChat = () => {
+    try {
+      localStorage.setItem(CHAT_KEY,
+        JSON.stringify(assistantState.messages.slice(-CHAT_KEEP)));
+    } catch { /* private mode or quota — the transcript still holds this session */ }
+  };
+
+  /** One stored turn, read back defensively. Anything whose role or content is
+   *  not what it claims is dropped rather than rendered. */
+  function restoredMessage(msg) {
+    if (!msg || typeof msg !== 'object') return null;
+    if (msg.role !== 'user' && msg.role !== 'assistant') return null;
+    if (typeof msg.content !== 'string') return null;
+    const out = { role: msg.role, content: msg.content };
+    // `error` and `partial` are load-bearing, not decoration: sendChat filters
+    // both out of the history it replays to the model. Persisting the text and
+    // dropping the flag would silently undo that filter, and the model would be
+    // asked to continue from something it never finished saying.
+    if (msg.error) out.error = true;
+    if (msg.partial) out.partial = true;
+    if (Array.isArray(msg.steps)) out.steps = msg.steps;
+    if (Array.isArray(msg.sources)) out.sources = msg.sources;
+    if (msg.usage && typeof msg.usage === 'object') out.usage = msg.usage;
+    // `running` is never restored. It names tools awaiting an answer from a
+    // request that died with the old page, so a restored one is a spinner that
+    // can never stop.
+    return out;
+  }
+
+  try {
+    const saved = JSON.parse(localStorage.getItem(CHAT_KEY) || '[]');
+    if (Array.isArray(saved)) {
+      assistantState.messages = saved.map(restoredMessage).filter(Boolean);
+    }
+  } catch { /* unreadable transcript — start empty rather than fail the boot */ }
+
   // Model choices for the brain, one per capability. Only the text pick has
   // an effect today — it rides along on every /api/agent/chat request (the
   // brain forwards it to OpenRouter). The omni and embedding picks are stored
@@ -3399,6 +3443,17 @@
     labBtn.title = 'Tune and grade diary retrieval against the test fixtures';
     labBtn.addEventListener('click', () => setView('raglab'));
     head.appendChild(labBtn);
+    // Offered even with an empty transcript: a disabled control that appears
+    // only sometimes is harder to find than one that always sits in the same
+    // place and exports nothing.
+    const exportBtn = document.createElement('button');
+    exportBtn.type = 'button';
+    exportBtn.id = 'chat-export-btn';
+    exportBtn.className = 'btn ghost';
+    exportBtn.textContent = 'Export chat';
+    exportBtn.title = 'Save this conversation as JSON or Markdown';
+    exportBtn.addEventListener('click', () => openExportDialog('chat'));
+    head.appendChild(exportBtn);
     sheet.appendChild(head);
 
     sheet.appendChild(renderChatSettings());
@@ -3832,6 +3887,9 @@
 
   async function sendChat(text) {
     assistantState.messages.push({ role: 'user', content: text });
+    // Stored before the request, not after it: a question that costs a reload
+    // to lose is the thing this project promises not to do.
+    persistChat();
     assistantState.busy = true;
     render();
     // The turn being streamed into. `running` holds tools the model has asked
@@ -3906,6 +3964,10 @@
       announce(failure);
     }
     assistantState.busy = false;
+    // The turn has settled — whether it answered, failed, or died partway. The
+    // stream mutates `turn` in place, so this is the one point where what is
+    // written is what the user will see on the next load.
+    persistChat();
     render();
     const nextInput = document.getElementById('chat-input');
     if (nextInput) nextInput.focus();
@@ -4512,18 +4574,91 @@
   const exportDialog = $('#export-dialog');
   const exportJson = () => JSON.stringify({ ...state, categories }, null, 2);
 
-  $('#export-btn').addEventListener('click', () => {
-    $('#export-json').value = exportJson();
+  // Which subject the shared dialog is currently showing. Everything that
+  // differs — the title, the blurb, the format switch, the filename, what Copy
+  // puts on the clipboard — reads this, so the two exports cannot half-swap.
+  let exportMode = 'board';
+
+  const ROLE_LABEL = { user: 'You', assistant: 'Assistant' };
+
+  const chatExportJson = () => JSON.stringify({
+    exported: new Date().toISOString(),
+    messages: assistantState.messages.map((m) => ({
+      role: m.role,
+      content: m.content,
+      // Carried so an exported transcript cannot read as a clean conversation
+      // when part of it failed. Absent, not false, on an ordinary turn.
+      ...(m.error ? { error: true } : {}),
+      ...(m.partial ? { partial: true } : {}),
+    })),
+  }, null, 2);
+
+  const chatExportMarkdown = () => {
+    const lines = ['# Lodestar assistant transcript', '',
+                   `*Exported ${new Date().toLocaleString()}*`, ''];
+    for (const m of assistantState.messages) {
+      let heading = `## ${ROLE_LABEL[m.role] || m.role}`;
+      if (m.error) heading += ' — failed';
+      else if (m.partial) heading += ' — incomplete';
+      lines.push(heading, '', m.content || '*(no text)*', '');
+    }
+    return lines.join('\n');
+  };
+
+  const chatExportText = () =>
+    ($('#chat-export-format').value === 'markdown'
+      ? chatExportMarkdown() : chatExportJson());
+
+  /** What the dialog is currently offering, whichever subject it is showing. */
+  const currentExportText = () =>
+    (exportMode === 'chat' ? chatExportText() : exportJson());
+
+  const currentExportName = () =>
+    (exportMode !== 'chat' ? 'lodestar.json'
+      : $('#chat-export-format').value === 'markdown'
+        ? 'lodestar-chat.md' : 'lodestar-chat.json');
+
+  // The copy button names what it will actually put on the clipboard. Left as a
+  // fixed "Copy JSON" it would offer Markdown under a JSON label — a small lie,
+  // but the kind the user only discovers after pasting.
+  const copyLabel = () =>
+    (exportMode === 'chat' && $('#chat-export-format').value === 'markdown'
+      ? 'Copy Markdown' : 'Copy JSON');
+
+  function openExportDialog(mode) {
+    exportMode = mode;
+    const chat = mode === 'chat';
+    $('#chat-export-format-row').hidden = !chat;
+    $('#export-title').textContent = chat ? 'Export chat' : 'Export board';
+    $('#export-copy').textContent = chat
+      ? 'Save the Assistant transcript. Markdown is for reading; JSON keeps the turn structure, including which turns failed. If your browser blocks the download, copy the text below instead.'
+      : 'Save the whole board as lodestar.json. If your browser blocks the download (some embedded viewers do), copy the JSON below and paste it into a file instead.';
+    $('#download-export').textContent = `Download ${currentExportName()}`;
+    $('#copy-export').textContent = copyLabel();
+    $('#export-json').value = currentExportText();
     exportDialog.showModal();
-  });
+  }
+
+  $('#export-btn').addEventListener('click', () => openExportDialog('board'));
   $('#cancel-export').addEventListener('click', () => exportDialog.close());
 
+  // Switching format re-renders the same transcript; it never re-reads the
+  // board, so the two subjects cannot bleed into one another.
+  $('#chat-export-format').addEventListener('change', () => {
+    $('#export-json').value = chatExportText();
+    $('#download-export').textContent = `Download ${currentExportName()}`;
+    $('#copy-export').textContent = copyLabel();
+  });
+
   $('#download-export').addEventListener('click', () => {
-    const blob = new Blob([exportJson()], { type: 'application/json' });
+    const name = currentExportName();
+    const blob = new Blob([currentExportText()], {
+      type: name.endsWith('.md') ? 'text/markdown' : 'application/json',
+    });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'lodestar.json';
+    a.download = name;
     a.rel = 'noopener';
     document.body.append(a);
     a.click();
@@ -4531,18 +4666,20 @@
     // download before the browser has started it (notably Firefox/Safari).
     setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 1000);
     exportDialog.close();
-    announce('Exported board as lodestar.json');
+    announce(`Exported ${exportMode === 'chat' ? 'chat' : 'board'} as ${name}`);
   });
 
   $('#copy-export').addEventListener('click', async () => {
     const btn = $('#copy-export');
     const done = () => {
       btn.textContent = 'Copied ✓';
-      setTimeout(() => { btn.textContent = 'Copy JSON'; }, 1600);
-      announce('Board JSON copied to clipboard');
+      setTimeout(() => { btn.textContent = copyLabel(); }, 1600);
+      announce(exportMode === 'chat'
+        ? 'Chat transcript copied to clipboard'
+        : 'Board JSON copied to clipboard');
     };
     try {
-      await navigator.clipboard.writeText(exportJson());
+      await navigator.clipboard.writeText(currentExportText());
       done();
     } catch (_) {
       // Clipboard API blocked (e.g. sandboxed embed) — select the JSON and
@@ -4554,7 +4691,7 @@
         done();
       } else {
         btn.textContent = 'Press ⌘C / Ctrl+C';
-        setTimeout(() => { btn.textContent = 'Copy JSON'; }, 2500);
+        setTimeout(() => { btn.textContent = copyLabel(); }, 2500);
         announce('JSON selected — press Ctrl+C or Cmd+C to copy');
       }
     }
@@ -4913,7 +5050,7 @@
     // right-hand column rather than among the chunking knobs — still wearing the
     // index ink, because that is the step it decides.
     { group: 'index', key: 'embedder', label: 'Embedder', kind: 'embedder', panel: 'models' },
-    { group: 'index', key: 'embed_model', label: 'Embedding model', kind: 'embed-model', when: 'Embedder = fastembed, sentence-transformers or openai', panel: 'models' },
+    { group: 'index', key: 'embed_model', label: 'Embedding model', kind: 'embed-model', when: 'Embedder = fastembed or sentence-transformers', panel: 'models' },
     { group: 'index', key: 'contextual', label: 'Contextual chunk headers', kind: 'check' },
     { group: 'retrieval', key: 'retriever', label: 'Retriever', kind: 'select', from: 'retrievers' },
     { group: 'retrieval', key: 'k', label: 'Contexts (k)', kind: 'number', min: 1, max: 40, step: 1 },
@@ -5062,6 +5199,17 @@
     try { localStorage.setItem(RAGLAB_CFG_KEY, JSON.stringify(ragState.cfg)); } catch (_) { /* private mode */ }
   }
 
+  /** Persist, and repaint when this field decides whether another one is live.
+   *  Only the owners repaint: a number input that owns nothing would otherwise
+   *  rebuild the panel on every commit and take the caret with it. */
+  function ragCommit(path) {
+    ragPersist();
+    const rules = (ragState.options && ragState.options.dependencies) || {};
+    for (const key of Object.keys(rules)) {
+      if (rules[key].field === path) { render(); return; }
+    }
+  }
+
   async function ragLoad() {
     ragState.phase = 'loading';
     render();
@@ -5072,7 +5220,7 @@
       ragState.problem = '';
       // Both are conveniences: a lab with no run history and no question picker
       // is still fully usable, so neither failure blocks the page.
-      try { ragState.runs = (await ragApi('/runs?limit=30')).runs; } catch (_) { ragState.runs = []; }
+      try { ragState.runs = (await ragApi('/evaluations?limit=30')).runs; } catch (_) { ragState.runs = []; }
       try { ragState.questions = (await ragApi('/questions?limit=200')).questions; } catch (_) { ragState.questions = []; }
     } catch (error) {
       ragState.phase = 'absent';
@@ -5108,19 +5256,26 @@
     if (view === 'raglab') render();
   }
 
+  // The lab's job kinds, and the collection each one is created in. Kept as a
+  // map rather than '/' + kind: the two names stopped matching when the routes
+  // became resource collections, and a concatenated path would have gone on
+  // looking correct while 404ing.
+  const RAG_COLLECTIONS = { index: '/indexes', run: '/evaluations' };
+
   async function ragStart(kind, extra) {
     if (ragState.busy) return;
     ragState.busy = true;
     ragState.problem = '';
     render();
     try {
-      const { job_id: jobId } = await ragApi('/' + kind, { ...ragConfig(), ...extra });
+      const { job_id: jobId } = await ragApi(RAG_COLLECTIONS[kind],
+                                             { ...ragConfig(), ...extra });
       ragState.jobId = jobId;
       render();
       ragPoll(jobId, async (result) => {
         if (kind === 'run') {
           ragState.result = result;
-          try { ragState.runs = (await ragApi('/runs?limit=30')).runs; } catch (_) { /* leaderboard is optional */ }
+          try { ragState.runs = (await ragApi('/evaluations?limit=30')).runs; } catch (_) { /* leaderboard is optional */ }
         } else {
           ragState.indexInfo = result;
         }
@@ -5154,13 +5309,26 @@
     ragState.queryProblem = '';
     render();
     try {
-      ragState.queryOut = await ragApi('/query', { ...ragConfig(), question });
+      ragState.queryOut = await ragApi('/queries', { ...ragConfig(), question });
     } catch (error) {
       ragState.queryOut = null;
       ragState.queryProblem = error.message;
     }
     ragState.busy = false;
     render();
+  }
+
+  /** Is this control live under the current config, and if not, why not?
+   *  The rules come from the lab (`/api/options` → dependencies), so the two
+   *  panels and the pipeline agree by construction rather than by review. */
+  function ragDependency(path, cfg) {
+    const rule = (ragState.options && ragState.options.dependencies || {})[path];
+    if (!rule) return null;
+    const [group, name] = rule.field.split('.');
+    const current = (cfg[group] || {})[name];
+    const enabled = rule.on_true ? Boolean(current)
+      : (rule.on || []).indexOf(current) !== -1;
+    return { enabled, reason: rule.reason };
   }
 
   function ragFieldControl(field, cfg) {
@@ -5170,7 +5338,10 @@
       const box = document.createElement('input');
       box.type = 'checkbox';
       box.checked = Boolean(bag[field.key]);
-      box.addEventListener('change', () => { bag[field.key] = box.checked; ragPersist(); });
+      box.addEventListener('change', () => {
+        bag[field.key] = box.checked;
+        ragCommit(`${field.group}.${field.key}`);
+      });
       return box;
     }
     if (field.kind === 'number') {
@@ -5182,7 +5353,7 @@
       input.value = bag[field.key];
       input.addEventListener('change', () => {
         bag[field.key] = Number(input.value);
-        ragPersist();
+        ragCommit(`${field.group}.${field.key}`);
       });
       return input;
     }
@@ -5208,7 +5379,10 @@
         bag[field.key] = sel.value;
         ragPersist();
       }
-      sel.addEventListener('change', () => { bag[field.key] = sel.value; ragPersist(); });
+      sel.addEventListener('change', () => {
+        bag[field.key] = sel.value;
+        ragCommit(`${field.group}.${field.key}`);
+      });
       return sel;
     }
     const sel = document.createElement('select');
@@ -5219,7 +5393,10 @@
       sel.appendChild(opt);
     }
     sel.value = bag[field.key];
-    sel.addEventListener('change', () => { bag[field.key] = sel.value; ragPersist(); });
+    sel.addEventListener('change', () => {
+      bag[field.key] = sel.value;
+      ragCommit(`${field.group}.${field.key}`);
+    });
     return sel;
   }
 
@@ -5231,6 +5408,14 @@
     label.className = field.kind === 'check' ? 'field rag-inline' : 'field';
     const control = ragFieldControl(field, cfg);
     const why = ragWhy(`${field.group}.${field.key}`, label);
+    // Disabling the control is what stops the value being tuned; the class is
+    // what stops the label reading as live text beside a dead input.
+    const gate = ragDependency(`${field.group}.${field.key}`, cfg);
+    if (gate && !gate.enabled) {
+      control.disabled = true;
+      label.classList.add('rag-field-off');
+      label.title = `Disabled because ${gate.reason}`;
+    }
     if (field.kind === 'check') {
       label.appendChild(control);
       label.append(' ' + field.label);
@@ -5238,12 +5423,17 @@
       return label;
     }
     label.append(field.label);
-    // When a knob only matters under another setting, say so on the label —
-    // the same courtesy the model panel does for its roles.
-    if (field.when) {
+    // A knob the current pipeline would ignore is turned off rather than merely
+    // annotated. The old `when:` text was accurate and inert: it said "Embedder
+    // = fastembed, sentence-transformers or openai" beside a control you could
+    // still edit, so a value set under a hash embedder looked applied and was
+    // silently dropped. The rule is served (options.dependencies), so this panel
+    // and the standalone one cannot grey out different things.
+    const dep = ragDependency(`${field.group}.${field.key}`, cfg);
+    if (dep && !dep.enabled) {
       const when = document.createElement('span');
       when.className = 'rag-when';
-      when.textContent = field.when;
+      when.textContent = dep.reason;
       label.appendChild(when);
     }
     if (why) label.appendChild(why);
@@ -5275,9 +5465,15 @@
     const label = document.createElement('label');
     label.className = 'field';
     label.append(role.label);
+    // Same rule as the step knobs: a model picker for a stage that calls no
+    // model is turned off, not merely captioned. `only_when` said "HyDE is on"
+    // beside a live dropdown, so a model chosen with HyDE off was recorded in
+    // the config and never used — and a run's label is the one thing a lab
+    // must not get wrong.
+    const gate = ragDependency(role.field, cfg);
     const when = document.createElement('span');
     when.className = 'rag-when';
-    when.textContent = role.only_when;
+    when.textContent = (gate && !gate.enabled) ? gate.reason : role.only_when;
     label.appendChild(when);
     const why = ragWhy('model.' + role.key, label);
     if (why) label.appendChild(why);
@@ -5299,8 +5495,13 @@
     }
     select.addEventListener('change', () => {
       cfg[group][key] = select.value;
-      ragPersist();
+      ragCommit(role.field);
     });
+    if (gate && !gate.enabled) {
+      select.disabled = true;
+      label.classList.add('rag-field-off');
+      label.title = `Disabled because ${gate.reason}`;
+    }
     label.appendChild(select);
     return label;
   }
@@ -5889,7 +6090,7 @@
         open.textContent = r.label || r.run_id;
         open.addEventListener('click', async () => {
           try {
-            ragState.result = await ragApi('/runs/' + r.run_id);
+            ragState.result = await ragApi('/evaluations/' + r.run_id);
             ragState.problem = '';
           } catch (error) { ragState.problem = error.message; }
           render();

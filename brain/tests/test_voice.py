@@ -41,16 +41,19 @@ def transcriber():
 
 # ---- Fake implementation --------------------------------------------------
 
+# This is a unit test.
 def test_fake_transcriber_returns_deterministic_text():
     assert FakeTranscriber().transcribe(AUDIO, 'wav') == FAKE_TRANSCRIPT
 
 
+# This is a unit test.
 def test_fake_transcriber_is_scriptable():
     fake = FakeTranscriber(script=['first thought', 'second thought'])
     assert fake.transcribe(AUDIO, 'wav') == 'first thought'
     assert fake.transcribe(AUDIO, 'wav') == 'second thought'
 
 
+# This is a unit test.
 def test_fake_transcriber_still_validates_format():
     # The offline path must reject what the real one rejects, or e2e/CI would
     # happily pass a payload that fails against the live API.
@@ -58,6 +61,7 @@ def test_fake_transcriber_still_validates_format():
         FakeTranscriber().transcribe(AUDIO, 'webm')
 
 
+# This is a unit test.
 def test_fake_transcriber_rejects_empty_audio():
     with pytest.raises(ValueError):
         FakeTranscriber().transcribe(b'', 'wav')
@@ -65,6 +69,7 @@ def test_fake_transcriber_rejects_empty_audio():
 
 # ---- OpenRouter implementation -------------------------------------------
 
+# This is a unit test.
 @respx.mock
 def test_openrouter_builds_input_audio_payload():
     route = respx.post('https://openrouter.ai/api/v1/chat/completions').mock(
@@ -86,6 +91,7 @@ def test_openrouter_builds_input_audio_payload():
     assert text_parts and 'transcribe' in text_parts[0]['text'].lower()
 
 
+# This is a unit test.
 @respx.mock
 def test_openrouter_honours_format_and_model_override():
     route = respx.post('https://openrouter.ai/api/v1/chat/completions').mock(
@@ -96,6 +102,7 @@ def test_openrouter_honours_format_and_model_override():
     assert payload['messages'][-1]['content'][-1]['input_audio']['format'] == 'mp3'
 
 
+# This is a unit test.
 @respx.mock
 def test_openrouter_strips_whitespace_and_tolerates_empty_reply():
     respx.post('https://openrouter.ai/api/v1/chat/completions').mock(
@@ -107,6 +114,7 @@ def test_openrouter_strips_whitespace_and_tolerates_empty_reply():
     assert transcriber().transcribe(AUDIO, 'wav') == ''
 
 
+# This is a unit test.
 @respx.mock
 def test_openrouter_rejects_unsupported_format_without_calling_out():
     route = respx.post('https://openrouter.ai/api/v1/chat/completions')
@@ -117,6 +125,7 @@ def test_openrouter_rejects_unsupported_format_without_calling_out():
     assert not route.called
 
 
+# This is a unit test.
 @respx.mock
 def test_openrouter_rejects_empty_audio_without_calling_out():
     route = respx.post('https://openrouter.ai/api/v1/chat/completions')
@@ -125,6 +134,7 @@ def test_openrouter_rejects_empty_audio_without_calling_out():
     assert not route.called
 
 
+# This is a unit test.
 @respx.mock
 def test_openrouter_wraps_upstream_failure():
     respx.post('https://openrouter.ai/api/v1/chat/completions').mock(
@@ -133,6 +143,7 @@ def test_openrouter_wraps_upstream_failure():
         transcriber().transcribe(AUDIO, 'wav')
 
 
+# This is a unit test.
 @respx.mock
 def test_openrouter_wraps_transport_failure():
     respx.post('https://openrouter.ai/api/v1/chat/completions').mock(
@@ -141,6 +152,7 @@ def test_openrouter_wraps_transport_failure():
         transcriber().transcribe(AUDIO, 'wav')
 
 
+# This is a unit test.
 def test_supported_formats_match_the_openrouter_docs():
     assert SUPPORTED_FORMATS == frozenset(
         {'wav', 'mp3', 'aiff', 'aac', 'ogg', 'flac', 'm4a', 'pcm16', 'pcm24'})
@@ -173,6 +185,7 @@ UNHEARD_REPLIES = [
 ]
 
 
+# This is a unit test.
 @pytest.mark.parametrize('reply', UNHEARD_REPLIES)
 @respx.mock
 def test_openrouter_rejects_a_reply_that_means_the_audio_never_arrived(reply):
@@ -199,6 +212,7 @@ REAL_TRANSCRIPTS = [
 ]
 
 
+# This is a unit test.
 @pytest.mark.parametrize('reply', REAL_TRANSCRIPTS)
 @respx.mock
 def test_openrouter_passes_real_transcripts_through_the_guard(reply):
@@ -207,6 +221,7 @@ def test_openrouter_passes_real_transcripts_through_the_guard(reply):
     assert transcriber().transcribe(AUDIO, 'wav') == reply
 
 
+# This is a unit test.
 @respx.mock
 def test_an_empty_reply_is_still_empty_not_an_error():
     # Silence is not a failure: the frontend says "Didn't catch that" and leaves
@@ -260,11 +275,13 @@ def parakeet(engine=None, decode=None, **kwargs):
                                **kwargs), calls
 
 
+# This is a unit test.
 def test_parakeet_transcribes_audio_bytes():
     t, _ = parakeet(FakeParakeetEngine('  what should I do about the visa  '))
     assert t.transcribe(AUDIO, 'wav') == 'what should I do about the visa'
 
 
+# This is a unit test.
 def test_parakeet_decodes_at_the_rate_the_model_expects():
     # Feeding a 16 kHz model 48 kHz samples would transcribe gibberish, so the
     # decode step must be told the model's own rate, not a hardcoded one.
@@ -280,6 +297,7 @@ def test_parakeet_decodes_at_the_rate_the_model_expects():
     assert asked == [(AUDIO, 22050)]
 
 
+# This is a unit test.
 def test_parakeet_hands_the_model_the_decoded_samples():
     engine = FakeParakeetEngine()
     t, _ = parakeet(engine)
@@ -287,6 +305,7 @@ def test_parakeet_hands_the_model_the_decoded_samples():
     assert engine.seen == [SAMPLES]
 
 
+# This is a unit test.
 def test_parakeet_never_writes_the_recording_to_disk():
     # The user's voice is decoded in memory. Nothing to leave behind, nothing to
     # clean up, and no temp file for another process to read.
@@ -297,6 +316,7 @@ def test_parakeet_never_writes_the_recording_to_disk():
                 if 'lodestar' in f or 'voice' in f}
 
 
+# This is a unit test.
 def test_parakeet_reports_silence_rather_than_asking_the_model():
     # An empty decode means the recording held no samples at all.
     engine = FakeParakeetEngine()
@@ -305,6 +325,7 @@ def test_parakeet_reports_silence_rather_than_asking_the_model():
     assert engine.seen == []
 
 
+# This is a unit test.
 def test_parakeet_wraps_a_decode_failure():
     def decode(audio, sample_rate):
         raise RuntimeError('libsndfile cannot read this')
@@ -318,6 +339,7 @@ def test_parakeet_wraps_a_decode_failure():
 # The real decoder, exercised for real: a WAV built here must come back as the
 # samples that went in. Skipped where librosa is absent (Linux, Docker, CI),
 # which is exactly where the OpenRouter backend is used instead.
+# This is a unit test.
 def test_the_real_decoder_reads_a_wav_without_ffmpeg():
     pytest.importorskip('librosa')
     from lodestar_brain.voice.parakeet import decode_audio
@@ -338,6 +360,7 @@ def test_the_real_decoder_reads_a_wav_without_ffmpeg():
     assert max(abs(float(s)) for s in samples) > 0.9, 'the tone was lost'
 
 
+# This is a unit test.
 def test_the_real_decoder_resamples_to_the_models_rate():
     # A 48 kHz recording (what MediaRecorder captures natively) has to come out
     # at the model's rate or the transcript is nonsense.
@@ -353,6 +376,7 @@ def test_the_real_decoder_resamples_to_the_models_rate():
     assert len(decode_audio(buffer.getvalue(), 16000)) == 16000
 
 
+# This is a unit test.
 def test_the_real_decoder_downmixes_stereo():
     pytest.importorskip('librosa')
     from lodestar_brain.voice.parakeet import decode_audio
@@ -368,11 +392,13 @@ def test_the_real_decoder_downmixes_stereo():
     assert len(samples) == 16000, 'stereo must collapse to one channel'
 
 
+# This is a unit test.
 def test_parakeet_does_not_load_the_checkpoint_until_it_is_needed():
     _, calls = parakeet()
     assert calls == [], 'constructing the transcriber must not download 600 MB'
 
 
+# This is a unit test.
 def test_parakeet_loads_the_checkpoint_once_across_calls():
     t, calls = parakeet()
     t.transcribe(AUDIO, 'wav')
@@ -380,10 +406,12 @@ def test_parakeet_loads_the_checkpoint_once_across_calls():
     assert calls == [PARAKEET_MODEL], 'the model must be cached, not reloaded'
 
 
+# This is a unit test.
 def test_parakeet_uses_the_mlx_community_checkpoint_by_default():
     assert PARAKEET_MODEL == 'mlx-community/parakeet-tdt-0.6b-v3'
 
 
+# This is a unit test.
 def test_parakeet_ignores_a_remote_model_slug():
     # The browser always sends its omni picker value (an OpenRouter slug). A
     # local backend must ignore it — trying to load 'google/gemini-2.5-flash-lite'
@@ -393,12 +421,14 @@ def test_parakeet_ignores_a_remote_model_slug():
     assert calls == [PARAKEET_MODEL]
 
 
+# This is a unit test.
 def test_parakeet_honours_an_explicitly_configured_checkpoint():
     t, calls = parakeet(model_name='mlx-community/parakeet-tdt-1.1b')
     t.transcribe(AUDIO, 'wav')
     assert calls == ['mlx-community/parakeet-tdt-1.1b']
 
 
+# This is a unit test.
 def test_parakeet_validates_format_before_loading_anything():
     t, calls = parakeet()
     with pytest.raises(ValueError):
@@ -406,6 +436,7 @@ def test_parakeet_validates_format_before_loading_anything():
     assert calls == []
 
 
+# This is a unit test.
 def test_parakeet_rejects_empty_audio_before_loading_anything():
     t, calls = parakeet()
     with pytest.raises(ValueError):
@@ -413,6 +444,7 @@ def test_parakeet_rejects_empty_audio_before_loading_anything():
     assert calls == []
 
 
+# This is a unit test.
 def test_parakeet_wraps_a_missing_mlx_install_as_transcription_error():
     def load(name):
         raise ImportError("No module named 'mlx'")
@@ -422,6 +454,7 @@ def test_parakeet_wraps_a_missing_mlx_install_as_transcription_error():
     assert 'parakeet' in str(caught.value).lower()
 
 
+# This is a unit test.
 def test_parakeet_wraps_an_inference_failure():
     class Exploding:
         sample_rate = 16000
@@ -434,11 +467,13 @@ def test_parakeet_wraps_an_inference_failure():
         t.transcribe(AUDIO, 'wav')
 
 
+# This is a unit test.
 def test_parakeet_returns_empty_string_when_nothing_was_said():
     t, _ = parakeet(FakeParakeetEngine(''))
     assert t.transcribe(AUDIO, 'wav') == ''
 
 
+# This is a unit test.
 def test_parakeet_module_imports_without_mlx_present():
     # Importing the module must never pull mlx in — the brain has to boot on
     # Linux and in Docker, where mlx cannot be installed at all.
@@ -448,21 +483,25 @@ def test_parakeet_module_imports_without_mlx_present():
 
 # ---- The seam: selection by settings (invariant #3) ----------------------
 
+# This is a unit test.
 def test_make_transcriber_selects_fake():
     assert isinstance(make_transcriber(Settings(transcriber='fake')), FakeTranscriber)
 
 
+# This is a unit test.
 def test_make_transcriber_selects_parakeet():
     made = make_transcriber(Settings(transcriber='parakeet'))
     assert isinstance(made, ParakeetTranscriber)
 
 
+# This is a unit test.
 def test_make_transcriber_passes_the_configured_checkpoint_to_parakeet():
     made = make_transcriber(Settings(transcriber='parakeet',
                                      parakeet_model='mlx-community/parakeet-tdt-1.1b'))
     assert made.model_name == 'mlx-community/parakeet-tdt-1.1b'
 
 
+# This is a unit test.
 def test_make_transcriber_rejects_auto(monkeypatch):
     # 'auto' picked Parakeet when mlx was importable and OpenRouter otherwise, so
     # the same config transcribed locally on a Mac and billed an API on Linux —
@@ -472,6 +511,7 @@ def test_make_transcriber_rejects_auto(monkeypatch):
         make_transcriber(Settings(transcriber='auto', openrouter_api_key='sk-test'))
 
 
+# This is a unit test.
 def test_make_transcriber_parakeet_ignores_availability(monkeypatch):
     # An explicit pick is honoured even where mlx is missing: the failure then
     # surfaces at transcribe time with a real reason, instead of being papered
@@ -481,12 +521,14 @@ def test_make_transcriber_parakeet_ignores_availability(monkeypatch):
                       ParakeetTranscriber)
 
 
+# This is a unit test.
 def test_make_transcriber_openrouter_is_explicit_and_ignores_local_availability(monkeypatch):
     monkeypatch.setattr('lodestar_brain.voice.parakeet_available', lambda: True)
     made = make_transcriber(Settings(transcriber='openrouter', openrouter_api_key='sk-test'))
     assert isinstance(made, OpenRouterTranscriber)
 
 
+# This is a unit test.
 def test_make_transcriber_rejects_unknown_choice():
     with pytest.raises(ValueError):
         make_transcriber(Settings(transcriber='whisper-on-a-toaster'))

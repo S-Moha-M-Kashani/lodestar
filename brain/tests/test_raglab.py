@@ -66,17 +66,20 @@ def session(diary):
 
 # --- text normalisation ----------------------------------------------------
 
+# This is a unit test.
 def test_normalize_folds_arabic_letterforms_and_digits():
     assert textnorm.normalize('يك') == textnorm.normalize('یک')
     assert '۱۴۰۵' not in textnorm.normalize('سال ۱۴۰۵')
     assert '1405' in textnorm.normalize('سال ۱۴۰۵')
 
 
+# This is a unit test.
 def test_normalize_is_idempotent():
     once = textnorm.normalize('مي‌خواستم   بلاخره ۳ بار')
     assert textnorm.normalize(once) == once
 
 
+# This is a unit test.
 def test_tokens_match_across_half_space_spelling():
     """«می‌خوام» and «می خوام» are the same word to a reader, so they must be
     the same token to BM25 — the corpus spells it both ways."""
@@ -86,12 +89,14 @@ def test_tokens_match_across_half_space_spelling():
     assert 'باشگاه' in joined and 'باشگاه' in spaced
 
 
+# This is a unit test.
 def test_tokens_drop_stopwords_but_keep_content():
     tokens = textnorm.tokens('که از به مهسا دعوا')
     assert 'مهسا' in tokens and 'دعوا' in tokens
     assert 'که' not in tokens
 
 
+# This is a unit test.
 def test_sentences_split_spoken_run_ons():
     text = 'امروز رفتم سر کار و بعدش مهسا زنگ زد. خیلی خسته بودم'
     assert len(textnorm.sentences(text)) >= 2
@@ -99,6 +104,7 @@ def test_sentences_split_spoken_run_ons():
 
 # --- embedders -------------------------------------------------------------
 
+# This is a unit test.
 def test_ascii_hash_embedder_is_blind_to_farsi():
     """The finding the lab exists to make measurable, and the one that moved the
     brain's default: an [a-z0-9]+ tokeniser embeds a Farsi diary to the zero
@@ -109,6 +115,7 @@ def test_ascii_hash_embedder_is_blind_to_farsi():
     assert not np.any(vectors)
 
 
+# This is a unit test.
 def test_char_hash_prefers_a_paraphrase_over_an_unrelated_line():
     embedder = embedding.make_embedder('char-hash')
     vectors = embedder.embed(['دعوا با مهسا سر کارهای خونه',
@@ -117,6 +124,7 @@ def test_char_hash_prefers_a_paraphrase_over_an_unrelated_line():
     assert float(vectors[0] @ vectors[1]) > float(vectors[0] @ vectors[2])
 
 
+# This is a unit test.
 def test_token_hash_is_normalised_and_nonzero_for_farsi():
     vectors = embedding.make_embedder('token-hash').embed(['خواب بی‌خوابی کمردرد'])
     assert np.any(vectors)
@@ -125,6 +133,7 @@ def test_token_hash_is_normalised_and_nonzero_for_farsi():
 
 # --- chunking --------------------------------------------------------------
 
+# This is a unit test.
 @pytest.mark.parametrize('chunker', ('message', 'turn-pair', 'semantic-drift'))
 def test_message_preserving_chunkers_cover_every_turn(session, chunker):
     """No message may be dropped. A chunker that loses turns loses evidence, and
@@ -137,6 +146,7 @@ def test_message_preserving_chunkers_cover_every_turn(session, chunker):
     assert covered == set(range(len(session['messages'])))
 
 
+# This is a unit test.
 def test_every_chunker_produces_unique_ids_and_nonempty_text(session):
     embedder = embedding.make_embedder('char-hash')
     for chunker in ('fixed', 'fixed-overlap', 'message', 'turn-pair', 'session',
@@ -148,6 +158,7 @@ def test_every_chunker_produces_unique_ids_and_nonempty_text(session):
         assert all(c.text.strip() for c in chunks), chunker
 
 
+# This is a unit test.
 def test_fixed_chunker_matches_the_production_packing(session):
     """The baseline has to *be* the baseline: same greedy 500-char packing the
     brain ships, or the comparison is against a straw man."""
@@ -158,6 +169,7 @@ def test_fixed_chunker_matches_the_production_packing(session):
     assert [c.text for c in ours] == theirs
 
 
+# This is a unit test.
 def test_contextual_prefix_situates_the_chunk(session):
     cfg = IndexConfig(chunker='message', contextual=True)
     chunk = chunking.chunk_session(session, cfg, embedding.make_embedder('char-hash'))[0]
@@ -166,6 +178,7 @@ def test_contextual_prefix_situates_the_chunk(session):
     assert chunk.body and not chunk.body.startswith('[')
 
 
+# This is a unit test.
 def test_overlap_chunker_repeats_material_between_windows(session):
     cfg = IndexConfig(chunker='fixed-overlap', chunk_chars=300, overlap=150,
                       contextual=False)
@@ -176,6 +189,7 @@ def test_overlap_chunker_repeats_material_between_windows(session):
     assert total > len(corpus.session_text(session))
 
 
+# This is a unit test.
 def test_semantic_drift_cuts_at_an_explicit_topic_shift():
     fake = {'session_id': 'x-1', 'date': '2026-01-01', 'time': '22:00',
             'source': 'voice', 'mood': {'label': 'خسته', 'valence': 4, 'arousal': 5},
@@ -193,6 +207,7 @@ def test_semantic_drift_cuts_at_an_explicit_topic_shift():
     assert any('مهسا' in c.text and 'مالیات' not in c.text for c in chunks)
 
 
+# This is a unit test.
 def test_chunk_metadata_is_chroma_safe(session):
     cfg = IndexConfig(chunker='message')
     chunk = chunking.chunk_session(session, cfg, embedding.make_embedder('char-hash'))[0]
@@ -200,6 +215,7 @@ def test_chunk_metadata_is_chroma_safe(session):
         assert isinstance(value, (str, int, float, bool)), key
 
 
+# This is a unit test.
 def test_importance_rises_with_emotional_intensity():
     calm = {'mood': {'label': 'آروم', 'valence': 6, 'arousal': 2}}
     wrecked = {'mood': {'label': 'داغون', 'valence': 1, 'arousal': 9}}
@@ -237,6 +253,7 @@ def habit_period(freq: str, day: str) -> str:
     return d.isoformat()
 
 
+# This is a unit test.
 def test_the_corpus_declares_its_habits_the_way_a_board_card_does(diary):
     habits = diary['habits']
     assert habits, 'the corpus must carry the habits the diarist tracks'
@@ -252,6 +269,7 @@ def test_the_corpus_declares_its_habits_the_way_a_board_card_does(diary):
     assert {h['freq'] for h in habits.values()} >= {'daily', 'weekly', 'monthly'}
 
 
+# This is a unit test.
 def test_every_habit_completion_sits_in_the_period_it_is_filed_under(diary):
     """`habitHistory` is bucketed by period id, so a date filed under the wrong
     bucket would make every count wrong in a way no other assertion notices."""
@@ -261,6 +279,7 @@ def test_every_habit_completion_sits_in_the_period_it_is_filed_under(diary):
                 assert habit_period(habit['freq'], day) == period, f'{slug} {day}'
 
 
+# This is a unit test.
 def test_a_habit_is_never_punched_more_often_than_its_period_asks(diary):
     """The punch strip has exactly `count` boxes, so a history with more
     completions than that in one period could not have come from the board."""
@@ -270,6 +289,7 @@ def test_a_habit_is_never_punched_more_often_than_its_period_asks(diary):
             assert len(days) == len(set(days)), f'{slug} {period} has a repeat'
 
 
+# This is a unit test.
 def test_the_habit_sessions_joined_the_corpus_without_disturbing_it(diary):
     """Additive on purpose: the habit sessions were appended on dates the corpus
     had not used, so every pre-existing session — and therefore every cached
@@ -285,12 +305,14 @@ def test_the_habit_sessions_joined_the_corpus_without_disturbing_it(diary):
         assert period['from'] <= s['date'] <= period['to'], s['session_id']
 
 
+# This is a unit test.
 def test_the_habit_storyline_is_described_like_every_other_thread(diary):
     """thread_layer builds its digest title from this description; a thread with
     no entry gets an empty one, which reads as a bug in the digest."""
     assert diary['threads']['habit-tracking']
 
 
+# This is a unit test.
 def test_every_chunk_reports_a_habit_field_even_when_it_has_none(session):
     """Chroma metadata is a fixed shape per collection in practice: a field that
     only some rows carry turns a `where` clause into a silent partial scan."""
@@ -299,6 +321,7 @@ def test_every_chunk_reports_a_habit_field_even_when_it_has_none(session):
     assert chunk.metadata()['session_id'] == session['session_id']
 
 
+# This is a unit test.
 def test_habit_questions_cite_verbatim_evidence_like_the_rest_of_the_set(
         diary, ground_truth):
     """The evidence quote is what quote-recall measures survival of, so a quote
@@ -315,6 +338,7 @@ def test_habit_questions_cite_verbatim_evidence_like_the_rest_of_the_set(
             assert ev['quote'] in cited, f"{question['id']} {ev['session_id']}"
 
 
+# This is a unit test.
 def test_every_question_type_is_one_the_report_breaks_down(ground_truth):
     """metrics.aggregate walks TYPES, so a question type missing from it is
     dropped from the per-type table without any error — the breakdown just
@@ -324,6 +348,7 @@ def test_every_question_type_is_one_the_report_breaks_down(ground_truth):
 
 # --- query understanding ---------------------------------------------------
 
+# This is a unit test.
 @pytest.mark.parametrize('question,expect_from,expect_to', [
     ('آذر چه خبر بود؟', 20251122, 20251221),
     ('پارسال پاییز حالم چطور بود؟', 20240923, 20241221),
@@ -335,15 +360,18 @@ def test_time_scopes_resolve_to_the_right_window(question, expect_from, expect_t
     assert (scope.from_int, scope.to_int) == (expect_from, expect_to)
 
 
+# This is a unit test.
 def test_untimed_question_has_no_scope():
     assert query.resolve_time_scope('چرا با مهسا دعوا می‌کنیم؟', '2026-07-28') is None
 
 
+# This is a unit test.
 def test_relative_month_scope_is_the_previous_calendar_month():
     scope = query.resolve_time_scope('ماه پیش چی کار کردم؟', '2026-07-28')
     assert scope and (scope.from_int, scope.to_int) == (20260601, 20260630)
 
 
+# This is a unit test.
 def test_where_clause_overlaps_rather_than_contains():
     """A chunk whose span straddles the edge of the window is kept: a scope asks
     about a period, it does not claim the evidence sits entirely inside it."""
@@ -354,18 +382,21 @@ def test_where_clause_overlaps_rather_than_contains():
     assert query.where_clause(None) is None
 
 
+# This is a unit test.
 def test_expansion_adds_a_synonym_variant():
     variants = query.expand('دعوا با همسرم سر چی بود؟')
     assert len(variants) >= 2
     assert any('مهسا' in v for v in variants)
 
 
+# This is a unit test.
 def test_keyword_query_strips_interrogatives():
     assert 'چی' not in query.keyword_query('حال مامان چی شد؟')
 
 
 # --- retrieval primitives --------------------------------------------------
 
+# This is a unit test.
 def test_bm25_finds_the_document_with_the_rare_term():
     bm25 = retrieval.BM25(['نامه اداره مالیات رسید و جریمه خوردم',
                            'با مهسا دعوا کردیم', 'رفتم پیاده‌روی'])
@@ -373,18 +404,21 @@ def test_bm25_finds_the_document_with_the_rare_term():
     assert top and top[0][0] == 0
 
 
+# This is a unit test.
 def test_bm25_respects_the_allowed_mask():
     bm25 = retrieval.BM25(['مالیات', 'مالیات'])
     allowed = np.array([False, True])
     assert [i for i, _ in bm25.top('مالیات', 2, allowed)] == [1]
 
 
+# This is a unit test.
 def test_rrf_ranks_a_document_both_retrievers_agree_on_first():
     fused = retrieval.rrf([['a', 'b', 'c'], ['b', 'a', 'd']])
     assert max(fused, key=fused.get) in ('a', 'b')
     assert fused['a'] > fused['c'] and fused['b'] > fused['d']
 
 
+# This is a unit test.
 def test_mmr_breaks_up_near_duplicates():
     vectors = np.array([[1, 0], [1, 0], [0, 1]], dtype=np.float32)
     relevance = np.array([1.0, 0.99, 0.5], dtype=np.float32)
@@ -392,16 +426,19 @@ def test_mmr_breaks_up_near_duplicates():
     assert retrieval.mmr(vectors, relevance, 2, 0.5) == [0, 2]
 
 
+# This is a unit test.
 def test_mmr_falls_back_when_vectors_are_missing():
     relevance = np.array([0.2, 0.9], dtype=np.float32)
     assert retrieval.mmr(np.zeros((0, 2), dtype=np.float32), relevance, 2, 0.5) == [1, 0]
 
 
+# This is a unit test.
 def test_recency_weight_halves_after_one_half_life():
     weight = retrieval.recency_weight(20260101, 20260701, 180.0)
     assert 0.4 < weight < 0.6
 
 
+# This is a unit test.
 def test_llm_grade_parser_defaults_unscored_lines_to_neutral():
     class Reply:
         content = '1: 8\nnonsense\n3: 0'
@@ -418,6 +455,7 @@ def test_llm_grade_parser_defaults_unscored_lines_to_neutral():
 
 # --- metrics ---------------------------------------------------------------
 
+# This is a unit test.
 def test_retrieval_metric_arithmetic():
     retrieved, gold = ['a', 'x', 'b'], ['a', 'b', 'c']
     assert metrics.recall_at_k(retrieved, gold, 3) == pytest.approx(2 / 3)
@@ -427,6 +465,7 @@ def test_retrieval_metric_arithmetic():
     assert metrics.ndcg_at_k(['a', 'b'], gold, 2) > metrics.ndcg_at_k(['x', 'a'], gold, 2)
 
 
+# This is a unit test.
 def test_quote_recall_needs_the_answering_sentence_not_just_the_session():
     question = {'evidence': [{'session_id': 's1', 'message_indices': [0],
                               'quote': 'آذر تموم شد و از هیچ شرکتی هیچ خبری نیس'}]}
@@ -435,18 +474,21 @@ def test_quote_recall_needs_the_answering_sentence_not_just_the_session():
                                 question) == 1.0
 
 
+# This is a unit test.
 def test_quote_recall_tolerates_whitespace_normalisation():
     question = {'evidence': [{'quote': 'می خوام برم باشگاه', 'session_id': 's',
                               'message_indices': [0]}]}
     assert metrics.quote_recall('گفت می  خوام   برم باشگاه', question) == 1.0
 
 
+# This is a unit test.
 def test_latest_state_session_is_the_newest_evidence():
     question = {'evidence': [{'session_id': '2025-12-01-a'},
                              {'session_id': '2026-05-12-a'}]}
     assert metrics.latest_state_session(question) == '2026-05-12-a'
 
 
+# This is a unit test.
 def test_aggregate_reports_per_type_and_a_headline():
     rows = [
         {'id': 'q1', 'type': 'single-hop', 'difficulty': 'easy', 'answerable': True,
@@ -467,6 +509,7 @@ def test_aggregate_reports_per_type_and_a_headline():
 # only durable output is the JSON run file. These tests are that boundary. They
 # exist because the persistence came back as one import line the first time.
 
+# This is a unit test.
 def test_memory_store_ranks_by_cosine_distance():
     """Chroma's contract, because LabIndex.dense reads it: `distances`, not
     similarities, so the caller's `1 - d` keeps meaning what it meant."""
@@ -482,6 +525,7 @@ def test_memory_store_ranks_by_cosine_distance():
     assert res['metadatas'][0][0] == {'layer': 'chunk'}
 
 
+# This is a unit test.
 def test_memory_store_answers_several_query_vectors_at_once():
     """Multi-query expansion sends one row per variant and merges the results,
     so a store that silently answered only the first would score expansion as
@@ -493,6 +537,7 @@ def test_memory_store_answers_several_query_vectors_at_once():
     assert res['ids'] == [['x'], ['y']]
 
 
+# This is a unit test.
 def test_memory_store_upsert_replaces_a_record_instead_of_duplicating_it():
     """Chunk ids are deterministic, so a rebuild writes the same ids again."""
     vectors = store.MemoryVectors('raglab-test')
@@ -506,6 +551,7 @@ def test_memory_store_upsert_replaces_a_record_instead_of_duplicating_it():
     assert res['metadatas'][0] == [{'layer': 'session'}]
 
 
+# This is a unit test.
 def test_memory_store_applies_the_where_clause_the_lab_actually_builds():
     """The filter is the one place a hand-rolled store could quietly differ from
     Chroma, so it is asserted against `query.where_clause` itself rather than a
@@ -523,6 +569,7 @@ def test_memory_store_applies_the_where_clause_the_lab_actually_builds():
     assert res['ids'][0] == ['in-scope']
 
 
+# This is a unit test.
 def test_memory_store_keeps_a_chunk_that_merely_overlaps_the_scope():
     """The same property `where_clause` documents: a chunk spanning a wide range
     is kept when it overlaps the window, because containment would drop exactly
@@ -536,6 +583,7 @@ def test_memory_store_keeps_a_chunk_that_merely_overlaps_the_scope():
     assert res['ids'][0] == ['thread']
 
 
+# This is a unit test.
 def test_memory_store_does_not_match_a_metadata_key_a_record_lacks():
     """Chroma's semantics, and the reason `Chunk.metadata()` carries `habit` on
     every chunk: a record missing the filtered key is excluded, never kept."""
@@ -548,6 +596,7 @@ def test_memory_store_does_not_match_a_metadata_key_a_record_lacks():
     assert res['ids'][0] == ['has']
 
 
+# This is a unit test.
 def test_memory_store_never_returns_more_than_it_holds():
     vectors = store.MemoryVectors('raglab-test')
     vectors.upsert(ids=['a'], documents=['one'], embeddings=[[1.0, 0.0]],
@@ -558,6 +607,7 @@ def test_memory_store_never_returns_more_than_it_holds():
     assert empty.query(query_embeddings=[[1.0, 0.0]], n_results=5)['ids'] == [[]]
 
 
+# This is a unit test.
 def test_memory_store_returns_stored_vectors_in_the_order_asked_for():
     """`LabIndex.vectors_for` reads vectors back for MMR rather than re-embedding
     them, and it zips the result against the ids it asked for."""
@@ -570,6 +620,7 @@ def test_memory_store_returns_stored_vectors_in_the_order_asked_for():
     assert np.allclose(got['embeddings'][1], [1.0, 0.0])
 
 
+# This is a unit test.
 def test_memory_store_get_skips_an_id_it_does_not_hold():
     """A silent partial result, exactly like Chroma's: the caller pairs ids with
     vectors by name, so a placeholder row would be a wrong vector."""
@@ -579,6 +630,7 @@ def test_memory_store_get_skips_an_id_it_does_not_hold():
     assert vectors.get(ids=['a', 'missing'], include=['embeddings'])['ids'] == ['a']
 
 
+# This is an integration test.
 def test_the_index_holds_its_vectors_in_process_memory(index):
     """Asserted on the type: 'there is no database' is not observable from a
     query that succeeds."""
@@ -586,6 +638,7 @@ def test_the_index_holds_its_vectors_in_process_memory(index):
     assert index.store.count() == index.stats.chunks
 
 
+# This is a configuration invariant: the lab must never grow a vector-database dependency.
 def test_no_lab_module_imports_a_vector_database_client():
     """chromadb is production's dependency, not the lab's — and neither is
     production's ChatStore. This is the line that would bring the persistence
@@ -601,6 +654,7 @@ def test_no_lab_module_imports_a_vector_database_client():
     assert offenders == []
 
 
+# This is an integration test.
 def test_a_fresh_lab_process_rebuilds_its_index(diary):
     """Nothing outlives the registry. A second one over the same config has to
     build again rather than find a collection waiting for it, which is what
@@ -614,6 +668,7 @@ def test_a_fresh_lab_process_rebuilds_its_index(diary):
     assert second.store.count() == second.stats.chunks
 
 
+# This is an integration test.
 def test_building_an_index_opens_no_socket(diary, monkeypatch):
     """The strongest form of the boundary: with nothing to talk to, a build must
     not be able to reach anything. The offline embedders download nothing, so a
@@ -630,6 +685,7 @@ def test_building_an_index_opens_no_socket(diary, monkeypatch):
 
 # --- index and pipeline (integration, in-process memory) -------------------
 
+# This is an integration test.
 def test_index_is_reused_for_the_same_fingerprint(registry):
     """`reused` used to mean "Chroma already held the right number of records" —
     the one form of reuse that can no longer happen. It now reports the only one
@@ -642,12 +698,14 @@ def test_index_is_reused_for_the_same_fingerprint(registry):
     assert first.stats.collection == cfg.collection()
 
 
+# This is a unit test.
 def test_different_configs_get_different_collections():
     a = IndexConfig(chunker='fixed').collection()
     b = IndexConfig(chunker='session').collection()
     assert a != b and a.startswith('raglab-')
 
 
+# This is an integration test.
 def test_retrieval_finds_the_evidence_session_for_a_known_question(index, ground_truth):
     """End-to-end on the real corpus: a hybrid retrieval over semantic chunks
     must surface at least one cited evidence session for most single-hop
@@ -665,6 +723,7 @@ def test_retrieval_finds_the_evidence_session_for_a_known_question(index, ground
     assert hits >= 4, f'only {hits}/10 single-hop questions found any evidence'
 
 
+# This is an integration test.
 def test_time_filter_narrows_the_candidate_pool(index, ground_truth):
     scoped = 'آذر چه خبر بود؟'
     with_filter = pipeline.retrieve(index, RetrievalConfig(time_filter=True),
@@ -678,6 +737,7 @@ def test_time_filter_narrows_the_candidate_pool(index, ground_truth):
     assert dates and all(20251122 <= d <= 20251221 for d in dates), dates
 
 
+# This is an integration test.
 def test_grader_threshold_produces_an_abstention(index):
     """A question about something the diary never mentions must be refusable —
     and only the grader can refuse it."""
@@ -691,6 +751,7 @@ def test_grader_threshold_produces_an_abstention(index):
     assert gated.abstained and not gated.contexts
 
 
+# This is an integration test.
 def test_answerer_emits_the_refusal_when_abstaining(index):
     outcome = pipeline.retrieve(index, RetrievalConfig(grader='lexical',
                                                       grade_threshold=0.99),
@@ -700,6 +761,7 @@ def test_answerer_emits_the_refusal_when_abstaining(index):
     assert outcome.abstained
 
 
+# This is a unit test.
 def test_quoting_the_diarist_saying_i_dont_know_is_not_an_abstention():
     """The diarist writes «نمیدونم» constantly. Counting it as a refusal scored
     6.5% of answerable questions as abstentions on a pipeline with no gate."""
@@ -711,6 +773,7 @@ def test_quoting_the_diarist_saying_i_dont_know_is_not_an_abstention():
     assert pipeline.reads_as_refusal('چیزی در این مورد ذکر نشده.', 'llm')
 
 
+# This is an integration test.
 def test_ascii_hash_baseline_retrieves_worse_than_char_hash(registry, ground_truth):
     """The lab's headline comparison, asserted: the production embedder cannot
     represent this corpus, so it must lose to a Unicode-aware one."""
@@ -734,6 +797,7 @@ def test_ascii_hash_baseline_retrieves_worse_than_char_hash(registry, ground_tru
 
 # --- evaluation harness ----------------------------------------------------
 
+# This is an integration test.
 def test_a_run_writes_one_json_file_and_nothing_else(registry, ground_truth,
                                                      tmp_path, monkeypatch):
     """The whole artifact policy in one assertion. A run's index, contexts and
@@ -757,6 +821,7 @@ def test_a_run_writes_one_json_file_and_nothing_else(registry, ground_truth,
     assert saved['config'] and saved['summary'] and saved['rows']
 
 
+# This is an integration test.
 def test_run_eval_scores_a_slice_end_to_end(registry, ground_truth, tmp_path,
                                             monkeypatch):
     monkeypatch.setattr(evaluate, 'RUNS_DIR', tmp_path)
@@ -774,6 +839,7 @@ def test_run_eval_scores_a_slice_end_to_end(registry, ground_truth, tmp_path,
     assert all('answer' in row for row in result.rows)
 
 
+# This is an integration test.
 def test_started_at_is_when_the_run_started(registry, ground_truth, tmp_path,
                                             monkeypatch):
     """`started_at` must agree with the run id, which is stamped at the start.
@@ -791,12 +857,14 @@ def test_started_at_is_when_the_run_started(registry, ground_truth, tmp_path,
     assert result.started_at.endswith(f'{stamp[:2]}:{stamp[2:4]}:{stamp[4:]}')
 
 
+# This is a unit test.
 def test_select_questions_strides_across_types(ground_truth):
     picked = evaluate.select_questions(ground_truth, limit=10)
     assert len(picked) == 10
     assert len({q['type'] for q in picked}) > 1, 'a limited run must stay diverse'
 
 
+# This is a unit test.
 def test_a_limited_run_reaches_the_end_of_the_question_set(ground_truth):
     """Striding with `questions[::step][:limit]` silently drops a tail whenever
     the count is not a multiple of the limit: at 112 questions and a limit of 20
@@ -819,6 +887,7 @@ def test_a_limited_run_reaches_the_end_of_the_question_set(ground_truth):
         assert questions.index(picked[-1]) >= len(questions) - stride, limit
 
 
+# This is a unit test.
 def test_a_limited_run_covers_the_newest_question_type(ground_truth):
     """The concrete consequence, asserted on the type that exposed it: habit
     questions are last in the file, so a limit that cannot reach the end cannot
@@ -827,6 +896,7 @@ def test_a_limited_run_covers_the_newest_question_type(ground_truth):
     assert any(q['type'] == 'habit' for q in picked)
 
 
+# This is a unit test.
 def test_config_round_trips_through_the_panel_payload():
     cfg = LabConfig.from_dict({'index': {'chunker': 'session', 'unknown': 1},
                                'retrieval': {'k': 3},
@@ -837,6 +907,7 @@ def test_config_round_trips_through_the_panel_payload():
     assert LabConfig.from_dict(cfg.to_dict()).to_dict() == cfg.to_dict()
 
 
+# This is a unit test.
 def test_the_lab_names_no_vector_database_at_all():
     """The guard used to be "refuse the production database". Having no such
     setting is the stronger version of it: a database the lab cannot name is one
@@ -847,6 +918,7 @@ def test_the_lab_names_no_vector_database_at_all():
         LabSettings(chroma_database='lodestar')
 
 
+# This is a unit test.
 def test_the_lab_ignores_a_leftover_chroma_environment(monkeypatch):
     """The board's Chroma stack runs whenever a board does, and a shell that ran
     the old lab commands still exports these. Neither may reach the lab."""
@@ -857,6 +929,7 @@ def test_the_lab_ignores_a_leftover_chroma_environment(monkeypatch):
 
 # --- RAGAS bridge ----------------------------------------------------------
 
+# This is a unit test.
 def test_ragas_telemetry_is_disabled_on_import():
     """RAGAS's usage ping blocks for ~150 seconds per evaluate() call when its
     endpoint is unreachable — longer than the measurement itself by three orders
@@ -865,6 +938,7 @@ def test_ragas_telemetry_is_disabled_on_import():
     assert os.environ.get('RAGAS_DO_NOT_TRACK') == 'true'
 
 
+# This is a unit test.
 def test_ragas_availability_reports_missing_pieces_instead_of_raising():
     from .raglab import ragas_eval
     status = ragas_eval.availability(LAB_SETTINGS)
@@ -874,6 +948,7 @@ def test_ragas_availability_reports_missing_pieces_instead_of_raising():
     assert 'ragas' in status.as_dict()['install_hint']
 
 
+# This is a unit test.
 def test_evidence_texts_are_the_cited_messages_not_the_short_quotes(diary,
                                                                    ground_truth):
     """String-similarity metrics need comparable units, so RAGAS is given the
@@ -887,17 +962,20 @@ def test_evidence_texts_are_the_cited_messages_not_the_short_quotes(diary,
     assert sum(map(len, texts)) > len(quote)
 
 
+# This is a unit test.
 def test_evidence_texts_fall_back_to_quotes_for_unknown_sessions():
     question = {'evidence': [{'session_id': 'nope', 'message_indices': [0],
                               'quote': 'یه چیزی'}]}
     assert corpus.evidence_texts({}, question) == ['یه چیزی']
 
 
+# This is a unit test.
 def test_json_safe_replaces_undefined_metrics_with_null():
     assert evaluate.json_safe({'a': float('nan'), 'b': [1.0, float('nan')]}) == \
         {'a': None, 'b': [1.0, None]}
 
 
+# This is an integration test.
 def test_ragas_offline_metrics_score_a_retrieval(index, ground_truth):
     pytest.importorskip('ragas')
     pytest.importorskip('rapidfuzz')
@@ -921,6 +999,7 @@ def test_ragas_offline_metrics_score_a_retrieval(index, ground_truth):
 # retrieval almost exclusively, so ranking on them picks a config that finds
 # evidence and says nothing useful about it.
 
+# This is a unit test.
 def test_the_deciding_metrics_are_exactly_the_four_chosen_ones():
     from .raglab import ragas_eval
     assert ragas_eval.DECISION_METRICS == (
@@ -931,6 +1010,7 @@ def test_the_deciding_metrics_are_exactly_the_four_chosen_ones():
     assert 'factual_correctness(mode=f1)' not in ragas_eval.DECISION_METRICS
 
 
+# This is a unit test.
 def test_the_decision_score_is_the_unweighted_mean_of_those_four():
     """Unweighted on purpose: any weighting would be a claim about their relative
     importance that this fixture cannot support, and a hidden thumb on the scale
@@ -945,6 +1025,7 @@ def test_the_decision_score_is_the_unweighted_mean_of_those_four():
     assert score == 0.5
 
 
+# This is a unit test.
 def test_the_decision_score_is_undefined_unless_all_four_are_present():
     """A mean over whichever metrics happened to succeed is not comparable
     between runs: an offline run would score on two metrics and outrank a judged
@@ -957,6 +1038,7 @@ def test_the_decision_score_is_undefined_unless_all_four_are_present():
          'llm_context_precision_with_reference': 1.0}) is None
 
 
+# This is a unit test.
 def test_the_decision_score_carries_its_own_uncertainty():
     """A ranking of means with no spread cannot say whether it ranked anything.
 
@@ -989,6 +1071,7 @@ def test_the_decision_score_carries_its_own_uncertainty():
     assert ragas_eval.decision_spread([])['n'] == 0
 
 
+# This is a unit test.
 def test_every_ragas_report_carries_a_spread_even_when_it_measured_nothing():
     """The key has to exist on every path, because the leaderboard reads it.
 
@@ -1000,6 +1083,7 @@ def test_every_ragas_report_carries_a_spread_even_when_it_measured_nothing():
     assert report['decision_spread'] == {'n': 0, 'mean': None, 'stderr': None}
 
 
+# This is an integration test.
 def test_an_offline_ragas_run_reports_no_decision_score(index, ground_truth):
     """The offline mode cannot measure any of the four, so it must say so rather
     than produce a number that looks comparable to a judged run's."""
@@ -1014,6 +1098,7 @@ def test_an_offline_ragas_run_reports_no_decision_score(index, ground_truth):
     assert report['decision_metrics'] == list(ragas_eval.DECISION_METRICS)
 
 
+# This is a unit test.
 def test_the_decision_score_explains_itself_like_every_other_number():
     """It is the number the architecture was chosen by, so of everything on the
     screen it is the one that must not be a bare figure."""
@@ -1027,6 +1112,7 @@ def test_the_decision_score_explains_itself_like_every_other_number():
     assert explain.topics()['metric.ragas_decision']
 
 
+# This is an integration test.
 def test_the_leaderboard_row_carries_the_deciding_score(index, ground_truth):
     """A leaderboard that ranks on a number it does not carry cannot be checked
     against the run it came from."""
@@ -1042,6 +1128,7 @@ def test_the_leaderboard_row_carries_the_deciding_score(index, ground_truth):
     assert result.brief()['ragas_decision_stderr'] == 0.05
 
 
+# This is a unit test.
 def test_a_row_recorded_before_the_spread_existed_reports_no_error(tmp_path,
                                                                   monkeypatch):
     """Older runs have no per-question composites to recover, so the row says
@@ -1062,6 +1149,7 @@ def test_a_row_recorded_before_the_spread_existed_reports_no_error(tmp_path,
 # silently is worth an assertion: a row that is not comparable to the others, a
 # row that cannot be ranked at all, and a row that raises after 40 minutes.
 
+# This is a unit test.
 def test_every_candidate_is_selected_by_a_unique_letter():
     """`--only A F` and `--final G` select on `label.split()[0]`.
 
@@ -1072,6 +1160,7 @@ def test_every_candidate_is_selected_by_a_unique_letter():
     assert all(len(letter) == 1 for letter in letters), letters
 
 
+# This is a unit test.
 def test_every_candidate_holds_the_embedder_and_both_models_fixed():
     """The sweep's claim is that each row changes one thing.
 
@@ -1088,6 +1177,7 @@ def test_every_candidate_holds_the_embedder_and_both_models_fixed():
             'a model grading its own answer is not evidence')
 
 
+# This is a unit test.
 def test_every_candidate_generates_an_answer_so_it_can_be_ranked():
     """All four deciding metrics need a response. A candidate that retrieved
     without answering would score `None`, drop to the bottom of the ranking as
@@ -1095,6 +1185,7 @@ def test_every_candidate_generates_an_answer_so_it_can_be_ranked():
     assert all(c.generation.answerer == 'llm' for c in sweep.candidates())
 
 
+# This is a unit test.
 def test_every_candidate_validates_before_the_sweep_starts():
     """`run_eval` raises on an invalid config. Candidate H is the eighth row, so
     a typo there would surface after an hour of paid judging."""
@@ -1102,6 +1193,7 @@ def test_every_candidate_validates_before_the_sweep_starts():
         assert cfg.validate() == [], cfg.label
 
 
+# This is a unit test.
 def test_no_two_candidates_are_the_same_configuration():
     """A duplicated row costs ten minutes and reads as reproducibility."""
     seen = {}
@@ -1111,6 +1203,7 @@ def test_no_two_candidates_are_the_same_configuration():
         seen[key] = cfg.label
 
 
+# This is a unit test.
 def test_the_final_run_refuses_to_start_without_a_judge(monkeypatch, tmp_path):
     """The final run is the one whose numbers go in the document.
 
@@ -1155,11 +1248,13 @@ class Recorder:
         return type('Turn', (), {'content': self.reply, 'tool_calls': []})()
 
 
+# This is a unit test.
 def test_every_llm_stage_has_a_role_in_the_registry():
     assert {role.key for role in models.ROLES} == {
         'expand', 'rerank', 'grade', 'answer', 'judge', 'ragas'}
 
 
+# This is a unit test.
 def test_every_model_role_points_at_a_real_config_field():
     cfg = LabConfig()
     for role in models.ROLES:
@@ -1167,15 +1262,19 @@ def test_every_model_role_points_at_a_real_config_field():
         assert field in getattr(cfg, group).__dataclass_fields__, role.key
 
 
+# This is a unit test.
 def test_every_model_in_the_catalogue_declares_where_its_weights_stand():
     entries = models.catalogue(LAB_SETTINGS)
     assert entries[0]['id'] == ''          # the lab default stays the first choice
     assert all(e['source'] in ('default', 'open', 'closed') for e in entries)
-    assert any(e['source'] == 'open' for e in entries)
     assert any(e['source'] == 'closed' for e in entries)
+    # Every open-weight option the remote list had answered 404 on this account
+    # (2026-08-02), so 'open' lives on the local list now — still declared.
+    assert all(option.source == 'open' for option in models.OLLAMA_MODELS)
     assert all(e['label'] for e in entries)
 
 
+# This is a unit test.
 def test_an_unverified_model_is_offered_as_unavailable_rather_than_dropped():
     """A model this lab has not actually run is still worth trying, so it stays
     in the list marked NA. Silently omitting it would hide the option."""
@@ -1185,6 +1284,7 @@ def test_an_unverified_model_is_offered_as_unavailable_rather_than_dropped():
     assert by_id[LAB_SETTINGS.llm_model]['available']
 
 
+# This is a unit test.
 def test_the_configured_model_is_always_offered_even_if_it_is_not_in_the_registry():
     settings = replace(LAB_SETTINGS, llm_model='someone/custom-7b')
     entries = models.catalogue(settings)
@@ -1192,6 +1292,7 @@ def test_the_configured_model_is_always_offered_even_if_it_is_not_in_the_registr
     assert entries[0]['label'].endswith('someone/custom-7b)')
 
 
+# This is a unit test.
 def test_a_blank_role_falls_back_to_the_lab_default_model():
     settings = replace(LAB_SETTINGS, llm_model='lab/default')
     roles = models.resolve(LabConfig(), settings)
@@ -1199,6 +1300,7 @@ def test_a_blank_role_falls_back_to_the_lab_default_model():
     assert roles.ragas == 'lab/default' and roles.judge == 'lab/default'
 
 
+# This is a unit test.
 def test_each_role_round_trips_from_the_panels_json():
     cfg = LabConfig.from_dict({
         'retrieval': {'reranker_model': 'rerank/model', 'grader_model': 'grade/model',
@@ -1212,6 +1314,7 @@ def test_each_role_round_trips_from_the_panels_json():
         'judge/model', 'ragas/model')
 
 
+# This is an integration test.
 def test_each_stage_calls_the_model_chosen_for_its_own_role(index):
     """The point of per-task models: a cheap reranker and an expensive answerer
     in the same run. One model for everything makes that impossible to measure."""
@@ -1230,6 +1333,7 @@ def test_each_stage_calls_the_model_chosen_for_its_own_role(index):
                              'answer/model']
 
 
+# This is an integration test.
 def test_a_stage_with_no_model_choice_leaves_it_to_the_provider(index):
     """'' rather than a guess: the provider already knows its default model, and
     a lab that hard-codes one here would silently ignore RAGLAB_MODEL."""
@@ -1239,6 +1343,7 @@ def test_a_stage_with_no_model_choice_leaves_it_to_the_provider(index):
     assert provider.calls == ['']
 
 
+# This is a unit test.
 def test_the_key_facts_judge_uses_the_judge_model():
     provider = Recorder(reply='1: yes')
     score = evaluate.judge_key_facts(provider, 'judge/model',
@@ -1247,11 +1352,13 @@ def test_the_key_facts_judge_uses_the_judge_model():
     assert score == pytest.approx(1.0)
 
 
+# This is a unit test.
 def test_every_configuration_factor_has_an_explainer():
     """An unexplained knob is a knob nobody can make a real decision about."""
     assert explain.missing() == []
 
 
+# This is a unit test.
 def test_the_explainers_cover_the_model_roles_too():
     topics = explain.topics()
     for role in models.ROLES:
@@ -1267,9 +1374,9 @@ def test_the_explainers_cover_the_model_roles_too():
 # is how a run ends up measuring nothing — so language coverage is part of every
 # entry, and the Farsi-capable models are offered by name.
 
-FARSI_MODELS = ('intfloat/multilingual-e5-large',
-                'sentence-transformers/paraphrase-multilingual-mpnet-base-v2',
-                'BAAI/bge-m3')
+FARSI_MODELS = ('heydariAI/persian-embeddings',
+                'intfloat/multilingual-e5-small',
+                'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
 
 
 class FakeTextEmbedding:
@@ -1288,6 +1395,7 @@ class FakeTextEmbedding:
             yield vector
 
 
+# This is a unit test.
 def test_every_embedder_says_which_languages_it_covers():
     """A hint per option, covering the whole registry: an embedder the panel
     offers without saying what it can read is a run nobody can interpret."""
@@ -1296,6 +1404,7 @@ def test_every_embedder_says_which_languages_it_covers():
     assert all(h['languages'] and h['label'] and h['note'] for h in hints.values())
 
 
+# This is a unit test.
 def test_the_production_default_is_labelled_as_latin_only():
     """ascii-hash scores 0.014 on this corpus for one reason, and the dropdown
     has to say it out loud rather than leave it to be discovered by a run."""
@@ -1306,6 +1415,7 @@ def test_the_production_default_is_labelled_as_latin_only():
         assert hints[kind]['farsi'] is True, kind
 
 
+# This is a unit test.
 def test_the_embedding_model_catalogue_offers_models_that_speak_farsi():
     entries = embedding.embed_model_catalogue(LAB_SETTINGS)
     assert entries[0]['id'] == ''            # the lab default stays first
@@ -1330,6 +1440,7 @@ def _fastembed_serving(monkeypatch, ids):
     monkeypatch.setattr(embedding, 'fastembed_models', lambda: frozenset(ids))
 
 
+# This is a unit test.
 def test_an_english_only_model_is_offered_but_says_so(monkeypatch):
     """The brain hardwires bge-small-en today. The lab must be able to measure
     that choice, and must never let it be picked by accident."""
@@ -1341,18 +1452,25 @@ def test_an_english_only_model_is_offered_but_says_so(monkeypatch):
     assert english['available'] is True      # installable, just wrong for Farsi
 
 
-def test_a_model_fastembed_cannot_serve_stays_in_the_list_as_unavailable(monkeypatch):
-    """Same rule as the chat models: NA says "worth trying, nobody measured it
-    here", while dropping it hides the option altogether."""
-    _fastembed_serving(monkeypatch, {'intfloat/multilingual-e5-large'})
+# This is a unit test.
+def test_a_model_this_fastembed_cannot_serve_reads_NA(monkeypatch):
+    """NA now means one thing only: *this installation* cannot load it. An older
+    fastembed serves a shorter list, and the panel has to say so rather than
+    promise a wheel that is not there."""
+    _fastembed_serving(
+        monkeypatch,
+        {'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'})
     entries = embedding.embed_model_catalogue(LAB_SETTINGS)
     by_id = {entry['id']: entry for entry in entries}
-    assert by_id['intfloat/multilingual-e5-large']['available'] is True
-    assert by_id['BAAI/bge-m3']['available'] is False
+    assert by_id[
+        'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'][
+            'available'] is True
+    assert by_id['BAAI/bge-small-en-v1.5']['available'] is False
     flags = [entry['available'] for entry in entries]
     assert flags == sorted(flags, reverse=True), 'usable models come first'
 
 
+# This is a unit test.
 def test_fastembed_models_are_NA_until_the_semantic_extra_is_installed(monkeypatch):
     """The mirror of the sentence-transformers case, and the reason the catalogue
     checks the import on top of the served list: with the extra missing, every
@@ -1362,34 +1480,38 @@ def test_fastembed_models_are_NA_until_the_semantic_extra_is_installed(monkeypat
                         lambda: frozenset(embedding.MODEL_IDS))
     monkeypatch.setattr(embedding, 'fastembed_available', lambda: False)
     absent = {e['id']: e for e in embedding.embed_model_catalogue(LAB_SETTINGS)}
-    assert absent['BAAI/bge-m3']['available'] is False
+    assert absent['sentence-transformers/all-MiniLM-L6-v2']['available'] is False
     assert absent['BAAI/bge-small-en-v1.5']['available'] is False
     monkeypatch.setattr(embedding, 'fastembed_available', lambda: True)
     present = {e['id']: e for e in embedding.embed_model_catalogue(LAB_SETTINGS)}
-    assert present['BAAI/bge-m3']['available'] is True
+    assert present['BAAI/bge-small-en-v1.5']['available'] is True
 
 
+# This is a unit test.
 def test_e5_models_carry_the_prefixes_they_were_trained_with():
     """E5 was trained with "query: " / "passage: ". Dropping the prefixes is a
     silent quality loss, so they belong to the model entry, not to a caller."""
     by_id = {e['id']: e for e in embedding.embed_model_catalogue(LAB_SETTINGS)}
-    e5 = by_id['intfloat/multilingual-e5-large']
+    e5 = by_id['intfloat/multilingual-e5-small']
     assert (e5['query_prefix'], e5['passage_prefix']) == ('query: ', 'passage: ')
-    mpnet = by_id['sentence-transformers/paraphrase-multilingual-mpnet-base-v2']
-    assert (mpnet['query_prefix'], mpnet['passage_prefix']) == ('', '')
+    plain = by_id['sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2']
+    assert (plain['query_prefix'], plain['passage_prefix']) == ('', '')
 
 
+# This is a unit test.
 def test_a_prefixed_embedder_marks_queries_and_passages_apart():
     fake = FakeTextEmbedding()
     embedder = embedding.FastEmbedMultilingual(
-        'intfloat/multilingual-e5-large', query_prefix='query: ',
-        passage_prefix='passage: ', factory=lambda name: fake)
+        'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2',
+        query_prefix='query: ', passage_prefix='passage: ',
+        factory=lambda name: fake)
     embedder.embed(['دعوا با مهسا سر خونه'])
     embedder.embed_queries(['دعوا با مهسا'])
     assert 'passage: دعوا با مهسا سر خونه' in fake.seen
     assert 'query: دعوا با مهسا' in fake.seen
 
 
+# This is a unit test.
 def test_a_query_is_embedded_as_a_query_when_the_model_distinguishes_them():
     class Asymmetric:
         dim = 2
@@ -1411,6 +1533,7 @@ def test_a_query_is_embedded_as_a_query_when_the_model_distinguishes_them():
     assert vectors.shape == (1, 2) and vectors.any()
 
 
+# This is a unit test.
 def test_a_symmetric_embedder_needs_no_query_method():
     """Every hash embedder embeds both sides the same way, and must keep
     working without knowing this distinction exists."""
@@ -1419,6 +1542,7 @@ def test_a_symmetric_embedder_needs_no_query_method():
     assert vectors.shape[0] == 1 and np.any(vectors)
 
 
+# This is an integration test.
 def test_dense_retrieval_embeds_the_question_as_a_query(index, monkeypatch):
     """The prefix is worthless if retrieval bypasses it, so the pipeline must go
     through the query seam rather than calling embed() itself."""
@@ -1436,17 +1560,19 @@ def test_dense_retrieval_embeds_the_question_as_a_query(index, monkeypatch):
     assert seen and seen[0] == ['قول باشگاه']
 
 
+# This is a unit test.
 def test_the_embedding_model_names_the_collection_only_when_it_is_used():
     """Same rule as the summary model: a model nobody loads must not invalidate
     an index and cost a 157-session rebuild."""
     hashed = IndexConfig(embedder='char-hash')
     assert hashed.fingerprint() == \
-        replace(hashed, embed_model='BAAI/bge-m3').fingerprint()
+        replace(hashed, embed_model='BAAI/bge-small-en-v1.5').fingerprint()
     real = IndexConfig(embedder='fastembed')
     assert real.fingerprint() != \
-        replace(real, embed_model='BAAI/bge-m3').fingerprint()
+        replace(real, embed_model='BAAI/bge-small-en-v1.5').fingerprint()
 
 
+# This is a unit test.
 def test_the_chosen_embedding_model_is_the_one_that_gets_loaded(monkeypatch):
     seen: dict = {}
 
@@ -1454,14 +1580,15 @@ def test_the_chosen_embedding_model_is_the_one_that_gets_loaded(monkeypatch):
         seen.update({'model': model_name} | kwargs)
         return object()
 
-    monkeypatch.setattr(embedding, 'FastEmbedMultilingual', spy)
-    embedding.make_embedder('fastembed', LAB_SETTINGS,
-                            model='intfloat/multilingual-e5-large')
-    assert seen['model'] == 'intfloat/multilingual-e5-large'
+    monkeypatch.setattr(embedding, 'SentenceTransformerEmbedder', spy)
+    embedding.make_embedder('sentence-transformers', LAB_SETTINGS,
+                            model='intfloat/multilingual-e5-small')
+    assert seen['model'] == 'intfloat/multilingual-e5-small'
     assert seen['query_prefix'] == 'query: '
     assert seen['passage_prefix'] == 'passage: '
 
 
+# This is a unit test.
 def test_a_blank_embedding_model_keeps_following_the_lab_default(monkeypatch):
     """'' means RAGLAB_FASTEMBED_MODEL, exactly as '' means RAGLAB_MODEL for the
     chat roles — the lab never hard-codes a model of its own."""
@@ -1472,6 +1599,7 @@ def test_a_blank_embedding_model_keeps_following_the_lab_default(monkeypatch):
     assert seen['model'] == LAB_SETTINGS.fastembed_model
 
 
+# This is a unit test.
 def test_the_index_builds_with_the_embedding_model_from_its_config(monkeypatch,
                                                                   diary):
     from .raglab import index as index_module
@@ -1483,18 +1611,20 @@ def test_the_index_builds_with_the_embedding_model_from_its_config(monkeypatch,
 
     monkeypatch.setattr(index_module.embedding, 'make_embedder', spy)
     cfg = IndexConfig(chunker='session', embedder='fastembed',
-                      embed_model='BAAI/bge-m3')
+                      embed_model='BAAI/bge-small-en-v1.5')
     LabIndex.build(cfg, {'sessions': diary['sessions'][:2], 'threads': {}},
                    LAB_SETTINGS)
-    assert seen == [('fastembed', 'BAAI/bge-m3')]
+    assert seen == [('fastembed', 'BAAI/bge-small-en-v1.5')]
 
 
+# This is a unit test.
 def test_the_language_note_names_the_model_that_was_actually_used():
     note = embedding.language_note('fastembed', 'BAAI/bge-small-en-v1.5')
     assert 'bge-small-en' in note and 'english' in note.lower()
     assert 'ascii-hash' in embedding.language_note('ascii-hash', '')
 
 
+# This is an integration test.
 def test_a_run_records_which_languages_its_embedder_can_represent(
         registry, ground_truth, tmp_path, monkeypatch):
     """A leaderboard row whose embedder could not read the corpus is not a
@@ -1510,27 +1640,112 @@ def test_a_run_records_which_languages_its_embedder_can_represent(
     assert 'ascii-hash' in notes and 'latin' in notes
 
 
+# This is a unit test.
 def test_the_embedding_model_knob_explains_itself():
     topics = explain.topics()
     assert 'farsi' in topics['index.embed_model'].lower()
     assert 'farsi' in topics['index.embedder'].lower()
 
 
+# --- the catalogue offers only what has run on this machine -----------------
+#
+# The rule used to be that a model nobody had measured stayed listed as NA —
+# "worth trying, nobody scored it yet". Checked against the wire on 2026-08-02
+# that had rotted into something else: six of the ten remote chat models answered
+# 404, and the embedder list offered a 16 GB download whose weights had been
+# half-fetched and abandoned twice. NA had stopped meaning "unmeasured" and
+# started meaning "broken", which is the one thing a dropdown must not hide. What
+# is listed now is what answered here.
+#
+# The local list keeps the old rule, because there NA is honest: a tag that is
+# merely not pulled yet is one `ollama pull` away, and the daemon is asked
+# directly rather than guessed at.
+
+REACHABLE_CHAT = ('openai/gpt-5-nano', 'openai/gpt-5-mini',
+                  'anthropic/claude-haiku-4.5', 'google/gemini-2.5-flash')
+
+# All six answered 404 "No endpoints available matching your guardrail
+# restrictions and data policy" on this account, measured 2026-08-02. They are
+# every open-weight option the remote list had.
+UNREACHABLE_CHAT = ('openai/gpt-5', 'meta-llama/llama-3.3-70b-instruct',
+                    'qwen/qwen-2.5-72b-instruct', 'google/gemma-3-27b-it',
+                    'mistralai/mistral-nemo', 'deepseek/deepseek-chat')
+
+# Each of these embedded a Farsi sentence here on 2026-08-02, through the backend
+# it names. Dropped with them: Qwen3-Embedding-8B (three of four shards were
+# incomplete downloads), BAAI/bge-m3 (this fastembed serves neither it nor
+# e5-small), both OpenAI models with their backend, and e5-large / mpnet-base-v2 /
+# jina-embeddings-v3, which nothing here has ever loaded.
+VERIFIED_EMBED = {
+    'heydariAI/persian-embeddings': 'sentence-transformers',
+    'intfloat/multilingual-e5-small': 'sentence-transformers',
+    'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2': 'fastembed',
+    'BAAI/bge-small-en-v1.5': 'fastembed',
+    'sentence-transformers/all-MiniLM-L6-v2': 'fastembed',
+}
+
+
+# This is a unit test.
+def test_the_remote_catalogue_offers_only_models_this_account_can_reach():
+    ids = {option.id for option in models.CHAT_MODELS}
+    assert ids == set(REACHABLE_CHAT)
+    assert not ids & set(UNREACHABLE_CHAT)
+    # And the local list is deliberately untouched: llama3.1:8b is not installed,
+    # reads NA, and stays, because pulling it is a one-line fix by the user.
+    assert 'llama3.1:8b' in {option.id for option in models.OLLAMA_MODELS}
+
+
+# This is a unit test.
+def test_the_embedding_catalogue_offers_only_models_that_loaded_here():
+    assert {m.id: m.backend for m in embedding.EMBED_MODELS} == VERIFIED_EMBED
+
+
+# This is a unit test.
+def test_the_lab_has_no_openai_embedding_backend():
+    """It went with its two models. A backend whose whole catalogue is gone is
+    still selectable, and would have built an embedder with no model and dim 0 —
+    worse than the API bill it was there to offer."""
+    assert 'openai' not in EMBEDDERS
+    assert 'openai' not in embedding.BACKENDS
+    assert 'openai' not in embedding.BACKEND_DEFAULTS
+    assert not hasattr(embedding, 'OpenAIEmbedder')
+    assert 'openai' not in {hint['kind'] for hint in embedding.embedder_hints()}
+    with pytest.raises(ValueError):
+        embedding.make_embedder('openai', LAB_SETTINGS)
+    # The key goes too, rather than sitting in the settings advertising a backend
+    # that is not there.
+    assert not hasattr(LabSettings(), 'openai_api_key')
+
+
+# This is a unit test.
+def test_e5_small_is_offered_through_the_backend_that_can_load_it():
+    """Its weights were already on disk and unreachable anyway: the entry named
+    fastembed, which does not serve it, so `validate()` refused the one backend
+    that could. The prefixes come along — they belong to the model, not to the
+    backend that happens to load it."""
+    entry = {m.id: m for m in embedding.EMBED_MODELS}[
+        'intfloat/multilingual-e5-small']
+    assert entry.backend == 'sentence-transformers'
+    assert (entry.query_prefix, entry.passage_prefix) == ('query: ', 'passage: ')
+    assert LabConfig(index=IndexConfig(
+        embedder='sentence-transformers',
+        embed_model='intfloat/multilingual-e5-small')).validate() == []
+    assert LabConfig(index=IndexConfig(
+        embedder='fastembed',
+        embed_model='intfloat/multilingual-e5-small')).validate()
+
+
 # --- models fastembed cannot serve -----------------------------------------
 #
-# The strongest candidates for Persian are not in fastembed's list: Qwen3 and
-# heydariAI/persian-embeddings are HuggingFace checkpoints, and OpenAI's are an
-# API call. Listing them as permanently NA would be honest and useless, so each
-# model names the backend that serves it and the lab grows two more of them.
-# Everything here runs offline: the local backend is exercised through an injected
-# factory and the API backend through an injected transport, because a test that
-# needs a 16 GB download is a test nobody runs.
+# The Persian-tuned encoder is not in fastembed's list — it is a HuggingFace
+# checkpoint — so each model names the backend that serves it and the lab grows a
+# second one. Everything here runs offline: the local backend is exercised
+# through an injected factory, because a test that needs a 2 GB download is a
+# test nobody runs.
 
 REQUESTED_MODELS = {
-    'Qwen/Qwen3-Embedding-8B': ('sentence-transformers', 4096, 'open'),
     'heydariAI/persian-embeddings': ('sentence-transformers', 1024, 'open'),
-    'openai/text-embedding-3-small': ('openai', 1536, 'closed'),
-    'openai/text-embedding-3-large': ('openai', 3072, 'closed'),
+    'intfloat/multilingual-e5-small': ('sentence-transformers', 384, 'open'),
 }
 
 
@@ -1551,6 +1766,7 @@ class FakeSentenceTransformer:
         return np.ones((len(list(texts)), self.dim), dtype=np.float32)
 
 
+# This is a unit test.
 def test_the_catalogue_offers_every_requested_model_with_its_backend():
     by_id = {model.id: model for model in embedding.EMBED_MODELS}
     for model_id, (backend, dim, source) in REQUESTED_MODELS.items():
@@ -1560,6 +1776,7 @@ def test_the_catalogue_offers_every_requested_model_with_its_backend():
         assert entry.farsi and entry.note, model_id
 
 
+# This is a unit test.
 def test_no_knob_offers_an_openrouter_embedding_or_rerank_model():
     """Availability is verified here, never guessed — the rule the embedder list
     already follows. Measured against OpenRouter's published catalogue on
@@ -1582,16 +1799,19 @@ def test_no_knob_offers_an_openrouter_embedding_or_rerank_model():
     assert RetrievalConfig().reranker == 'lexical'
 
 
+# This is a unit test.
 def test_every_model_names_a_backend_the_lab_actually_has():
     assert all(model.backend in embedding.BACKENDS
                for model in embedding.EMBED_MODELS)
     assert set(embedding.BACKENDS) <= set(EMBEDDERS)
 
 
-def test_the_persian_tuned_model_is_the_default_and_qwen3_the_ceiling():
+# This is a unit test.
+def test_the_persian_tuned_model_is_the_default():
     """The lab defaults to a Persian-tuned encoder — a Farsi corpus deserves one,
-    and at ~2.2 GB it is the cheapest real encoder here. Qwen3 stays the
-    recommended ceiling rather than the default: 16 GB is not a default."""
+    and at ~2.2 GB it is the cheapest real encoder here. Qwen3 was listed above it
+    as the recommended ceiling until 2026-08-02, when it turned out never to have
+    loaded on this machine at all."""
     assert IndexConfig().embedder == 'sentence-transformers'
     assert IndexConfig().embed_model == ''      # '' = the backend's default
     assert embedding.BACKEND_DEFAULTS['sentence-transformers'] == \
@@ -1599,168 +1819,106 @@ def test_the_persian_tuned_model_is_the_default_and_qwen3_the_ceiling():
     assert embedding.resolve_model('sentence-transformers', LAB_SETTINGS, '') == \
         'heydariAI/persian-embeddings'
     by_id = {m.id: m for m in embedding.EMBED_MODELS}
-    qwen = by_id['Qwen/Qwen3-Embedding-8B']
-    assert 'recommend' in qwen.note.lower()
     # Visible in the option itself, not only behind the explainer: the standing is
     # what you are looking for while the dropdown is open.
-    assert qwen.tag == 'recommended'
     assert by_id['heydariAI/persian-embeddings'].tag == 'lab default'
     # RAGLAB_FASTEMBED_MODEL still drives the fastembed backend, untouched.
     assert embedding.resolve_model('fastembed', LAB_SETTINGS, '') == \
         LabSettings().fastembed_model
 
 
+# This is a unit test.
 def test_the_persian_tuned_model_says_which_language_it_was_tuned_for():
     entry = {m.id: m for m in embedding.EMBED_MODELS}['heydariAI/persian-embeddings']
     assert 'persian' in entry.languages.lower() or 'farsi' in entry.languages.lower()
 
 
-def test_both_new_backends_are_offered_as_embedders_with_their_coverage():
-    assert {'sentence-transformers', 'openai'} <= set(EMBEDDERS)
+# This is a unit test.
+def test_the_local_backend_is_offered_as_an_embedder_with_its_coverage():
+    assert 'sentence-transformers' in EMBEDDERS
     hints = {hint['kind']: hint for hint in embedding.embedder_hints()}
     assert set(hints) == set(EMBEDDERS)
-    for kind in ('sentence-transformers', 'openai'):
+    for kind in ('sentence-transformers', 'fastembed'):
         assert hints[kind]['farsi'] is True
         assert hints[kind]['languages'] and hints[kind]['note']
 
 
+# This is a unit test.
 def test_a_local_model_is_offered_as_NA_until_its_library_is_installed(monkeypatch):
     monkeypatch.setattr(embedding, 'sentence_transformers_available', lambda: False)
     absent = {e['id']: e for e in embedding.embed_model_catalogue(LAB_SETTINGS)}
-    assert absent['Qwen/Qwen3-Embedding-8B']['available'] is False
+    assert absent['intfloat/multilingual-e5-small']['available'] is False
     assert absent['heydariAI/persian-embeddings']['available'] is False
     monkeypatch.setattr(embedding, 'sentence_transformers_available', lambda: True)
     present = {e['id']: e for e in embedding.embed_model_catalogue(LAB_SETTINGS)}
-    assert present['Qwen/Qwen3-Embedding-8B']['available'] is True
+    assert present['intfloat/multilingual-e5-small']['available'] is True
 
 
-def test_an_api_model_is_offered_as_NA_until_there_is_a_key():
-    """Availability stays verified rather than guessed: without a key the call
-    would fail at the first chunk of a 40-minute sweep."""
-    without = {e['id']: e for e in embedding.embed_model_catalogue(LAB_SETTINGS)}
-    assert without['openai/text-embedding-3-small']['available'] is False
-    keyed = replace(LAB_SETTINGS, openai_api_key='sk-test')
-    with_key = {e['id']: e for e in embedding.embed_model_catalogue(keyed)}
-    assert with_key['openai/text-embedding-3-small']['available'] is True
-    assert with_key['openai/text-embedding-3-large']['available'] is True
-
-
-def test_the_lab_reads_an_openai_key_of_its_own():
-    """Separate from OPENROUTER_API_KEY on purpose: OpenRouter serves no
-    embeddings endpoint, so the chat key cannot stand in for this one."""
-    settings = config.load_lab_settings({'OPENAI_API_KEY': 'sk-lab',
-                                         'OPENAI_BASE_URL': 'http://proxy/v1'})
-    assert settings.openai_api_key == 'sk-lab'
-    assert settings.openai_base_url == 'http://proxy/v1'
-    assert LabSettings().openai_api_key == ''
-    assert LabSettings().openai_base_url.endswith('/v1')
-
-
-def test_the_local_embedder_asks_qwen3_the_way_qwen3_expects():
-    """Qwen3 is instruction-tuned: the query side carries an instruction and the
-    document side does not. Getting that backwards is a silent accuracy loss of
-    exactly the kind the E5 prefixes taught us to test for."""
-    fake = FakeSentenceTransformer('Qwen/Qwen3-Embedding-8B')
+# This is a unit test.
+def test_the_local_backend_applies_the_prefixes_the_model_was_trained_with():
+    """The same guarantee the fastembed side keeps, on the backend that now
+    serves the E5 model: query and passage are marked apart, and getting that
+    backwards is a silent accuracy loss."""
+    fake = FakeSentenceTransformer('intfloat/multilingual-e5-small')
     embedder = embedding.SentenceTransformerEmbedder(
-        'Qwen/Qwen3-Embedding-8B', query_prefix='Instruct: find it\nQuery: ',
-        factory=lambda name: fake)
+        'intfloat/multilingual-e5-small', query_prefix='query: ',
+        passage_prefix='passage: ', factory=lambda name: fake)
     fake.seen.clear()                      # drop anything the probe encoded
     passages = embedder.embed(['امروز جلسه داشتم'])
     queries = embedder.embed_queries(['جلسه کی بود؟'])
-    assert fake.seen == ['امروز جلسه داشتم',
-                         'Instruct: find it\nQuery: جلسه کی بود؟']
+    assert fake.seen == ['passage: امروز جلسه داشتم', 'query: جلسه کی بود؟']
     assert embedder.dim == fake.dim == passages.shape[1] == queries.shape[1]
-    assert 'Qwen/Qwen3-Embedding-8B' in embedder.name
+    assert 'intfloat/multilingual-e5-small' in embedder.name
 
 
-def test_the_api_embedder_sends_the_model_and_normalises_what_comes_back():
-    calls = []
-
-    def post(url, payload, headers):
-        calls.append((url, payload, headers))
-        return {'data': [{'embedding': [3.0, 4.0]} for _ in payload['input']]}
-
-    keyed = replace(LAB_SETTINGS, openai_api_key='sk-test')
-    embedder = embedding.OpenAIEmbedder('openai/text-embedding-3-small', keyed,
-                                        post=post)
-    vectors = embedder.embed(['یک', 'دو'])
-    assert vectors.shape == (2, 2)
-    assert np.allclose(np.linalg.norm(vectors, axis=1), 1.0)
-    url, payload, headers = calls[-1]
-    assert url.endswith('/embeddings')
-    # The panel shows an OpenRouter-shaped slug; OpenAI's own API wants the bare
-    # model name, so the prefix is stripped on the wire.
-    assert payload['model'] == 'text-embedding-3-small'
-    assert 'sk-test' in headers['Authorization']
-    # Declared, not probed: a network call in the constructor would make building
-    # an index config cost money.
-    assert embedder.dim == 1536
-
-
-def test_the_api_embedder_batches_so_a_whole_corpus_fits():
-    calls = []
-
-    def post(url, payload, headers):
-        calls.append(payload['input'])
-        return {'data': [{'embedding': [1.0, 0.0]} for _ in payload['input']]}
-
-    keyed = replace(LAB_SETTINGS, openai_api_key='sk-test')
-    embedder = embedding.OpenAIEmbedder('openai/text-embedding-3-small', keyed,
-                                        batch_size=2, post=post)
-    embedder.embed(['a', 'b', 'c'])
-    assert [len(batch) for batch in calls] == [2, 1]
-
-
-def test_the_api_embedder_says_what_is_missing_instead_of_failing_mid_sweep():
-    with pytest.raises(ValueError) as raised:
-        embedding.OpenAIEmbedder('openai/text-embedding-3-small', LAB_SETTINGS)
-    assert 'OPENAI_API_KEY' in str(raised.value)
-
-
-def test_make_embedder_builds_both_new_backends(monkeypatch):
+# This is a unit test.
+def test_make_embedder_builds_the_local_backend(monkeypatch):
     monkeypatch.setattr(embedding, '_sentence_transformer',
                         lambda name: FakeSentenceTransformer(name))
     local = embedding.make_embedder('sentence-transformers', LAB_SETTINGS,
-                                    'Qwen/Qwen3-Embedding-8B')
-    assert 'Qwen/Qwen3-Embedding-8B' in local.name
+                                    'intfloat/multilingual-e5-small')
+    assert 'intfloat/multilingual-e5-small' in local.name
     # Blank means "the default model for the backend you chose", the same rule as
     # '' meaning RAGLAB_FASTEMBED_MODEL for fastembed.
     default = embedding.make_embedder('sentence-transformers', LAB_SETTINGS, '')
     assert 'heydariAI/persian-embeddings' in default.name
-    keyed = replace(LAB_SETTINGS, openai_api_key='sk-test')
-    api = embedding.make_embedder('openai', keyed, 'openai/text-embedding-3-large')
-    assert 'text-embedding-3-large' in api.name and api.dim == 3072
 
 
+# This is a unit test.
 def test_the_chosen_model_survives_the_fingerprint_for_every_model_backend():
     """The model is part of what got stored, so it has to reach the collection
     name — for all three backends, not just the first one the lab had."""
-    for kind in ('fastembed', 'sentence-transformers', 'openai'):
+    for kind in ('fastembed', 'sentence-transformers'):
         kept = IndexConfig(embedder=kind, embed_model='some/model').normalized()
         assert kept.embed_model == 'some/model', kind
     dropped = IndexConfig(embedder='char-hash', embed_model='some/model').normalized()
     assert dropped.embed_model == ''
-    a = IndexConfig(embedder='openai', embed_model='openai/text-embedding-3-small')
-    b = IndexConfig(embedder='openai', embed_model='openai/text-embedding-3-large')
+    a = IndexConfig(embedder='sentence-transformers',
+                    embed_model='heydariAI/persian-embeddings')
+    b = IndexConfig(embedder='sentence-transformers',
+                    embed_model='intfloat/multilingual-e5-small')
     assert a.fingerprint() != b.fingerprint()
 
 
+# This is a unit test.
 def test_a_model_from_the_wrong_backend_is_refused_before_the_run():
-    """Picking Qwen3 while the embedder is fastembed used to mean "load the
-    default instead" — a run labelled Qwen3 that measured something else."""
+    """Picking a HuggingFace checkpoint while the embedder is fastembed used to
+    mean "load the default instead" — a run labelled with one model that had
+    measured another."""
     problems = LabConfig(index=IndexConfig(
         embedder='fastembed',
-        embed_model='Qwen/Qwen3-Embedding-8B')).validate()
+        embed_model='heydariAI/persian-embeddings')).validate()
     assert any('sentence-transformers' in problem for problem in problems)
     assert LabConfig(index=IndexConfig(
         embedder='sentence-transformers',
-        embed_model='Qwen/Qwen3-Embedding-8B')).validate() == []
+        embed_model='heydariAI/persian-embeddings')).validate() == []
 
 
+# This is a unit test.
 def test_the_embedder_explainer_says_how_to_reach_a_model_it_cannot_download():
-    """Three backends is a choice nobody can make from the kind names alone."""
+    """Two backends is a choice nobody can make from the kind names alone."""
     text = explain.topics()['index.embedder'].lower()
-    assert 'sentence-transformers' in text and 'openai' in text
+    assert 'sentence-transformers' in text and 'fastembed' in text
 
 
 # --- what each number on the dashboard actually means -----------------------
@@ -1771,6 +1929,7 @@ def test_the_embedder_explainer_says_how_to_reach_a_model_it_cannot_download():
 # the same four facts, from the same registry, shown through the same `!` the knobs
 # use — and a metric a run can report without an explainer fails a test.
 
+# This is a unit test.
 def test_every_reported_metric_has_a_definition():
     """The gate: `aggregate()` can report these keys, so the panel can show them,
     so every one of them has to be explainable."""
@@ -1782,6 +1941,7 @@ def test_every_reported_metric_has_a_definition():
         assert measure.formula and measure.library and measure.help, measure.key
 
 
+# This is a unit test.
 def test_a_metric_states_the_exact_formula_it_computes():
     """Not prose about the idea — the arithmetic, matching the code above it."""
     by_key = {measure.key: measure for measure in metrics.MEASURES}
@@ -1795,6 +1955,7 @@ def test_a_metric_states_the_exact_formula_it_computes():
     assert '0.9' in by_key['quote_recall'].formula      # the fuzzy fallback
 
 
+# This is a unit test.
 def test_every_metric_names_the_library_that_computes_it():
     by_key = {measure.key: measure for measure in metrics.MEASURES}
     assert 'metrics.recall_at_k' in by_key['recall'].library
@@ -1805,6 +1966,7 @@ def test_every_metric_names_the_library_that_computes_it():
     assert 'llm' in by_key['key_fact_coverage'].library.lower()
 
 
+# This is a unit test.
 def test_every_metric_says_which_step_it_grades():
     """Same three inks as the panels: a number about retrieval is green wherever
     it appears, so the dashboard means one thing by a colour."""
@@ -1817,6 +1979,7 @@ def test_every_metric_says_which_step_it_grades():
     assert by_key['latency_ms'].step == ''      # whole pipeline, no single step
 
 
+# This is a unit test.
 def test_the_ragas_definitions_cover_every_metric_ragas_can_report():
     from .raglab import ragas_eval
     defined = {measure.key for measure in ragas_eval.RAGAS_MEASURES}
@@ -1824,6 +1987,7 @@ def test_the_ragas_definitions_cover_every_metric_ragas_can_report():
     assert reported <= defined, reported - defined
 
 
+# This is a unit test.
 def test_a_ragas_metric_carries_ragas_own_class_definition_and_formula():
     """"Faithfulness" is RAGAS's word, not ours, so the panel says whose
     definition it is showing and which class computed it."""
@@ -1844,6 +2008,7 @@ def test_a_ragas_metric_carries_ragas_own_class_definition_and_formula():
     assert 'rapidfuzz' in offline.library and 'llm' not in offline.formula.lower()
 
 
+# This is a unit test.
 def test_a_judged_metric_says_which_model_judged_it():
     """A number produced by a model is a number with variance, and the reader has
     to know which model — the same reason every stage carries its own dropdown.
@@ -1859,12 +2024,14 @@ def test_a_judged_metric_says_which_model_judged_it():
             assert 'no model' in measure.library.lower(), measure.key
 
 
+# This is a unit test.
 def test_no_metric_ships_without_an_explainer():
     """The counterpart of explain.missing() for the knobs: a metric added to
     AGGREGATED or to the RAGAS list without a definition fails here."""
     assert explain.missing_metrics() == []
 
 
+# This is a unit test.
 def test_metric_definitions_join_the_one_help_registry():
     """Homogeneous by construction: the panel has one explainer mechanism, so a
     metric's text lives with the knobs' text under 'metric.<key>'."""
@@ -1882,6 +2049,7 @@ def test_metric_definitions_join_the_one_help_registry():
 # be single-sourced here is which step each knob and each model serves, because a
 # dropdown coloured for the wrong step is worse than an uncoloured one.
 
+# This is a unit test.
 def test_the_pipeline_steps_are_named_once_in_pipeline_order():
     assert [step.key for step in config.STEPS] == ['index', 'retrieval',
                                                    'generation']
@@ -1892,6 +2060,7 @@ def test_the_pipeline_steps_are_named_once_in_pipeline_order():
                                                      'Generation']
 
 
+# This is a unit test.
 def test_the_steps_are_exactly_the_config_groups():
     """A step is a config group with a colour, so the two lists cannot drift:
     a fourth group would otherwise render in a panel nobody colours."""
@@ -1899,6 +2068,7 @@ def test_the_steps_are_exactly_the_config_groups():
                                                    in explain.GROUPS}
 
 
+# This is a unit test.
 def test_every_model_role_says_which_step_it_serves():
     steps = {step.key for step in config.STEPS}
     assert all(role.step in steps for role in models.ROLES)
@@ -1907,6 +2077,7 @@ def test_every_model_role_says_which_step_it_serves():
     assert all(role.step == role.field.split('.')[0] for role in models.ROLES)
 
 
+# This is a unit test.
 def test_every_step_owns_at_least_one_model():
     """Each colour has to mean something in the models panel — a step with no
     model in it is a legend entry pointing at nothing. The index step owns the
@@ -1916,6 +2087,7 @@ def test_every_step_owns_at_least_one_model():
     assert served == {step.key for step in config.STEPS}
 
 
+# This is a unit test.
 def test_a_model_role_is_serialised_with_its_step():
     role = next(r for r in models.ROLES if r.key == 'grade')
     assert role.as_dict()['step'] == 'retrieval'
@@ -1965,6 +2137,7 @@ RUN_FIXTURE = {
 }
 
 
+# This is a unit test.
 def test_the_difficulty_table_counts_answers_not_just_retrieval():
     """"What share of the hard questions came out right" needs a definition, and
     the only per-question one this data supports is evidence-based: the run files
@@ -1987,6 +2160,7 @@ def test_the_difficulty_table_counts_answers_not_just_retrieval():
     assert all('n' in row for row in table)
 
 
+# This is a unit test.
 def test_the_difficulty_table_reports_evidence_separately_from_answers():
     """Retrieval reaching the evidence and the answer using it are different
     failures, and collapsing them hides which half to fix."""
@@ -2000,6 +2174,7 @@ def test_the_difficulty_table_reports_evidence_separately_from_answers():
     assert rows[2]['evidence_found'] is None
 
 
+# This is a unit test.
 def test_a_question_page_shows_reference_retrieval_response_and_grades(ground_truth):
     """The four things you need to judge one question, in one file."""
     from .raglab import export
@@ -2020,6 +2195,7 @@ def test_a_question_page_shows_reference_retrieval_response_and_grades(ground_tr
     assert RUN_FIXTURE['run_id'] in page and RUN_FIXTURE['label'] in page
 
 
+# This is a unit test.
 def test_a_question_page_says_which_grades_are_not_per_question(ground_truth):
     """The four deciding metrics are stored as run means only.
 
@@ -2033,6 +2209,7 @@ def test_a_question_page_says_which_grades_are_not_per_question(ground_truth):
     assert 'not per question' in page.lower()
 
 
+# This is a unit test.
 def test_the_export_writes_one_file_per_question_plus_an_index(ground_truth,
                                                               tmp_path):
     from .raglab import export
@@ -2046,6 +2223,7 @@ def test_the_export_writes_one_file_per_question_plus_an_index(ground_truth,
     assert '(q-sh-001.md)' in index
 
 
+# This is a unit test.
 def test_the_export_never_invents_the_context_text(ground_truth, tmp_path):
     """Runs store the retrieved session ids, not the chunk text.
 
@@ -2068,6 +2246,7 @@ def client():
     return TestClient(create_app())
 
 
+# This is an integration test.
 def test_options_describes_the_corpus_and_capabilities(client):
     body = client.get('/api/options').json()
     # Pinned rather than derived: the corpus is the measuring instrument, so a
@@ -2078,6 +2257,7 @@ def test_options_describes_the_corpus_and_capabilities(client):
     assert 'ragas' in body['capabilities']
 
 
+# This is an integration test.
 def test_options_advertises_no_vector_database(client):
     """The panel used to carry a `chroma <db> @ <url>` badge, which is now a
     claim about a service that is not involved. It is replaced by a positive
@@ -2089,12 +2269,14 @@ def test_options_advertises_no_vector_database(client):
                                'runs': 'brain/tests/raglab/.runs'}
 
 
+# This is an integration test.
 def test_health_says_the_lab_depends_on_no_service(client):
     body = client.get('/api/health').json()
     assert body['ok'] and body['storage'] == 'memory'
     assert [key for key in body if 'chroma' in key or key == 'database'] == []
 
 
+# This is an integration test.
 def test_a_build_starts_without_any_service_running(client):
     """`/api/index` used to answer 503 unless a Chroma heartbeat came back. With
     the index in process memory there is nothing that can be down, so the job
@@ -2102,12 +2284,13 @@ def test_a_build_starts_without_any_service_running(client):
     from .raglab import server as lab_server
 
     assert not hasattr(lab_server, 'require_chroma')
-    body = client.post('/api/index', json={
+    body = client.post('/api/indexes', json={
         'index': {'chunker': 'session', 'embedder': 'ascii-hash',
                   'layers': ['session']}}).json()
     assert body['job_id']
 
 
+# This is an integration test.
 def test_options_counts_the_habits_the_corpus_tracks(client):
     """The habit ledger is only as good as the habits behind it, so how many the
     fixture declares is part of describing the corpus."""
@@ -2115,12 +2298,14 @@ def test_options_counts_the_habits_the_corpus_tracks(client):
     assert corpus_facts['habits'] == 5
 
 
+# This is an integration test.
 def test_options_names_habit_as_a_question_type(client):
     """The per-type breakdown is where habit retrieval either shows up or hides
     inside the aggregation bucket."""
     assert 'habit' in client.get('/api/options').json()['question_types']
 
 
+# This is an integration test.
 def test_options_explains_the_new_metadata_and_the_deciding_score(client):
     body = client.get('/api/options').json()
     assert body['help']['metric.ragas_decision']
@@ -2128,14 +2313,16 @@ def test_options_explains_the_new_metadata_and_the_deciding_score(client):
     assert by_key['ragas_decision']['step'] == ''
 
 
+# This is an integration test.
 def test_panel_is_served(client):
     page = client.get('/')
     assert page.status_code == 200
     assert 'RAG Lab' in page.text
 
 
+# This is an integration test.
 def test_ad_hoc_query_returns_stages_and_contexts(client):
-    body = client.post('/api/query', json={
+    body = client.post('/api/queries', json={
         'question': 'آذر چه خبر بود؟',
         'index': {'chunker': 'message', 'embedder': 'char-hash',
                   'layers': ['chunk']},
@@ -2146,13 +2333,15 @@ def test_ad_hoc_query_returns_stages_and_contexts(client):
     assert 'retrieve_ms' in body['timings']
 
 
+# This is an integration test.
 def test_query_rejects_an_unknown_strategy(client):
-    res = client.post('/api/query', json={'question': 'x',
+    res = client.post('/api/queries', json={'question': 'x',
                                           'index': {'chunker': 'nope'}})
     assert res.status_code == 400
     assert 'unknown chunker' in res.json()['detail']
 
 
+# This is an integration test.
 def test_questions_endpoint_hides_the_answers(client):
     body = client.get('/api/questions?limit=5').json()
     assert len(body['questions']) == 5
@@ -2160,6 +2349,7 @@ def test_questions_endpoint_hides_the_answers(client):
     assert body['questions'][0]['evidence_sessions']
 
 
+# This is an integration test.
 def test_options_offers_a_model_choice_for_every_llm_task(client):
     body = client.get('/api/options').json()
     roles = {role['key']: role for role in body['model_roles']}
@@ -2169,9 +2359,13 @@ def test_options_offers_a_model_choice_for_every_llm_task(client):
                for role in roles.values())
     ids = [m['id'] for m in body['models']]
     assert ids[0] == '' and '4skl/gemma4-e2b-mtp' in ids
-    assert {m['source'] for m in body['models']} >= {'default', 'open'}
+    # 'open' is no longer guaranteed here: the remote list kept only what this
+    # account can reach (all closed, measured 2026-08-02); open weights are the
+    # local list's business.
+    assert {m['source'] for m in body['models']} >= {'default', 'closed'}
 
 
+# This is an integration test.
 def test_options_explains_every_knob(client):
     body = client.get('/api/options').json()
     for key in ('index.chunker', 'retrieval.reranker',
@@ -2180,6 +2374,7 @@ def test_options_explains_every_knob(client):
         assert body['help'].get(key), key
 
 
+# This is an integration test.
 def test_defaults_carry_the_per_task_model_fields(client):
     """The panel merges saved settings over these, so a field missing here is a
     dropdown that renders as undefined on an old browser tab."""
@@ -2191,17 +2386,20 @@ def test_defaults_carry_the_per_task_model_fields(client):
     assert defaults['generation']['ragas_model'] == ''
 
 
+# This is an integration test.
 def test_a_per_task_model_is_accepted_by_the_query_endpoint(client):
-    res = client.post('/api/query', json={
+    res = client.post('/api/queries', json={
         'question': 'آذر چه خبر بود؟',
         'index': {'chunker': 'message', 'embedder': 'char-hash', 'layers': ['chunk']},
         'retrieval': {'k': 4,
-                      'grader_model': 'meta-llama/llama-3.3-70b-instruct'},
-        'generation': {'answerer': 'extractive', 'judge_model': 'openai/gpt-5'}})
+                      'grader_model': 'anthropic/claude-haiku-4.5'},
+        'generation': {'answerer': 'extractive',
+                       'judge_model': 'openai/gpt-5-mini'}})
     assert res.status_code == 200
     assert res.json()['contexts']
 
 
+# This is a unit test.
 def test_the_standalone_panel_offers_the_model_pickers_too():
     """The lab still runs without a board, and that panel must not be the one
     place where a model is hard-coded."""
@@ -2238,6 +2436,7 @@ def test_the_standalone_panel_reads_only_fields_the_lab_still_produces():
         f'{sorted(read - sent)}')
 
 
+# This is an integration test.
 def test_ragas_takes_its_own_judge_model(index, ground_truth):
     pytest.importorskip('ragas')
     pytest.importorskip('rapidfuzz')
@@ -2251,6 +2450,7 @@ def test_ragas_takes_its_own_judge_model(index, ground_truth):
     assert report['n_samples'] == 1, report['notes']
 
 
+# This is an integration test.
 def test_options_say_which_languages_each_embedder_covers(client):
     body = client.get('/api/options').json()
     hints = {hint['kind']: hint for hint in body['embedder_hints']}
@@ -2259,23 +2459,25 @@ def test_options_say_which_languages_each_embedder_covers(client):
     assert hints['ascii-hash']['farsi'] is False
 
 
+# This is an integration test.
 def test_options_offer_farsi_capable_embedding_models(client):
     body = client.get('/api/options').json()
     assert body['embed_models'][0]['id'] == ''
     by_id = {entry['id']: entry for entry in body['embed_models']}
-    assert by_id['intfloat/multilingual-e5-large']['farsi'] is True
+    assert by_id['intfloat/multilingual-e5-small']['farsi'] is True
     assert by_id['BAAI/bge-small-en-v1.5']['farsi'] is False
     assert body['defaults']['index']['embed_model'] == ''
     assert body['help']['index.embed_model']
 
 
+# This is an integration test.
 def test_an_embedding_model_is_accepted_by_the_query_endpoint(client):
     """The field has to survive the panel round trip even when the running
     embedder ignores it, or a stale tab breaks a query."""
-    res = client.post('/api/query', json={
+    res = client.post('/api/queries', json={
         'question': 'آذر چه خبر بود؟',
         'index': {'chunker': 'message', 'embedder': 'char-hash',
-                  'embed_model': 'intfloat/multilingual-e5-large',
+                  'embed_model': 'intfloat/multilingual-e5-small',
                   'layers': ['chunk']},
         'retrieval': {'k': 4},
         'generation': {'answerer': 'extractive'}})
@@ -2283,12 +2485,14 @@ def test_an_embedding_model_is_accepted_by_the_query_endpoint(client):
     assert res.json()['contexts']
 
 
+# This is a unit test.
 def test_the_standalone_panel_offers_the_embedding_models_too():
     from .raglab.server import STATIC
     html = (STATIC / 'index.html').read_text(encoding='utf-8')
     assert 'embed_models' in html and 'embedder_hints' in html
 
 
+# This is an integration test.
 def test_options_define_every_metric_the_panel_can_show(client):
     body = client.get('/api/options').json()
     by_key = {measure['key']: measure for measure in body['metrics']}
@@ -2305,6 +2509,7 @@ def test_options_define_every_metric_the_panel_can_show(client):
     assert 'ragas' in by_key['faithfulness']['library'].lower()
 
 
+# This is an integration test.
 def test_options_colour_code_the_pipeline_steps(client):
     """The panel cannot invent the grouping: which step a control belongs to is
     a fact about the pipeline, served with everything else."""
@@ -2320,9 +2525,11 @@ def test_options_colour_code_the_pipeline_steps(client):
     assert by_key['answer'] == 'generation'
 
 
-def test_options_offer_the_two_new_backends_and_their_models(client):
+# This is an integration test.
+def test_options_offer_the_local_backend_and_its_models(client):
     body = client.get('/api/options').json()
-    assert {'sentence-transformers', 'openai'} <= set(body['embedders'])
+    assert 'sentence-transformers' in set(body['embedders'])
+    assert 'openai' not in set(body['embedders'])
     by_id = {entry['id']: entry for entry in body['embed_models']}
     for model_id, (backend, dim, _) in REQUESTED_MODELS.items():
         assert model_id in by_id, model_id
@@ -2332,9 +2539,10 @@ def test_options_offer_the_two_new_backends_and_their_models(client):
     # download or an API call that cannot happen.
     caps = body['capabilities']
     assert isinstance(caps['sentence_transformers'], bool)
-    assert isinstance(caps['openai_embeddings'], bool)
+    assert 'openai_embeddings' not in caps
 
 
+# This is a unit test.
 def test_the_standalone_panel_colour_codes_the_steps_too():
     """One ink per step, defined once as a token and applied by data-step, so the
     two panels cannot end up disagreeing about what orange means."""
@@ -2347,6 +2555,7 @@ def test_the_standalone_panel_colour_codes_the_steps_too():
     assert 'data-step="generation"' in html
 
 
+# This is a unit test.
 def test_the_standalone_panel_takes_its_metric_definitions_from_the_service():
     """No second list of score labels: the panel that runs without a board has to
     explain a metric the same way the board's page does, or the same number ends
@@ -2358,9 +2567,11 @@ def test_the_standalone_panel_takes_its_metric_definitions_from_the_service():
     assert 'SCORE_CARDS' not in html, 'the hard-coded score list is back'
 
 
+# This is a unit test.
 def test_the_standalone_panel_says_which_backends_consult_the_model():
     """It said "fastembed only", which stopped being true the moment a second
-    backend could load a model."""
+    backend could load a model — and "or openai" stopped being true when that
+    backend left with its catalogue."""
     import re
 
     from .raglab.server import STATIC
@@ -2368,9 +2579,11 @@ def test_the_standalone_panel_says_which_backends_consult_the_model():
     label = re.search(r'<label>Embedding model.*?</label>', html, re.S)
     assert label, 'the standalone panel lost its embedding-model label'
     assert 'sentence-transformers' in label.group(0)
-    assert 'openai' in label.group(0)
+    assert 'fastembed' in label.group(0)
+    assert 'openai' not in label.group(0)
 
 
+# This is a unit test.
 def test_the_standalone_panel_keeps_every_model_in_one_place():
     """The embedder is a language model too, so it belongs in the model column
     with the other seven rather than buried among the chunking knobs."""
@@ -2384,6 +2597,7 @@ def test_the_standalone_panel_keeps_every_model_in_one_place():
     assert 'id="embed_model"' in card.group(0)
 
 
+# This is a unit test.
 def test_the_standalone_panel_ranks_the_leaderboard_by_the_deciding_score():
     """Two numbers on one row invite ranking by the wrong one, so the panel has
     to say which column chose the architecture."""
@@ -2407,6 +2621,7 @@ OLLAMA_SETTINGS = replace(LAB_SETTINGS, llm_provider='ollama',
                           llm_model='gemma4:e2b')
 
 
+# This is a unit test.
 def test_the_lab_provider_resolves_to_a_real_backend_or_the_fake():
     """Local is the default; another backend is always an explicit choice."""
     assert LabSettings(openrouter_api_key='').provider == 'ollama'
@@ -2419,11 +2634,13 @@ def test_the_lab_provider_resolves_to_a_real_backend_or_the_fake():
                        llm_provider='ollama').provider == 'ollama'
 
 
+# This is a unit test.
 def test_an_unknown_lab_provider_raises_rather_than_falling_back():
     with pytest.raises(ValueError, match='RAGLAB_LLM'):
         LabSettings(llm_provider='ollamma')
 
 
+# This is a unit test.
 def test_llm_ready_asks_whether_a_real_model_is_reachable_not_whether_a_key_is():
     """The distinction the whole change rests on. The fake provider answers and
     grades every question without ever failing, so 'has a backend' and 'has a
@@ -2434,6 +2651,7 @@ def test_llm_ready_asks_whether_a_real_model_is_reachable_not_whether_a_key_is()
     assert not LabSettings(openrouter_api_key='sk-x', llm_provider='fake').llm_ready
 
 
+# This is a unit test.
 def test_the_lab_builds_its_local_model_through_the_production_seam():
     """CLAUDE.md's rule: the lab tracks production seams, so whatever wins here
     ports over unchanged. Adding 'ollama' to make_chat_model is what made it
@@ -2446,6 +2664,7 @@ def test_the_lab_builds_its_local_model_through_the_production_seam():
     assert built.model == 'gemma4:e2b'
 
 
+# This is a unit test.
 def test_the_ragas_judge_follows_the_provider_instead_of_hardcoding_openrouter():
     """The bug this replaces: ragas_eval named ChatOpenAI, the OpenRouter key and
     the OpenRouter base URL itself, so the judge was the one stage RAGLAB_LLM
@@ -2460,6 +2679,7 @@ def test_the_ragas_judge_follows_the_provider_instead_of_hardcoding_openrouter()
     assert judge.model_name == 'qwen3.5:2b'
 
 
+# This is a unit test.
 def test_ragas_availability_accepts_a_local_judge_with_no_api_key():
     from .raglab import ragas_eval
     status = ragas_eval.availability(OLLAMA_SETTINGS)
@@ -2472,6 +2692,7 @@ def test_ragas_availability_accepts_a_local_judge_with_no_api_key():
             'the note has to name the way out, not just the missing key')
 
 
+# This is a unit test.
 def test_the_judge_is_pushed_far_less_hard_when_it_runs_locally():
     """The failure this exists to prevent, measured: RAGAS defaults to 16
     concurrent calls, one laptop model serves two or three, and the queued
@@ -2491,6 +2712,7 @@ def test_the_judge_is_pushed_far_less_hard_when_it_runs_locally():
     assert local['timeout'] >= 600, 'calls under load were measured at 80–92s'
 
 
+# This is a unit test.
 def test_a_run_records_which_backend_judged_it():
     """A decision score is comparable only within one judge, and the model slug
     alone does not say whether it ran locally or was paid for."""
@@ -2499,6 +2721,7 @@ def test_a_run_records_which_backend_judged_it():
     assert 'fake' in models.note_for(LabConfig(), LAB_SETTINGS)
 
 
+# This is a unit test.
 def test_the_dropdown_offers_the_local_models_when_the_backend_is_local():
     """Two lists, not one: an OpenRouter slug is not something Ollama can load,
     and a local tag is not something OpenRouter serves. One merged dropdown would
@@ -2516,6 +2739,7 @@ def test_the_dropdown_offers_the_local_models_when_the_backend_is_local():
     assert not (local - {''}) & {o.id for o in models.CHAT_MODELS}
 
 
+# This is a unit test.
 def test_every_local_model_says_what_it_is_for():
     """The catalogue rule applies to the local list too: the licence is part of
     the label and every option says why you would pick it. On a local backend
@@ -2527,6 +2751,7 @@ def test_every_local_model_says_what_it_is_for():
         assert option.label
 
 
+# This is a unit test.
 def test_a_model_the_local_backend_does_not_serve_stops_the_run(monkeypatch):
     """The embedder rule applied to chat models: a mismatch is a validation
     error, never a silent fallback. A leaderboard row labelled qwen3.5:2b that
@@ -2542,6 +2767,7 @@ def test_a_model_the_local_backend_does_not_serve_stops_the_run(monkeypatch):
         OLLAMA_SETTINGS) == []
 
 
+# This is a unit test.
 def test_an_unreachable_daemon_claims_nothing_rather_than_refusing_everything(
         monkeypatch):
     """"Cannot check" and "not there" are different facts. With the daemon down
@@ -2552,6 +2778,7 @@ def test_an_unreachable_daemon_claims_nothing_rather_than_refusing_everything(
     assert models.provider_problems(cfg, OLLAMA_SETTINGS) == []
 
 
+# This is a unit test.
 def test_the_local_tag_list_is_read_from_the_daemon_not_guessed(monkeypatch):
     """Availability is verified, never inferred from the shape of a slug."""
     calls = {}
@@ -2581,6 +2808,7 @@ def test_the_local_tag_list_is_read_from_the_daemon_not_guessed(monkeypatch):
     assert 'gemma4:e2b' in ids and 'gemma4:e2b:latest' in ids
 
 
+# This is a unit test.
 def test_the_sweep_can_be_pointed_at_a_local_pairing():
     """The sweep's two model pins are env-settable so a local run needs no edit
     to the file — but the rule they exist to enforce is unchanged: two different
@@ -2591,6 +2819,7 @@ def test_the_sweep_can_be_pointed_at_a_local_pairing():
         assert cfg.generation.ragas_model == sweep.JUDGE_MODEL, cfg.label
 
 
+# This is a unit test.
 def test_each_provider_names_its_own_pairing_and_never_crosses_them():
     """A slug only means something to the backend that serves it, so the default
     pairing is per provider. Crossing them is the failure `provider_problems`
@@ -2604,6 +2833,7 @@ def test_each_provider_names_its_own_pairing_and_never_crosses_them():
         assert pair['judge'] in slugs, (provider, pair)
 
 
+# This is a unit test.
 def test_choosing_the_local_backend_is_enough_to_get_a_local_default_model():
     """`RAGLAB_LLM=ollama` on its own has to produce a runnable lab. It did not:
     the default model stayed a remote slug, so `provider_problems` refused every
@@ -2614,6 +2844,7 @@ def test_choosing_the_local_backend_is_enough_to_get_a_local_default_model():
     assert not models.provider_problems(LabConfig(), local)
 
 
+# This is a unit test.
 def test_an_explicit_model_is_never_replaced_by_the_provider_default():
     """The resolution is for the *unset* case only. Overwriting a stated model
     would mean a run labelled with one model was scored by another."""
@@ -2621,6 +2852,7 @@ def test_an_explicit_model_is_never_replaced_by_the_provider_default():
     assert local.llm_model == 'gemma4:e2b'
 
 
+# This is a unit test.
 def test_every_provider_has_a_default_model_it_can_actually_serve():
     for provider, model in config.PROVIDER_MODELS.items():
         served = (models.OLLAMA_MODELS if provider == 'ollama'
@@ -2628,6 +2860,7 @@ def test_every_provider_has_a_default_model_it_can_actually_serve():
         assert model in {m.id for m in served}, (provider, model)
 
 
+# This is a unit test.
 def test_the_local_pairing_is_the_one_that_was_screened():
     """The judge is part of the apparatus, so the default judge has to be a model
     `.screens/` has a row for — a default nobody screened is judge-shopping with
@@ -2636,6 +2869,7 @@ def test_the_local_pairing_is_the_one_that_was_screened():
                                         'judge': 'gemma4:e2b'}
 
 
+# This is a unit test.
 def test_the_sweep_refuses_a_judge_that_grades_its_own_answers(monkeypatch,
                                                               tmp_path):
     monkeypatch.setattr(sweep, 'ANSWER_MODEL', 'gemma4:e2b')
@@ -2646,6 +2880,7 @@ def test_the_sweep_refuses_a_judge_that_grades_its_own_answers(monkeypatch,
         sweep.judged_settings()
 
 
+# This is a unit test.
 def test_the_sweep_starts_with_a_local_judge_and_no_api_key(monkeypatch):
     """The guard used to test for a credential, so anyone judging locally was
     sent away from a run they could have made."""
@@ -2659,6 +2894,7 @@ def test_the_sweep_starts_with_a_local_judge_and_no_api_key(monkeypatch):
 # medium / 26 hard, and a plain stride hands medium about half of any sample —
 # which measures the medium pipeline and reports it as the pipeline.
 
+# This is a unit test.
 def test_a_balanced_sample_splits_the_difficulty_bands_as_evenly_as_it_can(
         ground_truth):
     picked = evaluate.select_questions(ground_truth, limit=49,
@@ -2671,6 +2907,7 @@ def test_a_balanced_sample_splits_the_difficulty_bands_as_evenly_as_it_can(
     assert counts == {'easy': 17, 'medium': 16, 'hard': 16}, counts
 
 
+# This is a unit test.
 def test_a_balanced_sample_that_divides_evenly_is_exactly_equal(ground_truth):
     picked = evaluate.select_questions(ground_truth, limit=51,
                                        balance='difficulty')
@@ -2679,6 +2916,7 @@ def test_a_balanced_sample_that_divides_evenly_is_exactly_equal(ground_truth):
     assert counts == {'easy': 17, 'medium': 17, 'hard': 17}, counts
 
 
+# This is a unit test.
 def test_a_balanced_sample_is_the_same_questions_every_time(ground_truth):
     """Two candidates are only comparable if they scored the same questions, so
     the selection has to be deterministic rather than merely proportionate."""
@@ -2689,6 +2927,7 @@ def test_a_balanced_sample_is_the_same_questions_every_time(ground_truth):
     assert [q['id'] for q in first] == [q['id'] for q in second]
 
 
+# This is a unit test.
 def test_a_balanced_sample_still_spreads_across_the_question_types(ground_truth):
     """Balancing difficulty must not cost type coverage — habit questions are
     last in the file and were the type a bad stride used to lose entirely."""
@@ -2699,6 +2938,7 @@ def test_a_balanced_sample_still_spreads_across_the_question_types(ground_truth)
     assert 'habit' in types
 
 
+# This is a unit test.
 def test_a_balanced_sample_keeps_the_fixture_order(ground_truth):
     """Band-by-band output would make two runs undiffable line by line for no
     reason."""
@@ -2709,6 +2949,7 @@ def test_a_balanced_sample_keeps_the_fixture_order(ground_truth):
                                         if i in {q['id'] for q in picked}]
 
 
+# This is a unit test.
 def test_a_band_too_small_for_its_share_does_not_shrink_the_sample():
     """A run asked for N questions must produce N whenever the set holds that
     many; what a small band cannot supply is offered to the others."""
@@ -2724,6 +2965,7 @@ def test_a_band_too_small_for_its_share_does_not_shrink_the_sample():
     assert sum(1 for q in picked if q['difficulty'] == 'easy') == 2
 
 
+# This is a unit test.
 def test_the_default_sampling_rule_is_unchanged(ground_truth):
     """The twelve runs already in `.runs/` were strided. Changing the default
     underneath the leaderboard would make those rows incomparable rather than
@@ -2734,11 +2976,13 @@ def test_the_default_sampling_rule_is_unchanged(ground_truth):
     assert [q['id'] for q in strided] == [q['id'] for q in explicit]
 
 
+# This is a unit test.
 def test_an_unknown_balance_raises_rather_than_silently_striding(ground_truth):
     with pytest.raises(ValueError, match='balance'):
         evaluate.select_questions(ground_truth, limit=10, balance='difficlty')
 
 
+# This is a unit test.
 def test_an_unknown_balance_raises_even_when_there_is_no_limit(ground_truth):
     """Checked after the early return, the validation passed silently on any run
     without a limit — so a typo would only raise on the runs where it happened to
@@ -2747,6 +2991,7 @@ def test_an_unknown_balance_raises_even_when_there_is_no_limit(ground_truth):
         evaluate.select_questions(ground_truth, balance='difficlty')
 
 
+# This is an integration test.
 def test_a_run_saves_the_questions_it_was_measured_on(registry, ground_truth):
     """Neither the config nor the metric means say which questions produced them,
     so the ids travel with the row. Losing them is how two rows get compared
@@ -2767,6 +3012,7 @@ def test_a_run_saves_the_questions_it_was_measured_on(registry, ground_truth):
     assert 'question_ids' not in result.brief()['selection']
 
 
+# This is a unit test.
 def test_the_sweep_measures_every_candidate_on_the_same_balanced_30():
     """The sample is a property of the sweep, not of the invocation: a row
     measured on a different sample is a different measurement."""
@@ -2775,6 +3021,7 @@ def test_the_sweep_measures_every_candidate_on_the_same_balanced_30():
     assert sweep.SWEEP_BALANCE in config.BALANCES
 
 
+# This is a unit test.
 def test_the_sweep_sample_is_exactly_ten_of_each_band(ground_truth):
     """30 divides by three, so this sample needs no remainder rule at all — the
     bands are equal rather than merely as-equal-as-possible."""
@@ -2795,6 +3042,7 @@ PROGRESS_CFG = LabConfig(index=IndexConfig(chunker='message', embedder='char-has
                          label='progress')
 
 
+# This is an integration test.
 def test_progress_reports_which_question_it_is_on(registry, ground_truth,
                                                   tmp_path, monkeypatch):
     monkeypatch.setattr(evaluate, 'RUNS_DIR', tmp_path)
@@ -2814,6 +3062,7 @@ def test_progress_reports_which_question_it_is_on(registry, ground_truth,
     assert any(band in scoring[0][2] for band in config.DIFFICULTIES), scoring
 
 
+# This is an integration test.
 def test_a_two_argument_progress_callback_still_works(registry, ground_truth,
                                                       tmp_path, monkeypatch):
     """The detail is additive. The panel's reporter predates it, and a run must
@@ -2826,6 +3075,7 @@ def test_a_two_argument_progress_callback_still_works(registry, ground_truth,
     assert 'scoring' in seen and 'done' in seen
 
 
+# This is a unit test.
 def test_the_judged_phase_reports_calls_as_they_land():
     """The judged phase is the whole wall clock on a local judge. RAGAS scores a
     batch, so without a per-call hook the bar sits at one number for hours."""
@@ -2842,6 +3092,7 @@ def test_the_judged_phase_reports_calls_as_they_land():
     assert watch.fraction() <= 1.0
 
 
+# This is a unit test.
 def test_the_job_carries_the_detail_to_whoever_is_polling():
     """The panel polls a job dict, so the detail has to be a field on it — a
     progress line only the terminal sees leaves the two UIs looking hung."""
@@ -2864,6 +3115,7 @@ def test_the_job_carries_the_detail_to_whoever_is_polling():
     assert 'detail' in jobs.jobs[job_id]
 
 
+# This is a unit test.
 def test_a_running_job_can_be_cancelled_before_its_next_call():
     """Stopping a run must prevent its next unit of work, not just its polling."""
     from .raglab.server import Jobs
@@ -2892,6 +3144,7 @@ def test_a_running_job_can_be_cancelled_before_its_next_call():
     assert '_cancel' not in job
 
 
+# This is a unit test.
 def test_both_frontends_read_the_progress_detail():
     """Neither UI may quietly stop showing it: a judged local run spends hours in
     one stage, and the detail is the only thing that moves."""
@@ -2901,6 +3154,7 @@ def test_both_frontends_read_the_progress_detail():
     assert '.job.detail' in board
 
 
+# This is a unit test.
 def test_both_rag_lab_frontends_offer_a_cooperative_stop():
     """The embedded panel is the usual surface, but the standalone lab needs it too."""
     panel = (RAGLAB_DIR / 'static' / 'index.html').read_text(encoding='utf-8')
@@ -2911,6 +3165,7 @@ def test_both_rag_lab_frontends_offer_a_cooperative_stop():
     assert "'/jobs/' + ragState.jobId + '/cancel'" in board
 
 
+# This is a unit test.
 def test_the_terminal_bar_says_stage_fraction_elapsed_and_detail():
     line = sweep.bar('Stage F', 'scoring', 0.5, 'question 16/30 · hard',
                      time.time() - 63)
@@ -2923,6 +3178,7 @@ def test_the_terminal_bar_says_stage_fraction_elapsed_and_detail():
     assert filled == sweep.BAR_WIDTH // 2, filled
 
 
+# This is a unit test.
 def test_a_shorter_detail_cannot_leave_the_tail_of_a_longer_one_behind():
     """Without the padding a redraw leaves stale characters on the line, which
     reads as a stale *number* rather than as a drawing artefact."""
@@ -2936,6 +3192,7 @@ def test_a_shorter_detail_cannot_leave_the_tail_of_a_longer_one_behind():
     assert '137' not in written[1]
 
 
+# This is a unit test.
 def test_the_expected_judge_call_count_scales_with_k():
     """Context precision asks one verdict per retrieved chunk, so k is what
     drives the bill — the estimate has to know that or it is decoration."""
@@ -2945,6 +3202,7 @@ def test_the_expected_judge_call_count_scales_with_k():
     assert at_k12 - at_k5 == 10 * 7, (at_k5, at_k12)
 
 
+# This is a unit test.
 def test_the_balance_control_is_explained_like_every_other_knob():
     """`explain.missing()` covers config fields; a run-level control has to be
     added to the same registry by hand or it reaches the panel unexplained."""
@@ -2966,6 +3224,7 @@ def _row(run_id, label, decision, ids, judge, stderr=None):
                           'question_ids': ids}}
 
 
+# This is a unit test.
 def test_the_sweeps_own_ranking_applies_the_same_error_test():
     """Measured, and it is why this exists: F scored 0.7375 against A's 0.7222 on
     identical questions, and the sweep printed F on top of a list headed "ranked
@@ -2983,6 +3242,7 @@ def test_the_sweeps_own_ranking_applies_the_same_error_test():
     assert '0.0477' in text or '0.048' in text, 'the error it was judged against'
 
 
+# This is a unit test.
 def test_the_sweeps_ranking_names_a_winner_when_there_is_one():
     judge = {'model': 'gemma4:e2b', 'provider': 'ollama'}
     ids = ['q1', 'q2']
@@ -2992,6 +3252,7 @@ def test_the_sweeps_ranking_names_a_winner_when_there_is_one():
     assert 'F' in text and 'Winner' in text
 
 
+# This is a unit test.
 def test_rows_that_scored_different_questions_are_not_ranked_together():
     """The failure this exists to stop: F measured on 30 balanced questions read
     as beating A measured on 24 strided ones, when neither number bears on the
@@ -3005,6 +3266,7 @@ def test_rows_that_scored_different_questions_are_not_ranked_together():
     assert all(len(g.rows) == 1 for g in groups)
 
 
+# This is a unit test.
 def test_rows_scored_by_different_judges_are_not_ranked_together():
     ids = ['q1', 'q2']
     groups = leaderboard.group([
@@ -3015,6 +3277,7 @@ def test_rows_scored_by_different_judges_are_not_ranked_together():
     assert len(groups) == 2, 'a judge swap is a different measurement'
 
 
+# This is a unit test.
 def test_a_group_ranks_by_decision_score_and_keeps_the_unranked_rows_last():
     judge = {'model': 'gemma4:e2b', 'provider': 'ollama'}
     ids = ['q1', 'q2']
@@ -3028,6 +3291,7 @@ def test_a_group_ranks_by_decision_score_and_keeps_the_unranked_rows_last():
     assert group.rows[-1]['ragas_decision'] is None
 
 
+# This is a unit test.
 def test_a_lead_inside_the_error_is_reported_as_a_tie():
     """0.6487 against 0.6501 was a real pair in this lab, and a bare ranking read
     it as a win. The margin has to be compared to the error or the leaderboard
@@ -3046,6 +3310,7 @@ def test_a_lead_inside_the_error_is_reported_as_a_tie():
     assert leaderboard.verdict(clear) == 'F'
 
 
+# This is a unit test.
 def test_runs_that_never_recorded_their_sample_are_not_treated_as_one_sample():
     """Found by running the thing: every run predating `RunResult.selection` has
     no question ids, so keying on the ids alone put 3-, 24- and 100-question runs
@@ -3060,6 +3325,7 @@ def test_runs_that_never_recorded_their_sample_are_not_treated_as_one_sample():
     assert len(leaderboard.group(rows)) == 2, 'different counts, different samples'
 
 
+# This is a unit test.
 def test_an_unrecorded_sample_can_never_declare_a_winner():
     """Two runs of 24 questions apiece may still be two *different* 24 — striding
     changed, and nothing on those rows says which questions they were. So even
@@ -3078,6 +3344,7 @@ def test_an_unrecorded_sample_can_never_declare_a_winner():
     assert '| 1 |' not in text, text
 
 
+# This is a unit test.
 def test_a_group_with_no_measured_error_cannot_claim_a_winner():
     """`± 0` on the oldest rows would present them as the most precise."""
     judge = {'model': 'openai/gpt-5-mini', 'provider': 'openrouter'}
@@ -3089,6 +3356,7 @@ def test_a_group_with_no_measured_error_cannot_claim_a_winner():
     assert leaderboard.verdict(group) == 'unknown'
 
 
+# This is a unit test.
 def test_the_group_that_decides_something_is_printed_first():
     """Sorting by question count put a 100-question group of unrecorded samples —
     which cannot be ranked at all — above the 30-question group that decides the
@@ -3103,6 +3371,7 @@ def test_the_group_that_decides_something_is_printed_first():
     assert leaderboard.verdict(groups[0]) == 'F', [g.sample for g in groups]
 
 
+# This is a unit test.
 def test_every_judge_label_reads_as_a_noun_after_judged_by():
     judge = {'model': '', 'provider': ''}
     unjudged, = leaderboard.group([_row('r1', 'retrieval only', None,
@@ -3112,6 +3381,7 @@ def test_every_judge_label_reads_as_a_noun_after_judged_by():
     assert 'judged by no judge —' in text
 
 
+# This is a unit test.
 def test_the_markdown_names_the_sample_and_the_judge_on_every_group():
     judge = {'model': 'gemma4:e2b', 'provider': 'ollama'}
     text = leaderboard.markdown(leaderboard.group([
@@ -3122,6 +3392,7 @@ def test_the_markdown_names_the_sample_and_the_judge_on_every_group():
     assert 'r1' in text, 'the run id is what makes a row checkable'
 
 
+# This is a unit test.
 def test_the_run_list_carries_the_two_fields_comparability_needs(tmp_path,
                                                                  monkeypatch):
     """`brief()` had them and `list_runs` did not, so the panel's own leaderboard
@@ -3154,6 +3425,7 @@ def test_the_run_list_carries_the_two_fields_comparability_needs(tmp_path,
 # of the local models screened so far answered identically to every claim, which
 # scores 0.5 on a balanced set and separates no candidate from any other.
 
+# This is a unit test.
 def test_the_screen_pairs_a_verified_answer_with_one_fabricated_number(
         diary, ground_truth):
     """Built from the ground truth, not hand-authored: a supported claim is a
@@ -3176,6 +3448,7 @@ def test_the_screen_pairs_a_verified_answer_with_one_fabricated_number(
         assert strip(supported.claim) == strip(fabricated.claim)
 
 
+# This is a unit test.
 def test_the_screen_measures_how_much_word_overlap_could_explain(diary,
                                                                 ground_truth):
     """Reported, not assumed — and it is not zero, which is a deliberate trade.
@@ -3203,6 +3476,7 @@ def test_the_screen_measures_how_much_word_overlap_could_explain(diary,
     assert abs(signal['difference']) <= 0.15, signal
 
 
+# This is a unit test.
 def test_the_screen_dates_its_context_the_way_the_pipeline_does(diary,
                                                                ground_truth):
     """The defect that made the first screen's verdicts worthless.
@@ -3222,6 +3496,7 @@ def test_the_screen_dates_its_context_the_way_the_pipeline_does(diary,
             assert re.match(r'^\[\d{4}-\d{2}-\d{2}\]', line), line
 
 
+# This is a unit test.
 def test_a_screened_claim_is_one_sentence_not_a_whole_answer(diary,
                                                             ground_truth):
     """The second defect. A reference answer is several clauses spanning several
@@ -3247,6 +3522,7 @@ def test_a_screened_claim_is_one_sentence_not_a_whole_answer(diary,
         assert anchored or not item.supported, item.id
 
 
+# This is a unit test.
 def test_the_fabricated_number_is_one_the_context_never_states(diary,
                                                               ground_truth):
     """Otherwise the claim is labelled unsupported while being arguably
@@ -3265,6 +3541,7 @@ def test_the_fabricated_number_is_one_the_context_never_states(diary,
             assert textnorm.normalize(numeral) not in context, (item.id, numeral)
 
 
+# This is a unit test.
 def test_a_question_that_cannot_be_mutated_cleanly_is_skipped(diary):
     """No mutation is better than a mislabelled one."""
     from .raglab import judgescreen
@@ -3277,6 +3554,7 @@ def test_a_question_that_cannot_be_mutated_cleanly_is_skipped(diary):
     assert judgescreen.build_items(ground_truth, sessions, pairs=4) == []
 
 
+# This is a unit test.
 def test_the_screen_reads_a_ragas_shaped_reply_and_nothing_looser():
     """RAGAS asks for nested JSON and retries on malformed output, so a model that
     judges well but writes prose spends its speed advantage on retries. Counting
@@ -3292,6 +3570,7 @@ def test_the_screen_reads_a_ragas_shaped_reply_and_nothing_looser():
     assert judgescreen._verdict('') is None
 
 
+# This is a unit test.
 def test_a_constant_judge_is_reported_as_degenerate_not_as_fifty_percent():
     """The field that decides. A model answering the same way every time is
     unusable at any accuracy, because it cannot separate two candidates — and on
@@ -3306,6 +3585,7 @@ def test_a_constant_judge_is_reported_as_degenerate_not_as_fifty_percent():
     assert result['recall_unsupported'] == 0.0
 
 
+# This is a unit test.
 def test_a_judge_that_tracks_the_claim_is_not_flagged_degenerate():
     from .raglab.judgescreen import Call, score
     calls = [Call(item_id=f'i{i}', supported=i % 2 == 0,
@@ -3315,6 +3595,7 @@ def test_a_judge_that_tracks_the_claim_is_not_flagged_degenerate():
     assert result['degenerate'] is False and result['accuracy'] == 1.0
 
 
+# This is a unit test.
 def test_unparseable_replies_are_counted_separately_from_wrong_ones():
     """Two different problems with two different fixes: a prompt/format issue and
     a comprehension issue. Folding them together would send you tuning the wrong
@@ -3330,6 +3611,7 @@ def test_unparseable_replies_are_counted_separately_from_wrong_ones():
     assert result['accuracy'] == 1.0, 'accuracy is over what could be graded'
 
 
+# This is a unit test.
 def test_the_screen_refuses_to_run_without_a_backend(monkeypatch):
     """The same guard as the sweep, for the same reason: the fake provider judges
     every claim without failing, and a screen it passed would be a licence."""
@@ -3339,6 +3621,7 @@ def test_the_screen_refuses_to_run_without_a_backend(monkeypatch):
         judgescreen.screen(['whatever:1b'], pairs=1)
 
 
+# This is a unit test.
 def test_the_screen_keeps_every_prompt_and_reply_it_sent():
     """A screen that reported only an accuracy could not be re-read to see *how*
     a model failed, and 'it was a constant predictor' is a conclusion nobody can
@@ -3351,6 +3634,7 @@ def test_the_screen_keeps_every_prompt_and_reply_it_sent():
     assert {'prompt', 'reply', 'verdict', 'parsed', 'seconds', 'usage'} <= names
 
 
+# This is a unit test.
 def test_a_remote_slug_is_never_refused_on_the_strength_of_a_listing(monkeypatch):
     """OpenRouter's list is authoritative in one direction only: everything on it
     works, but a slug missing from it may still be valid — the routing suffixes
@@ -3363,3 +3647,310 @@ def test_a_remote_slug_is_never_refused_on_the_strength_of_a_listing(monkeypatch
                         lambda settings: frozenset({'openai/gpt-5-nano'}))
     cfg = LabConfig(generation=GenerationConfig(ragas_model='openai/gpt-5-mini:floor'))
     assert models.provider_problems(cfg, keyed) == []
+
+
+# ---------------------------------------------------------------------------
+# The HTTP surface — resource collections rather than action verbs.
+# ---------------------------------------------------------------------------
+
+# This is an integration test.
+def test_the_run_and_runs_collision_is_gone(client):
+    """`POST /api/run` sat one character away from `GET /api/runs`, meaning two
+    unrelated things: start an evaluation, and list finished ones. Reading a
+    caller you had to check the verb to know which. Both are now the same
+    collection — POST creates, GET lists — and the old spellings are gone
+    rather than aliased, because a second name for one thing is the thing this
+    rename was fixing."""
+    assert client.post('/api/run', json={}).status_code == 404
+    assert client.get('/api/runs').status_code == 404
+    assert client.post('/api/index', json={}).status_code == 404
+    assert client.post('/api/query', json={'question': 'x'}).status_code == 404
+
+
+# This is an integration test.
+def test_starting_work_creates_a_job_and_says_where_to_watch_it(client):
+    """202 rather than 200: the work has been accepted, not done — the response
+    body is a receipt, not a result. `Location` points at the job so a caller
+    never has to build the polling url by string concatenation."""
+    for path, payload in (
+            ('/api/indexes', {'index': {'chunker': 'session',
+                                        'embedder': 'ascii-hash'}}),
+            ('/api/evaluations', {'index': {'chunker': 'session',
+                                            'embedder': 'ascii-hash'},
+                                  'generation': {'answerer': 'none'},
+                                  'limit': 1, 'ragas_mode': 'off'})):
+        res = client.post(path, json=payload)
+        assert res.status_code == 202, f'{path} -> {res.status_code}'
+        job_id = res.json()['job_id']
+        assert job_id
+        assert res.headers['Location'] == f'/api/jobs/{job_id}'
+        # And the url it points at is real.
+        assert client.get(res.headers['Location']).status_code == 200
+
+
+# This is an integration test.
+def test_evaluations_lists_and_fetches_the_same_resource(client):
+    """One noun, three operations, no second spelling for any of them."""
+    assert 'runs' in client.get('/api/evaluations').json()
+    assert client.get('/api/evaluations/no-such-run').status_code == 404
+
+
+# This is an integration test.
+def test_a_query_is_posted_to_its_collection(client):
+    """`/api/queries` rather than `/api/query`: every other collection on this
+    service is plural, and a surface where one route breaks the rule is a
+    surface you have to remember instead of infer."""
+    res = client.post('/api/queries', json={
+        'index': {'chunker': 'session', 'embedder': 'ascii-hash'},
+        'retrieval': {'retriever': 'dense', 'k': 2},
+        'generation': {'answerer': 'none'},
+        'question': 'وام مسکن'})
+    assert res.status_code == 200
+    assert 'contexts' in res.json()
+    # The precondition still refuses, and still says which one.
+    assert client.post('/api/queries', json={}).status_code == 400
+
+
+# This is an integration test.
+def test_a_second_job_is_refused_in_readable_english(client):
+    """The refusal read 'a index job is still stopping' — wrong article, and
+    'stopping' for a job that is running. A message describing the wrong state
+    sends the reader looking for a bug that is not there."""
+    first = client.post('/api/indexes', json={
+        'index': {'chunker': 'message', 'embedder': 'token-hash'}})
+    assert first.status_code == 202
+    second = client.post('/api/indexes', json={
+        'index': {'chunker': 'turn-pair', 'embedder': 'token-hash'}})
+    if second.status_code == 409:
+        detail = second.json()['detail']
+        assert 'a index' not in detail
+        assert 'an index job is already running' in detail
+
+
+# ---------------------------------------------------------------------------
+# The panel's two usability guarantees, held by the served data rather than by
+# either frontend — a rule copied into two panels is a rule that will disagree.
+# ---------------------------------------------------------------------------
+
+# This is a unit test.
+def test_every_option_list_leads_with_the_default():
+    """A default buried sixth reads as an exotic choice. The measured winner
+    should be the first thing offered, and this fails if a default moves without
+    its list — which is how the embedder default ended up behind three hash
+    embedders that exist only to be measured against it."""
+    cfg = LabConfig()
+    for name, options, default in (
+            ('chunkers', config.CHUNKERS, cfg.index.chunker),
+            ('embedders', config.EMBEDDERS, cfg.index.embedder),
+            ('retrievers', config.RETRIEVERS, cfg.retrieval.retriever),
+            ('rerankers', config.RERANKERS, cfg.retrieval.reranker),
+            ('graders', config.GRADERS, cfg.retrieval.grader),
+            ('answerers', config.ANSWERERS, cfg.generation.answerer)):
+        assert options[0] == default, (
+            f'{name} leads with {options[0]!r} but the default is {default!r}')
+
+
+# This is a unit test.
+def test_a_dependent_control_is_live_only_when_its_owner_makes_it_mean_something():
+    """The rule the panels grey out by. Each case is a knob the pipeline would
+    ignore, so leaving it editable invites tuning a number that does nothing.
+
+    `semantic-drift` is deliberately in the *enabled* set for chunk_chars: it
+    passes the value to `_semantic_segments` as a max_chars cap, so unlike
+    message/turn-pair/session it genuinely reads it."""
+    def state(cfg):
+        return config.dependency_state(cfg.to_dict())
+
+    drift = state(LabConfig(index=IndexConfig(chunker='semantic-drift')))
+    assert drift['index.chunk_chars']['enabled']
+    assert not drift['index.overlap']['enabled']
+
+    per_message = state(LabConfig(index=IndexConfig(chunker='message')))
+    assert not per_message['index.chunk_chars']['enabled']
+    assert 'structure' in per_message['index.chunk_chars']['reason']
+
+    hashed = state(LabConfig(index=IndexConfig(embedder='char-hash')))
+    assert not hashed['index.embed_model']['enabled']
+    real = state(LabConfig(index=IndexConfig(embedder='sentence-transformers')))
+    assert real['index.embed_model']['enabled']
+
+    ungated = state(LabConfig(retrieval=RetrievalConfig(grader='none')))
+    assert not ungated['retrieval.grade_threshold']['enabled']
+    assert not ungated['retrieval.grader_model']['enabled']
+    lexical_gate = state(LabConfig(retrieval=RetrievalConfig(grader='lexical')))
+    assert lexical_gate['retrieval.grade_threshold']['enabled']
+    assert not lexical_gate['retrieval.grader_model']['enabled']   # no model involved
+
+    no_hyde = state(LabConfig(retrieval=RetrievalConfig(hyde=False)))
+    assert not no_hyde['retrieval.expansion_model']['enabled']
+    assert state(LabConfig(retrieval=RetrievalConfig(hyde=True))
+                 )['retrieval.expansion_model']['enabled']
+
+    extractive = state(LabConfig(generation=GenerationConfig(answerer='extractive')))
+    assert not extractive['generation.model']['enabled']
+    assert state(LabConfig(generation=GenerationConfig(answerer='llm'))
+                 )['generation.model']['enabled']
+
+
+# This is a unit test.
+def test_every_disabled_control_says_why():
+    """A greyed-out control with no reason is indistinguishable from a broken
+    one. Every rule carries the sentence the panel shows."""
+    for key, rule in config.DEPENDENCIES.items():
+        assert rule['reason'], f'{key} has no reason'
+        assert not rule['reason'].endswith('.'), (
+            f'{key}: the panel completes "disabled because …", so no full stop')
+
+
+# This is an integration test.
+def test_the_panel_is_served_the_dependency_rules(client):
+    """Both frontends read this rather than each keeping a copy."""
+    served = client.get('/api/options').json()['dependencies']
+    assert served['index.overlap']['on'] == ['fixed-overlap']
+    assert 'semantic-drift' in served['index.chunk_chars']['on']
+
+
+# This is a unit test.
+def test_the_embedder_hints_render_in_the_same_order_as_the_embedders():
+    """The standalone panel builds its embedder dropdown from EMBEDDER_HINTS, not
+    from EMBEDDERS, so reordering one and not the other left the panel still
+    leading with ascii-hash while the in-board panel led with the default. Two
+    lists describing one set of choices have to agree on their order or the two
+    frontends disagree about what is recommended."""
+    from .raglab.embedding import EMBEDDER_HINTS
+
+    assert [hint.kind for hint in EMBEDDER_HINTS] == list(config.EMBEDDERS)
+
+
+# This is a unit test.
+def test_no_hint_still_calls_a_hash_embedder_the_brain_default():
+    """`ascii-hash` was labelled 'the brain default today'. Session 1 promoted
+    heydariAI/persian-embeddings and retired `hash` in production *by name*, so
+    the label described a configuration that now raises at boot."""
+    from .raglab.embedding import EMBEDDER_HINTS
+
+    for hint in EMBEDDER_HINTS:
+        if hint.kind.endswith('-hash'):
+            assert 'brain default' not in hint.label, hint.label
+
+
+# ---------------------------------------------------------------------------
+# Two bugs found by auditing the lab, 2026-08-02. Both are reproductions: they
+# encode the correct behaviour and fail against the code as it stands.
+# ---------------------------------------------------------------------------
+
+# This is a unit test.
+def test_a_gate_whose_model_call_fails_does_not_silently_pass_everything():
+    """`llm_scores` catches every exception from the model and returns 0.5 for
+    each document. 0.5 clears the default 0.4 threshold, so an unreachable
+    model turns `grader='llm'` into a no-op and the run records nothing about
+    it — measured on 2026-08-02 with Ollama down: grader=lexical returned 2
+    contexts, grader=llm returned 4, the same as ungated.
+
+    In the shipped brain that fallback is deliberate and right: production
+    prefers answering with more context to emptying it. A lab is the opposite
+    case. Its entire output is a claim about what a configuration scored, so a
+    row labelled `grader=llm` that was measured ungated is the one artefact
+    this lab must never produce — the same reasoning that already makes
+    `judged_settings()` refuse an unbacked run rather than let the fake
+    provider fill in.
+
+    The parse fallback is a different thing and must survive: a line the model
+    wrote that we could not read is genuinely 'no opinion'."""
+    class Unreachable:
+        def invoke(self, messages, **kwargs):
+            raise ConnectionError('the model daemon is not running')
+
+    with pytest.raises(Exception) as caught:
+        retrieval.llm_scores(Unreachable(), 'm', 'q', ['a', 'b', 'c'])
+    # And it names the cause, so the reader is not left guessing which stage
+    # went missing.
+    assert 'not running' in str(caught.value) or 'grade' in str(caught.value).lower()
+
+    # Unchanged: a reply that arrives but cannot be parsed is still no opinion.
+    class Unparseable:
+        def invoke(self, messages, **kwargs):
+            return type('Reply', (), {'content': 'I think they all look fine!'})()
+
+    scores = retrieval.llm_scores(Unparseable(), 'm', 'q', ['a', 'b'])
+    assert list(scores) == [pytest.approx(0.5), pytest.approx(0.5)]
+
+
+# This is an integration test.
+def test_running_an_evaluation_leaves_the_repositorys_runs_directory_alone(
+        registry, ground_truth):
+    """`run_eval` ends in `save_run`, which writes to the module-level
+    RUNS_DIR. Nine tests redirect it to tmp_path; one —
+    test_a_run_saves_the_questions_it_was_measured_on — does not take the
+    fixtures, so every invocation of this suite deposits a real run file.
+
+    Measured 2026-08-02: one more file in `.runs/` after every suite run, and
+    124 of the 154 sitting there were this leak — four fifths of the
+    directory, against 30 runs somebody asked for. The
+    leaderboard's own guards quarantine them (no judge, unrecorded sample) so
+    no real comparison is corrupted, which is why this went unnoticed; the
+    cost is a `.runs/` that is mostly noise and a leaderboard padded with
+    groups nobody produced on purpose.
+
+    This test deliberately does *not* redirect RUNS_DIR — that is the thing
+    under test. The fix worth making is structural rather than one more
+    monkeypatch line: nine tests repeating a guard by hand is nine chances to
+    forget, and one already did."""
+    real = config.RUNS_DIR
+    before = {p.name for p in real.glob('*.json')} if real.exists() else set()
+
+    cfg = LabConfig(index=IndexConfig(chunker='session', embedder='ascii-hash'),
+                    generation=GenerationConfig(answerer='none'))
+    evaluate.run_eval(registry, ground_truth, cfg, LAB_SETTINGS,
+                      limit=2, balance='difficulty', ragas_mode='off')
+
+    after = {p.name for p in real.glob('*.json')} if real.exists() else set()
+    assert after == before, (
+        f'the suite wrote {sorted(after - before)} into the real .runs/')
+
+
+# This is a configuration invariant.
+def test_no_test_in_this_suite_can_reach_the_real_runs_directory():
+    """The structural half. Whatever redirects RUNS_DIR has to apply to every
+    test, not to the ones whose author remembered — otherwise this returns the
+    next time someone adds a case that calls run_eval."""
+    assert evaluate.RUNS_DIR != config.RUNS_DIR, (
+        'evaluate.RUNS_DIR still points at the repository .runs/ during tests')
+
+
+# This is an integration test.
+def test_both_run_routes_screen_the_models_the_backend_serves(client, monkeypatch):
+    """`/api/evaluations` refused a model the active backend does not serve;
+    `/api/queries` ran it. Two routes over the same pipeline disagreeing about
+    which configs are legal is a bug on its own, and it got worse the moment a
+    dead grade stage started raising: the panel's fastest feedback loop would
+    answer a bare 500 where the slow one answers a 400 naming the model."""
+    monkeypatch.setattr(models, 'provider_problems',
+                        lambda cfg, settings: ['model "qwen3.5:2b" is not served'])
+    payload = {'index': {'chunker': 'session', 'embedder': 'ascii-hash'},
+               'generation': {'answerer': 'none'}, 'question': 'چه خبر؟'}
+    for path in ('/api/queries', '/api/evaluations'):
+        res = client.post(path, json=payload)
+        assert res.status_code == 400, f'{path} -> {res.status_code}'
+        assert 'qwen3.5:2b' in res.json()['detail'], path
+
+
+# This is an integration test.
+def test_a_query_whose_gate_cannot_reach_its_model_says_so(client, monkeypatch):
+    """The other half of the gate fix. Refusing to score is only an improvement
+    if the refusal reaches the caller as something they can read: 502 because
+    the lab is up and its model is not, and the message names the stage —
+    otherwise the panel shows an empty result and the reader blames retrieval
+    for what the grader did."""
+    def unreachable(*args, **kwargs):
+        raise ConnectionError('the model daemon is not running')
+
+    monkeypatch.setattr(retrieval, 'lab_chat', unreachable)
+    res = client.post('/api/queries', json={
+        'question': 'چه خبر؟',
+        'index': {'chunker': 'session', 'embedder': 'ascii-hash'},
+        'retrieval': {'k': 4, 'grader': 'llm', 'grade_threshold': 0.4},
+        'generation': {'answerer': 'none'}})
+    assert res.status_code == 502, res.status_code
+    detail = res.json()['detail']
+    assert 'grade' in detail.lower() and 'not running' in detail

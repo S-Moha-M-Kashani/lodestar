@@ -11,6 +11,7 @@ from .harness import all_scenarios, load_scenario, run_scenario
 SCENARIOS = all_scenarios()
 
 
+# This is an eval.
 @pytest.mark.eval
 @pytest.mark.parametrize("path", SCENARIOS, ids=[p.stem for p in SCENARIOS])
 def test_scenario_tool_calls_and_effect(path):
@@ -40,11 +41,13 @@ def test_scenario_tool_calls_and_effect(path):
         assert moved["columnId"] == "answered"
 
 
+# This is a configuration invariant: an empty scenario directory must fail, not pass silently.
 @pytest.mark.eval
 def test_at_least_one_scenario_exists():
     assert SCENARIOS, "no eval scenarios found"
 
 
+# This is a live eval: it calls the real model, and is skipped without BRAIN_EVAL_LIVE=1.
 @pytest.mark.live
 @pytest.mark.skipif(
     os.environ.get("BRAIN_EVAL_LIVE") != "1" or not os.environ.get("OPENROUTER_API_KEY"),

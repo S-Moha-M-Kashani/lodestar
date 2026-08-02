@@ -8,6 +8,7 @@ import { mkdtempSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+// This is an integration test.
 test('GET /api/state returns version, cards, seeded categories', async () => {
   const s = await startServer();
   try {
@@ -21,6 +22,7 @@ test('GET /api/state returns version, cards, seeded categories', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('PUT /api/state persists a card and echoes full board', async () => {
   const s = await startServer();
   try {
@@ -37,6 +39,7 @@ test('PUT /api/state persists a card and echoes full board', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('omitting a live card from PUT soft-deletes it into trash', async () => {
   const s = await startServer();
   try {
@@ -60,6 +63,7 @@ test('omitting a live card from PUT soft-deletes it into trash', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('re-including a trashed card restores it', async () => {
   const s = await startServer();
   try {
@@ -75,6 +79,7 @@ test('re-including a trashed card restores it', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('wrong methods return 405 with the shared error body', async () => {
   const s = await startServer();
   try {
@@ -90,6 +95,7 @@ test('wrong methods return 405 with the shared error body', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('malformed JSON body → 400 Invalid JSON', async () => {
   const s = await startServer();
   try {
@@ -102,6 +108,7 @@ test('malformed JSON body → 400 Invalid JSON', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('non-array cards → 400 shape error', async () => {
   const s = await startServer();
   try {
@@ -114,6 +121,7 @@ test('non-array cards → 400 shape error', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('card with blank title is silently dropped (not an error)', async () => {
   const s = await startServer();
   try {
@@ -130,6 +138,7 @@ test('card with blank title is silently dropped (not an error)', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('card with no id gets one auto-generated', async () => {
   const s = await startServer();
   try {
@@ -144,6 +153,7 @@ test('card with no id gets one auto-generated', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('DELETE /api/cards/ with empty id → 400 Missing card id', async () => {
   const s = await startServer();
   try {
@@ -153,6 +163,7 @@ test('DELETE /api/cards/ with empty id → 400 Missing card id', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('DELETE unknown id → 200 { ok: false }', async () => {
   const s = await startServer();
   try {
@@ -162,6 +173,7 @@ test('DELETE unknown id → 200 { ok: false }', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('unknown path → 404 text/plain Not found', async () => {
   const s = await startServer();
   try {
@@ -172,6 +184,7 @@ test('unknown path → 404 text/plain Not found', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('~5MB payload cap → 400 Invalid JSON: Payload too large', async () => {
   const s = await startServer();
   try {
@@ -186,6 +199,7 @@ test('~5MB payload cap → 400 Invalid JSON: Payload too large', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('proxy returns 503 assistant unavailable when brain is down', async () => {
   // Point AGENT_URL at a port with nothing listening.
   const s = await startServer({ env: { AGENT_URL: 'http://127.0.0.1:59999' } });
@@ -199,6 +213,7 @@ test('proxy returns 503 assistant unavailable when brain is down', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('/api/rag/* is also proxied (503 when brain down)', async () => {
   const s = await startServer({ env: { AGENT_URL: 'http://127.0.0.1:59999' } });
   try {
@@ -314,6 +329,7 @@ test('an SSE upstream reaches the browser frame by frame, not all at the end', a
 // for lab options landing on the brain would 404 in a way that reads like the
 // lab is broken.
 
+// This is an integration test.
 test('/api/raglab/* is proxied to the lab, not to the brain', async () => {
   const seen = [];
   const lab = await startStubBrain((req) => seen.push(req), {
@@ -332,6 +348,7 @@ test('/api/raglab/* is proxied to the lab, not to the brain', async () => {
   } finally { await s.stop(); await lab.stop(); await brain.stop(); }
 });
 
+// This is an integration test.
 test('/api/raglab/* forwards POST bodies and query strings', async () => {
   const seen = [];
   const lab = await startStubBrain((req) => seen.push(req), {
@@ -350,6 +367,7 @@ test('/api/raglab/* forwards POST bodies and query strings', async () => {
   } finally { await s.stop(); await lab.stop(); }
 });
 
+// This is an integration test.
 test('the lab being down is reported as the lab, not as the assistant', async () => {
   // Distinct wording is the whole point: "assistant unavailable" would send the
   // user restarting a brain that is running perfectly well.
@@ -361,6 +379,7 @@ test('the lab being down is reported as the lab, not as the assistant', async ()
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('a lab error status passes through instead of becoming a 503', async () => {
   const lab = await startStubBrain(() => {}, {
     status: 400, body: { detail: 'unknown chunker: nope' },
@@ -376,6 +395,7 @@ test('a lab error status passes through instead of becoming a 503', async () => 
   } finally { await s.stop(); await lab.stop(); }
 });
 
+// This is an integration test.
 test('static index.html served at / with html content-type', async () => {
   const s = await startServer();
   try {
@@ -387,6 +407,7 @@ test('static index.html served at / with html content-type', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('whitelisted path with wrong method falls through to 404', async () => {
   const s = await startServer();
   try {
@@ -395,6 +416,7 @@ test('whitelisted path with wrong method falls through to 404', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('boot migrates a legacy cards table missing newer columns', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'lodestar-legacy-'));
   const dbPath = join(dir, 'board.db');
@@ -423,6 +445,7 @@ test('boot migrates a legacy cards table missing newer columns', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('PUT /api/state round-trips a card deadline', async () => {
   const s = await startServer();
   try {
@@ -443,6 +466,7 @@ test('PUT /api/state round-trips a card deadline', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('malformed deadlines are sanitized to empty string', async () => {
   const s = await startServer();
   try {
@@ -459,6 +483,7 @@ test('malformed deadlines are sanitized to empty string', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('deadline survives soft-delete and restore', async () => {
   const s = await startServer();
   try {
@@ -486,6 +511,7 @@ const putCards = (base, cards) => fetch(base + '/api/state', {
   body: JSON.stringify({ version: 1, cards }),
 });
 
+// This is an integration test.
 test('PUT /api/state round-trips the habit fields', async () => {
   const s = await startServer();
   try {
@@ -509,6 +535,7 @@ test('PUT /api/state round-trips the habit fields', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('a card that says nothing about habits gets the habit defaults', async () => {
   const s = await startServer();
   try {
@@ -523,6 +550,7 @@ test('a card that says nothing about habits gets the habit defaults', async () =
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('habit is an accepted card type', async () => {
   const s = await startServer();
   try {
@@ -535,6 +563,7 @@ test('habit is an accepted card type', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('an unrecognized frequency is scrubbed to empty', async () => {
   const s = await startServer();
   try {
@@ -546,6 +575,7 @@ test('an unrecognized frequency is scrubbed to empty', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('every real frequency is kept', async () => {
   const s = await startServer();
   try {
@@ -557,6 +587,7 @@ test('every real frequency is kept', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('habitCount is clamped to 1..99 and always a whole number', async () => {
   const s = await startServer();
   try {
@@ -571,6 +602,7 @@ test('habitCount is clamped to 1..99 and always a whole number', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('habitTimes are normalized: valid, sorted, deduped, and never more than the target', async () => {
   const s = await startServer();
   try {
@@ -585,6 +617,7 @@ test('habitTimes are normalized: valid, sorted, deduped, and never more than the
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('a malformed habit history is replaced with an empty one', async () => {
   const s = await startServer();
   try {
@@ -598,6 +631,7 @@ test('a malformed habit history is replaced with an empty one', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('history entries that are not period→timestamps are dropped, the good ones kept', async () => {
   const s = await startServer();
   try {
@@ -624,6 +658,7 @@ test('history entries that are not period→timestamps are dropped, the good one
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('history keeps the newest 400 periods so one habit cannot bloat every save', async () => {
   const s = await startServer();
   try {
@@ -644,6 +679,7 @@ test('history keeps the newest 400 periods so one habit cannot bloat every save'
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('habit history is not tied to the card type — retyping a card never erases it', async () => {
   const s = await startServer();
   try {
@@ -665,6 +701,7 @@ test('habit history is not tied to the card type — retyping a card never erase
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('habit history survives soft-delete and restore', async () => {
   const s = await startServer();
   try {
@@ -681,6 +718,7 @@ test('habit history survives soft-delete and restore', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('a legacy database gains the habit columns with their defaults', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'qboard-habit-migrate-'));
   const dbPath = join(dir, 'board.db');
@@ -708,6 +746,7 @@ test('a legacy database gains the habit columns with their defaults', async () =
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('a proposal can carry habit fields through the confirmation gate', async () => {
   const s = await startServer();
   try {
@@ -755,6 +794,7 @@ function startStubBrain(handler, reply = { status: 200, body: { text: 'transcrib
   });
 }
 
+// This is an integration test.
 test('POST /api/agent/transcribe reaches the brain with the body intact', async () => {
   const seen = [];
   const brain = await startStubBrain((req) => seen.push(req));
@@ -775,6 +815,7 @@ test('POST /api/agent/transcribe reaches the brain with the body intact', async 
   } finally { await s.stop(); await brain.stop(); }
 });
 
+// This is an integration test.
 test('transcribe returns 503 when the brain is down', async () => {
   const s = await startServer({ env: { AGENT_URL: 'http://127.0.0.1:59999' } });
   try {
@@ -787,6 +828,7 @@ test('transcribe returns 503 when the brain is down', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('a transcription failure keeps the brain\'s reason instead of flattening it', async () => {
   // When a model silently drops the audio the brain answers 502 with a detail
   // naming the model. The proxy must pass that through verbatim so the browser
@@ -804,6 +846,7 @@ test('a transcription failure keeps the brain\'s reason instead of flattening it
   } finally { await s.stop(); await brain.stop(); }
 });
 
+// This is an integration test.
 test('oversized audio is rejected as too large, not blamed on the brain', async () => {
   // Audio is the only payload that realistically hits the ~5MB body cap. The
   // caller must be told the recording was too long — reporting "assistant
@@ -859,6 +902,7 @@ async function waitForSnapshots(dir, n, timeoutMs = 8000) {
 // Give a backup that should NOT happen enough time to prove it didn't.
 const settle = (ms = 1200) => new Promise((r) => setTimeout(r, ms));
 
+// This is an integration test.
 test('PUT with a never-before-seen card triggers one backup', async () => {
   const bk = backupSandbox();
   const s = await startServer({ env: bk.env });
@@ -873,6 +917,7 @@ test('PUT with a never-before-seen card triggers one backup', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('PUT that only edits an existing card triggers no further backup', async () => {
   const bk = backupSandbox();
   const s = await startServer({ env: bk.env });
@@ -886,6 +931,7 @@ test('PUT that only edits an existing card triggers no further backup', async ()
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('PUT that restores a soft-deleted card triggers no further backup', async () => {
   const bk = backupSandbox();
   const s = await startServer({ env: bk.env });
@@ -902,6 +948,7 @@ test('PUT that restores a soft-deleted card triggers no further backup', async (
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('one PUT carrying five new cards triggers exactly one backup', async () => {
   const bk = backupSandbox();
   const s = await startServer({ env: bk.env });
@@ -914,6 +961,7 @@ test('one PUT carrying five new cards triggers exactly one backup', async () => 
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('LODESTAR_BACKUP_ON_WRITE=0 disables write-triggered backups', async () => {
   const bk = backupSandbox();
   const s = await startServer({ env: { ...bk.env, LODESTAR_BACKUP_ON_WRITE: '0' } });
@@ -941,6 +989,7 @@ const getJson = async (base, path) => (await fetch(base + path)).json();
 const act = (base, id, what) =>
   fetch(`${base}/api/proposals/${encodeURIComponent(id)}/${what}`, { method: 'POST' });
 
+// This is an integration test.
 test('POST /api/proposals creates a card the board does not show', async () => {
   const s = await startServer();
   try {
@@ -959,6 +1008,7 @@ test('POST /api/proposals creates a card the board does not show', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('a proposal with a blank title is rejected as a bad request', async () => {
   const s = await startServer();
   try {
@@ -969,6 +1019,7 @@ test('a proposal with a blank title is rejected as a bad request', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('creating a proposal triggers no backup', async () => {
   const bk = backupSandbox();
   const s = await startServer({ env: bk.env });
@@ -980,6 +1031,7 @@ test('creating a proposal triggers no backup', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('a browser PUT that omits proposals does not trash them', async () => {
   // The load-bearing case: writeBoard soft-deletes any live card missing from a
   // save, and the browser never sends proposals because it cannot see them.
@@ -997,6 +1049,7 @@ test('a browser PUT that omits proposals does not trash them', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('confirming a proposal puts it on the board and takes one backup', async () => {
   const bk = backupSandbox();
   const s = await startServer({ env: bk.env });
@@ -1015,6 +1068,7 @@ test('confirming a proposal puts it on the board and takes one backup', async ()
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('rejecting a proposal trashes it and takes no backup', async () => {
   const bk = backupSandbox();
   const s = await startServer({ env: bk.env });
@@ -1036,6 +1090,7 @@ test('rejecting a proposal trashes it and takes no backup', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('a rejected proposal restores from Trash as an ordinary card', async () => {
   // Reject clears `pending` as well as setting deleted_at. If it did not, the
   // restored row would still be invisible and the restore would look broken.
@@ -1054,6 +1109,7 @@ test('a rejected proposal restores from Trash as an ordinary card', async () => 
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('confirm or reject on an unknown or already-live card → 404', async () => {
   const s = await startServer();
   try {
@@ -1072,6 +1128,7 @@ test('confirm or reject on an unknown or already-live card → 404', async () =>
   } finally { await s.stop(); }
 });
 
+// This is an integration test.
 test('/api/proposals rejects methods it does not implement', async () => {
   const s = await startServer();
   try {
@@ -1087,6 +1144,7 @@ test('/api/proposals rejects methods it does not implement', async () => {
 // Brains live in the 9000 block; 8001/8002 belong to the Chroma stack that chat
 // memory now runs on. Port collisions are covered in tests/ports.test.js.
 
+// This is a configuration invariant.
 test('package.json pairs the test board with its own brain', async () => {
   const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   const board = pkg.scripts['test-board'];
