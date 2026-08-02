@@ -198,10 +198,9 @@ def create_app() -> FastAPI:
             },
             'capabilities': {
                 'fastembed': embedding.fastembed_available(),
-                # One per model backend, so the panel can say which of the three
+                # One per model backend, so the panel can say which of the two
                 # can run right now instead of finding out during a build.
                 'sentence_transformers': embedding.sentence_transformers_available(),
-                'openai_embeddings': embedding.openai_embeddings_available(settings),
                 'cross_encoder': retrieval.cross_encoder_available(
                     settings.cross_encoder_model),
                 'cross_encoder_model': settings.cross_encoder_model,

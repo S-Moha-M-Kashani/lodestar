@@ -68,11 +68,6 @@ class LabSettings:
     # picked. A default that cannot run is a broken default, not a strict one.
     llm_model: str = ''
     fastembed_model: str = 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'
-    # Its own key, deliberately not the OpenRouter one: OpenRouter serves no
-    # /embeddings endpoint, so the chat key cannot stand in here. Absent means the
-    # OpenAI embedding models show as NA rather than failing mid-sweep.
-    openai_api_key: str = ''
-    openai_base_url: str = 'https://api.openai.com/v1'
     # Multilingual on purpose: fastembed's default rerankers (ms-marco-MiniLM,
     # jina-reranker-v1-*-en) are English-only and score Farsi pairs as noise.
     # ~1.1 GB on first use; override with RAGLAB_CROSS_ENCODER.
@@ -126,8 +121,6 @@ def load_lab_settings(env: dict | None = None) -> LabSettings:
         fastembed_model=env.get(
             'RAGLAB_FASTEMBED_MODEL',
             'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'),
-        openai_api_key=env.get('OPENAI_API_KEY', ''),
-        openai_base_url=env.get('OPENAI_BASE_URL', 'https://api.openai.com/v1'),
         cross_encoder_model=env.get('RAGLAB_CROSS_ENCODER',
                                     'jinaai/jina-reranker-v2-base-multilingual'),
     )
@@ -150,13 +143,13 @@ CHUNKERS = ('semantic-drift', 'fixed', 'fixed-overlap', 'message', 'turn-pair',
 # or day and ignore both numbers entirely.
 CHAR_SIZED_CHUNKERS = ('semantic-drift', 'fixed', 'fixed-overlap')
 OVERLAP_CHUNKERS = ('fixed-overlap',)
-# Three of these load a named model: 'fastembed' (its own ONNX list),
+# Two of these load a named model: 'fastembed' (its own ONNX list) and
 # 'sentence-transformers' (any HuggingFace checkpoint — the only way to reach
-# Qwen3 and the Persian-tuned encoders) and 'openai' (an API call, no download).
-# The hash embedders take no model at all.
-EMBEDDERS = ('sentence-transformers', 'fastembed', 'openai',
+# the Persian-tuned encoders). The hash embedders take no model at all. The
+# 'openai' API backend left 2026-08-02 with its whole catalogue.
+EMBEDDERS = ('sentence-transformers', 'fastembed',
              'ascii-hash', 'token-hash', 'char-hash')
-MODEL_EMBEDDERS = ('fastembed', 'sentence-transformers', 'openai')
+MODEL_EMBEDDERS = ('fastembed', 'sentence-transformers')
 RETRIEVERS = ('hybrid-rrf', 'dense', 'bm25')
 RERANKERS = ('lexical', 'none', 'recency', 'agentic', 'cross-encoder', 'llm')
 GRADERS = ('none', 'lexical', 'llm')
@@ -423,13 +416,12 @@ HELP = {
         'it can represent: "ascii-hash" is what the brain ships today and reads '
         'Latin script only, so Farsi embeds to the zero vector — measured at 0.01 '
         'recall, i.e. chance. The other two hash embedders see any script but '
-        'only as letters, never as meaning. Three options load a real model, and '
+        'only as letters, never as meaning. Two options load a real model, and '
         'they differ in what that costs: "fastembed" runs its own short ONNX list '
         'locally; "sentence-transformers" runs any HuggingFace checkpoint, which '
-        'is the only way to reach the Persian-tuned encoders and Qwen3 — it needs '
-        'the local-embeddings extra and downloads weights; "openai" downloads '
-        'nothing but calls an API, so it needs OPENAI_API_KEY and spends money '
-        'per run. Whichever you pick, the model below decides the languages.'),
+        'is the only way to reach the Persian-tuned encoders — it needs '
+        'the local-embeddings extra and downloads weights. Whichever you pick, '
+        'the model below decides the languages.'),
     'index.embed_model': (
         'Which real embedding model the chosen backend loads. This is where Farsi '
         'is won '

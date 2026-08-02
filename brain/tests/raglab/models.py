@@ -14,10 +14,16 @@ models are the interesting ones — they can be run locally later, which is the
 whole direction of the brain's LLMProvider seam — so `open` / `closed` is part of
 the label, not a footnote.
 
-**A model the lab has not actually run stays in the list, marked unavailable.**
-Silently dropping it would hide the option; showing it as NA says "worth trying,
-nobody measured it yet". Availability is verified against OpenRouter's own model
-list when a key is present, and never guessed when it is not.
+**The remote catalogue offers only models this account can reach.** The old rule
+— an unrun model stays listed as NA, "worth trying, nobody measured it yet" —
+was checked against the wire on 2026-08-02 and had rotted: all six open-weight
+options answered 404 ("no endpoints matching your guardrail restrictions and
+data policy"), so NA had stopped meaning "unmeasured" and started meaning
+"broken", the one thing a dropdown must not hide. The local list keeps the old
+rule, because there NA is honest: a tag that is merely not pulled is one
+`ollama pull` away, and the daemon is asked directly rather than guessed at.
+Availability is still verified against OpenRouter's own model list when a key is
+present, and never guessed when it is not.
 """
 from dataclasses import dataclass, fields
 
@@ -46,22 +52,10 @@ CHAT_MODELS = (
                 note='every grade in .runs/ so far was measured on this'),
     ModelOption('openai/gpt-5-mini', 'GPT-5 mini', 'closed',
                 note='the same family with more capacity — the obvious A/B'),
-    ModelOption('openai/gpt-5', 'GPT-5', 'closed',
-                note='for judging, where a wrong verdict costs more than tokens'),
     ModelOption('anthropic/claude-haiku-4.5', 'Claude Haiku 4.5', 'closed',
                 note='fast, and strong at "answer only from this context"'),
     ModelOption('google/gemini-2.5-flash', 'Gemini 2.5 Flash', 'closed',
                 note='cheap long context, useful for the summary pass'),
-    ModelOption('meta-llama/llama-3.3-70b-instruct', 'Llama 3.3 70B', 'open',
-                note='open weights, genuinely multilingual'),
-    ModelOption('qwen/qwen-2.5-72b-instruct', 'Qwen2.5 72B', 'open',
-                note='the strongest open candidate on Persian in public evals'),
-    ModelOption('google/gemma-3-27b-it', 'Gemma 3 27B', 'open',
-                note='small enough to run locally once Ollama lands'),
-    ModelOption('mistralai/mistral-nemo', 'Mistral Nemo', 'open',
-                note='Apache-2.0, cheap enough for the 157-session summary pass'),
-    ModelOption('deepseek/deepseek-chat', 'DeepSeek Chat', 'open',
-                note='open weights, reasons well about contradictions'),
 )
 
 # Served by Ollama on this machine, and therefore a different list: an OpenRouter
