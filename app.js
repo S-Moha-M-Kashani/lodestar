@@ -2877,25 +2877,13 @@
   // an effect today — it rides along on every /api/agent/chat request (the
   // brain forwards it to OpenRouter). The omni pick is a stored preference
   // for the media-ingestion feature to come. Embedding is deliberately NOT a
-  // pick: the brain runs exactly one embedder (BRAIN_EMBEDDER's default,
-  // heydariAI/persian-embeddings), the old dropdown was a preference nothing
-  // ever read, and a dead control teaches the user not to trust the live
-  // ones — so the panel states the fixed model instead (renderChatSettings).
-  // A saved `embed` key from that dropdown may linger in localStorage; the
-  // load sweep below iterates DEFAULT_MODELS keys, so it is ignored, and the
-  // next persist drops it.
+  // pick: the brain runs exactly one embedder (heydariAI/persian-embeddings),
+  // so the panel states it instead of offering a dead dropdown. A stale saved
+  // `embed` key is ignored by the load sweep and dropped on the next persist.
   const MODELS_KEY = KEY_PREFIX + 'models';
-  // Every omni option has to be a model that genuinely receives audio.
-  // nemotron-3-nano-omni:free is listed as audio-capable but the provider
-  // serving it discards the audio and answers an apology, and it was kept here
-  // only for being free. It is gone: OpenRouter lists exactly one free
-  // audio-input model and that was it, so "free" never meant "works". Free
-  // dictation is the local Parakeet backend's job instead (BRAIN_TRANSCRIBER
-  // defaults to it). voxtral-small briefly replaced it and is gone too, for
-  // cost: its text prices match the default's, which hid that its *audio* rate
-  // is $100/M tokens against the default's $0.30/M (measured 2026-08-02) —
-  // ~330x for the tokens dictation is made of. The default is the cheapest
-  // usable audio model in the catalogue.
+  // Every omni option must genuinely receive audio at a sane price; slugs that
+  // fail that test go to RETIRED_MODELS, never just delisted. Free dictation
+  // is the local Parakeet backend's job (BRAIN_TRANSCRIBER defaults to it).
   const DEFAULT_MODELS = {
     // Local-first is the normal Assistant experience. Nano stays one click
     // away under the explicit OpenRouter provider selector below. The omni
@@ -2914,36 +2902,20 @@
   ];
   const modelRoute = (slug) =>
     (slug.startsWith('4skl/') || !slug.includes('/')) ? 'local' : 'OpenRouter API';
-  // Slugs retired *for cause* — not merely dropped from the preset list above.
-  // Dropping a model from MODEL_PICKERS does not deselect it: a saved pick that
-  // left the list is re-added as an option and stays selected. That is right for
-  // a slug the user chose deliberately and wrong for one removed because it was
-  // broken, and the difference is not visible in the options list alone. It cost
-  // us a whole release: nemotron came out of the picker while the only browser
-  // that had it selected kept dictating through the provider that discards the
-  // audio, so the fix reached everyone except the person it was for.
+  // Slugs retired *for cause*. Dropping a model from MODEL_PICKERS does not
+  // deselect it — a saved pick that left the list is re-added and stays
+  // selected — so a broken or overpriced slug must be listed here to be swept
+  // back to the default on load.
   const RETIRED_MODELS = new Set([
-    // Dictation: advertises audio input, but the provider serving it drops the
-    // input_audio part and answers an invented apology instead of a transcript.
+    // Advertises audio input, but its provider discards the audio.
     'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
-    // Dictation, retired for cost like kimi-k3 below: audio at $100/M tokens
-    // against the default's $0.30/M — the dearest audio model in the catalogue.
-    // Briefly reinstated on 2026-08-02 through a misread confirmation and
-    // retired again the same day. Permanent, like kimi-k3: do not bring it back.
+    // Audio at $100/M tokens, ~330x the default's rate.
     'mistralai/voxtral-small-24b-2507',
-    // Text. kimi-k3 stays here permanently: at $3/$15 per M tokens it was the
-    // dearest model ever offered in this picker — 60x the default's input price,
-    // ~50x per turn for the same work — and it is not in the OpenRouter key's
-    // allowlist at all, so it now fails outright rather than merely costing more.
-    // It also took ~11s against the default's under 3, and nothing streams, so
-    // the wait was a motionless "Thinking…" that read as a hang. No free
-    // replacement exists to weigh against it: every ':free' slug 404s under the
-    // key's guardrail, so the cheapest reachable tool-calling model is the
-    // default itself.
+    // ~50x the default's price per turn, ~11s per answer, and absent from the
+    // OpenRouter key's allowlist.
     'moonshotai/kimi-k3',
     'openai/gpt-4o-mini',
-    // Deprecated upstream, and it routes per request to a model the brain never
-    // reads back out of the response — so a slow turn is unattributable.
+    // Deprecated router; the model it resolves to is unattributable.
     'openrouter/auto',
   ]);
   const assistantModels = { ...DEFAULT_MODELS };

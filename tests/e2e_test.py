@@ -1233,12 +1233,9 @@ try:
         # user not to trust the ones that do. The row now states the real,
         # fixed model instead.
         # The text picker is local-first: it offers the models pulled on this
-        # machine, and OpenRouter is one explicit selector away. All three local
-        # slugs were verified against `ollama list` rather than assumed.
-        # moonshotai/kimi-k3 and openai/gpt-4o-mini are retired, and so is
-        # openrouter/auto: it is deprecated, it routes to a different model per
-        # request, and the brain never reads the resolved slug back out of the
-        # response — so a slow or badly tool-calling turn was unattributable.
+        # machine (verified against `ollama list`), and OpenRouter is one
+        # explicit selector away. Retirement reasons live in RETIRED_MODELS
+        # (app.js) and git history, not here.
         DEFAULT_TEXT = "4skl/gemma4-e2b-mtp"
         ALT_TEXT = "gemma4:e2b"
         THIRD_TEXT = "deepseek-r1:8b"
@@ -1249,28 +1246,10 @@ try:
         def option_values(selector):
             return page.locator(f"{selector} option").evaluate_all(
                 "os => os.map(o => o.value)")
-        # Every omni option must be a model that actually receives audio.
-        # nemotron:free advertises audio input but its provider discards the
-        # input_audio part, so every dictation came back an invented apology; it
-        # was kept selectable only for being free. It is gone now: OpenRouter has
-        # exactly one free audio-input model and that is it, so "free" was never
-        # a working choice — free dictation is Parakeet's job, locally and offline
-        # (BRAIN_TRANSCRIBER defaults to parakeet).
-        # voxtral-small was nemotron's replacement and is retired too, for cost:
-        # its text prices match the default's, which is what hid that its *audio*
-        # rate is $100/M tokens against the default's $0.30/M — measured
-        # 2026-08-02, the most expensive audio-input model in the catalogue,
-        # ~330x the default for the tokens dictation is made of. It came back
-        # for a few hours that day through a misread confirmation and is now
-        # retired permanently — do not offer it again.
-        # openai/whisper-large-v3-turbo was briefly the default and is not one:
-        # measured on 2026-07-31, OpenRouter's published catalogue is 337 models
-        # and holds no whisper, embedding or rerank entry, so it can transcribe
-        # nothing. The picker is the remote route by definition — local dictation
-        # is Parakeet's job inside the brain, which ignores this pick entirely, so
-        # the local checkpoint is not an option here either.
-        # The default IS the cheapest usable audio model in the catalogue
-        # (2026-08-02): $0.10/M in, $0.30/M audio.
+        # Every omni option must genuinely receive audio at a sane price — the
+        # default is the cheapest usable audio model in the catalogue
+        # (2026-08-02). Free dictation is Parakeet's job, locally, inside the
+        # brain. Per-model retirement reasons: RETIRED_MODELS in app.js.
         DEFAULT_OMNI = "google/gemini-2.5-flash-lite"
         ALT_OMNI = ["openai/gpt-audio-mini"]
         BROKEN_OMNI = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
@@ -1379,21 +1358,9 @@ try:
         page.select_option("#model-text", DEFAULT_TEXT)
 
         # ---- Retired picks do not survive, even though off-list picks do.
-        # Removing a model from the options list was not enough: a saved slug that
-        # left the list stays *selected* (it is re-added as an extra option), and no
-        # migration shipped, so the browser that had nemotron kept dictating through
-        # the model whose provider drops the audio — the removal never reached the
-        # only person affected by it. Same for the retired text models: kimi-k3 cost
-        # $3/$15 per M tokens against the default's $0.05/$0.40 — ~50x per turn for
-        # the same work — and it is not in the OpenRouter key's allowlist, so it is
-        # retired for good. It was slow with it: 11s against nano's 2.6s behind a
-        # non-streaming "Thinking…", which reads as a hang.
-        #
-        # So a slug retired *for cause* is reset to the default on load, while a
-        # slug the user picked deliberately is still honoured — that escape hatch is
-        # why off-list options exist and it has to stay. The reset is also written
-        # back to storage: left in place, the dead slug would return the moment a
-        # future version trimmed the retirement list.
+        # A slug retired *for cause* is reset to the default on load and cleared
+        # from storage; a slug the user picked deliberately is still honoured —
+        # that escape hatch is why off-list options exist and it has to stay.
         MODELS_KEY = "lodestar:models"
         for retired_text in RETIRED_TEXT:
             # The payload keeps a saved `embed` key on purpose: every browser
@@ -1435,6 +1402,22 @@ try:
         check("assistant: a still-valid saved pick survives the sweep",
               page.input_value("#model-text") == ALT_TEXT
               and page.input_value("#model-omni") == DEFAULT_OMNI)
+
+        # This is an end-to-end test. A browser that saved voxtral while it was
+        # briefly offered must be reset, not left dictating at ~330x the
+        # default's audio rate — so its RETIRED_MODELS line is load-bearing,
+        # not leftover.
+        VOXTRAL = "mistralai/voxtral-small-24b-2507"
+        page.evaluate(
+            "([key, omni]) => localStorage.setItem(key, JSON.stringify({ omni }))",
+            [MODELS_KEY, VOXTRAL])
+        page.reload()
+        page.wait_for_selector("#board")
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector("#model-text")
+        check("assistant: a saved voxtral pick resets to the default",
+              page.input_value("#model-omni") == DEFAULT_OMNI
+              and VOXTRAL not in option_values("#model-omni"))
 
         # The escape hatch: a slug that was never retired, merely unknown to the
         # preset list, is still selected and still offered.
