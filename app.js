@@ -5199,6 +5199,17 @@
     try { localStorage.setItem(RAGLAB_CFG_KEY, JSON.stringify(ragState.cfg)); } catch (_) { /* private mode */ }
   }
 
+  /** Persist, and repaint when this field decides whether another one is live.
+   *  Only the owners repaint: a number input that owns nothing would otherwise
+   *  rebuild the panel on every commit and take the caret with it. */
+  function ragCommit(path) {
+    ragPersist();
+    const rules = (ragState.options && ragState.options.dependencies) || {};
+    for (const key of Object.keys(rules)) {
+      if (rules[key].field === path) { render(); return; }
+    }
+  }
+
   async function ragLoad() {
     ragState.phase = 'loading';
     render();
@@ -5209,7 +5220,7 @@
       ragState.problem = '';
       // Both are conveniences: a lab with no run history and no question picker
       // is still fully usable, so neither failure blocks the page.
-      try { ragState.runs = (await ragApi('/runs?limit=30')).runs; } catch (_) { ragState.runs = []; }
+      try { ragState.runs = (await ragApi('/evaluations?limit=30')).runs; } catch (_) { ragState.runs = []; }
       try { ragState.questions = (await ragApi('/questions?limit=200')).questions; } catch (_) { ragState.questions = []; }
     } catch (error) {
       ragState.phase = 'absent';
@@ -5245,19 +5256,26 @@
     if (view === 'raglab') render();
   }
 
+  // The lab's job kinds, and the collection each one is created in. Kept as a
+  // map rather than '/' + kind: the two names stopped matching when the routes
+  // became resource collections, and a concatenated path would have gone on
+  // looking correct while 404ing.
+  const RAG_COLLECTIONS = { index: '/indexes', run: '/evaluations' };
+
   async function ragStart(kind, extra) {
     if (ragState.busy) return;
     ragState.busy = true;
     ragState.problem = '';
     render();
     try {
-      const { job_id: jobId } = await ragApi('/' + kind, { ...ragConfig(), ...extra });
+      const { job_id: jobId } = await ragApi(RAG_COLLECTIONS[kind],
+                                             { ...ragConfig(), ...extra });
       ragState.jobId = jobId;
       render();
       ragPoll(jobId, async (result) => {
         if (kind === 'run') {
           ragState.result = result;
-          try { ragState.runs = (await ragApi('/runs?limit=30')).runs; } catch (_) { /* leaderboard is optional */ }
+          try { ragState.runs = (await ragApi('/evaluations?limit=30')).runs; } catch (_) { /* leaderboard is optional */ }
         } else {
           ragState.indexInfo = result;
         }
@@ -5291,13 +5309,26 @@
     ragState.queryProblem = '';
     render();
     try {
-      ragState.queryOut = await ragApi('/query', { ...ragConfig(), question });
+      ragState.queryOut = await ragApi('/queries', { ...ragConfig(), question });
     } catch (error) {
       ragState.queryOut = null;
       ragState.queryProblem = error.message;
     }
     ragState.busy = false;
     render();
+  }
+
+  /** Is this control live under the current config, and if not, why not?
+   *  The rules come from the lab (`/api/options` → dependencies), so the two
+   *  panels and the pipeline agree by construction rather than by review. */
+  function ragDependency(path, cfg) {
+    const rule = (ragState.options && ragState.options.dependencies || {})[path];
+    if (!rule) return null;
+    const [group, name] = rule.field.split('.');
+    const current = (cfg[group] || {})[name];
+    const enabled = rule.on_true ? Boolean(current)
+      : (rule.on || []).indexOf(current) !== -1;
+    return { enabled, reason: rule.reason };
   }
 
   function ragFieldControl(field, cfg) {
@@ -5307,7 +5338,10 @@
       const box = document.createElement('input');
       box.type = 'checkbox';
       box.checked = Boolean(bag[field.key]);
-      box.addEventListener('change', () => { bag[field.key] = box.checked; ragPersist(); });
+      box.addEventListener('change', () => {
+        bag[field.key] = box.checked;
+        ragCommit(`${field.group}.${field.key}`);
+      });
       return box;
     }
     if (field.kind === 'number') {
@@ -5319,7 +5353,7 @@
       input.value = bag[field.key];
       input.addEventListener('change', () => {
         bag[field.key] = Number(input.value);
-        ragPersist();
+        ragCommit(`${field.group}.${field.key}`);
       });
       return input;
     }
@@ -5345,7 +5379,10 @@
         bag[field.key] = sel.value;
         ragPersist();
       }
-      sel.addEventListener('change', () => { bag[field.key] = sel.value; ragPersist(); });
+      sel.addEventListener('change', () => {
+        bag[field.key] = sel.value;
+        ragCommit(`${field.group}.${field.key}`);
+      });
       return sel;
     }
     const sel = document.createElement('select');
@@ -5356,7 +5393,10 @@
       sel.appendChild(opt);
     }
     sel.value = bag[field.key];
-    sel.addEventListener('change', () => { bag[field.key] = sel.value; ragPersist(); });
+    sel.addEventListener('change', () => {
+      bag[field.key] = sel.value;
+      ragCommit(`${field.group}.${field.key}`);
+    });
     return sel;
   }
 
@@ -5368,6 +5408,14 @@
     label.className = field.kind === 'check' ? 'field rag-inline' : 'field';
     const control = ragFieldControl(field, cfg);
     const why = ragWhy(`${field.group}.${field.key}`, label);
+    // Disabling the control is what stops the value being tuned; the class is
+    // what stops the label reading as live text beside a dead input.
+    const gate = ragDependency(`${field.group}.${field.key}`, cfg);
+    if (gate && !gate.enabled) {
+      control.disabled = true;
+      label.classList.add('rag-field-off');
+      label.title = `Disabled because ${gate.reason}`;
+    }
     if (field.kind === 'check') {
       label.appendChild(control);
       label.append(' ' + field.label);
@@ -5375,12 +5423,17 @@
       return label;
     }
     label.append(field.label);
-    // When a knob only matters under another setting, say so on the label —
-    // the same courtesy the model panel does for its roles.
-    if (field.when) {
+    // A knob the current pipeline would ignore is turned off rather than merely
+    // annotated. The old `when:` text was accurate and inert: it said "Embedder
+    // = fastembed, sentence-transformers or openai" beside a control you could
+    // still edit, so a value set under a hash embedder looked applied and was
+    // silently dropped. The rule is served (options.dependencies), so this panel
+    // and the standalone one cannot grey out different things.
+    const dep = ragDependency(`${field.group}.${field.key}`, cfg);
+    if (dep && !dep.enabled) {
       const when = document.createElement('span');
       when.className = 'rag-when';
-      when.textContent = field.when;
+      when.textContent = dep.reason;
       label.appendChild(when);
     }
     if (why) label.appendChild(why);
@@ -5412,9 +5465,15 @@
     const label = document.createElement('label');
     label.className = 'field';
     label.append(role.label);
+    // Same rule as the step knobs: a model picker for a stage that calls no
+    // model is turned off, not merely captioned. `only_when` said "HyDE is on"
+    // beside a live dropdown, so a model chosen with HyDE off was recorded in
+    // the config and never used — and a run's label is the one thing a lab
+    // must not get wrong.
+    const gate = ragDependency(role.field, cfg);
     const when = document.createElement('span');
     when.className = 'rag-when';
-    when.textContent = role.only_when;
+    when.textContent = (gate && !gate.enabled) ? gate.reason : role.only_when;
     label.appendChild(when);
     const why = ragWhy('model.' + role.key, label);
     if (why) label.appendChild(why);
@@ -5436,8 +5495,13 @@
     }
     select.addEventListener('change', () => {
       cfg[group][key] = select.value;
-      ragPersist();
+      ragCommit(role.field);
     });
+    if (gate && !gate.enabled) {
+      select.disabled = true;
+      label.classList.add('rag-field-off');
+      label.title = `Disabled because ${gate.reason}`;
+    }
     label.appendChild(select);
     return label;
   }
@@ -6026,7 +6090,7 @@
         open.textContent = r.label || r.run_id;
         open.addEventListener('click', async () => {
           try {
-            ragState.result = await ragApi('/runs/' + r.run_id);
+            ragState.result = await ragApi('/evaluations/' + r.run_id);
             ragState.problem = '';
           } catch (error) { ragState.problem = error.message; }
           render();
