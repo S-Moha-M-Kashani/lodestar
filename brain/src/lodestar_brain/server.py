@@ -132,6 +132,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             logging.getLogger(__name__).warning(
                 'chat memory disabled: Chroma at %s is unreachable (%s)',
                 settings.chroma_url, exc)
+    if memory is not None:
+        # Chroma is a derived index over assistant.db: rebuild what it missed
+        # (turns recorded while it was down). Best-effort — compose starts the
+        # board and the brain in no promised order, so a board that is not up
+        # yet is logged, never fatal.
+        try:
+            added = memory.sync(board.list_chat())
+            if added:
+                logging.getLogger(__name__).info(
+                    'chat index: %d recorded message(s) indexed at boot', added)
+        except Exception as exc:
+            logging.getLogger(__name__).warning(
+                'chat index not synced from the record: %s', exc)
     agent = LodestarAgent(settings=settings, tools=tools,
                           max_steps=settings.max_agent_steps)
     transcriber = make_transcriber(settings)
@@ -151,14 +164,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return served_models(settings)
 
     def remember(messages: list[dict], reply: str) -> None:
-        """Record both sides of the exchange. Every chat route must call this:
-        a second route is a second place to forget."""
-        if memory is None:
-            return
+        """Record both sides of the exchange — durably first (assistant.db,
+        through the Node API like every write), then into the derived Chroma
+        index. Every chat route must call this: a second route is a second
+        place to forget. Failures are logged, never raised — the reply the
+        user is already reading must not become a 500 after the fact, and a
+        turn the record missed is still picked up by the next boot's sync
+        only if it was recorded, so the log line is the whole trace."""
         last_user = next((m.get('content', '') for m in reversed(messages)
                           if m.get('role') == 'user'), '')
-        memory.record([last_user], metadata={'role': 'user'})
-        memory.record([reply], metadata={'role': 'assistant'})
+        turn = [{'role': role, 'content': content}
+                for role, content in (('user', last_user), ('assistant', reply))
+                if content.strip()]   # the record refuses empty rows
+        if not turn:
+            return
+        try:
+            rows = board.record_chat(turn)
+        except Exception:
+            logging.getLogger(__name__).exception(
+                'chat record unreachable — this turn is NOT in assistant.db')
+            return
+        if memory is None:
+            return
+        try:
+            memory.index_messages(rows)
+        except Exception:
+            # Recorded but not indexed: the next boot's sync rebuilds this.
+            logging.getLogger(__name__).exception('chat index write failed')
 
     @app.post('/agent/chat')
     async def chat(body: ChatBody) -> dict:

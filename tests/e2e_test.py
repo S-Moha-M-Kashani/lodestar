@@ -27,6 +27,9 @@ BRAIN_PORT = int(os.environ.get("TEST_BRAIN_PORT", "8798"))
 RAGLAB_PORT = int(os.environ.get("TEST_RAGLAB_PORT", "8797"))
 URL = f"http://localhost:{PORT}"
 DB_PATH = os.path.join(tempfile.mkdtemp(prefix="qboard-test-"), "board.db")
+# The chat record beside it — without this the spawned server would write chat
+# rows into the repo's real databases/ folder.
+ASSISTANT_DB_PATH = os.path.join(os.path.dirname(DB_PATH), "assistant.db")
 
 # Write-triggered backups are exercised against a throwaway directory, and with
 # rclone pointed at a path that does not exist. The suite must never add to the
@@ -99,7 +102,8 @@ def start_server():
     proc = subprocess.Popen(
         ["node", "server.js"],
         cwd=ROOT,
-        env={**os.environ, "PORT": str(PORT), "BOARD_DB": DB_PATH, "NODE_NO_WARNINGS": "1",
+        env={**os.environ, "PORT": str(PORT), "BOARD_DB": DB_PATH,
+             "ASSISTANT_DB": ASSISTANT_DB_PATH, "NODE_NO_WARNINGS": "1",
              "AGENT_URL": f"http://127.0.0.1:{BRAIN_PORT}",
              "RAGLAB_URL": f"http://127.0.0.1:{RAGLAB_PORT}",
              "LODESTAR_BACKUP_ON_WRITE": "1", "LODESTAR_BACKUP_DIR": BACKUP_DIR,

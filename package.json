@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "test-board": "PORT=3001 BOARD_DB=board-3001.db AGENT_URL=http://127.0.0.1:9001 node server.js",
+    "test-board": "PORT=3001 BOARD_DB=board-3001.db ASSISTANT_DB=assistant-3001.db AGENT_URL=http://127.0.0.1:9001 node server.js",
     "test-brain": "BOARD_API_URL=http://127.0.0.1:3001 BRAIN_CHROMA_DATABASE=lodestar-test uv run --project brain --extra local-embeddings uvicorn lodestar_brain.server:app --port 9001",
     "lab": "node scripts/lab.mjs",
     "raglab": "uv run --project brain --extra semantic --extra local-embeddings --with 'ragas==0.4.*' --with 'langchain-community<0.4' --with 'langchain-openai<1' --with rapidfuzz uvicorn --app-dir brain/tests raglab.server:app --port 9002",

@@ -285,6 +285,68 @@ function writeCategories(cats) {
 
 const categoryIds = () => new Set(db.prepare('SELECT id FROM categories').all().map((r) => r.id));
 
+// --------------------------------------------------------------------------
+// The chat record (assistant.db)
+// --------------------------------------------------------------------------
+// The assistant's transcript, given the same durability the board has — in its
+// own file deliberately: the whole-board PUT /api/state soft-deletes every
+// card it does not see, and one bad save must never sit next to two kinds of
+// data. Chroma only ever holds chunks derived from these rows; this table is
+// what a re-index rebuilds from. deleted_at exists for a future chat trash;
+// nothing sets it yet — the API of this stage is append-and-read only.
+
+const ASSISTANT_DB_PATH = process.env.ASSISTANT_DB || join(ROOT, 'databases', 'assistant.db');
+mkdirSync(dirname(ASSISTANT_DB_PATH), { recursive: true });
+const chatDb = new DatabaseSync(ASSISTANT_DB_PATH);
+chatDb.exec(`
+  CREATE TABLE IF NOT EXISTS messages (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    role       TEXT    NOT NULL,
+    content    TEXT    NOT NULL,
+    created_at INTEGER NOT NULL,
+    deleted_at INTEGER
+  );
+`);
+
+const CHAT_ROLES = new Set(['user', 'assistant']);
+
+function readChatMessages() {
+  // created_at before id, so an imported older transcript reads in order.
+  return chatDb.prepare(
+    'SELECT id, role, content, created_at FROM messages WHERE deleted_at IS NULL ORDER BY created_at, id')
+    .all()
+    .map((r) => ({ id: r.id, role: r.role, content: r.content, createdAt: r.created_at }));
+}
+
+/** Append a batch of messages. All-or-nothing: one invalid row refuses the
+ *  whole batch, so an import can never half-apply. createdAt is optional —
+ *  imports keep their own timestamps, live turns are stamped here. Returns
+ *  the inserted rows, or null when the batch is invalid. */
+function appendChatMessages(list) {
+  if (!Array.isArray(list) || list.length === 0) return null;
+  for (const m of list) {
+    if (!m || typeof m !== 'object') return null;
+    if (!CHAT_ROLES.has(m.role)) return null;
+    if (typeof m.content !== 'string' || !m.content.trim()) return null;
+    if (m.createdAt !== undefined && !Number.isFinite(m.createdAt)) return null;
+  }
+  const insert = chatDb.prepare('INSERT INTO messages (role, content, created_at) VALUES (?, ?, ?)');
+  const saved = [];
+  chatDb.exec('BEGIN');
+  try {
+    for (const m of list) {
+      const createdAt = m.createdAt ?? Date.now();
+      const { lastInsertRowid } = insert.run(m.role, m.content, createdAt);
+      saved.push({ id: Number(lastInsertRowid), role: m.role, content: m.content, createdAt });
+    }
+    chatDb.exec('COMMIT');
+  } catch (err) {
+    chatDb.exec('ROLLBACK');
+    throw err;
+  }
+  return saved;
+}
+
 const rowToCard = (r, catIds) => ({
   id: r.id,
   columnId: r.column_id,
@@ -603,6 +665,25 @@ const server = createServer(async (req, res) => {
   // The Trash — soft-deleted cards, recoverable until purged.
   if (path === '/api/trash') {
     if (req.method === 'GET') return sendJson(res, 200, readTrash());
+    return sendJson(res, 405, { error: 'Method not allowed' });
+  }
+
+  // The chat record — append-and-read only: no route can delete or rewrite a
+  // message, so the durability promise extends to chat.
+  if (path === '/api/chat/messages') {
+    if (req.method === 'GET') return sendJson(res, 200, { messages: readChatMessages() });
+    if (req.method === 'POST') {
+      try {
+        const saved = appendChatMessages(JSON.parse(await readBody(req)).messages);
+        if (!saved) {
+          return sendJson(res, 400, { error:
+            'Body must be { messages: [{role, content, createdAt?}] } — role user|assistant, content non-empty' });
+        }
+        return sendJson(res, 200, { messages: saved });
+      } catch (err) {
+        return sendJson(res, 400, { error: 'Invalid JSON: ' + err.message });
+      }
+    }
     return sendJson(res, 405, { error: 'Method not allowed' });
   }
 
