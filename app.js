@@ -2892,10 +2892,10 @@
   // only for being free. It is gone: OpenRouter lists exactly one free
   // audio-input model and that was it, so "free" never meant "works". Free
   // dictation is the local Parakeet backend's job instead (BRAIN_TRANSCRIBER
-  // defaults to it). voxtral-small briefly replaced it and is gone too, for
-  // cost: its text prices match the default's, which hid that its *audio* rate
-  // is $100/M tokens against the default's $0.30/M (measured 2026-08-02) —
-  // ~330x for the tokens dictation is made of. The default is the cheapest
+  // defaults to it). voxtral-small replaced it, was retired for cost on
+  // 2026-08-02 — audio at $100/M tokens against the default's $0.30/M, ~330x,
+  // a rate its default-matching text prices hid — and was reinstated the same
+  // day by explicit decision, cost accepted. The default stays the cheapest
   // usable audio model in the catalogue.
   const DEFAULT_MODELS = {
     // Local-first is the normal Assistant experience. Nano stays one click
@@ -2911,7 +2911,8 @@
     { key: 'text', id: 'model-text', label: 'Text generation',
       options: [DEFAULT_MODELS.text, 'gemma4:e2b', 'deepseek-r1:8b'] },
     { key: 'omni', id: 'model-omni', label: 'Audio → text (route: OpenRouter API)',
-      options: [DEFAULT_MODELS.omni, 'openai/gpt-audio-mini'] },
+      options: [DEFAULT_MODELS.omni, 'openai/gpt-audio-mini',
+                'mistralai/voxtral-small-24b-2507'] },
   ];
   const modelRoute = (slug) =>
     (slug.startsWith('4skl/') || !slug.includes('/')) ? 'local' : 'OpenRouter API';
@@ -2927,9 +2928,9 @@
     // Dictation: advertises audio input, but the provider serving it drops the
     // input_audio part and answers an invented apology instead of a transcript.
     'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
-    // Dictation, retired for cost like kimi-k3 below: audio at $100/M tokens
-    // against the default's $0.30/M — the dearest audio model in the catalogue.
-    'mistralai/voxtral-small-24b-2507',
+    // voxtral-small sat here for a few hours on 2026-08-02 (audio at $100/M
+    // tokens, ~330x the default) and was reinstated by explicit decision, cost
+    // accepted — so it is back in MODEL_PICKERS above, not retired.
     // Text. kimi-k3 stays here permanently: at $3/$15 per M tokens it was the
     // dearest model ever offered in this picker — 60x the default's input price,
     // ~50x per turn for the same work — and it is not in the OpenRouter key's
