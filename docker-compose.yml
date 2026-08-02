@@ -69,19 +69,36 @@ services:
       - ./brain/src:/app/src:ro
     restart: unless-stopped
 
-  # Chat memory — the project's own Chroma, persisting to databases/chroma-data
-  # beside the other two databases. Derived data: chunks and vectors rebuild
-  # from assistant.db, which is why the backup covers the .db files and never
-  # this folder. A bind mount rather than a named volume so "where is my data"
-  # has one answer. Host port 8003: 8001/8002 belong to the unrelated
-  # ~/vectordb-lab stack (tests/ports.test.js), and both stacks must be able
-  # to run at once. `npm run chroma` starts just this service for native runs.
+  # Chat memory — the project's own Chroma, persisting to
+  # databases/real/chroma-data beside the other two real databases. Derived
+  # data: chunks and vectors rebuild from assistant.db, which is why the backup
+  # covers the .db files and never this folder. A bind mount rather than a
+  # named volume so "where is my data" has one answer. Host port 8003:
+  # 8001/8002 belong to the unrelated ~/vectordb-lab stack
+  # (tests/ports.test.js), and both stacks must be able to run at once.
+  # `npm run chroma` starts just this service for native runs.
   chroma:
     image: chromadb/chroma:latest
     ports:
       - "8003:8000"
     volumes:
-      - ./databases/chroma-data:/data
+      - ./databases/real/chroma-data:/data
+    environment:
+      IS_PERSISTENT: "TRUE"
+      ANONYMIZED_TELEMETRY: "FALSE"
+    restart: unless-stopped
+
+  # The :3001 sandbox's own Chroma — a physically separate store under
+  # databases/test/, so test chunks and vectors never share files with real
+  # chat memory: "delete the test data" is `rm -rf databases/test` and can
+  # never touch the real store. `npm run test-brain` dials it on :8004
+  # (tests/ports.test.js pins the pairing); `npm run chroma-test` starts it.
+  chroma-test:
+    image: chromadb/chroma:latest
+    ports:
+      - "8004:8000"
+    volumes:
+      - ./databases/test/chroma-data-3001:/data
     environment:
       IS_PERSISTENT: "TRUE"
       ANONYMIZED_TELEMETRY: "FALSE"

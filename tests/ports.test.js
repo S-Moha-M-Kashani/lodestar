@@ -28,6 +28,10 @@ const CHROMA_PORTS = [8001, 8002];
 // on the host so a native brain reaches the same store the composed one does.
 // Next free slot in the 8000 block — both stacks must be able to run at once.
 const PROJECT_CHROMA_PORT = 8003;
+// The test stack's own Chroma (compose `chroma-test`): a physically separate
+// store under databases/test/, so test chunks and vectors never share files
+// with real chat memory. Next slot after the real one.
+const TEST_CHROMA_PORT = 8004;
 const MAIN_BRAIN_PORT = 9000;
 const MAIN_BOARD_PORT = 3000;
 
@@ -77,6 +81,7 @@ test('every long-running port is distinct', () => {
     testBrainPort(),
     ...CHROMA_PORTS,
     PROJECT_CHROMA_PORT,
+    TEST_CHROMA_PORT,
   ];
   assert.equal(
     new Set(ports).size,
@@ -105,6 +110,40 @@ test("the project Chroma binds :8003, never the vectordb-lab stack's ports", () 
   assert.equal(host, PROJECT_CHROMA_PORT);
   assert.ok(!CHROMA_PORTS.includes(host),
     `:${host} belongs to ~/vectordb-lab — the two stacks must run at once`);
+});
+
+// The test stack's Chroma. Two ways this can drift: the chroma-test service
+// binding a port some other service owns, and the test brain quietly dialling
+// the *real* Chroma on :8003 — which would put test chunks and vectors back
+// into the real store, the exact mixing the second service exists to prevent.
+const testChromaHostPort = () => {
+  const block = read('docker-compose.yml').match(
+    /\n  chroma-test:\n([\s\S]*?)(?=\n  \S|\n\S|$)/);
+  assert.ok(block, 'docker-compose.yml has no chroma-test service');
+  const m = block[1].match(/"(\d+):(\d+)"/);
+  assert.ok(m, 'could not read a port mapping out of the chroma-test service');
+  return Number(m[1]);
+};
+
+// This is a configuration invariant.
+test('the test Chroma binds :8004, colliding with nothing', () => {
+  const host = testChromaHostPort();
+  assert.equal(host, TEST_CHROMA_PORT);
+  assert.ok(!CHROMA_PORTS.includes(host),
+    `:${host} belongs to ~/vectordb-lab — the stacks must run at once`);
+  assert.notEqual(host, projectChromaHostPort(),
+    'the test Chroma must be a separate store, not the real one');
+});
+
+// This is a configuration invariant.
+test('the test brain dials the test Chroma, never the real store', () => {
+  const brain = scripts['test-brain'];
+  const m = brain.match(/BRAIN_CHROMA_URL=http:\/\/localhost:(\d+)/);
+  assert.ok(m,
+    'test-brain must pin BRAIN_CHROMA_URL — without it the brain takes the ' +
+      ':8003 default and test chat memory lands in the real store');
+  assert.equal(Number(m[1]), testChromaHostPort(),
+    'test-brain dials a port the chroma-test service does not publish');
 });
 
 // This is a configuration invariant.

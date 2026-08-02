@@ -23,7 +23,7 @@ import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { resolveBoardDb } from './scripts/db-location.mjs';
+import { resolveBoardDb, resolveAssistantDb } from './scripts/db-location.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 3000;
@@ -295,7 +295,7 @@ const categoryIds = () => new Set(db.prepare('SELECT id FROM categories').all().
 // what a re-index rebuilds from. deleted_at exists for a future chat trash;
 // nothing sets it yet — the API of this stage is append-and-read only.
 
-const ASSISTANT_DB_PATH = process.env.ASSISTANT_DB || join(ROOT, 'databases', 'assistant.db');
+const ASSISTANT_DB_PATH = resolveAssistantDb({ root: ROOT, env: process.env });
 mkdirSync(dirname(ASSISTANT_DB_PATH), { recursive: true });
 const chatDb = new DatabaseSync(ASSISTANT_DB_PATH);
 chatDb.exec(`

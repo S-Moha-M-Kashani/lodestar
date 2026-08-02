@@ -34,16 +34,18 @@ test('no DB → status no-db, exits without throwing', () => {
 });
 
 // This is an integration test: real files on disk and a stub rclone binary.
-test('a databases/ run snapshots every .db, prunes per name, skips chroma-data', () => {
+test('a databases/ run snapshots every real .db, skipping chroma-data and test data', () => {
   const dir = mkdtempSync(join(tmpdir(), 'bk-'));
-  const databasesDir = join(dir, 'databases');
+  // The sweep reads databases/real/ — the home of the records worth a Drive
+  // snapshot. databases/test/ is the :3001 sandbox: disposable by definition,
+  // and backing it up would push throwaway boards to the same Drive folder.
+  const databasesDir = join(dir, 'databases', 'real');
   const backupsDir = join(dir, 'backups');
   const missingRclone = join(dir, 'no-such-rclone');
   mkdirSync(databasesDir, { recursive: true });
   writeFileSync(join(databasesDir, 'board.db'), 'BOARD');
 
-  // Only board.db exists yet (the Stage 1 reality): one snapshot, no invented
-  // assistant one.
+  // Only board.db exists yet: one snapshot, no invented assistant one.
   const first = runBackup({ databasesDir, backupsDir, rcloneBin: missingRclone,
                             now: new Date('2026-08-02T10:00:00Z') });
   assert.equal(first.localPaths.length, 1);
@@ -51,11 +53,15 @@ test('a databases/ run snapshots every .db, prunes per name, skips chroma-data',
   assert.equal(files.filter((f) => f.startsWith('board-')).length, 1);
   assert.ok(!files.some((f) => f.startsWith('assistant-')));
 
-  // assistant.db appears (Stage 2) and chroma-data/ appears (Stage 3): both
-  // .db files are snapshotted; chroma-data is derived bulk and never backed up.
+  // assistant.db and chroma-data/ appear beside it, and the test stack's
+  // databases land in the sibling test/ folder: both real .db files are
+  // snapshotted; chroma-data is derived bulk and test data is disposable —
+  // neither is ever backed up.
   writeFileSync(join(databasesDir, 'assistant.db'), 'ASSISTANT');
   mkdirSync(join(databasesDir, 'chroma-data'), { recursive: true });
   writeFileSync(join(databasesDir, 'chroma-data', 'chroma.sqlite3'), 'CHROMA');
+  mkdirSync(join(dir, 'databases', 'test'), { recursive: true });
+  writeFileSync(join(dir, 'databases', 'test', 'board-3001.db'), 'TESTBOARD');
   const both = runBackup({ databasesDir, backupsDir, rcloneBin: missingRclone,
                            now: new Date('2026-08-02T10:01:00Z') });
   assert.equal(both.localPaths.length, 2);
@@ -63,6 +69,7 @@ test('a databases/ run snapshots every .db, prunes per name, skips chroma-data',
   assert.equal(readFileSync(join(backupsDir, files.find((f) => f.startsWith('assistant-'))), 'utf8'),
     'ASSISTANT');
   assert.ok(!files.some((f) => f.includes('chroma')), 'chroma-data is never backed up');
+  assert.ok(!files.some((f) => f.includes('3001')), 'test databases are never backed up');
 
   // Prune applies per database name: board's snapshots must not be able to
   // evict assistant's (lexically, assistant-* sorts before every board-*).
@@ -73,6 +80,16 @@ test('a databases/ run snapshots every .db, prunes per name, skips chroma-data',
   files = readdirSync(backupsDir).filter((f) => f.endsWith('.db'));
   assert.equal(files.filter((f) => f.startsWith('board-')).length, 3);
   assert.equal(files.filter((f) => f.startsWith('assistant-')).length, 3);
+});
+
+// This is a configuration invariant.
+test("the sweep's default folder is databases/real, where the records now live", () => {
+  // After the real/test split, a default still reading databases/ finds no
+  // .db at all and `npm run backup` reports "nothing to back up" forever —
+  // the quietest possible way to lose the backup habit.
+  const src = readFileSync(new URL('../scripts/backup-db.mjs', import.meta.url), 'utf8');
+  assert.match(src, /join\(ROOT, 'databases', 'real'\)/,
+    'runBackup must default its sweep to databases/real');
 });
 
 // This is an integration test: real files on disk and a stub rclone binary.

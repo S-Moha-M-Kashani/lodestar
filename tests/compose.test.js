@@ -250,22 +250,39 @@ test('no brain mount shadows the container virtualenv', () => {
 
 // --- The project's own Chroma (Session 7, stage 3) --------------------------
 // Chat-memory chunks and their vectors are derived data (rebuilt from
-// assistant.db) and live beside the other databases, in databases/chroma-data.
+// assistant.db) and live beside the other databases, in databases/real/.
 // A bind mount rather than a named volume deliberately: "where is my data" has
 // one answer — the databases/ folder — and stage 1's backup exclusion of
-// chroma-data/ actually covers it.
+// the chroma folders actually covers it.
 
 // This is a configuration invariant.
-test('compose runs the project Chroma over databases/chroma-data', () => {
+test('compose runs the project Chroma over databases/real/chroma-data', () => {
   const block = serviceBlock('chroma');
   assert.ok(
-    mountsOf(block).some((m) => m.startsWith('./databases/chroma-data:')),
-    `the chroma service must bind-mount ./databases/chroma-data — a named ` +
-      `volume would move the derived store back out of the databases/ folder. ` +
-      `Got [${mountsOf(block).join(', ')}]`,
+    mountsOf(block).some((m) => m.startsWith('./databases/real/chroma-data:')),
+    `the chroma service must bind-mount ./databases/real/chroma-data — a named ` +
+      `volume would move the derived store back out of the databases/ folder, ` +
+      `and the pre-split ./databases/chroma-data would sit beside the test ` +
+      `data again. Got [${mountsOf(block).join(', ')}]`,
   );
   assert.match(block, /IS_PERSISTENT/,
     'chroma persistence must be pinned on, or the store silently becomes per-boot');
+});
+
+// This is a configuration invariant.
+test('the test Chroma persists to databases/test, physically apart from the real store', () => {
+  // The :3001 stack's chunks and vectors get their own files, not a logical
+  // database inside the real store: a separate service over a separate bind
+  // mount, so "delete the test data" is `rm -rf databases/test` and can never
+  // touch real chat memory.
+  const block = serviceBlock('chroma-test');
+  assert.ok(
+    mountsOf(block).some((m) => m.startsWith('./databases/test/chroma-data-3001:')),
+    `the chroma-test service must bind-mount ./databases/test/chroma-data-3001. ` +
+      `Got [${mountsOf(block).join(', ')}]`,
+  );
+  assert.match(block, /IS_PERSISTENT/,
+    'the test store is the durable :3001 sandbox — persistence pinned on, like the real one');
 });
 
 // This is a configuration invariant.

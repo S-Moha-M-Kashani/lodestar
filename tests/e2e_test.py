@@ -1222,72 +1222,63 @@ try:
               any(c["title"] == "A thought I do not want" for c in api_trash()["cards"]))
 
         # ---- Assistant model settings ----------------------------------------
-        # A "Models" panel with three pickers. Only the text-generation pick
-        # changes behaviour today (it rides along on every chat request); the
-        # omni and embedding picks are stored preferences for the brain's
-        # coming media/RAG features. All three persist in localStorage.
+        # A "Models" panel with two pickers (text, omni) plus a fixed embedder
+        # display. Only the text-generation pick changes behaviour today (it
+        # rides along on every chat request); the omni pick is a stored
+        # preference for the brain's coming media features. Both persist in
+        # localStorage. The embedding row is deliberately NOT a picker: the
+        # brain embeds with heydariAI/persian-embeddings (the
+        # sentence-transformers default), the old dropdown was a stored
+        # preference nothing read, and a control that does nothing teaches the
+        # user not to trust the ones that do. The row now states the real,
+        # fixed model instead.
         # The text picker is local-first: it offers the models pulled on this
-        # machine, and OpenRouter is one explicit selector away. All three local
-        # slugs were verified against `ollama list` rather than assumed.
-        # moonshotai/kimi-k3 and openai/gpt-4o-mini are retired, and so is
-        # openrouter/auto: it is deprecated, it routes to a different model per
-        # request, and the brain never reads the resolved slug back out of the
-        # response — so a slow or badly tool-calling turn was unattributable.
+        # machine (verified against `ollama list`), and OpenRouter is one
+        # explicit selector away.
         DEFAULT_TEXT = "4skl/gemma4-e2b-mtp"
         ALT_TEXT = "gemma4:e2b"
         THIRD_TEXT = "deepseek-r1:8b"
-        RETIRED_TEXT = ["moonshotai/kimi-k3", "openai/gpt-4o-mini", "openrouter/auto"]
 
         # Every option now says which route it takes, so the label is no longer
         # the slug. Assert on the values — the label carries its own check below.
         def option_values(selector):
             return page.locator(f"{selector} option").evaluate_all(
                 "os => os.map(o => o.value)")
-        # Every omni option must be a model that actually receives audio.
-        # nemotron:free advertises audio input but its provider discards the
-        # input_audio part, so every dictation came back an invented apology; it
-        # was kept selectable only for being free. It is gone now: OpenRouter has
-        # exactly one free audio-input model and that is it, so "free" was never
-        # a working choice — free dictation is Parakeet's job, locally and offline
-        # (BRAIN_TRANSCRIBER defaults to parakeet).
-        # voxtral-small was nemotron's replacement and is retired too, for cost:
-        # its text prices match the default's, which is what hid that its *audio*
-        # rate is $100/M tokens against the default's $0.30/M — measured
-        # 2026-08-02, the most expensive audio-input model in the catalogue,
-        # ~330x the default for the tokens dictation is made of.
-        # openai/whisper-large-v3-turbo was briefly the default and is not one:
-        # measured on 2026-07-31, OpenRouter's published catalogue is 337 models
-        # and holds no whisper, embedding or rerank entry, so it can transcribe
-        # nothing. The picker is the remote route by definition — local dictation
-        # is Parakeet's job inside the brain, which ignores this pick entirely, so
-        # the local checkpoint is not an option here either.
-        # The default IS the cheapest usable audio model in the catalogue
-        # (2026-08-02): $0.10/M in, $0.30/M audio.
+        # Every omni option must genuinely receive audio at a sane price — the
+        # default is the cheapest usable audio model in the catalogue
+        # (2026-08-02). Free dictation is Parakeet's job, locally, inside the
+        # brain.
         DEFAULT_OMNI = "google/gemini-2.5-flash-lite"
         ALT_OMNI = ["openai/gpt-audio-mini"]
-        BROKEN_OMNI = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
-        DEFAULT_EMBED = "nvidia/llama-nemotron-embed-vl-1b-v2:free"
+        # The one embedder the brain actually runs — fixed, local, not a pick.
+        FIXED_EMBED = "heydariAI/persian-embeddings"
         page.locator('.view-switch button[data-view="assistant"]').click()
         page.wait_for_selector("#chat-input")
-        check("assistant: settings panel offers the three model pickers",
+        check("assistant: settings panel offers the two model pickers",
               page.locator(".chat-settings").count() == 1
               and page.locator("#model-text").count() == 1
-              and page.locator("#model-omni").count() == 1
-              and page.locator("#model-embed").count() == 1)
+              and page.locator("#model-omni").count() == 1)
+        check("assistant: the embedding dropdown is gone",
+              page.locator("#model-embed").count() == 0)
+        # The row is informative, not interactive: it names the real model and
+        # says it runs locally, in the panel where the old picker stood.
+        check("assistant: the fixed embedder display names the real model",
+              page.locator(".chat-settings #model-embed-fixed").count() == 1
+              and FIXED_EMBED in page.locator("#model-embed-fixed").inner_text())
+        check("assistant: the fixed embedder says it runs locally",
+              "local" in page.locator("#model-embed-fixed").inner_text().lower())
+        check("assistant: the stale embedding-pick hint sentence is gone",
+              "embedding pick is saved"
+              not in page.locator(".chat-settings").inner_text())
         check("assistant: pickers default to the chosen slugs",
               page.input_value("#model-text") == DEFAULT_TEXT
-              and page.input_value("#model-omni") == DEFAULT_OMNI
-              and page.input_value("#model-embed") == DEFAULT_EMBED)
+              and page.input_value("#model-omni") == DEFAULT_OMNI)
         omni_options = option_values("#model-omni")
-        check("assistant: the audio-dropping free model is gone from the picker",
-              BROKEN_OMNI not in omni_options)
         check("assistant: the audio picker offers only models that take audio",
               omni_options == [DEFAULT_OMNI, *ALT_OMNI])
         text_options = option_values("#model-text")
         check("assistant: the text picker offers the local default and alternatives",
               text_options == [DEFAULT_TEXT, ALT_TEXT, THIRD_TEXT])
-        check("assistant: the retired text models are gone from the picker",
-              not any(slug in text_options for slug in RETIRED_TEXT))
         # ---- Local-first: the text provider is a choice, and every option says
         # where it runs. Free-and-private against billed-and-remote is the one
         # difference a picker must never leave implicit, so the label carries the
@@ -1323,10 +1314,9 @@ try:
         # openrouter/auto is gone from every picker, not just the text one: it is
         # deprecated, and the resolved model was never read back out of the
         # response, so no picker should be able to hand the brain a router.
-        embed_options = option_values("#model-embed")
         check("assistant: no picker offers the deprecated openrouter/auto router",
               all("openrouter/auto" not in opts
-                  for opts in (text_options, omni_options, embed_options)))
+                  for opts in (text_options, omni_options)))
         # The brain now says which models it can serve, because the text pick
         # rides on every chat turn: pointed at a local backend, a picker offering
         # `openai/gpt-5-nano` would fail every turn with no way out from the UI.
@@ -1360,51 +1350,26 @@ try:
               page.input_value("#model-text") == ALT_TEXT)
         page.select_option("#model-text", DEFAULT_TEXT)
 
-        # ---- Retired picks do not survive, even though off-list picks do.
-        # Removing a model from the options list was not enough: a saved slug that
-        # left the list stays *selected* (it is re-added as an extra option), and no
-        # migration shipped, so the browser that had nemotron kept dictating through
-        # the model whose provider drops the audio — the removal never reached the
-        # only person affected by it. Same for the retired text models: kimi-k3 cost
-        # $3/$15 per M tokens against the default's $0.05/$0.40 — ~50x per turn for
-        # the same work — and it is not in the OpenRouter key's allowlist, so it is
-        # retired for good. It was slow with it: 11s against nano's 2.6s behind a
-        # non-streaming "Thinking…", which reads as a hang.
-        #
-        # So a slug retired *for cause* is reset to the default on load, while a
-        # slug the user picked deliberately is still honoured — that escape hatch is
-        # why off-list options exist and it has to stay. The reset is also written
-        # back to storage: left in place, the dead slug would return the moment a
-        # future version trimmed the retirement list.
+        # ---- A stale `embed` key from the removed embedding picker must stay
+        # inert: no resurrected dropdown, and the other saved picks load as-is.
         MODELS_KEY = "lodestar:models"
-        for retired_text in RETIRED_TEXT:
-            page.evaluate(
-                "([key, text, omni]) => localStorage.setItem(key, JSON.stringify("
-                "{ text, omni, embed: 'openai/text-embedding-3-small' }))",
-                [MODELS_KEY, retired_text, BROKEN_OMNI])
-            page.reload()
-            page.wait_for_selector("#board")
-            page.locator('.view-switch button[data-view="assistant"]').click()
-            page.wait_for_selector("#model-text")
-            check(f"assistant: retired text pick {retired_text} resets to the default",
-                  page.input_value("#model-text") == DEFAULT_TEXT)
-            check(f"assistant: retired text pick {retired_text} is not offered",
-                  retired_text not in option_values("#model-text"))
-            check(f"assistant: retired {retired_text} is cleared from storage",
-                  retired_text not in page.evaluate(
-                      "key => localStorage.getItem(key) || ''", MODELS_KEY))
-            # The broken omni pick rides along on the same load: one retirement
-            # sweep covers every picker, not just the text one.
-            check("assistant: the audio-dropping saved omni pick resets to the default",
-                  page.input_value("#model-omni") == DEFAULT_OMNI)
-            check("assistant: the audio-dropping omni pick is not offered",
-                  BROKEN_OMNI not in option_values("#model-omni"))
-            # A live pick in the same payload must be left exactly as it was.
-            check("assistant: a still-valid saved pick survives the sweep",
-                  page.input_value("#model-embed") == "openai/text-embedding-3-small")
+        page.evaluate(
+            "([key, text]) => localStorage.setItem(key, JSON.stringify("
+            "{ text, embed: 'openai/text-embedding-3-small' }))",
+            [MODELS_KEY, ALT_TEXT])
+        page.reload()
+        page.wait_for_selector("#board")
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector("#model-text")
+        check("assistant: a stale saved embed pick resurrects no dropdown",
+              page.locator("#model-embed").count() == 0
+              and page.locator("#model-embed-fixed").count() == 1)
+        check("assistant: the saved picks beside a stale key load as-is",
+              page.input_value("#model-text") == ALT_TEXT
+              and page.input_value("#model-omni") == DEFAULT_OMNI)
 
-        # The escape hatch: a slug that was never retired, merely unknown to the
-        # preset list, is still selected and still offered.
+        # The escape hatch: a slug unknown to the preset list is still
+        # selected and still offered.
         HAND_PICKED = "anthropic/claude-sonnet-5"
         page.evaluate(
             "([key, text]) => localStorage.setItem(key, JSON.stringify({ text }))",

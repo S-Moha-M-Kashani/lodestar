@@ -135,7 +135,6 @@
   const effortVal = (v) => (v === 'low' || v === 'high' ? v : 'medium');
   const controlVal = (v) => (v === 'act' || v === 'none' ? v : 'influence');
   const srcVal = (v) => (v === 'user' || v === 'ai' ? v : 'default');
-  const EFFORT_LABEL = { low: 'Low', medium: 'Medium', high: 'High' };
   const CONTROL_LABEL = { act: 'I can act', influence: 'I can influence', none: 'Out of my hands' };
 
   // --------------------------------------------------------------------------
@@ -2876,69 +2875,33 @@
 
   // Model choices for the brain, one per capability. Only the text pick has
   // an effect today — it rides along on every /api/agent/chat request (the
-  // brain forwards it to OpenRouter). The omni and embedding picks are stored
-  // preferences for the media-ingestion and remote-embedder features to come.
+  // brain forwards it to OpenRouter). The omni pick is a stored preference
+  // for the media-ingestion feature to come. Embedding is deliberately NOT a
+  // pick: the brain runs exactly one embedder (heydariAI/persian-embeddings),
+  // so the panel states it instead of offering a dead dropdown. A stale saved
+  // `embed` key is ignored by the load sweep and dropped on the next persist.
   const MODELS_KEY = KEY_PREFIX + 'models';
-  // Every omni option has to be a model that genuinely receives audio.
-  // nemotron-3-nano-omni:free is listed as audio-capable but the provider
-  // serving it discards the audio and answers an apology, and it was kept here
-  // only for being free. It is gone: OpenRouter lists exactly one free
-  // audio-input model and that was it, so "free" never meant "works". Free
-  // dictation is the local Parakeet backend's job instead (BRAIN_TRANSCRIBER
-  // defaults to it). voxtral-small briefly replaced it and is gone too, for
-  // cost: its text prices match the default's, which hid that its *audio* rate
-  // is $100/M tokens against the default's $0.30/M (measured 2026-08-02) —
-  // ~330x for the tokens dictation is made of. The default is the cheapest
-  // usable audio model in the catalogue.
+  // Every omni option must genuinely receive audio at a sane price. Free
+  // dictation is the local Parakeet backend's job (BRAIN_TRANSCRIBER
+  // defaults to it).
   const DEFAULT_MODELS = {
     // Local-first is the normal Assistant experience. Nano stays one click
-    // away under the explicit OpenRouter provider selector below. The omni and
-    // embedding picks are the remote route by definition — local dictation is
-    // Parakeet's job inside the brain, which ignores this pick entirely.
+    // away under the explicit OpenRouter provider selector below. The omni
+    // pick is the remote route by definition — local dictation is Parakeet's
+    // job inside the brain, which ignores this pick entirely.
     text: '4skl/gemma4-e2b-mtp',
     omni: 'google/gemini-2.5-flash-lite',
-    embed: 'nvidia/llama-nemotron-embed-vl-1b-v2:free',
   };
+  // The one embedder the brain actually runs — shown in the panel, never picked.
+  const FIXED_EMBEDDER = 'heydariAI/persian-embeddings';
   const MODEL_PICKERS = [
     { key: 'text', id: 'model-text', label: 'Text generation',
       options: [DEFAULT_MODELS.text, 'gemma4:e2b', 'deepseek-r1:8b'] },
     { key: 'omni', id: 'model-omni', label: 'Audio → text (route: OpenRouter API)',
       options: [DEFAULT_MODELS.omni, 'openai/gpt-audio-mini'] },
-    { key: 'embed', id: 'model-embed', label: 'Text → embedding (route: OpenRouter API)',
-      options: [DEFAULT_MODELS.embed, 'openai/text-embedding-3-small'] },
   ];
   const modelRoute = (slug) =>
     (slug.startsWith('4skl/') || !slug.includes('/')) ? 'local' : 'OpenRouter API';
-  // Slugs retired *for cause* — not merely dropped from the preset list above.
-  // Dropping a model from MODEL_PICKERS does not deselect it: a saved pick that
-  // left the list is re-added as an option and stays selected. That is right for
-  // a slug the user chose deliberately and wrong for one removed because it was
-  // broken, and the difference is not visible in the options list alone. It cost
-  // us a whole release: nemotron came out of the picker while the only browser
-  // that had it selected kept dictating through the provider that discards the
-  // audio, so the fix reached everyone except the person it was for.
-  const RETIRED_MODELS = new Set([
-    // Dictation: advertises audio input, but the provider serving it drops the
-    // input_audio part and answers an invented apology instead of a transcript.
-    'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
-    // Dictation, retired for cost like kimi-k3 below: audio at $100/M tokens
-    // against the default's $0.30/M — the dearest audio model in the catalogue.
-    'mistralai/voxtral-small-24b-2507',
-    // Text. kimi-k3 stays here permanently: at $3/$15 per M tokens it was the
-    // dearest model ever offered in this picker — 60x the default's input price,
-    // ~50x per turn for the same work — and it is not in the OpenRouter key's
-    // allowlist at all, so it now fails outright rather than merely costing more.
-    // It also took ~11s against the default's under 3, and nothing streams, so
-    // the wait was a motionless "Thinking…" that read as a hang. No free
-    // replacement exists to weigh against it: every ':free' slug 404s under the
-    // key's guardrail, so the cheapest reachable tool-calling model is the
-    // default itself.
-    'moonshotai/kimi-k3',
-    'openai/gpt-4o-mini',
-    // Deprecated upstream, and it routes per request to a model the brain never
-    // reads back out of the response — so a slow turn is unattributable.
-    'openrouter/auto',
-  ]);
   const assistantModels = { ...DEFAULT_MODELS };
   assistantModels.provider = 'ollama';
   const TEXT_MODELS_BY_PROVIDER = {
@@ -2952,9 +2915,8 @@
   //
   // This exists because the text pick rides on every chat request. With
   // BRAIN_LLM=ollama the brain forwards that slug to a daemon that cannot load
-  // `openai/gpt-5-nano`, so every turn would fail with a picker offering no way
-  // out — the RETIRED_MODELS lesson again: a pick that cannot work has to be
-  // deselected, not merely delisted.
+  // `openai/gpt-5-nano`, so every turn would fail with a picker offering no
+  // way out — an unservable pick has to be deselected, not merely delisted.
   const brainModels = { provider: '', verified: false, models: [], default: '' };
 
   async function probeBrainModels() {
@@ -2994,7 +2956,7 @@
 
   // The options for one picker: the backend's own list when it verified one,
   // otherwise the presets. Only the text pick is served by the chat model, so
-  // the omni and embedding pickers keep their curated lists either way.
+  // the omni picker keeps its curated list either way.
   function pickerOptions(picker) {
     if (picker.key === 'text') {
       if (assistantModels.provider === 'openrouter') return TEXT_MODELS_BY_PROVIDER.openrouter;
@@ -3012,21 +2974,14 @@
   let savedTextProvider = false;
   try {
     const saved = JSON.parse(localStorage.getItem(MODELS_KEY) || '{}');
-    let swept = false;
     for (const k of Object.keys(DEFAULT_MODELS)) {
       if (typeof saved[k] !== 'string' || !saved[k]) continue;
-      // Leave the default in place for a retired pick; keep anything else,
-      // including an off-list slug that was chosen on purpose.
-      if (RETIRED_MODELS.has(saved[k])) { swept = true; continue; }
       assistantModels[k] = saved[k];
     }
     if (saved.provider === 'ollama' || saved.provider === 'openrouter') {
       assistantModels.provider = saved.provider;
       savedTextProvider = true;
     }
-    // Write the sweep back rather than re-running it every load: left in storage,
-    // a dead slug would return the moment a later version trimmed the list above.
-    if (swept) persistModels();
   } catch { /* corrupted or private mode — keep defaults */ }
 
   function renderChatSettings() {
@@ -3083,9 +3038,30 @@
       label.appendChild(sel);
       panel.appendChild(label);
     }
+    // The embedder is a fact, not a pick: the brain runs exactly one model,
+    // locally. A filled-in ledger cell where the dropdown used to stand —
+    // same footprint as the selects, no affordance — so nobody hunts for a
+    // control that shouldn't exist.
+    const embedField = document.createElement('div');
+    embedField.className = 'field model-fixed';
+    embedField.id = 'model-embed-fixed';
+    embedField.append('Text → embedding (route: local, fixed)');
+    const embedValue = document.createElement('span');
+    embedValue.className = 'model-fixed-value';
+    const embedName = document.createElement('span');
+    embedName.textContent = FIXED_EMBEDDER;
+    const embedStamp = document.createElement('span');
+    embedStamp.className = 'model-fixed-stamp';
+    embedStamp.textContent = 'built-in';
+    embedValue.append(embedName, embedStamp);
+    const embedNote = document.createElement('span');
+    embedNote.className = 'model-fixed-note';
+    embedNote.textContent = 'Persian-tuned · embeds your cards inside the brain, never remote';
+    embedField.append(embedValue, embedNote);
+    panel.appendChild(embedField);
     const hint = document.createElement('p');
     hint.className = 'field-hint';
-    hint.textContent = 'Text generation applies to the chat. Ollama uses models pulled on this machine; OpenRouter currently offers GPT-5 Nano and requires an API key. The omni model transcribes your voice, unless the brain is dictating locally with Parakeet — that ignores this pick. The embedding pick is saved for upcoming retrieval features.';
+    hint.textContent = 'Text generation applies to the chat. Ollama uses models pulled on this machine; OpenRouter currently offers GPT-5 Nano and requires an API key. The omni model transcribes your voice, unless the brain is dictating locally with Parakeet — that ignores this pick.';
     panel.appendChild(hint);
     // Where the chat model runs, when the brain told us. Worth saying out loud:
     // a local backend is free and private but answers in tens of seconds, and
