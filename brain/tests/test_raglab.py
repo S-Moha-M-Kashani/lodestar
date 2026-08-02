@@ -3859,8 +3859,9 @@ def test_running_an_evaluation_leaves_the_repositorys_runs_directory_alone(
     test_a_run_saves_the_questions_it_was_measured_on — does not take the
     fixtures, so every invocation of this suite deposits a real run file.
 
-    Measured 2026-08-02: 138 files before the suite, 139 after, and 92 of the
-    140 then present were this leak — two thirds of the directory. The
+    Measured 2026-08-02: one more file in `.runs/` after every suite run, and
+    124 of the 154 sitting there were this leak — four fifths of the
+    directory, against 30 runs somebody asked for. The
     leaderboard's own guards quarantine them (no judge, unrecorded sample) so
     no real comparison is corrupted, which is why this went unnoticed; the
     cost is a `.runs/` that is mostly noise and a leaderboard padded with
