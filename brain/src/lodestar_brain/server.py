@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from .agent import AgentResult, AgentStep, LodestarAgent
 from .config import Settings, load_settings
 from .llm import make_chat_model, served_models
-from .retrieval import CardIndex, ChatStore, gate_llm, make_embeddings
+from .retrieval import CardIndex, ChatStore, coverage, gate_llm, make_embeddings
 from .tools.board import BoardClient, make_board_tools
 from .tools.retrieve import make_recall_tool, make_retrieve_tool
 from .tools.websearch import DdgsSearch, make_search_tool
@@ -277,15 +277,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post('/rag/recall')
     def recall(body: RecallBody) -> dict:
-        """`memory` says whether there was anywhere to look.
+        """Searches the chat record AND the board's cards; every match says
+        which with `source`. `memory` says whether the chat side had anywhere
+        to look.
 
         Without it an empty list means both "nothing was ever recorded about
         that" and "chat memory is switched off", which are opposite claims —
         one about the user's history, one about the service. The same objection
-        made /rag/communities 404 rather than answer with an empty list."""
+        made /rag/communities 404 rather than answer with an empty list.
+        Cards never depended on Chroma, so they are searched either way; a
+        board that is down costs the card half, never the whole answer.
+        Chat and card hits are grouped, not sorted together: a weighted-RRF
+        score and a coverage score share no scale, and interleaving them
+        would pretend a calibration that was never measured."""
+        cards: list[dict] = []
+        try:
+            index.build(board.list_cards())
+            # llm=None: the search box answers directly, so it gets the fast
+            # ungated pipeline — the gate exists for contexts a model reads.
+            hits = index.search(body.text, k=body.k, llm=None)
+            cards = [{'text': doc.page_content,
+                      'score': round(coverage(body.text, doc.page_content,
+                                              index.bm25.idf), 4),
+                      'metadata': dict(doc.metadata), 'source': 'card'}
+                     for doc in hits]
+        except Exception as exc:
+            logging.getLogger(__name__).warning(
+                'recall: cards unsearchable, answering from chat only (%s)', exc)
         if memory is None:
-            return {'matches': [], 'memory': False}
-        return {'matches': memory.search(body.text, k=body.k), 'memory': True}
+            return {'matches': cards, 'memory': False}
+        chat = [hit | {'source': 'chat'}
+                for hit in memory.search(body.text, k=body.k)]
+        return {'matches': chat + cards, 'memory': True}
 
     return app
 

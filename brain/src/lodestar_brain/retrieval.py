@@ -636,6 +636,11 @@ TOP_K = 8           # contexts handed to the answerer
 CANDIDATES = 40     # depth taken from each half before fusion
 RRF_K = 60          # the constant in 1/(k + rank)
 RERANK_DEPTH = 20   # how many candidates the reranker actually reads
+# (dense, bm25) fusion weights for chat recall. Deliberately not the card
+# index's equal split: recall queries are mostly literals the user remembers
+# saying — a password, a name, an amount — where the exact-term half should
+# dominate and the dense half only backstops paraphrase.
+RECALL_WEIGHTS = (0.2, 0.8)
 
 
 class RankBM25Retriever(BaseRetriever):
@@ -1038,13 +1043,35 @@ class ChatStore:
 
     def search(self, text: str, k: int = 5,
                scope: TimeScope | None = None) -> list[dict]:
-        if self.count() == 0:
+        """Hybrid, BM25-heavy: dense from Chroma, BM25 over the same chunks,
+        fused by weighted RRF (RECALL_WEIGHTS). Fused inline rather than via
+        `hybrid_retriever` because `EnsembleRetriever` discards the fused
+        score, and this result carries one all the way to the UI."""
+        total = self.count()
+        if total == 0:
             return []   # an empty store is a normal state, not a failed query
-        hits = self.store.similarity_search_with_relevance_scores(
-            text, k=min(k, self.count()),
-            filter=where_clause(scope, fields=('created_day',)))
-        return [{'text': doc.page_content, 'score': round(float(score), 4),
-                 'metadata': dict(doc.metadata)} for doc, score in hits]
+        raw = self.store.get()
+        corpus = [Document(id=id_, page_content=content, metadata=meta or {})
+                  for id_, content, meta in zip(raw['ids'], raw['documents'],
+                                                raw['metadatas'])]
+        depth = min(total, max(k, CANDIDATES))
+        dense = self.store.similarity_search(
+            text, k=depth, filter=where_clause(scope, fields=('created_day',)))
+        lexical = RankBM25Retriever.from_documents(
+            corpus, k=depth, scope=scope).invoke(text)
+        # Keyed on the text, not the chunk id: the dense half's documents come
+        # back from Chroma and the lexical half's from the corpus above, and an
+        # id only one side carries would count the same chunk twice.
+        scores: dict[str, float] = {}
+        seen: dict[str, Document] = {}
+        for weight, ranking in zip(RECALL_WEIGHTS, (dense, lexical)):
+            for rank, doc in enumerate(ranking, start=1):
+                seen.setdefault(doc.page_content, doc)
+                scores[doc.page_content] = (scores.get(doc.page_content, 0.0)
+                                            + weight / (RRF_K + rank))
+        ordered = sorted(scores, key=lambda key: -scores[key])[:k]
+        return [{'text': key, 'score': round(scores[key], 4),
+                 'metadata': dict(seen[key].metadata)} for key in ordered]
 
     def count(self) -> int:
         return self.client.get_collection(self.collection_name).count()
