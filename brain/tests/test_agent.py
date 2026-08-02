@@ -45,6 +45,7 @@ def build(script, tools, **kw):
                          llm=FakeChat(script=script), **kw)
 
 
+# This is a unit test.
 def test_agent_executes_tool_calls_then_replies():
     calls = []
     agent = build([call('echo', {'text': 'ping'}), AIMessage(content='done')],
@@ -57,6 +58,7 @@ def test_agent_executes_tool_calls_then_replies():
     assert result.steps[0].result == {'echoed': 'ping'}
 
 
+# This is a unit test.
 def test_agent_recovers_from_an_unknown_tool_and_from_a_raising_tool():
     # create_agent owns the unknown-tool message, so assert recovery and the
     # reported step — never the wording. A raising tool is ours to handle: it
@@ -72,6 +74,7 @@ def test_agent_recovers_from_an_unknown_tool_and_from_a_raising_tool():
     assert result.steps[1].result == {'error': 'kaput'}
 
 
+# This is a unit test.
 def test_agent_stops_at_max_steps_and_still_reports_them():
     agent = build([call('echo', {'text': 'x'}, i) for i in range(8)],
                   [echo_tool([])], max_steps=2)
@@ -81,6 +84,7 @@ def test_agent_stops_at_max_steps_and_still_reports_them():
     assert len(result.steps) == 2
 
 
+# This is a unit test.
 def test_an_unknown_provider_fails_when_the_agent_is_built():
     # create_app builds the agent at import time, so this is the boot-time
     # failure the no-auto-modes rule asks for — not a 500 on the first chat.
@@ -88,6 +92,7 @@ def test_an_unknown_provider_fails_when_the_agent_is_built():
         LodestarAgent(settings=Settings(llm_provider='typo'), tools=[])
 
 
+# This is a unit test.
 def test_arun_matches_run():
     # The route is async; this is the path production actually takes.
     calls = []
@@ -100,6 +105,7 @@ def test_arun_matches_run():
     assert result.steps[0].result == {'echoed': 'ping'}
 
 
+# This is a unit test.
 def test_arun_survives_a_raising_tool():
     # Tool-error handling that is only wired up synchronously raises
     # NotImplementedError under ainvoke/astream — which is this test's point.
@@ -110,6 +116,7 @@ def test_arun_survives_a_raising_tool():
     assert result.steps[0].result == {'error': 'kaput'}
 
 
+# This is a unit test.
 def test_arun_stops_at_max_steps_and_still_reports_them():
     agent = build([call('echo', {'text': 'x'}, i) for i in range(8)],
                   [echo_tool([])], max_steps=2)
@@ -165,6 +172,7 @@ def test_untrusted_tool_output_is_fenced_off_from_instructions():
     assert untrusted.BEGIN in SYSTEM_PROMPT and untrusted.END in SYSTEM_PROMPT
 
 
+# This is a unit test.
 def test_steps_from_pairs_calls_with_results_and_decodes_json():
     messages = [HumanMessage(content='go'),
                 AIMessage(content='', tool_calls=[
@@ -197,6 +205,7 @@ def test_usage_sums_the_turns_model_calls_and_is_absent_when_unreported():
     assert _usage_from([AIMessage(content='done')]) is None
 
 
+# This is a unit test.
 def test_steps_from_ignores_a_call_with_no_result_yet():
     # The old loop appended a step only once the tool had run; a transcript cut
     # off at the step limit must not report a step that never happened.
@@ -205,6 +214,7 @@ def test_steps_from_ignores_a_call_with_no_result_yet():
     assert _steps_from(messages) == []
 
 
+# This is a unit test.
 def test_the_model_picker_gets_one_compiled_graph_per_model():
     # create_agent binds its model at build time, but the Assistant view sends
     # a model per request — so there is a graph per pick, cached per process.
@@ -221,6 +231,7 @@ def test_the_model_picker_gets_one_compiled_graph_per_model():
                                      ('fake', 'anthropic/claude-sonnet-4.5')]
 
 
+# This is a unit test.
 def test_the_same_slug_under_two_providers_gets_two_graphs():
     """A model name means something only to the backend serving it. Keyed on the
     slug alone, picking OpenRouter after Ollama would replay the graph compiled

@@ -20,6 +20,7 @@ exit ${failCopy ? 1 : 0}
   return { bin, logPath };
 }
 
+// This is an integration test: real files on disk and a stub rclone binary.
 test('no DB → status no-db, exits without throwing', () => {
   const dir = mkdtempSync(join(tmpdir(), 'bk-'));
   const r = runBackup({ dbPath: join(dir, 'missing.db'), backupsDir: join(dir, 'backups') });
@@ -27,6 +28,7 @@ test('no DB → status no-db, exits without throwing', () => {
   assert.equal(r.pushed, false);
 });
 
+// This is an integration test: real files on disk and a stub rclone binary.
 test('happy path copies locally and invokes rclone copy', () => {
   const dir = mkdtempSync(join(tmpdir(), 'bk-'));
   const dbPath = join(dir, 'board.db');
@@ -43,6 +45,7 @@ test('happy path copies locally and invokes rclone copy', () => {
   assert.match(log, /copy .*board-2026-07-24.*\.db gdrive:lodestar-backups\//);
 });
 
+// This is an integration test: real files on disk and a stub rclone binary.
 test('rclone copy failure → status rclone-failed but local kept, no throw', () => {
   const dir = mkdtempSync(join(tmpdir(), 'bk-'));
   const dbPath = join(dir, 'board.db');
@@ -55,6 +58,7 @@ test('rclone copy failure → status rclone-failed but local kept, no throw', ()
   assert.ok(existsSync(r.localPath));
 });
 
+// This is an integration test: real files on disk and a stub rclone binary.
 test('missing rclone binary → status rclone-missing, local kept', () => {
   const dir = mkdtempSync(join(tmpdir(), 'bk-'));
   const dbPath = join(dir, 'board.db');
@@ -65,6 +69,7 @@ test('missing rclone binary → status rclone-missing, local kept', () => {
   assert.ok(existsSync(r.localPath));
 });
 
+// This is an integration test: real files on disk and a stub rclone binary.
 test('keep defaults to 100 backups', () => {
   const dir = mkdtempSync(join(tmpdir(), 'bk-'));
   const dbPath = join(dir, 'board.db');
@@ -84,6 +89,7 @@ test('keep defaults to 100 backups', () => {
   assert.ok(!files.some((f) => f.includes('10-00-00')));
 });
 
+// This is an integration test: real files on disk and a stub rclone binary.
 test('a real SQLite DB is snapshotted consistently and stays readable', () => {
   const dir = mkdtempSync(join(tmpdir(), 'bk-'));
   const dbPath = join(dir, 'board.db');
@@ -100,6 +106,7 @@ test('a real SQLite DB is snapshotted consistently and stays readable', () => {
   );
 });
 
+// This is an integration test: real files on disk and a stub rclone binary.
 test('a file that is not a SQLite DB still gets a byte-for-byte copy', () => {
   // The fallback path: whatever the snapshot mechanism, a non-SQLite board file
   // must never be silently skipped or truncated.
@@ -112,6 +119,7 @@ test('a file that is not a SQLite DB still gets a byte-for-byte copy', () => {
   assert.equal(readFileSync(r.localPath, 'utf8'), 'NOT-A-DATABASE');
 });
 
+// This is an integration test: real files on disk and a stub rclone binary.
 test('prune keeps only the newest N backups', () => {
   const dir = mkdtempSync(join(tmpdir(), 'bk-'));
   const dbPath = join(dir, 'board.db');

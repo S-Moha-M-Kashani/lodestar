@@ -23,6 +23,7 @@ def _load():
     return data, cards, label_of
 
 
+# This is an eval.
 @pytest.mark.eval
 def test_find_related_precision_at_k_meets_threshold():
     data, cards, label_of = _load()
@@ -41,6 +42,7 @@ def test_find_related_precision_at_k_meets_threshold():
             f"query {q['text']!r}: precision {precision:.2f} < {threshold}")
 
 
+# This is an eval.
 @pytest.mark.eval
 def test_top_result_is_from_expected_cluster():
     data, cards, label_of = _load()

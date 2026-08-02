@@ -1,6 +1,7 @@
 from lodestar_brain.config import Settings, load_settings
 
 
+# This is a unit test.
 def test_defaults():
     s = load_settings(env={})
     assert s.openrouter_base_url == 'https://openrouter.ai/api/v1'
@@ -40,6 +41,7 @@ def test_defaults():
     assert s.parakeet_model == 'mlx-community/parakeet-tdt-0.6b-v3'
 
 
+# This is a unit test.
 def test_choosing_the_backend_chooses_the_model_on_a_hand_built_settings():
     """`Settings(llm_provider=...)` is how the unit tests, the evals and
     create_app's callers build settings — load_settings is only the env path. A
@@ -56,6 +58,7 @@ def test_choosing_the_backend_chooses_the_model_on_a_hand_built_settings():
                     model='openai/gpt-5-nano').model == 'openai/gpt-5-nano'
 
 
+# This is a unit test.
 def test_env_overrides():
     s = load_settings(env={
         'OPENROUTER_API_KEY': 'sk-test',
@@ -92,15 +95,18 @@ def test_env_overrides():
 # database, and one collection per board. The brain talking to :3000 (board.db)
 # and the brain talking to :3001 (board-3001.db) must never share a collection.
 
+# This is a unit test.
 def test_chroma_url_defaults_to_the_local_docker_server():
     assert load_settings(env={}).chroma_url == 'http://localhost:8001'
 
 
+# This is a unit test.
 def test_chroma_url_env_override_wins():
     s = load_settings(env={'BRAIN_CHROMA_URL': 'http://host.docker.internal:8001'})
     assert s.chroma_url == 'http://host.docker.internal:8001'
 
 
+# This is a unit test.
 def test_chroma_url_can_select_the_offline_memory_backend():
     # e2e and CI run without the container: 'memory' keeps them offline.
     assert load_settings(env={'BRAIN_CHROMA_URL': 'memory'}).chroma_url == 'memory'
@@ -112,15 +118,18 @@ def test_chroma_url_can_select_the_offline_memory_backend():
 #   :3001 (board-3001.db) -> database 'lodestar-test' collection chat-board-3001
 #   pytest                -> database 'lodestar-test' collection chat-test-<uuid>
 
+# This is a unit test.
 def test_the_real_board_gets_the_production_database():
     assert load_settings(env={}).chroma_database == 'lodestar'
 
 
+# This is a unit test.
 def test_the_test_board_gets_the_test_database():
     s = load_settings(env={'BOARD_API_URL': 'http://127.0.0.1:3001'})
     assert s.chroma_database == 'lodestar-test'
 
 
+# This is a unit test.
 def test_any_other_board_is_treated_as_non_production():
     # Only :3000 is the real board; an unknown port must never be able to
     # write into the production database.
@@ -129,11 +138,13 @@ def test_any_other_board_is_treated_as_non_production():
             == 'lodestar-test'
 
 
+# This is a unit test.
 def test_chroma_database_env_override_wins():
     s = load_settings(env={'BRAIN_CHROMA_DATABASE': 'lodestar-staging'})
     assert s.chroma_database == 'lodestar-staging'
 
 
+# This is a unit test.
 def test_real_and_test_boards_never_share_a_database():
     real = load_settings(env={'BOARD_API_URL': 'http://127.0.0.1:3000'})
     test = load_settings(env={'BOARD_API_URL': 'http://127.0.0.1:3001'})
@@ -141,32 +152,38 @@ def test_real_and_test_boards_never_share_a_database():
     assert real.chat_collection != test.chat_collection
 
 
+# This is a unit test.
 def test_chat_collection_defaults_to_the_board_port():
     assert load_settings(env={}).chat_collection == 'chat-board-3000'
 
 
+# This is a unit test.
 def test_chat_collection_follows_the_test_board():
     s = load_settings(env={'BOARD_API_URL': 'http://127.0.0.1:3001'})
     assert s.chat_collection == 'chat-board-3001'
 
 
+# This is a unit test.
 def test_chat_collection_env_override_wins():
     s = load_settings(env={'BOARD_API_URL': 'http://127.0.0.1:3001',
                            'BRAIN_CHAT_COLLECTION': 'chat-scratch'})
     assert s.chat_collection == 'chat-scratch'
 
 
+# This is a unit test.
 def test_chat_collection_without_a_port_uses_default():
     s = load_settings(env={'BOARD_API_URL': 'http://board.test'})
     assert s.chat_collection == 'chat-board-default'
 
 
+# This is a unit test.
 def test_directly_constructed_settings_leave_chat_memory_off():
     # Settings() built in code (unit tests, evals) must not reach any Chroma
     # unless a url is given explicitly.
     assert Settings().chroma_url == ''
 
 
+# This is a unit test.
 def test_the_on_disk_persist_dir_setting_is_gone():
     # The dir-per-board store was replaced by the server; a stale attribute
     # would silently keep writing chroma/ dirs.

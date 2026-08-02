@@ -57,20 +57,24 @@ def _enum(tool, field):
     raise AssertionError(f'no enum on {field}')
 
 
+# This is a unit test.
 def test_the_six_tool_names_are_exactly_these():
     assert set(tools_by_name()) == EXPECTED
 
 
+# This is a unit test.
 def test_every_tool_has_a_non_empty_description():
     for name, tool in tools_by_name().items():
         assert tool.description.strip(), name
 
 
+# This is a unit test.
 def test_every_tool_exposes_an_args_schema():
     for name, tool in tools_by_name().items():
         assert tool.args_schema is not None, name
 
 
+# This is a unit test.
 def test_the_column_enum_is_the_boards_three_columns():
     tools = tools_by_name()
     assert COLUMNS == ['inbox', 'in-progress', 'answered']
@@ -78,6 +82,7 @@ def test_the_column_enum_is_the_boards_three_columns():
     assert _enum(tools['update_card'], 'column_id') == COLUMNS
 
 
+# This is a unit test.
 def test_the_card_type_enum_is_the_boards_six_types():
     tools = tools_by_name()
     assert TYPES == ['question', 'problem', 'task', 'idea', 'plan', 'habit']
@@ -85,6 +90,7 @@ def test_the_card_type_enum_is_the_boards_six_types():
     assert _enum(tools['update_card'], 'type') == TYPES
 
 
+# This is a unit test.
 def test_a_habits_cadence_is_offered_where_the_card_is_made():
     tools = tools_by_name()
     # '' is the sixth option: every non-habit card leaves the frequency unset.
@@ -96,12 +102,14 @@ def test_a_habits_cadence_is_offered_where_the_card_is_made():
     assert 'frequency' not in tools['update_card'].args_schema.model_json_schema()['properties']
 
 
+# This is a unit test.
 def test_importance_and_urgency_keep_their_three_way_enum():
     update = tools_by_name()['update_card']
     assert _enum(update, 'importance') == ['high', 'low', '']
     assert _enum(update, 'urgency') == ['high', 'low', '']
 
 
+# This is a unit test.
 def test_list_cards_still_accepts_an_empty_column_filter():
     # The old schema let the model omit the filter; '' has to stay legal or a
     # model that passes it explicitly gets a validation error where it used to
@@ -109,6 +117,7 @@ def test_list_cards_still_accepts_an_empty_column_filter():
     assert '' in _enum(tools_by_name()['list_cards'], 'column_id')
 
 
+# This is a unit test.
 def test_required_fields_match_the_old_hand_written_schemas():
     schemas = {name: _schema(tool) for name, tool in tools_by_name().items()}
     assert schemas['create_card']['required'] == ['title']
@@ -119,11 +128,13 @@ def test_required_fields_match_the_old_hand_written_schemas():
     assert schemas['list_cards'].get('required', []) == []
 
 
+# This is a unit test.
 def test_create_card_still_tells_the_model_it_needs_approval():
     described = tools_by_name()['create_card'].description.lower()
     assert 'propos' in described or 'approv' in described or 'confirm' in described
 
 
+# This is a unit test.
 def test_category_stays_a_free_string_with_guidance():
     # Categories are the user's own registry, so this must not become an enum;
     # the description is how the model learns what ids are in use.
