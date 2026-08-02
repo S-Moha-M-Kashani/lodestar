@@ -171,6 +171,10 @@ LLM_GRADE_PROMPT = (
     '0 means irrelevant, 10 means it directly contains the answer.')
 
 
+class GradeUnavailable(RuntimeError):
+    """The grading model could not be reached, so nothing was scored."""
+
+
 def llm_scores(llm, model: str, query: str, documents: list[str],
                max_chars: int = 700) -> np.ndarray:
     """Batch relevance grading in one call. One call per candidate would be more
@@ -186,8 +190,17 @@ def llm_scores(llm, model: str, query: str, documents: list[str],
                                'content': f'Question: {query}\n\n{listing}'}],
                         model)
         text = turn.content or ''
-    except Exception:
-        return np.full(len(documents), 0.5, dtype=np.float32)
+    except Exception as error:
+        # This used to return 0.5 for every document, which clears the gate's
+        # default 0.4 threshold: an unreachable model turned grader='llm' into
+        # a no-op and no field on the run said so. A lab's whole output is a
+        # claim about what a configuration scored, so a row labelled
+        # grader='llm' that was measured ungated is the one artefact it must
+        # never produce — the reasoning that already makes judged_settings()
+        # refuse an unbacked run rather than let the fake provider fill in.
+        raise GradeUnavailable(
+            f'the LLM grade stage could not reach its model '
+            f'({model or "the configured default"}): {error}') from error
     scores = np.full(len(documents), np.nan, dtype=np.float32)
     for line in text.splitlines():
         match = re.match(r'\s*\[?(\d+)\]?\s*[:.\-]\s*(\d+(?:\.\d+)?)', line)

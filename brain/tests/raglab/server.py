@@ -304,7 +304,12 @@ def create_app() -> FastAPI:
         question = (payload.get('question') or '').strip()
         if not question:
             raise HTTPException(400, 'question is required')
-        problems = cfg.validate()
+        # The same screen /api/evaluations applies. It used to be missing here,
+        # so one route refused a model the backend does not serve while the
+        # other ran it — and now that a dead grade stage raises instead of
+        # scoring everything 0.5, the difference between the two routes would
+        # be a 400 naming the model against a bare 500.
+        problems = cfg.validate() + models.provider_problems(cfg, settings)
         if problems:
             raise HTTPException(400, '; '.join(problems))
         index = registry.get(cfg.index)
@@ -335,6 +340,15 @@ def create_app() -> FastAPI:
     @app.exception_handler(ValueError)
     def value_error(_request, error: ValueError):
         return JSONResponse({'detail': str(error)}, status_code=400)
+
+    @app.exception_handler(retrieval.GradeUnavailable)
+    def grade_unavailable(_request, error: Exception):
+        """502, not 500: the lab is fine, the model it was told to grade with is
+        not. The gate refuses to score rather than passing everything at 0.5, so
+        this is the reply a caller gets — and it has to say which stage went
+        missing, or the panel shows a blank result and the reader blames
+        retrieval."""
+        return JSONResponse({'detail': str(error)}, status_code=502)
 
     return app
 
