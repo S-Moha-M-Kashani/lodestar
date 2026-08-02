@@ -2,7 +2,7 @@
 // local SQLite file so cards survive restarts. Zero npm dependencies:
 // Node's built-in http server and node:sqlite do all the work.
 //
-//   node server.js                 # http://localhost:3000, board.db beside this file
+//   node server.js                 # http://localhost:3000, databases/board.db
 //   PORT=4000 BOARD_DB=/tmp/x.db node server.js
 //
 // The board is stored one row per card. The client sends its whole state
@@ -23,10 +23,13 @@ import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { resolveBoardDb } from './scripts/db-location.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 3000;
-const DB_PATH = process.env.BOARD_DB || join(ROOT, 'board.db');
+// databases/board.db by default (BOARD_DB overrides), moving a legacy
+// root-level board.db in — backed up first — the first time it boots.
+const DB_PATH = resolveBoardDb({ root: ROOT, env: process.env });
 const AGENT_URL = process.env.AGENT_URL || 'http://127.0.0.1:9000';
 // The RAG lab (brain/tests/raglab) — developer tooling, in the 9000 block like
 // the brains but a separate service, and usually not running at all. The
