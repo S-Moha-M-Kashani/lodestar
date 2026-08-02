@@ -574,8 +574,8 @@ There is still a defensible answer, ordered by how well established it is:
 
 Full write-ups, with run ids, real Farsi model outputs and every metric table:
 
-- `report/rag-sweep-essence.html` — the brief: abstract, findings, what to do next.
-- `report/rag-candidates-abcd.html` — the evidence, candidate by candidate.
+- `docs/report/rag-sweep-essence.html` — the brief: abstract, findings, what to do next.
+- `docs/report/rag-candidates-abcd.html` — the evidence, candidate by candidate.
 - `docs/rag-architecture.md` and `docs/rag-chosen-architecture.md` — the measured
   argument and the recorded decision.
 
@@ -670,8 +670,8 @@ once. The suites are run locally before each commit instead.
 
 ## More
 
-- `details.md` — the full architecture deep dive: every module, the data flows, the invariants, and the design trade-offs.
-- `plan.md` — the requirements ledger: every Sprint 2 task requirement and optional task, what
+- `docs/details.md` — the full architecture deep dive: every module, the data flows, the invariants, and the design trade-offs.
+- `docs/plan.md` — the requirements ledger: every Sprint 2 task requirement and optional task, what
   is shipped, what is planned, and where each one is implemented. Includes a known-limitations
   section.
 - `docs/` — a design spec per major feature (what was built, why, and what was rejected), plus the
