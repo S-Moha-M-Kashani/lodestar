@@ -271,9 +271,15 @@ service on :9002 that the board proxies to. Start the service, open the board, a
 page finds it:
 
 ```sh
-npm run raglab      # the lab service on :9002 (test-only)
+npm run lab         # the lab's suite, then the lab service on :9002 (test-only)
 npm run test-board  # the board on :3001 → Assistant → RAG test lab
 ```
+
+`npm run lab` will not open the panel on a red suite — the lab's whole claim is that
+retrieval choices here were decided by measurement, and that is worth what the tests
+behind it are worth. `-- --no-test` skips the suite, `-- --all` runs the whole brain
+suite instead of the lab's, `-- --test-only` stops after it. `npm run raglab` still
+starts the service on its own.
 
 The page says how to start the service if it is not running, so a board with no lab
 behind it is a normal state rather than a broken screen. The service also serves a

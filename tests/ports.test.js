@@ -40,6 +40,7 @@ const testBrainPort = () => portOf('test-brain', /--port\s+(\d+)/);
 const testBrainBoardPort = () =>
   portOf('test-brain', /BOARD_API_URL=http:\/\/127\.0\.0\.1:(\d+)/);
 
+// This is a configuration invariant.
 test('the test brain does not bind a port owned by the Chroma stack', () => {
   const port = testBrainPort();
   assert.ok(
@@ -49,6 +50,7 @@ test('the test brain does not bind a port owned by the Chroma stack', () => {
   );
 });
 
+// This is a configuration invariant.
 test('the test board proxies agent calls to the test brain, not to Chroma', () => {
   const agentPort = testBoardAgentPort();
   assert.ok(
@@ -62,6 +64,7 @@ test('the test board proxies agent calls to the test brain, not to Chroma', () =
   );
 });
 
+// This is a configuration invariant.
 test('every long-running port is distinct', () => {
   const ports = [
     MAIN_BOARD_PORT,
@@ -77,6 +80,7 @@ test('every long-running port is distinct', () => {
   );
 });
 
+// This is a configuration invariant.
 test('the paired test board and test brain point at each other', () => {
   // The pairing invariant: board-3001.db is served by the brain that was told
   // to write to :3001, so the test board never mutates the real board.
@@ -94,6 +98,7 @@ test('the paired test board and test brain point at each other', () => {
 const RAGLAB_PORT = 9002;
 const raglabPort = () => portOf('raglab', /--port\s+(\d+)/);
 
+// This is a configuration invariant.
 test('the RAG lab lives in the 9000 block, not on a board port', () => {
   const port = raglabPort();
   assert.equal(port, RAGLAB_PORT);
@@ -102,6 +107,7 @@ test('the RAG lab lives in the 9000 block, not on a board port', () => {
     'the test board needs :3001 — the lab page is served from it');
 });
 
+// This is a configuration invariant.
 test('the RAG lab never binds a port owned by Chroma or a brain', () => {
   const port = raglabPort();
   assert.ok(!CHROMA_PORTS.includes(port), `raglab binds :${port}, Chroma's port`);
@@ -109,6 +115,7 @@ test('the RAG lab never binds a port owned by Chroma or a brain', () => {
   assert.notEqual(port, testBrainPort());
 });
 
+// This is a configuration invariant.
 test('the RAG lab launcher installs the backend its default embedder needs', () => {
   // The lab now defaults to a Persian-tuned sentence-transformers model. Without
   // the local-embeddings extra the service starts happily and then fails on the
@@ -124,6 +131,28 @@ test('the RAG lab launcher installs the backend its default embedder needs', () 
   assert.match(scripts.raglab, new RegExp(`--extra\\s+${needed}\\b`));
 });
 
+// This is a configuration invariant.
+test('the one-command lab runner delegates the launch instead of copying it', () => {
+  // `npm run lab` runs the suite and then starts the lab. The launch line it
+  // starts has to be *the* launch line: raglab carries four version pins and an
+  // --extra chosen by the default embedder (asserted above), and a second copy
+  // inside the runner is the copy that would still say `fastembed` a year from
+  // now. So the runner shells `npm run raglab` and reads the port back out of
+  // it, and this test is what stops someone inlining it for speed.
+  assert.match(scripts.lab, /scripts\/lab\.mjs/);
+  const runner = read('scripts/lab.mjs');
+  assert.match(runner, /'npm',\s*\['run',\s*'raglab'\]/,
+    'the runner must start the lab via npm run raglab');
+  // Comments stripped: the prose explaining *why* the launch is not respelled
+  // here is allowed to name the thing it is not doing.
+  const code = runner.replace(/^\s*\/\/.*$/gm, '');
+  assert.ok(!/--extra|uvicorn/.test(code),
+    'the runner respells the uvicorn launch — it must delegate to npm run raglab');
+  assert.ok(!new RegExp(`\\b${RAGLAB_PORT}\\b`).test(code),
+    'the runner hardcodes the port instead of reading it from the raglab script');
+});
+
+// This is a configuration invariant.
 test('the brain launcher installs the backend its default embedder needs', () => {
   // The same pairing as the lab above, for the same reason: the brain defaults
   // to a Persian-tuned sentence-transformers model, and without the extra it
@@ -147,6 +176,7 @@ test('the brain launcher installs the backend its default embedder needs', () =>
   );
 });
 
+// This is a configuration invariant.
 test("the Node proxy's default RAGLAB_URL matches the port the lab binds", () => {
   const m = read('server.js').match(
     /RAGLAB_URL\s*=\s*process\.env\.RAGLAB_URL\s*\|\|\s*'http:\/\/127\.0\.0\.1:(\d+)'/,
@@ -155,6 +185,7 @@ test("the Node proxy's default RAGLAB_URL matches the port the lab binds", () =>
   assert.equal(Number(m[1]), raglabPort());
 });
 
+// This is a configuration invariant.
 test('the e2e suite pins RAGLAB_URL at a port it never starts', () => {
   // The suite checks the "lab is not running" panel, so it must not inherit
   // server.js's :9002 default: on a machine with the real lab up, the proxy
@@ -169,6 +200,7 @@ test('the e2e suite pins RAGLAB_URL at a port it never starts', () => {
     'the e2e proxy port must differ from the port a real lab binds');
 });
 
+// This is a configuration invariant.
 test('lab traffic and assistant traffic go to different upstreams', () => {
   // One prefix routed to the wrong service is a silent 404 that reads as "the
   // lab is broken", so the split is asserted rather than trusted.
@@ -178,6 +210,7 @@ test('lab traffic and assistant traffic go to different upstreams', () => {
   assert.match(server, /assistant unavailable/);
 });
 
+// This is a configuration invariant.
 test('no RAG lab command names a vector database', () => {
   // The lab's experiments are ephemeral: the index is process memory and the
   // only thing written down is the JSON run. So there is no database to pin —
@@ -192,6 +225,7 @@ test('no RAG lab command names a vector database', () => {
   }
 });
 
+// This is a configuration invariant.
 test("the Node proxy's default AGENT_URL matches the brain's port", () => {
   const m = read('server.js').match(
     /AGENT_URL\s*=\s*process\.env\.AGENT_URL\s*\|\|\s*'http:\/\/127\.0\.0\.1:(\d+)'/,
@@ -200,6 +234,7 @@ test("the Node proxy's default AGENT_URL matches the brain's port", () => {
   assert.equal(Number(m[1]), MAIN_BRAIN_PORT);
 });
 
+// This is a configuration invariant.
 test('the composed brain listens on the port compose dials', () => {
   // Nothing else covers this pair, and it is the one that breaks silently:
   // a container-internal port never collides on the host, so a drift between
@@ -217,6 +252,7 @@ test('the composed brain listens on the port compose dials', () => {
   );
 });
 
+// This is a configuration invariant.
 test('the brain Dockerfile EXPOSEs the port it serves', () => {
   const dockerfile = read('brain/Dockerfile');
   const exposed = dockerfile.match(/EXPOSE\s+(\d+)/);
@@ -232,6 +268,7 @@ test('the brain Dockerfile EXPOSEs the port it serves', () => {
 // serves fails as "LLM metrics unavailable", which reads like a missing key.
 const OLLAMA_PORT = 11434;
 
+// This is a configuration invariant.
 test('the local model server is reached, never bound', () => {
   const brain = read('brain/src/lodestar_brain/config.py').match(
     /ollama_base_url: str = 'http:\/\/localhost:(\d+)\/v1'/,
@@ -257,6 +294,7 @@ test('the local model server is reached, never bound', () => {
   assert.ok(!ours.includes(OLLAMA_PORT), `we bind :${OLLAMA_PORT} ourselves`);
 });
 
+// This is a configuration invariant.
 test("the '/v1' is part of the URL, not appended by a caller", () => {
   // Ollama's OpenAI-compatible surface lives under /v1, and the model builder
   // takes the base URL verbatim. Keeping the suffix in the setting is what lets
