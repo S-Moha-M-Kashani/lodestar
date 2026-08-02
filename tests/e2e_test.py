@@ -1249,16 +1249,22 @@ try:
         # was kept selectable only for being free. It is gone now: OpenRouter has
         # exactly one free audio-input model and that is it, so "free" was never
         # a working choice — free dictation is Parakeet's job, locally and offline
-        # (BRAIN_TRANSCRIBER defaults to parakeet). Voxtral replaces it: a
-        # purpose-built speech model at the same price as the default.
+        # (BRAIN_TRANSCRIBER defaults to parakeet).
+        # voxtral-small was nemotron's replacement and is retired too, for cost:
+        # its text prices match the default's, which is what hid that its *audio*
+        # rate is $100/M tokens against the default's $0.30/M — measured
+        # 2026-08-02, the most expensive audio-input model in the catalogue,
+        # ~330x the default for the tokens dictation is made of.
         # openai/whisper-large-v3-turbo was briefly the default and is not one:
         # measured on 2026-07-31, OpenRouter's published catalogue is 337 models
         # and holds no whisper, embedding or rerank entry, so it can transcribe
         # nothing. The picker is the remote route by definition — local dictation
         # is Parakeet's job inside the brain, which ignores this pick entirely, so
         # the local checkpoint is not an option here either.
+        # The default IS the cheapest usable audio model in the catalogue
+        # (2026-08-02): $0.10/M in, $0.30/M audio.
         DEFAULT_OMNI = "google/gemini-2.5-flash-lite"
-        ALT_OMNI = ["openai/gpt-audio-mini", "mistralai/voxtral-small-24b-2507"]
+        ALT_OMNI = ["openai/gpt-audio-mini"]
         BROKEN_OMNI = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
         DEFAULT_EMBED = "nvidia/llama-nemotron-embed-vl-1b-v2:free"
         page.locator('.view-switch button[data-view="assistant"]').click()
