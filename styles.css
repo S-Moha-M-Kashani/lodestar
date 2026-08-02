@@ -2165,6 +2165,39 @@ kbd {
   padding: 4px 6px;
   max-width: 100%;
 }
+/* The embedder is a fact, not a pick — the brain runs exactly one, locally.
+   Set as a filled-in ledger cell where the dropdown stood: the selects'
+   footprint, no affordance, closed with a small neutral rubber stamp (the
+   .badge idiom — type stamps stay neutral, colour still means category). */
+.chat-settings .model-fixed-value {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 4%, var(--paper));
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 4px 6px;
+}
+.chat-settings .model-fixed-stamp {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  border: 1.5px solid currentColor;
+  border-radius: 3px;
+  padding: 0.5px 5px;
+  transform: rotate(-2deg);
+  opacity: 0.9;
+  white-space: nowrap;
+}
+.chat-settings .model-fixed-note {
+  font-size: 10px;
+  opacity: 0.8;
+}
 .chat-settings .field-hint {
   flex-basis: 100%;
   margin: 0;
