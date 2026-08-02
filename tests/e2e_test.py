@@ -1156,6 +1156,15 @@ try:
         check("assistant: searching past conversations finds an earlier exchange",
               recalled and found_text)
 
+        # Recall now answers from the board's cards as well as the chat
+        # record, so every hit must say which it is.
+        labeled = False
+        if has_panel and recalled:
+            metas = page.locator(".recall-hit-meta").all_inner_texts()
+            labeled = bool(metas) and all(
+                m.startswith(("chat", "card")) for m in metas)
+        check("assistant: every recall hit is labeled with its source", labeled)
+
         # An empty list means two opposite things, and the brain now says which.
         # Reporting a switched-off memory as "no matches" sends the user hunting
         # for a conversation that was never recordable.

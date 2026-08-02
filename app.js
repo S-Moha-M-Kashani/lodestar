@@ -3596,18 +3596,17 @@
       return out;
     }
     if (recallState.matches === null) {
-      out.textContent = 'Search what you and the assistant have said before.';
-      return out;
-    }
-    if (!recallState.memory) {
-      // Deliberately not "no matches": this is the service being switched off,
-      // not the history being empty, and the two send you to different places.
-      out.textContent = 'Chat memory is off, so nothing has been recorded. '
-        + 'Start the Chroma container to keep conversations.';
+      out.textContent = 'Search what you and the assistant have said before, and the cards on the board.';
       return out;
     }
     if (!recallState.matches.length) {
-      out.textContent = 'Nothing recorded about that yet.';
+      // Deliberately not "no matches" when memory is off: that is the service
+      // being switched off, not the history being empty, and the two send you
+      // to different places.
+      out.textContent = recallState.memory
+        ? 'Nothing recorded about that yet.'
+        : 'Chat memory is off, so nothing has been recorded. '
+          + 'Start the Chroma container to keep conversations.';
       return out;
     }
     const list = document.createElement('ol');
@@ -3620,11 +3619,23 @@
       said.textContent = hit.text;
       const meta = document.createElement('p');
       meta.className = 'recall-hit-meta';
-      meta.textContent = `${(hit.metadata && hit.metadata.role) || 'unknown'} · ${hit.score}`;
+      // A brain too old to label sources only ever returned chat hits, so
+      // the missing field reads as 'chat' rather than as a guess.
+      const source = hit.source === 'card'
+        ? `card${hit.metadata && hit.metadata.num ? ' ' + cardLabel({ num: hit.metadata.num }) : ''}`
+        : `chat · ${(hit.metadata && hit.metadata.role) || 'unknown'}`;
+      meta.textContent = `${source} · ${hit.score}`;
       item.append(said, meta);
       list.appendChild(item);
     }
     out.appendChild(list);
+    if (!recallState.memory) {
+      const note = document.createElement('p');
+      note.className = 'chat-recall-note';
+      note.textContent = 'Chat memory is off — these matches are from cards only. '
+        + 'Start the Chroma container to keep conversations.';
+      out.appendChild(note);
+    }
     return out;
   }
 
