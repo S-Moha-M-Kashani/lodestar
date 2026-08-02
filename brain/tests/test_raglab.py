@@ -2102,7 +2102,7 @@ def test_a_build_starts_without_any_service_running(client):
     from .raglab import server as lab_server
 
     assert not hasattr(lab_server, 'require_chroma')
-    body = client.post('/api/index', json={
+    body = client.post('/api/indexes', json={
         'index': {'chunker': 'session', 'embedder': 'ascii-hash',
                   'layers': ['session']}}).json()
     assert body['job_id']
@@ -2135,7 +2135,7 @@ def test_panel_is_served(client):
 
 
 def test_ad_hoc_query_returns_stages_and_contexts(client):
-    body = client.post('/api/query', json={
+    body = client.post('/api/queries', json={
         'question': 'آذر چه خبر بود؟',
         'index': {'chunker': 'message', 'embedder': 'char-hash',
                   'layers': ['chunk']},
@@ -2147,7 +2147,7 @@ def test_ad_hoc_query_returns_stages_and_contexts(client):
 
 
 def test_query_rejects_an_unknown_strategy(client):
-    res = client.post('/api/query', json={'question': 'x',
+    res = client.post('/api/queries', json={'question': 'x',
                                           'index': {'chunker': 'nope'}})
     assert res.status_code == 400
     assert 'unknown chunker' in res.json()['detail']
@@ -2192,7 +2192,7 @@ def test_defaults_carry_the_per_task_model_fields(client):
 
 
 def test_a_per_task_model_is_accepted_by_the_query_endpoint(client):
-    res = client.post('/api/query', json={
+    res = client.post('/api/queries', json={
         'question': 'آذر چه خبر بود؟',
         'index': {'chunker': 'message', 'embedder': 'char-hash', 'layers': ['chunk']},
         'retrieval': {'k': 4,
@@ -2272,7 +2272,7 @@ def test_options_offer_farsi_capable_embedding_models(client):
 def test_an_embedding_model_is_accepted_by_the_query_endpoint(client):
     """The field has to survive the panel round trip even when the running
     embedder ignores it, or a stale tab breaks a query."""
-    res = client.post('/api/query', json={
+    res = client.post('/api/queries', json={
         'question': 'آذر چه خبر بود؟',
         'index': {'chunker': 'message', 'embedder': 'char-hash',
                   'embed_model': 'intfloat/multilingual-e5-large',
@@ -3363,3 +3363,188 @@ def test_a_remote_slug_is_never_refused_on_the_strength_of_a_listing(monkeypatch
                         lambda settings: frozenset({'openai/gpt-5-nano'}))
     cfg = LabConfig(generation=GenerationConfig(ragas_model='openai/gpt-5-mini:floor'))
     assert models.provider_problems(cfg, keyed) == []
+
+
+# ---------------------------------------------------------------------------
+# The HTTP surface — resource collections rather than action verbs.
+# ---------------------------------------------------------------------------
+
+# This is an integration test.
+def test_the_run_and_runs_collision_is_gone(client):
+    """`POST /api/run` sat one character away from `GET /api/runs`, meaning two
+    unrelated things: start an evaluation, and list finished ones. Reading a
+    caller you had to check the verb to know which. Both are now the same
+    collection — POST creates, GET lists — and the old spellings are gone
+    rather than aliased, because a second name for one thing is the thing this
+    rename was fixing."""
+    assert client.post('/api/run', json={}).status_code == 404
+    assert client.get('/api/runs').status_code == 404
+    assert client.post('/api/index', json={}).status_code == 404
+    assert client.post('/api/query', json={'question': 'x'}).status_code == 404
+
+
+# This is an integration test.
+def test_starting_work_creates_a_job_and_says_where_to_watch_it(client):
+    """202 rather than 200: the work has been accepted, not done — the response
+    body is a receipt, not a result. `Location` points at the job so a caller
+    never has to build the polling url by string concatenation."""
+    for path, payload in (
+            ('/api/indexes', {'index': {'chunker': 'session',
+                                        'embedder': 'ascii-hash'}}),
+            ('/api/evaluations', {'index': {'chunker': 'session',
+                                            'embedder': 'ascii-hash'},
+                                  'generation': {'answerer': 'none'},
+                                  'limit': 1, 'ragas_mode': 'off'})):
+        res = client.post(path, json=payload)
+        assert res.status_code == 202, f'{path} -> {res.status_code}'
+        job_id = res.json()['job_id']
+        assert job_id
+        assert res.headers['Location'] == f'/api/jobs/{job_id}'
+        # And the url it points at is real.
+        assert client.get(res.headers['Location']).status_code == 200
+
+
+# This is an integration test.
+def test_evaluations_lists_and_fetches_the_same_resource(client):
+    """One noun, three operations, no second spelling for any of them."""
+    assert 'runs' in client.get('/api/evaluations').json()
+    assert client.get('/api/evaluations/no-such-run').status_code == 404
+
+
+# This is an integration test.
+def test_a_query_is_posted_to_its_collection(client):
+    """`/api/queries` rather than `/api/query`: every other collection on this
+    service is plural, and a surface where one route breaks the rule is a
+    surface you have to remember instead of infer."""
+    res = client.post('/api/queries', json={
+        'index': {'chunker': 'session', 'embedder': 'ascii-hash'},
+        'retrieval': {'retriever': 'dense', 'k': 2},
+        'generation': {'answerer': 'none'},
+        'question': 'وام مسکن'})
+    assert res.status_code == 200
+    assert 'contexts' in res.json()
+    # The precondition still refuses, and still says which one.
+    assert client.post('/api/queries', json={}).status_code == 400
+
+
+# This is an integration test.
+def test_a_second_job_is_refused_in_readable_english(client):
+    """The refusal read 'a index job is still stopping' — wrong article, and
+    'stopping' for a job that is running. A message describing the wrong state
+    sends the reader looking for a bug that is not there."""
+    first = client.post('/api/indexes', json={
+        'index': {'chunker': 'message', 'embedder': 'token-hash'}})
+    assert first.status_code == 202
+    second = client.post('/api/indexes', json={
+        'index': {'chunker': 'turn-pair', 'embedder': 'token-hash'}})
+    if second.status_code == 409:
+        detail = second.json()['detail']
+        assert 'a index' not in detail
+        assert 'an index job is already running' in detail
+
+
+# ---------------------------------------------------------------------------
+# The panel's two usability guarantees, held by the served data rather than by
+# either frontend — a rule copied into two panels is a rule that will disagree.
+# ---------------------------------------------------------------------------
+
+# This is a unit test.
+def test_every_option_list_leads_with_the_default():
+    """A default buried sixth reads as an exotic choice. The measured winner
+    should be the first thing offered, and this fails if a default moves without
+    its list — which is how the embedder default ended up behind three hash
+    embedders that exist only to be measured against it."""
+    cfg = LabConfig()
+    for name, options, default in (
+            ('chunkers', config.CHUNKERS, cfg.index.chunker),
+            ('embedders', config.EMBEDDERS, cfg.index.embedder),
+            ('retrievers', config.RETRIEVERS, cfg.retrieval.retriever),
+            ('rerankers', config.RERANKERS, cfg.retrieval.reranker),
+            ('graders', config.GRADERS, cfg.retrieval.grader),
+            ('answerers', config.ANSWERERS, cfg.generation.answerer)):
+        assert options[0] == default, (
+            f'{name} leads with {options[0]!r} but the default is {default!r}')
+
+
+# This is a unit test.
+def test_a_dependent_control_is_live_only_when_its_owner_makes_it_mean_something():
+    """The rule the panels grey out by. Each case is a knob the pipeline would
+    ignore, so leaving it editable invites tuning a number that does nothing.
+
+    `semantic-drift` is deliberately in the *enabled* set for chunk_chars: it
+    passes the value to `_semantic_segments` as a max_chars cap, so unlike
+    message/turn-pair/session it genuinely reads it."""
+    def state(cfg):
+        return config.dependency_state(cfg.to_dict())
+
+    drift = state(LabConfig(index=IndexConfig(chunker='semantic-drift')))
+    assert drift['index.chunk_chars']['enabled']
+    assert not drift['index.overlap']['enabled']
+
+    per_message = state(LabConfig(index=IndexConfig(chunker='message')))
+    assert not per_message['index.chunk_chars']['enabled']
+    assert 'structure' in per_message['index.chunk_chars']['reason']
+
+    hashed = state(LabConfig(index=IndexConfig(embedder='char-hash')))
+    assert not hashed['index.embed_model']['enabled']
+    real = state(LabConfig(index=IndexConfig(embedder='sentence-transformers')))
+    assert real['index.embed_model']['enabled']
+
+    ungated = state(LabConfig(retrieval=RetrievalConfig(grader='none')))
+    assert not ungated['retrieval.grade_threshold']['enabled']
+    assert not ungated['retrieval.grader_model']['enabled']
+    lexical_gate = state(LabConfig(retrieval=RetrievalConfig(grader='lexical')))
+    assert lexical_gate['retrieval.grade_threshold']['enabled']
+    assert not lexical_gate['retrieval.grader_model']['enabled']   # no model involved
+
+    no_hyde = state(LabConfig(retrieval=RetrievalConfig(hyde=False)))
+    assert not no_hyde['retrieval.expansion_model']['enabled']
+    assert state(LabConfig(retrieval=RetrievalConfig(hyde=True))
+                 )['retrieval.expansion_model']['enabled']
+
+    extractive = state(LabConfig(generation=GenerationConfig(answerer='extractive')))
+    assert not extractive['generation.model']['enabled']
+    assert state(LabConfig(generation=GenerationConfig(answerer='llm'))
+                 )['generation.model']['enabled']
+
+
+# This is a unit test.
+def test_every_disabled_control_says_why():
+    """A greyed-out control with no reason is indistinguishable from a broken
+    one. Every rule carries the sentence the panel shows."""
+    for key, rule in config.DEPENDENCIES.items():
+        assert rule['reason'], f'{key} has no reason'
+        assert not rule['reason'].endswith('.'), (
+            f'{key}: the panel completes "disabled because …", so no full stop')
+
+
+# This is an integration test.
+def test_the_panel_is_served_the_dependency_rules(client):
+    """Both frontends read this rather than each keeping a copy."""
+    served = client.get('/api/options').json()['dependencies']
+    assert served['index.overlap']['on'] == ['fixed-overlap']
+    assert 'semantic-drift' in served['index.chunk_chars']['on']
+
+
+# This is a unit test.
+def test_the_embedder_hints_render_in_the_same_order_as_the_embedders():
+    """The standalone panel builds its embedder dropdown from EMBEDDER_HINTS, not
+    from EMBEDDERS, so reordering one and not the other left the panel still
+    leading with ascii-hash while the in-board panel led with the default. Two
+    lists describing one set of choices have to agree on their order or the two
+    frontends disagree about what is recommended."""
+    from .raglab.embedding import EMBEDDER_HINTS
+
+    assert [hint.kind for hint in EMBEDDER_HINTS] == list(config.EMBEDDERS)
+
+
+# This is a unit test.
+def test_no_hint_still_calls_a_hash_embedder_the_brain_default():
+    """`ascii-hash` was labelled 'the brain default today'. Session 1 promoted
+    heydariAI/persian-embeddings and retired `hash` in production *by name*, so
+    the label described a configuration that now raises at boot."""
+    from .raglab.embedding import EMBEDDER_HINTS
+
+    for hint in EMBEDDER_HINTS:
+        if hint.kind.endswith('-hash'):
+            assert 'brain default' not in hint.label, hint.label
