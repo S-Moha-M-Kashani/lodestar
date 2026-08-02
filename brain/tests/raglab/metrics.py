@@ -20,7 +20,6 @@ set:
 """
 import difflib
 import math
-from collections import defaultdict
 from dataclasses import dataclass
 
 from lodestar_brain import textnorm

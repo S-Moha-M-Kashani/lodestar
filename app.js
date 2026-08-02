@@ -135,7 +135,6 @@
   const effortVal = (v) => (v === 'low' || v === 'high' ? v : 'medium');
   const controlVal = (v) => (v === 'act' || v === 'none' ? v : 'influence');
   const srcVal = (v) => (v === 'user' || v === 'ai' ? v : 'default');
-  const EFFORT_LABEL = { low: 'Low', medium: 'Medium', high: 'High' };
   const CONTROL_LABEL = { act: 'I can act', influence: 'I can influence', none: 'Out of my hands' };
 
   // --------------------------------------------------------------------------
@@ -2878,25 +2877,13 @@
   // an effect today — it rides along on every /api/agent/chat request (the
   // brain forwards it to OpenRouter). The omni pick is a stored preference
   // for the media-ingestion feature to come. Embedding is deliberately NOT a
-  // pick: the brain runs exactly one embedder (BRAIN_EMBEDDER's default,
-  // heydariAI/persian-embeddings), the old dropdown was a preference nothing
-  // ever read, and a dead control teaches the user not to trust the live
-  // ones — so the panel states the fixed model instead (renderChatSettings).
-  // A saved `embed` key from that dropdown may linger in localStorage; the
-  // load sweep below iterates DEFAULT_MODELS keys, so it is ignored, and the
-  // next persist drops it.
+  // pick: the brain runs exactly one embedder (heydariAI/persian-embeddings),
+  // so the panel states it instead of offering a dead dropdown. A stale saved
+  // `embed` key is ignored by the load sweep and dropped on the next persist.
   const MODELS_KEY = KEY_PREFIX + 'models';
-  // Every omni option has to be a model that genuinely receives audio.
-  // nemotron-3-nano-omni:free is listed as audio-capable but the provider
-  // serving it discards the audio and answers an apology, and it was kept here
-  // only for being free. It is gone: OpenRouter lists exactly one free
-  // audio-input model and that was it, so "free" never meant "works". Free
-  // dictation is the local Parakeet backend's job instead (BRAIN_TRANSCRIBER
-  // defaults to it). voxtral-small briefly replaced it and is gone too, for
-  // cost: its text prices match the default's, which hid that its *audio* rate
-  // is $100/M tokens against the default's $0.30/M (measured 2026-08-02) —
-  // ~330x for the tokens dictation is made of. The default is the cheapest
-  // usable audio model in the catalogue.
+  // Every omni option must genuinely receive audio at a sane price. Free
+  // dictation is the local Parakeet backend's job (BRAIN_TRANSCRIBER
+  // defaults to it).
   const DEFAULT_MODELS = {
     // Local-first is the normal Assistant experience. Nano stays one click
     // away under the explicit OpenRouter provider selector below. The omni
@@ -2915,38 +2902,6 @@
   ];
   const modelRoute = (slug) =>
     (slug.startsWith('4skl/') || !slug.includes('/')) ? 'local' : 'OpenRouter API';
-  // Slugs retired *for cause* — not merely dropped from the preset list above.
-  // Dropping a model from MODEL_PICKERS does not deselect it: a saved pick that
-  // left the list is re-added as an option and stays selected. That is right for
-  // a slug the user chose deliberately and wrong for one removed because it was
-  // broken, and the difference is not visible in the options list alone. It cost
-  // us a whole release: nemotron came out of the picker while the only browser
-  // that had it selected kept dictating through the provider that discards the
-  // audio, so the fix reached everyone except the person it was for.
-  const RETIRED_MODELS = new Set([
-    // Dictation: advertises audio input, but the provider serving it drops the
-    // input_audio part and answers an invented apology instead of a transcript.
-    'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
-    // Dictation, retired for cost like kimi-k3 below: audio at $100/M tokens
-    // against the default's $0.30/M — the dearest audio model in the catalogue.
-    // Briefly reinstated on 2026-08-02 through a misread confirmation and
-    // retired again the same day. Permanent, like kimi-k3: do not bring it back.
-    'mistralai/voxtral-small-24b-2507',
-    // Text. kimi-k3 stays here permanently: at $3/$15 per M tokens it was the
-    // dearest model ever offered in this picker — 60x the default's input price,
-    // ~50x per turn for the same work — and it is not in the OpenRouter key's
-    // allowlist at all, so it now fails outright rather than merely costing more.
-    // It also took ~11s against the default's under 3, and nothing streams, so
-    // the wait was a motionless "Thinking…" that read as a hang. No free
-    // replacement exists to weigh against it: every ':free' slug 404s under the
-    // key's guardrail, so the cheapest reachable tool-calling model is the
-    // default itself.
-    'moonshotai/kimi-k3',
-    'openai/gpt-4o-mini',
-    // Deprecated upstream, and it routes per request to a model the brain never
-    // reads back out of the response — so a slow turn is unattributable.
-    'openrouter/auto',
-  ]);
   const assistantModels = { ...DEFAULT_MODELS };
   assistantModels.provider = 'ollama';
   const TEXT_MODELS_BY_PROVIDER = {
@@ -2960,9 +2915,8 @@
   //
   // This exists because the text pick rides on every chat request. With
   // BRAIN_LLM=ollama the brain forwards that slug to a daemon that cannot load
-  // `openai/gpt-5-nano`, so every turn would fail with a picker offering no way
-  // out — the RETIRED_MODELS lesson again: a pick that cannot work has to be
-  // deselected, not merely delisted.
+  // `openai/gpt-5-nano`, so every turn would fail with a picker offering no
+  // way out — an unservable pick has to be deselected, not merely delisted.
   const brainModels = { provider: '', verified: false, models: [], default: '' };
 
   async function probeBrainModels() {
@@ -3020,21 +2974,14 @@
   let savedTextProvider = false;
   try {
     const saved = JSON.parse(localStorage.getItem(MODELS_KEY) || '{}');
-    let swept = false;
     for (const k of Object.keys(DEFAULT_MODELS)) {
       if (typeof saved[k] !== 'string' || !saved[k]) continue;
-      // Leave the default in place for a retired pick; keep anything else,
-      // including an off-list slug that was chosen on purpose.
-      if (RETIRED_MODELS.has(saved[k])) { swept = true; continue; }
       assistantModels[k] = saved[k];
     }
     if (saved.provider === 'ollama' || saved.provider === 'openrouter') {
       assistantModels.provider = saved.provider;
       savedTextProvider = true;
     }
-    // Write the sweep back rather than re-running it every load: left in storage,
-    // a dead slug would return the moment a later version trimmed the list above.
-    if (swept) persistModels();
   } catch { /* corrupted or private mode — keep defaults */ }
 
   function renderChatSettings() {
