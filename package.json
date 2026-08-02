@@ -12,6 +12,7 @@
     "raglab:sweep": "PYTHONPATH=brain/tests uv run --project brain --extra semantic --extra local-embeddings --with 'ragas==0.4.*' --with 'langchain-community<0.4' --with 'langchain-openai<1' --with rapidfuzz python -m raglab.sweep",
     "raglab:judgescreen": "PYTHONPATH=brain/tests uv run --project brain python -m raglab.judgescreen",
     "raglab:leaderboard": "PYTHONPATH=brain/tests uv run --project brain python -m raglab.leaderboard",
+    "chroma": "docker compose up -d chroma",
     "backup": "node scripts/backup-db.mjs",
     "test:server": "node scripts/backup-db.mjs && node --test tests/*.test.js",
     "test:all": "node scripts/backup-db.mjs && node --test tests/*.test.js && uv run --project brain pytest brain/tests -v && uv run --with playwright python tests/e2e_test.py",

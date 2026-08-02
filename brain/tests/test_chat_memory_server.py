@@ -1,9 +1,10 @@
-"""Integration: chat memory against the real Chroma server in Docker
-(localhost:8001). Skipped when the container isn't running, so the offline unit
-suite stays green — but this is the only place the HTTP client, the auto-created
-`lodestar` database, and real cross-process persistence are exercised.
+"""Integration: chat memory against the real Chroma server in Docker — the
+project's own (localhost:8003, persisting to databases/chroma-data). Skipped
+when the container isn't running, so the offline unit suite stays green — but
+this is the only place the HTTP client, the auto-created `lodestar` database,
+and real cross-process persistence are exercised.
 
-Run the server with: docker compose up -d   (in ~/vectordb-lab)
+Run the server with: npm run chroma
 """
 import urllib.error
 import urllib.request
@@ -13,7 +14,7 @@ import pytest
 
 from lodestar_brain.retrieval import ChatStore, LexicalHashEmbeddings
 
-CHROMA_URL = 'http://localhost:8001'
+CHROMA_URL = 'http://localhost:8003'
 PRODUCTION_DATABASE = 'lodestar'   # board.db's memory — must stay untouched
 DATABASE = 'lodestar-test'
 

@@ -90,14 +90,16 @@ def test_env_overrides():
     assert s.parakeet_model == 'mlx-community/parakeet-tdt-1.1b'
 
 
-# ---- chat memory lives on the shared Chroma server ------------------------
-# No on-disk store any more: one Chroma server (Docker, :8001), one `lodestar`
-# database, and one collection per board. The brain talking to :3000 (board.db)
-# and the brain talking to :3001 (board-3001.db) must never share a collection.
+# ---- chat memory lives on the project's own Chroma server -----------------
+# One Chroma server (the compose `chroma` service over databases/chroma-data,
+# host port 8003 — 8001/8002 belong to the unrelated ~/vectordb-lab stack, see
+# tests/ports.test.js), one `lodestar` database, and one collection per board.
+# The brain talking to :3000 (board.db) and the brain talking to :3001
+# (board-3001.db) must never share a collection.
 
 # This is a unit test.
-def test_chroma_url_defaults_to_the_local_docker_server():
-    assert load_settings(env={}).chroma_url == 'http://localhost:8001'
+def test_chroma_url_defaults_to_the_projects_own_chroma():
+    assert load_settings(env={}).chroma_url == 'http://localhost:8003'
 
 
 # This is a unit test.
