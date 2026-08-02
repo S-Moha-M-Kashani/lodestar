@@ -37,7 +37,7 @@ function snapshot(dbPath, destPath) {
 
 export function runBackup({
   dbPath = process.env.BOARD_DB,
-  databasesDir = join(ROOT, 'databases'),
+  databasesDir = join(ROOT, 'databases', 'real'),
   backupsDir = process.env.LODESTAR_BACKUP_DIR || join(ROOT, 'backups'),
   remote = process.env.LODESTAR_RCLONE_REMOTE || 'gdrive',
   keep = Number(process.env.LODESTAR_BACKUP_KEEP) || 100,
@@ -45,9 +45,11 @@ export function runBackup({
   rcloneBin = process.env.LODESTAR_RCLONE_BIN || 'rclone',
 } = {}) {
   // One explicit file (BOARD_DB, or the server's write-triggered backup), or
-  // every .db directly inside databases/ — board.db and assistant.db. The
-  // chroma-data/ subdirectory is deliberately never included: it is derived,
-  // it is the bulk, and it rebuilds from the two SQLite records.
+  // every .db directly inside databases/real/ — board.db and assistant.db.
+  // Two things are deliberately never included: chroma-data/ (derived, the
+  // bulk, rebuilds from the two SQLite records) and the databases/test/
+  // sibling (the :3001 sandbox is disposable by definition, and backing it up
+  // would push throwaway boards to the same Drive folder as the real ones).
   const sources = dbPath ? [dbPath]
     : existsSync(databasesDir)
       ? readdirSync(databasesDir).filter((f) => f.endsWith('.db')).map((f) => join(databasesDir, f)).sort()
