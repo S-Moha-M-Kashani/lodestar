@@ -18,12 +18,15 @@ def mark_gold(candidate_texts: list[str],
     Substring either direction over the shared normaliser: a chunk may be
     smaller than a quote (part of one message) or larger (several). Normalising
     first means a whitespace or zero-width difference cannot hide a real match —
-    the same reason the tokeniser is shared across the whole brain."""
+    the same reason the tokeniser is shared across the whole brain. A candidate
+    that normalises to the empty string (blank, whitespace-only, or nothing the
+    tokeniser keeps) is never gold — the empty string is a substring of every
+    quote, which would mark a chunk with no evidence at all as a match."""
     quotes = [_norm(q) for q in evidence_quotes if q.strip()]
     out = []
     for text in candidate_texts:
         norm = _norm(text)
-        out.append(any(q in norm or norm in q for q in quotes))
+        out.append(bool(norm) and any(q in norm or norm in q for q in quotes))
     return out
 
 

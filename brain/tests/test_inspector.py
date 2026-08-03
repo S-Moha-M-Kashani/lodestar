@@ -65,6 +65,9 @@ def test_mark_gold_matches_evidence_quote_either_direction():
     # no quotes → nothing is gold
     assert inspector.mark_gold(texts, []) == [False, False]
 
+    # empty normalisation (blank, whitespace-only, punctuation-only) → never gold
+    assert inspector.mark_gold(['', '   ', '...!!!'], quotes) == [False, False, False]
+
 
 # This is an integration test (real in-memory index, offline).
 def test_chunks_by_session_groups_and_counts():
