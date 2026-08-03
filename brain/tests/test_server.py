@@ -145,6 +145,36 @@ def test_chat_echo_reports_neither_flag():
     assert body['proposed'] is False
 
 
+# This is an integration test.
+def test_a_turn_reports_what_it_cost_and_says_nothing_when_it_cannot():
+    """`cost` rides alongside `usage`, on both chat routes.
+
+    On the wire rather than computed in the browser: the model is chosen per
+    request and the prices are a remote document, so a client doing this
+    arithmetic would need its own price table and its own guess at which model
+    answered. Here both are known for certain.
+
+    The fake backend has no per-token bill, which makes it the case worth
+    pinning: `cost` is 0.0 because that is *true* of a local model, not because
+    the figure was missing. `test_pricing.py` owns the other direction — an
+    unknown model or an unreachable price list reports None, and the Assistant
+    then shows no figure at all.
+    """
+    client = TestClient(fake_app())
+    body = client.post('/agent/chat', json={
+        'messages': [{'role': 'user', 'content': 'just talking'}]}).json()
+    assert body['usage'], 'the fake backend reports usage; cost rides with it'
+    assert body['cost'] == 0.0
+
+    # The stream's `done` event carries the same turn, so it must carry the same
+    # cost — two routes reporting one turn differently is the drift _turn_json
+    # exists to prevent.
+    with client.stream('POST', '/agent/chat/stream', json={
+            'messages': [{'role': 'user', 'content': 'just talking'}]}) as res:
+        frames = [line for line in res.iter_lines() if line.startswith('data: ')]
+    assert json.loads(frames[-1][6:])['cost'] == 0.0
+
+
 # ---- POST /agent/transcribe ----------------------------------------------
 
 WAV = b'RIFF....WAVEfake-pcm-bytes'

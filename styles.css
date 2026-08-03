@@ -2152,6 +2152,45 @@ body[data-view="assistant"] .app-footer { display: none; }
   gap: 8px;
 }
 .assistant-toolbar .chat-recall { flex: 1 1 auto; min-width: 0; }
+
+/* What the conversation has cost, beside the search fold rather than under the
+   transcript: a running total that scrolls out of view is not a running total.
+   Deliberately quiet — tabular figures so the number does not twitch as it
+   grows, and soft ink because it is a fact to glance at, never the point of the
+   screen. */
+.assistant-cost {
+  flex: 0 0 auto;
+  margin: 0;
+  align-self: center;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+/* Anything waiting on the user, pinned under the row above. It used to scroll
+   away with the page: the strip sits above the transcript, which is right until
+   the transcript pushes the composer past the fold, and the reader is then at
+   the bottom typing while a card awaiting their yes is off the top of the
+   screen. `top` matches the habit rail's offset so the two pinned things in this
+   app stop at the same line. The paper background is load-bearing — without it
+   the transcript would show through as it slides underneath. */
+.assistant-waiting {
+  position: sticky;
+  top: 8px;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: var(--card);
+  /* Bleeds over the sheet's own padding so nothing peeks past the edges while
+     scrolling, then puts the padding back inside. */
+  margin: 0 -16px;
+  padding: 8px 16px;
+  box-shadow: var(--shadow-lift);
+  clip-path: inset(0 0 -18px 0);   /* the lift below the strip only, never above */
+}
 /* The extras drawer. Shut it is one sign the width of a button, and the
    conversation below it has the whole sheet; a rail beside the transcript took
    300px off it permanently to hold controls that are touched once. */

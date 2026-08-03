@@ -8,6 +8,7 @@ the board actually persists to (and deletes from) the database.
 """
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -1442,6 +1443,37 @@ try:
         check("gate: the Assistant tab carries a count badge",
               page.locator('.view-switch button[data-view="assistant"] .view-badge')
                   .inner_text().strip() == "1")
+
+        # This is an end-to-end test.
+        # Something waiting for approval has to stay findable. It sits above the
+        # transcript, which is correct until the transcript is long enough to push
+        # the composer past the fold: the reader is then at the bottom typing, and
+        # what needs their decision is somewhere off the top of the screen. So the
+        # panel is pinned — scroll wherever you like, it is still on screen.
+        page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+        waiting = page.locator(".assistant-waiting")
+        box = waiting.bounding_box() if waiting.count() else None
+        height = page.evaluate("() => window.innerHeight")
+        check("gate: what is waiting for approval stays on screen when scrolled away",
+              box is not None
+              # Wholly inside the viewport, not merely overlapping its edge.
+              and box["y"] >= 0 and box["y"] + box["height"] <= height
+              # And it is not inside the transcript, which scrolls on its own:
+              # nesting it there would hide it behind the same problem again.
+              and page.locator(".chat-log .assistant-waiting").count() == 0)
+
+        # This is an end-to-end test.
+        # What the session has cost so far, in money rather than tokens. Offline
+        # the backend is a local fake, so the honest figure is 0.000$ — which is
+        # the formatting this pins. That it is *true* of a local model rather than
+        # a missing number is brain/tests/test_pricing.py's job.
+        cost = page.locator(".assistant-cost")
+        check("assistant: the session's cost is shown to three decimals",
+              cost.count() == 1
+              and re.search(r"= ?0\.000\$", cost.inner_text()) is not None
+              # Beside the conversation, not inside it: a running total that
+              # scrolls out of view with the transcript is not a running total.
+              and page.locator(".chat-log .assistant-cost").count() == 0)
 
         page.click(".proposal-approve")
         page.wait_for_function("document.querySelectorAll('.proposal').length === 0")

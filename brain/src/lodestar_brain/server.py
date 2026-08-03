@@ -4,6 +4,7 @@ import base64
 import binascii
 import json
 import logging
+from dataclasses import replace
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException
@@ -13,6 +14,7 @@ from pydantic import BaseModel, Field
 from .agent import AgentResult, AgentStep, LodestarAgent
 from .config import Settings, load_settings
 from .llm import make_chat_model, served_models
+from .pricing import model_prices, turn_cost
 from .safety import make_url_safety
 from .retrieval import (CardIndex, ChatStore, coverage, expand_queries,
                         gate_llm, make_embeddings)
@@ -90,7 +92,7 @@ def _step_json(step: AgentStep) -> dict:
     return {'tool': step.tool, 'arguments': step.arguments, 'result': step.result}
 
 
-def _turn_json(result: AgentResult) -> dict:
+def _turn_json(result: AgentResult, cost: float | None = None) -> dict:
     """The whole turn. Built here so the buffered route and the stream's `done`
     event cannot drift into reporting the same turn differently."""
     return {'reply': result.reply,
@@ -99,7 +101,11 @@ def _turn_json(result: AgentResult) -> dict:
             'steps': [_step_json(s) for s in result.steps],
             # null when the model reported nothing, so the Assistant can stay
             # silent rather than claim a turn cost zero.
-            'usage': result.usage}
+            'usage': result.usage,
+            # USD, unrounded — how many decimals to show is the reader's
+            # question. null when the price is not known, which the Assistant
+            # renders as no figure at all rather than as free. See pricing.py.
+            'cost': cost}
 
 
 def _sse(event: str, data: dict) -> str:
@@ -172,6 +178,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         Only a local backend answers with a list: see `served_models`."""
         return served_models(settings)
 
+    def priced(result: AgentResult, body: ChatBody) -> float | None:
+        """What this turn cost, in USD, or None if that is not knowable.
+
+        Priced against the model and provider the *request* named, not the ones
+        the brain booted with: the picker can move between models mid-conversation
+        and a turn's price is the price of whatever served it. Shared by both chat
+        routes for the same reason `_turn_json` is — two routes pricing one turn
+        differently is a bug nobody would find.
+        """
+        settings_for_turn = settings
+        if body.provider and body.provider != settings.llm_provider:
+            settings_for_turn = replace(settings, llm_provider=body.provider)
+        return turn_cost(result.usage, model_prices(settings_for_turn, body.model))
+
     def remember(messages: list[dict], reply: str) -> None:
         """Record both sides of the exchange — durably first (assistant.db,
         through the Node API like every write), then into the derived Chroma
@@ -210,7 +230,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         result = await agent.arun(body.messages, model=body.model,
                                   provider=body.provider)
         remember(body.messages, result.reply)
-        return _turn_json(result)
+        return _turn_json(result, priced(result, body))
 
     @app.post('/agent/chat/stream')
     async def chat_stream(body: ChatBody) -> StreamingResponse:
@@ -238,7 +258,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         yield _sse('token', {'text': payload})
                     else:
                         remember(body.messages, payload.reply)
-                        yield _sse('done', _turn_json(payload))
+                        yield _sse('done', _turn_json(payload,
+                                                      priced(payload, body)))
             except Exception as exc:
                 # The headers left long ago, so there is no status code to fail
                 # with. Staying quiet would leave the browser on "Thinking…"

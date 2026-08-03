@@ -2864,6 +2864,11 @@
     if (Array.isArray(msg.steps)) out.steps = msg.steps;
     if (Array.isArray(msg.sources)) out.sources = msg.sources;
     if (msg.usage && typeof msg.usage === 'object') out.usage = msg.usage;
+    // The session total is the sum of what each turn cost, so the figures have to
+    // survive a reload with the transcript they belong to. Only a real number is
+    // taken: a restored null or a string would otherwise turn the whole total
+    // into NaN, and one unreadable turn must not erase the bill for the rest.
+    if (typeof msg.cost === 'number' && Number.isFinite(msg.cost)) out.cost = msg.cost;
     // `running` is never restored. It names tools awaiting an answer from a
     // request that died with the old page, so a restored one is a spinner that
     // can never stop.
@@ -3453,6 +3458,8 @@
     const toolbar = document.createElement('div');
     toolbar.className = 'assistant-toolbar';
     toolbar.appendChild(renderRecallPanel());
+    const cost = renderSessionCost();
+    if (cost) toolbar.appendChild(cost);
     const extrasBtn = document.createElement('button');
     extrasBtn.type = 'button';
     extrasBtn.id = 'assistant-extras-btn';
@@ -3474,9 +3481,19 @@
     extras.appendChild(renderChatSettings());
     sheet.appendChild(extras);
 
-    // Nothing proposed, nothing shown — the section must not sit there empty.
-    if (assistantState.proposals.length) sheet.appendChild(renderProposals());
-    if (assistantState.edits.length) sheet.appendChild(renderSuggestedEdits());
+    // Anything waiting on the user shares one pinned strip directly under the
+    // row above. Pinned because it used to scroll away: it is above the
+    // transcript, which is right until the transcript is long enough to push the
+    // composer past the fold — the reader is then at the bottom typing while the
+    // thing needing their decision sits off the top of the screen. Nothing
+    // waiting, nothing shown: the strip must not sit there empty.
+    if (assistantState.proposals.length || assistantState.edits.length) {
+      const waiting = document.createElement('div');
+      waiting.className = 'assistant-waiting';
+      if (assistantState.proposals.length) waiting.appendChild(renderProposals());
+      if (assistantState.edits.length) waiting.appendChild(renderSuggestedEdits());
+      sheet.appendChild(waiting);
+    }
 
     const log = document.createElement('div');
     log.className = 'chat-log';
@@ -3817,7 +3834,7 @@
     const evidence = document.createElement('div');
     evidence.className = 'chat-meta-body';
     if (sources.length) evidence.appendChild(renderChatSources(sources));
-    if (msg.usage) evidence.appendChild(renderChatUsage(msg.usage));
+    if (msg.usage) evidence.appendChild(renderChatUsage(msg.usage, msg.cost));
     if (done.length || running.length) {
       const steps = document.createElement('div');
       steps.className = 'chat-steps';
@@ -3827,6 +3844,40 @@
     }
     meta.appendChild(evidence);
     el.appendChild(meta);
+    return el;
+  }
+
+  // Three decimals, always — a tenth of a cent is the resolution a chat turn
+  // lives at, and a fixed width keeps the readout from twitching as the total
+  // grows. Rounded only here: the brain sends the figure unrounded so a session
+  // total is the sum of real numbers rather than a sum of rounded ones.
+  const money = (usd) => `${Number(usd).toFixed(3)}$`;
+
+  /** One turn's price, where three decimals is often not enough resolution.
+   *
+   *  A turn on a cheap model costs around $0.0002, which `money` renders as
+   *  "0.000$" — indistinguishable from the local model that really was free. So a
+   *  paid turn below the display resolution says so instead. A genuine zero still
+   *  prints 0.000$, because that one is a fact rather than a rounding. */
+  const moneyTurn = (usd) => (usd > 0 && usd < 0.0005 ? '<0.001$' : money(usd));
+
+  /** What this conversation has cost so far, or nothing if nothing is known.
+   *
+   *  Summed from the turns rather than kept as a running counter, so it survives
+   *  a reload with the transcript and can never drift from the turns it claims to
+   *  add up. Turns the brain could not price are simply absent from the sum; if
+   *  none of them carried a price there is no readout at all, because "0.000$"
+   *  would be a claim about money nobody measured. */
+  function renderSessionCost() {
+    const priced = assistantState.messages
+      .map((m) => m.cost)
+      .filter((c) => typeof c === 'number' && Number.isFinite(c));
+    if (!priced.length) return null;
+    const el = document.createElement('p');
+    el.className = 'assistant-cost';
+    el.textContent = `current session cost = ${money(priced.reduce((a, b) => a + b, 0))}`;
+    el.title = `Summed over ${priced.length} priced turn${priced.length === 1 ? '' : 's'}`
+      + ' at the current model’s published rates';
     return el;
   }
 
@@ -3841,16 +3892,21 @@
     return parts.join(' · ');
   }
 
-  // How the turn's total split. Tokens only, deliberately no money figure: a
-  // price per model is a number this app cannot verify, and one that has
-  // quietly gone stale is worse than none at all. Absent, not zero, when the
-  // model reported nothing — see _usage_from in the brain. The total itself is
-  // on the folded line above, so it is not printed twice.
-  function renderChatUsage(usage) {
+  // How the turn's total split, and what it cost. This used to be tokens only,
+  // on the grounds that a per-model price is a number the app cannot verify and
+  // a stale one is worse than none — which was right about a hardcoded table and
+  // is why the figure now comes from the provider's own live catalogue instead
+  // (pricing.py). The price is still absent, never zero, whenever the brain could
+  // not look it up: unpriced and free are different facts. Absent likewise when
+  // the model reported no usage — see _usage_from. The token total is on the
+  // folded line above, so it is not printed twice.
+  function renderChatUsage(usage, cost) {
     const line = document.createElement('p');
     line.className = 'chat-usage';
     const n = (v) => Number(v || 0).toLocaleString();
-    line.textContent = `${n(usage.input_tokens)} in · ${n(usage.output_tokens)} out`;
+    const parts = [`${n(usage.input_tokens)} in · ${n(usage.output_tokens)} out`];
+    if (typeof cost === 'number') parts.push(moneyTurn(cost));
+    line.textContent = parts.join(' · ');
     return line;
   }
 
@@ -4244,6 +4300,12 @@
       // but nothing on the wire says how many, and a partial count shown as the
       // total would be wrong in the direction that flatters us.
       turn.usage = data.usage || null;
+      // Absent unless the brain actually knew the price — see pricing.py. Left
+      // undefined rather than set to 0, so an unpriced turn is missing from the
+      // session total instead of quietly reported as free.
+      if (typeof data.cost === 'number' && Number.isFinite(data.cost)) {
+        turn.cost = data.cost;
+      }
       // Two distinct outcomes: an edit changed the board, a proposal did not.
       if (data.mutated) await adoptServerBoard();
       // One flag for both kinds of waiting suggestion: a card to accept, or a
