@@ -253,6 +253,11 @@
        in knowing which stage a choice changes. -->
   <section class="card grow" id="modelCard">
     <h2>4 · Models (one per task)</h2>
+    <!-- Where the LLM stages run. A mode is a served preset (/api/options ->
+         modes): picking one applies the lab's own patch and stamps the run's
+         provider, so this panel cannot invent a pairing the lab never served. -->
+    <label>Backend</label>
+    <select id="mode"></select>
     <div class="step" data-step="index">
       <span class="step-tag">Index</span>
       <label>Embedder</label>
@@ -362,8 +367,17 @@ function fillEmbedders() {
 // ink. A role whose step this page has no group for still renders, in the
 // catch-all under them: a stage added in the service must never silently vanish
 // from the panel.
+// The chat-model list for the backend the runs will actually use: the picked
+// mode's own catalogue, or the boot catalogue when no mode is picked. A slug
+// only means something to the backend that serves it — filled from the wrong
+// list, a dropdown cannot display a preset and quietly resets it.
+function modelList() {
+  const mode = (OPTIONS.modes || []).find((m) => m.key === $('mode').value);
+  return (mode && mode.models) || OPTIONS.models || [];
+}
+
 function fillModels() {
-  const options = (OPTIONS.models || []).map((m) =>
+  const options = modelList().map((m) =>
     `<option value="${escapeHtml(m.id)}">${escapeHtml(modelLabel(m))}</option>`).join('');
   const row = (role) =>
     `<label>${escapeHtml(role.label)} <span class="muted">· ${escapeHtml(role.only_when)}</span>`
@@ -384,6 +398,38 @@ function fillModels() {
   }
   for (const roles of Object.values(groups)) spare.push(...roles);
   $('modelRoles').innerHTML = spare.map(row).join('');
+}
+
+// The mode dropdown: '' follows whatever backend the lab booted with; a mode
+// applies its served preset onto the controls (the choices stay editable) and
+// its provider rides along on every run.
+function fillModes() {
+  const caps = OPTIONS.capabilities || {};
+  $('mode').innerHTML =
+    `<option value="">lab boot (${escapeHtml(caps.llm_provider || 'unknown')})</option>`
+    + (OPTIONS.modes || []).map((m) =>
+      `<option value="${escapeHtml(m.key)}">${escapeHtml(m.label)}</option>`).join('');
+  $('mode').onchange = () => {
+    const mode = (OPTIONS.modes || []).find((m) => m.key === $('mode').value);
+    // Read the controls before the model dropdowns are rebuilt for the new
+    // backend's catalogue, then write the merged config back over them.
+    const cfg = readConfig();
+    if (mode && mode.config) {
+      for (const group of Object.keys(mode.config)) {
+        Object.assign(cfg[group], mode.config[group]);
+      }
+    }
+    fillModels();
+    applyDefaults(cfg);
+    applyDependencies();
+  };
+}
+
+// The backend the picked mode runs on, spread into a run's payload; {} when no
+// mode is picked and the run should follow the lab's boot provider.
+function pickedProvider() {
+  const mode = (OPTIONS.modes || []).find((m) => m.key === $('mode').value);
+  return mode ? { provider: mode.provider } : {};
 }
 
 // Every knob explains itself. The text comes from the service (config.HELP and
@@ -545,6 +591,7 @@ async function boot() {
   checkboxes($('types'), o.question_types, []);
   document.addEventListener('change', applyDependencies);
   fillModels();
+  fillModes();
   applyDefaults(o.defaults);
   applyDependencies();
   decorateExplainers();
@@ -638,7 +685,7 @@ async function doBuild(force) {
 }
 
 $('run').onclick = async () => {
-  const body = Object.assign(readConfig(), {
+  const body = Object.assign(readConfig(), pickedProvider(), {
     ragas_mode: $('ragas_mode').value,
     limit: +$('limit').value || null,
     ragas_limit: +$('ragas_limit').value || null,
@@ -728,27 +775,35 @@ function table(head, rows) {
     '</tbody></table>';
 }
 
+// A query is a job like a build or a run: the index it builds implicitly can
+// take minutes, so the ask watches the same job box — stage, fraction, detail —
+// instead of blocking behind a static placeholder.
 $('ask').onclick = async () => {
-  const body = Object.assign(readConfig(), { question: $('question').value });
-  $('queryOut').innerHTML = '<div class="muted">retrieving…</div>';
+  const body = Object.assign(readConfig(), pickedProvider(),
+                             { question: $('question').value });
+  $('queryOut').innerHTML = '';
   try {
-    const out = await api('/api/queries', body);
-    const scope = out.time_scope
-      ? `time scope <b>${out.time_scope.label}</b> ${out.time_scope.from} → ${out.time_scope.to} (${out.time_scope.kind})`
-      : 'no time scope detected';
-    $('queryOut').innerHTML =
-      `<div class="muted">${scope} · ${out.diagnostics.candidates_in_scope} chunks in scope · ` +
-      `dense ${out.diagnostics.dense_hits} · bm25 ${out.diagnostics.bm25_hits} · ` +
-      `graded out ${out.diagnostics.graded_out ?? 0} · ` +
-      Object.entries(out.timings).map(([k, v]) => `${k} ${v}`).join(' · ') + '</div>' +
-      (out.answer ? `<div class="ctx fa"><b>${out.abstained ? '(abstained) ' : ''}</b>${out.answer}</div>` : '') +
-      out.contexts.map((c) => `<div class="ctx">
-          <div class="meta">${c.chunk_id} · ${c.date} · score ${fmt(c.score)} ·
-            ${Object.entries(c.stages).map(([k, v]) => k + ' ' + fmt(v, 2)).join(' · ')}
-            ${c.expanded_from ? ' · expanded from ' + c.expanded_from : ''}</div>
-          <div class="fa">${escapeHtml(c.text).replace(/\n/g, '<br>')}</div></div>`).join('');
+    const { job_id } = await api('/api/queries', body);
+    poll(job_id, renderQuery);
   } catch (e) { $('queryOut').innerHTML = `<div class="note">${e.message}</div>`; }
 };
+
+function renderQuery(out) {
+  const scope = out.time_scope
+    ? `time scope <b>${out.time_scope.label}</b> ${out.time_scope.from} → ${out.time_scope.to} (${out.time_scope.kind})`
+    : 'no time scope detected';
+  $('queryOut').innerHTML =
+    `<div class="muted">${scope} · ${out.diagnostics.candidates_in_scope} chunks in scope · ` +
+    `dense ${out.diagnostics.dense_hits} · bm25 ${out.diagnostics.bm25_hits} · ` +
+    `graded out ${out.diagnostics.graded_out ?? 0} · ` +
+    Object.entries(out.timings).map(([k, v]) => `${k} ${v}`).join(' · ') + '</div>' +
+    (out.answer ? `<div class="ctx fa"><b>${out.abstained ? '(abstained) ' : ''}</b>${out.answer}</div>` : '') +
+    out.contexts.map((c) => `<div class="ctx">
+        <div class="meta">${c.chunk_id} · ${c.date} · score ${fmt(c.score)} ·
+          ${Object.entries(c.stages).map(([k, v]) => k + ' ' + fmt(v, 2)).join(' · ')}
+          ${c.expanded_from ? ' · expanded from ' + c.expanded_from : ''}</div>
+        <div class="fa">${escapeHtml(c.text).replace(/\n/g, '<br>')}</div></div>`).join('');
+}
 
 function escapeHtml(s) {
   return s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));

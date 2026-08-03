@@ -2694,7 +2694,33 @@ try:
                       "latency_ms": 26.0, "abstained": False}],
         }
 
+        # A question is a job now too (an implicit index build can outwait any
+        # HTTP timeout), so /queries answers a receipt and the result arrives
+        # through /jobs — this is the payload that job hands back. Exactly the
+        # fields pipeline.Context.as_dict() sends in "contexts" — no more, so a
+        # panel reading a field the lab dropped shows up here as rendered
+        # "undefined" rather than in production.
+        LAB_QUERY = {
+            "question": "باشگاه هفته‌ای چند بار بود؟", "abstained": False,
+            "answer": "هفته‌ای سه بار.", "time_scope": None,
+            "sessions": [], "diagnostics": {"candidates_in_scope": 12,
+                                            "dense_hits": 8,
+                                            "bm25_hits": 8,
+                                            "graded_out": 0,
+                                            "queries": []},
+            "timings": {"retrieve_ms": 4.0},
+            "contexts": [{"chunk_id": "2026-05-16-a#3",
+                          "session_id": "2026-05-16-a",
+                          "date": "2026-05-16",
+                          "score": 0.81, "stages": {"retrieval": 1.0},
+                          "expanded_from": "",
+                          "text": "این هفته سه بار باشگاه رفتم."}],
+            "models": {"expand": "", "rerank": "", "grade": "",
+                       "answer": "", "judge": "", "ragas": ""},
+        }
+
         job_polls = []
+        query_polls = []
 
         def lab_route(route):
             url = route.request.url
@@ -2746,24 +2772,27 @@ try:
                      "question_en": "What is my job situation?",
                      "answerable": True, "evidence_sessions": ["2026-05-12-a"]}]}
             elif "/api/raglab/queries" in url:
-                payload = {
-                    "question": "باشگاه هفته‌ای چند بار بود؟", "abstained": False,
-                    "answer": "هفته‌ای سه بار.", "time_scope": None,
-                    "sessions": [], "diagnostics": {"candidates_in_scope": 12,
-                                                    "dense_hits": 8,
-                                                    "bm25_hits": 8,
-                                                    "graded_out": 0,
-                                                    "queries": []},
-                    "timings": {"retrieve_ms": 4.0},
-                    # Exactly the fields pipeline.Context.as_dict() sends — no
-                    # more, so a panel reading a field the lab dropped shows up
-                    # here as rendered "undefined" rather than in production.
-                    "contexts": [{"chunk_id": "2026-05-16-a#3",
-                                  "session_id": "2026-05-16-a",
-                                  "date": "2026-05-16",
-                                  "score": 0.81, "stages": {"retrieval": 1.0},
-                                  "expanded_from": "",
-                                  "text": "این هفته سه بار باشگاه رفتم."}]}
+                # A receipt, not a result: the ask became a watched job
+                # (feat/raglab-query-progress), and this mock lagging behind on
+                # the old synchronous payload is what once hung the whole suite
+                # — the page read job_id undefined and polled a job that never
+                # carried a query result.
+                payload = {"job_id": "job-q"}
+            elif "/api/raglab/jobs/job-q" in url:
+                # First poll mid-retrieval — the stage the page must show —
+                # then done, carrying the query payload.
+                if not query_polls:
+                    query_polls.append(1)
+                    payload = {"id": "job-q", "kind": "query",
+                               "state": "running", "stage": "retrieving",
+                               "progress": 0.75,
+                               "detail": "باشگاه هفته‌ای چند بار بود؟",
+                               "result": None, "error": None}
+                else:
+                    payload = {"id": "job-q", "kind": "query", "state": "done",
+                               "stage": "done", "progress": 1.0,
+                               "detail": "done", "result": LAB_QUERY,
+                               "error": None}
             elif "/api/raglab/jobs/" in url:
                 # The first poll is still running and carries a detail. A judged
                 # run on a local model spends hours inside one stage, so the
@@ -3173,6 +3202,15 @@ try:
         # word "undefined" — visible, unfailing, and easy to ship.
         page.fill("#raglab-question", "باشگاه هفته‌ای چند بار بود؟")
         page.click("#raglab-ask")
+        # An ask is a job like a run, so it reports through the same watched
+        # box before its contexts land. Read atomically in one evaluate: the
+        # running state lasts only until the next poll, and a locator that
+        # resolves and then reads would race the box detaching.
+        ask_progress = lambda: page.evaluate(
+            "() => { const el = document.querySelector('.rag-progress .rag-meta');"
+            " return el ? el.textContent : ''; }")
+        check("raglab: an ask reports its stage through the watched-job box",
+              wait_until(lambda: "query: retrieving" in ask_progress()))
         page.wait_for_selector(".rag-context")
         context_meta = page.locator(".rag-context .rag-meta").first.inner_text()
         check("raglab: a retrieved context says which chunk it is and when",

@@ -574,10 +574,11 @@ There is still a defensible answer, ordered by how well established it is:
 
 Full write-ups, with run ids, real Farsi model outputs and every metric table:
 
-- `docs/report/rag-sweep-essence.html` — the brief: abstract, findings, what to do next.
-- `docs/report/rag-candidates-abcd.html` — the evidence, candidate by candidate.
-- `docs/rag-architecture.md` and `docs/rag-chosen-architecture.md` — the measured
-  argument and the recorded decision.
+- `docs/report/rag-architecture.md` — the measured argument and the recorded decision: run ids,
+  real Farsi model outputs, and every metric table.
+- `docs/report/rag-sweep-2026-07-30.json` — the raw sweep record behind it.
+- `docs/report/index.html` — the same story presented visually: the pipeline, the ablation
+  ladder and the leaderboard, with screenshots.
 
 ## Known limitations and next steps
 
@@ -670,10 +671,10 @@ once. The suites are run locally before each commit instead.
 
 ## More
 
-- `docs/details.md` — the full architecture deep dive: every module, the data flows, the invariants, and the design trade-offs.
-- `docs/plan.md` — the requirements ledger: every Sprint 2 task requirement and optional task, what
-  is shipped, what is planned, and where each one is implemented. Includes a known-limitations
-  section.
+- `docs/report/index.html` — the project report: product, architecture, the RAG lab, and the
+  Sprint 2 rubric answered point by point, with screenshots.
+- `docs/report/project_requirements_checklist.md` — the requirements ledger: every Sprint 2
+  task requirement and optional task, what is shipped, and where each one is implemented.
 - `docs/` — a design spec per major feature (what was built, why, and what was rejected), plus the
   one implementation plan currently being executed. Start at `docs/README.md`, which carries a
   status per document.

@@ -2245,6 +2245,26 @@ def client():
     return TestClient(create_app())
 
 
+def _finished(client, job_id: str, timeout: float = 30.0) -> dict:
+    """Poll a job to its terminal state, the way both frontends do."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        job = client.get(f'/api/jobs/{job_id}').json()
+        if job['state'] not in ('running', 'cancelling'):
+            return job
+        time.sleep(0.01)
+    raise AssertionError(f'job {job_id} still running after {timeout}s')
+
+
+def _ask(client, payload: dict) -> dict:
+    """POST one question and wait for its job — the panel's ask flow."""
+    res = client.post('/api/queries', json=payload)
+    assert res.status_code == 202, res.text
+    job = _finished(client, res.json()['job_id'])
+    assert job['state'] == 'done', job.get('error')
+    return job['result']
+
+
 # This is an integration test.
 def test_options_describes_the_corpus_and_capabilities(client):
     body = client.get('/api/options').json()
@@ -2321,12 +2341,12 @@ def test_panel_is_served(client):
 
 # This is an integration test.
 def test_ad_hoc_query_returns_stages_and_contexts(client):
-    body = client.post('/api/queries', json={
+    body = _ask(client, {
         'question': 'آذر چه خبر بود؟',
         'index': {'chunker': 'message', 'embedder': 'char-hash',
                   'layers': ['chunk']},
         'retrieval': {'k': 4},
-        'generation': {'answerer': 'extractive'}}).json()
+        'generation': {'answerer': 'extractive'}})
     assert body['contexts'] and body['answer']
     assert body['time_scope']['label'] == 'آذر'
     assert 'retrieve_ms' in body['timings']
@@ -2387,15 +2407,14 @@ def test_defaults_carry_the_per_task_model_fields(client):
 
 # This is an integration test.
 def test_a_per_task_model_is_accepted_by_the_query_endpoint(client):
-    res = client.post('/api/queries', json={
+    body = _ask(client, {
         'question': 'آذر چه خبر بود؟',
         'index': {'chunker': 'message', 'embedder': 'char-hash', 'layers': ['chunk']},
         'retrieval': {'k': 4,
                       'grader_model': 'anthropic/claude-haiku-4.5'},
         'generation': {'answerer': 'extractive',
                        'judge_model': 'openai/gpt-5-mini'}})
-    assert res.status_code == 200
-    assert res.json()['contexts']
+    assert body['contexts']
 
 
 # This is a unit test.
@@ -2473,15 +2492,14 @@ def test_options_offer_farsi_capable_embedding_models(client):
 def test_an_embedding_model_is_accepted_by_the_query_endpoint(client):
     """The field has to survive the panel round trip even when the running
     embedder ignores it, or a stale tab breaks a query."""
-    res = client.post('/api/queries', json={
+    body = _ask(client, {
         'question': 'آذر چه خبر بود؟',
         'index': {'chunker': 'message', 'embedder': 'char-hash',
                   'embed_model': 'intfloat/multilingual-e5-small',
                   'layers': ['chunk']},
         'retrieval': {'k': 4},
         'generation': {'answerer': 'extractive'}})
-    assert res.status_code == 200
-    assert res.json()['contexts']
+    assert body['contexts']
 
 
 # This is a unit test.
@@ -3695,19 +3713,72 @@ def test_evaluations_lists_and_fetches_the_same_resource(client):
 
 
 # This is an integration test.
-def test_a_query_is_posted_to_its_collection(client):
-    """`/api/queries` rather than `/api/query`: every other collection on this
-    service is plural, and a surface where one route breaks the rule is a
-    surface you have to remember instead of infer."""
+def test_a_query_is_a_job_like_its_sibling_collections(client):
+    """The ask button used to block on a synchronous POST: an implicit index
+    build (on a real embedder, a 2.2 GB download plus 167 sessions of
+    encoding) and every LLM stage ran behind a static 'retrieving…' note,
+    indistinguishable from a dead lab. A query is accepted as a job — 202, a
+    Location to poll, stage/fraction/detail while it runs — like /api/indexes
+    and /api/evaluations before it, and for the same reason: the work can
+    outlive anything a spinner honestly promises."""
     res = client.post('/api/queries', json={
         'index': {'chunker': 'session', 'embedder': 'ascii-hash'},
         'retrieval': {'retriever': 'dense', 'k': 2},
         'generation': {'answerer': 'none'},
         'question': 'وام مسکن'})
-    assert res.status_code == 200
-    assert 'contexts' in res.json()
-    # The precondition still refuses, and still says which one.
+    assert res.status_code == 202
+    job_id = res.json()['job_id']
+    assert res.headers['Location'] == f'/api/jobs/{job_id}'
+    job = _finished(client, job_id)
+    assert job['kind'] == 'query'
+    assert job['state'] == 'done', job.get('error')
+    assert 'contexts' in job['result'] and 'diagnostics' in job['result']
+    # The preconditions still refuse synchronously, and still say which one:
+    # a bad payload is a 400 the panel shows at once, never a job that dies.
     assert client.post('/api/queries', json={}).status_code == 400
+
+
+# This is an integration test.
+def test_the_query_job_hands_its_reporter_to_the_index_build(monkeypatch):
+    """The longest silent wait behind the ask button is the index the query
+    builds implicitly when its fingerprint is new. If the job does not pass
+    its reporter down to the registry, the bar sits on 'starting 0%' for the
+    whole build — the old bug wearing a new box."""
+    from fastapi.testclient import TestClient
+
+    from .raglab.server import create_app
+    seen = {}
+    original = IndexRegistry.get
+
+    def spy(self, cfg, progress=None, force=False):
+        seen['progress'] = progress
+        return original(self, cfg, progress=progress, force=force)
+
+    monkeypatch.setattr(IndexRegistry, 'get', spy)
+    fresh = TestClient(create_app())
+    res = fresh.post('/api/queries', json={
+        'index': {'chunker': 'session', 'embedder': 'ascii-hash'},
+        'retrieval': {'retriever': 'bm25', 'k': 2},
+        'generation': {'answerer': 'none'},
+        'question': 'وام مسکن'})
+    assert res.status_code == 202
+    job = _finished(fresh, res.json()['job_id'])
+    assert job['state'] == 'done', job.get('error')
+    assert callable(seen.get('progress'))
+
+
+# This is a unit test.
+def test_both_frontends_watch_the_ask_as_a_job():
+    """Neither panel may block on a bare fetch behind a static note: the ask
+    goes through the same job box as builds and runs, so the reader sees
+    stage, fraction and detail instead of guessing whether anything is
+    happening at all."""
+    panel = (RAGLAB_DIR / 'static' / 'index.html').read_text(encoding='utf-8')
+    board = (REPO_ROOT / 'app.js').read_text(encoding='utf-8')
+    # The static placeholder was the bug: it moves at no point of a build.
+    assert 'retrieving…' not in panel
+    # The ask joins the job-kind map the board already polls through.
+    assert "query: '/queries'" in board
 
 
 # This is an integration test.
@@ -3937,10 +4008,10 @@ def test_both_run_routes_screen_the_models_the_backend_serves(client, monkeypatc
 # This is an integration test.
 def test_a_query_whose_gate_cannot_reach_its_model_says_so(client, monkeypatch):
     """The other half of the gate fix. Refusing to score is only an improvement
-    if the refusal reaches the caller as something they can read: 502 because
-    the lab is up and its model is not, and the message names the stage —
-    otherwise the panel shows an empty result and the reader blames retrieval
-    for what the grader did."""
+    if the refusal reaches the caller as something they can read: now that a
+    query is a job, that is the job's error — surfaced, never swallowed — and
+    it still has to name the stage that went missing, or the panel shows a
+    blank result and the reader blames retrieval for what the grader did."""
     def unreachable(*args, **kwargs):
         raise ConnectionError('the model daemon is not running')
 
@@ -3950,6 +4021,182 @@ def test_a_query_whose_gate_cannot_reach_its_model_says_so(client, monkeypatch):
         'index': {'chunker': 'session', 'embedder': 'ascii-hash'},
         'retrieval': {'k': 4, 'grader': 'llm', 'grade_threshold': 0.4},
         'generation': {'answerer': 'none'}})
-    assert res.status_code == 502, res.status_code
-    detail = res.json()['detail']
-    assert 'grade' in detail.lower() and 'not running' in detail
+    assert res.status_code == 202, res.status_code
+    job = _finished(client, res.json()['job_id'])
+    assert job['state'] == 'error'
+    assert 'grade' in job['error'].lower() and 'not running' in job['error']
+
+
+# --- provider modes: local vs OpenRouter -------------------------------------
+# The models column grows a mode dropdown. A mode is a served preset: which
+# backend runs the LLM stages and which model each stage defaults to. Served
+# rather than kept in a frontend, so the two panels cannot disagree about what
+# picking "openrouter" configures.
+
+
+# This is a unit test.
+def test_the_lab_offers_a_local_and_an_openrouter_mode():
+    # Local first: it is the lab default, and an option list leads with its
+    # default here (see test_every_option_list_leads_with_the_default).
+    assert [mode.key for mode in models.MODES] == ['local', 'openrouter']
+    by_key = {mode.key: mode for mode in models.MODES}
+    assert by_key['local'].provider == 'ollama'
+    assert by_key['openrouter'].provider == 'openrouter'
+    # A mode explains itself like every other control on the page.
+    assert all(mode.label and mode.note for mode in models.MODES)
+
+
+# This is a unit test.
+def test_openrouter_mode_runs_every_llm_stage_on_gpt5_nano(monkeypatch):
+    """The preset: the whole LLM pipeline switched on, every stage on
+    gpt-5-nano — and the index deliberately untouched, because
+    heydariAI/persian-embeddings is the measured winner and stays local."""
+    monkeypatch.setattr(models, 'openrouter_ids', lambda settings: frozenset())
+    patch = models.mode_config('openrouter', LAB_SETTINGS)
+    ret, gen = patch['retrieval'], patch['generation']
+    nano = 'openai/gpt-5-nano'
+    assert ret['hyde'] is True and ret['expansion_model'] == nano
+    assert ret['reranker'] == 'llm' and ret['reranker_model'] == nano
+    assert ret['grader'] == 'llm'
+    assert ret['grader_model'] == nano       # nothing verified → the fallback
+    assert ret['grade_threshold'] == 0.4     # the measured gate setting
+    assert gen['answerer'] == 'llm' and gen['model'] == nano
+    assert gen['key_facts_judge'] is True and gen['judge_model'] == nano
+    assert gen['ragas_model'] == nano
+    assert 'index' not in patch
+
+
+# This is a unit test.
+def test_the_gate_prefers_a_cohere_reranker_the_account_can_reach(monkeypatch):
+    """cohere/rerank-4-fast is a purpose-built relevance scorer (query + text →
+    score), so the gate prefers it; the -pro build is next. A slug OpenRouter's
+    own model list does not verify falls back to gpt-5-nano rather than
+    gambling a run on it — 'cannot verify' must not become a refused run."""
+    def gate(served):
+        monkeypatch.setattr(models, 'openrouter_ids',
+                            lambda settings: frozenset(served))
+        return models.mode_config('openrouter',
+                                  LAB_SETTINGS)['retrieval']['grader_model']
+
+    assert gate({'cohere/rerank-4-fast', 'cohere/rerank-4-pro',
+                 'openai/gpt-5-nano'}) == 'cohere/rerank-4-fast'
+    assert gate({'cohere/rerank-4-pro',
+                 'openai/gpt-5-nano'}) == 'cohere/rerank-4-pro'
+    assert gate({'openai/gpt-5-nano'}) == 'openai/gpt-5-nano'
+    assert gate(set()) == 'openai/gpt-5-nano'
+
+
+# This is a unit test.
+def test_local_mode_resets_the_same_fields_openrouter_sets(monkeypatch):
+    """Switching back must be a full reset to the lab defaults: a field one
+    mode sets and the other forgets would leak a remote model into a local
+    run's label."""
+    monkeypatch.setattr(models, 'openrouter_ids', lambda settings: frozenset())
+    local = models.mode_config('local', LAB_SETTINGS)
+    remote = models.mode_config('openrouter', LAB_SETTINGS)
+    assert ({group: set(names) for group, names in local.items()}
+            == {group: set(names) for group, names in remote.items()})
+    defaults = LabConfig().to_dict()
+    for group, names in local.items():
+        for name, value in names.items():
+            assert value == defaults[group][name], f'{group}.{name}'
+    # No auto modes anywhere in this repo: an unknown mode raises, never guesses.
+    with pytest.raises(ValueError):
+        models.mode_config('cloud', LAB_SETTINGS)
+
+
+# This is a unit test.
+def test_a_provider_override_rebuilds_the_settings_it_names():
+    """The dropdown must move the backend, not just the model labels: a run
+    whose models say openrouter while the settings still say ollama would be
+    refused over models the user never picked."""
+    swapped = config.settings_for_provider(LAB_SETTINGS, 'openrouter')
+    assert swapped.provider == 'openrouter'
+    # The old backend's default model must not survive the switch — a slug
+    # only means something to the backend that serves it...
+    assert swapped.llm_model == config.PROVIDER_MODELS['openrouter']
+    back = config.settings_for_provider(swapped, 'ollama')
+    assert back.llm_model == config.PROVIDER_MODELS['ollama']
+    # ...but an explicitly named model (RAGLAB_MODEL) is never replaced.
+    named = replace(LAB_SETTINGS, llm_model='someone/custom-7b')
+    assert (config.settings_for_provider(named, 'openrouter').llm_model
+            == 'someone/custom-7b')
+    # '' means "no override": the settings pass through untouched.
+    assert config.settings_for_provider(LAB_SETTINGS, '') is LAB_SETTINGS
+    with pytest.raises(ValueError):
+        config.settings_for_provider(LAB_SETTINGS, 'huggingface')
+
+
+# This is an integration test.
+def test_options_serves_the_provider_modes(client):
+    body = client.get('/api/options').json()
+    modes = {mode['key']: mode for mode in body['modes']}
+    assert set(modes) == {'local', 'openrouter'}
+    assert modes['openrouter']['provider'] == 'openrouter'
+    served = modes['openrouter']['config']
+    assert served['generation']['model'] == 'openai/gpt-5-nano'
+    # The gate default is resolved against whatever this machine could verify
+    # right now, so any of the three legal answers passes — never a fourth.
+    assert served['retrieval']['grader_model'] in (
+        'cohere/rerank-4-fast', 'cohere/rerank-4-pro', 'openai/gpt-5-nano')
+    # The dropdown explains itself behind the same '!' as every other control.
+    assert 'run.mode' in body['help']
+
+
+# This is an integration test.
+def test_both_run_routes_refuse_an_unknown_provider(client):
+    """Both run routes apply the same screen — the two disagreeing about which
+    configs are legal was a bug once already."""
+    for route in ('/api/queries', '/api/evaluations'):
+        res = client.post(route, json={'question': 'x',
+                                       'provider': 'huggingface'})
+        assert res.status_code == 400, route
+        assert 'huggingface' in res.json()['detail']
+
+
+# This is a unit test.
+def test_a_mode_only_presets_models_its_own_catalogue_offers(monkeypatch):
+    """The bug this pins: the panel's dropdowns were filled from the boot
+    provider's catalogue, so under the openrouter mode gpt-5-nano was not
+    offerable — and the panel's config-follows-the-panel rule then silently
+    wiped the preset back to ''. Every model a mode presets must be offered by
+    the catalogue that same mode carries."""
+    monkeypatch.setattr(models, 'openrouter_ids', lambda settings: frozenset())
+    for entry in models.mode_catalogue(LAB_SETTINGS):
+        offered = {option['id'] for option in entry['models']}
+        for group, names in entry['config'].items():
+            for name, value in names.items():
+                if name.endswith('model') and value:
+                    assert value in offered, (
+                        f"{entry['key']} presets {group}.{name}={value!r} "
+                        'but its own catalogue does not offer it')
+
+
+# This is an integration test.
+def test_each_mode_carries_the_catalogue_of_its_own_backend(client):
+    """A slug only means something to the backend that serves it, so the mode
+    that moves the backend must bring that backend's model list with it."""
+    body = client.get('/api/options').json()
+    modes = {mode['key']: mode for mode in body['modes']}
+    remote = {option['id'] for option in modes['openrouter']['models']}
+    local = {option['id'] for option in modes['local']['models']}
+    assert 'openai/gpt-5-nano' in remote
+    assert '4skl/gemma4-e2b-mtp' in local
+    # Disjoint apart from the '' lab-default entry and a model the user named
+    # by RAGLAB_MODEL — an explicitly named model is offered everywhere by the
+    # catalogue's own rule. The two known lists must never blur into one
+    # dropdown of half-unusable choices.
+    named = body['capabilities']['llm_model']
+    assert (remote & local) <= {'', named}
+
+
+# This is a unit test.
+def test_both_panels_offer_the_mode_dropdown():
+    """The dropdown sits in the models column of the board's page and in the
+    standalone panel, both reading the served modes rather than a local copy —
+    a preset kept in a frontend is a preset that will drift."""
+    from .raglab.server import STATIC
+    html = (STATIC / 'index.html').read_text(encoding='utf-8')
+    appjs = (config.ROOT / 'app.js').read_text(encoding='utf-8')
+    assert 'raglab-mode' in appjs and 'options.modes' in appjs
+    assert 'modes' in html
