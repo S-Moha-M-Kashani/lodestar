@@ -1,4 +1,3 @@
-# This is an integration test (real in-memory index, offline ascii-hash embedder).
 from .raglab import pipeline, corpus
 from .raglab.config import IndexConfig, RetrievalConfig, LabSettings
 from .raglab.index import IndexRegistry
@@ -6,6 +5,7 @@ from .raglab.index import IndexRegistry
 LAB_SETTINGS = LabSettings(openrouter_api_key='', llm_provider='fake')
 
 
+# This is an integration test (real in-memory index, offline ascii-hash embedder).
 def test_retrieve_traced_records_ranks_and_dropped_candidates():
     diary = corpus.load_diary()
     gt = corpus.load_ground_truth()
@@ -37,3 +37,14 @@ def test_retrieve_traced_records_ranks_and_dropped_candidates():
     assert len(kept) == len(outcome.contexts)
     # the ordered step lists are present
     assert trace['dense'] and trace['bm25'] and trace['fused']
+
+    # exercise the grader path: verify grade_score is populated as float when grader is active
+    cfg_with_grader = RetrievalConfig(retriever='hybrid-rrf', reranker='none',
+                                      grader='lexical', grade_threshold=0.0, k=3,
+                                      rerank_depth=20, time_filter=False)
+    outcome_graded, trace_graded = pipeline.retrieve_traced(
+        index, cfg_with_grader, question, query_date)
+    graded_candidates = [c for c in trace_graded['candidates']
+                         if c['grade_score'] is not None]
+    assert any(isinstance(c['grade_score'], float) for c in graded_candidates), \
+        'expected at least one candidate with float grade_score'
