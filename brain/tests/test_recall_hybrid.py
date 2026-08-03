@@ -158,6 +158,19 @@ def test_latin_query_recalls_the_persian_chat_message_first():
     assert hits and 'مهسا' in hits[0]['text'], (
         'the message naming مهسا must outrank script-blind dense noise')
 
+# This is an integration test (in-process Chroma, no server, no disk).
+def test_chat_search_evidence_floor_is_optional_for_the_agent():
+    """The floor protects a human reading a result list; the agent's
+    find_related turns it off to keep semantic chunk matches reachable."""
+    store = ChatStore(MEMORY_URL, LexicalHashEmbeddings(),
+                      collection='chat-evidence-flag')
+    store.index_messages([row(1, 'دیشب دعوامون شد سر برنامه آخر هفته')])
+    # «دعوا» and «دعوامون» are different BM25 tokens: no lexical evidence.
+    assert store.search('دعوا') == [], 'the search box keeps the floor'
+    hits = store.search('دعوا', evidence=False)
+    assert hits and 'دعوامون' in hits[0]['text'], (
+        'without the floor, the semantically nearest chunk must surface')
+
 
 # This is an integration test (in-process Chroma, no server, no disk).
 def test_chat_search_returns_nothing_when_nothing_matches():
