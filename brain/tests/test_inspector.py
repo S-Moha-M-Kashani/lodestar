@@ -64,3 +64,18 @@ def test_mark_gold_matches_evidence_quote_either_direction():
     assert inspector.mark_gold(['شیش قسط'], quotes) == [True]
     # no quotes → nothing is gold
     assert inspector.mark_gold(texts, []) == [False, False]
+
+
+# This is an integration test (real in-memory index, offline).
+def test_chunks_by_session_groups_and_counts():
+    diary = corpus.load_diary()
+    index = IndexRegistry(LAB_SETTINGS, diary).get(
+        IndexConfig(chunker='session', embedder='ascii-hash'))
+    groups = inspector.chunks_by_session(index)
+
+    assert len(groups) == len(index.by_session)
+    total = sum(len(g['chunks']) for g in groups)
+    assert total == len(index.chunks)
+    first = groups[0]
+    assert first['session_id'] and 'date' in first
+    assert all('id' in c and 'text' in c for c in first['chunks'])

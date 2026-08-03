@@ -25,3 +25,16 @@ def mark_gold(candidate_texts: list[str],
         norm = _norm(text)
         out.append(any(q in norm or norm in q for q in quotes))
     return out
+
+
+def chunks_by_session(index) -> list[dict]:
+    """Every chunk the index holds, grouped by session in index order — the
+    'chunks after indexing' view. `by_session` is built in chunk order, which
+    follows diary order, so no sorting is needed or wanted."""
+    groups = []
+    for session_id, chunks in index.by_session.items():
+        groups.append({
+            'session_id': session_id,
+            'date': chunks[0].date if chunks else '',
+            'chunks': [{'id': c.id, 'text': c.text} for c in chunks]})
+    return groups
