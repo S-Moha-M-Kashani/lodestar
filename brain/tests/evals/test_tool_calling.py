@@ -36,9 +36,18 @@ def test_scenario_tool_calls_and_effect(path):
         assert len(proposals) == expect["proposals_size"]
     if "proposals_titles_contain" in expect:
         assert any(expect["proposals_titles_contain"] in c["title"] for c in proposals)
-    if "answered_id" in expect:
-        moved = next(c for c in cards if c["id"] == expect["answered_id"])
-        assert moved["columnId"] == "answered"
+    # A suggested edit changes nothing until the user saves, so the scenario
+    # asserts the card stayed put *and* that the suggestion is waiting.
+    if "unchanged_id" in expect:
+        before = {c["id"]: c for c in scenario["board"]}[expect["unchanged_id"]]
+        after = next(c for c in cards if c["id"] == expect["unchanged_id"])
+        assert after["columnId"] == before["columnId"], "an agent edit must not apply"
+    edits = board.list_edits()
+    if "edits_size" in expect:
+        assert len(edits) == expect["edits_size"]
+    if "edits_field" in expect:
+        key, value = expect["edits_field"]
+        assert any(e["fields"].get(key) == value for e in edits)
 
 
 # This is a configuration invariant: an empty scenario directory must fail, not pass silently.

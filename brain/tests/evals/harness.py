@@ -36,33 +36,24 @@ PIANO_CARD = {'id': 'c-piano', 'num': 12, 'columnId': 'in-progress',
 
 
 class InMemoryBoard:
-    """Duck-typed BoardClient: full-list read-modify-write, no HTTP.
+    """Duck-typed BoardClient: reads, and two kinds of suggestion. No HTTP.
 
-    Mirrors the real BoardClient contract (save_cards receives the FULL list).
-    The real Node server assigns id/num to newly created cards (board tools'
-    create_card sends a card dict with no 'id' and relies on the server
-    to add one) — this fake mirrors that by assigning an id to any card that
-    arrives without one, so create_card's post-save id lookup works the
-    same way it does against the real server."""
+    It has no way to write a card, because the real client has none either — the
+    agent proposes cards and suggests edits, and only the user's own save applies
+    either. A fake that could still write would let a test pass on a path
+    production cannot reach.
+
+    The real Node server assigns the id to a proposed card (create_card sends a
+    dict with no 'id'), so this mirrors that.
+    """
 
     def __init__(self, cards=None):
         self._cards = [dict(c) for c in (cards or [])]
         self._proposals = []
-        self.saves = []  # record each full-list save for assertions
+        self._edits = []
 
     def list_cards(self):
         return [dict(c) for c in self._cards]
-
-    def save_cards(self, cards):
-        saved = []
-        for c in cards:
-            c = dict(c)
-            if not c.get('id'):
-                c['id'] = f'new-{next(_id_counter)}'
-            saved.append(c)
-        self._cards = saved
-        self.saves.append(self.list_cards())
-        return self.list_cards()
 
     def create_proposal(self, card):
         """Mirrors POST /api/proposals: the card is stored but stays OFF the
@@ -75,6 +66,17 @@ class InMemoryBoard:
 
     def list_proposals(self):
         return [dict(c) for c in self._proposals]
+
+    def create_edit(self, card_id, fields):
+        """Mirrors POST /api/edits: stored for the user to review, and the card
+        itself is untouched — list_cards must show it exactly as it was."""
+        suggestion = {'id': f'edit-{next(_id_counter)}', 'cardId': card_id,
+                      'fields': dict(fields)}
+        self._edits.append(suggestion)
+        return dict(suggestion)
+
+    def list_edits(self):
+        return [dict(e) for e in self._edits]
 
 
 def _turn_from_spec(spec):

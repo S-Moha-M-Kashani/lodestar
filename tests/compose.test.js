@@ -302,6 +302,19 @@ test('the composed brain dials the project Chroma service, and only after it sta
 });
 
 // This is a configuration invariant.
+test('the composed brain can boot without a Safe Browsing key', () => {
+  // BRAIN_URL_SAFETY's *env* default is the real backend, which raises at boot
+  // with no key. That is deliberate for a native run — a link check that
+  // silently never fires is worse than none — but it would turn
+  // `docker compose up --build` into a crash loop for anyone who has no key. So
+  // compose states the choice instead of inheriting it.
+  const pinned = brainEnvPin('BRAIN_URL_SAFETY');
+  assert.ok(pinned, 'the composed brain must pin BRAIN_URL_SAFETY, or it cannot boot keyless');
+  assert.match(pinned, /off|google-safe-browsing|fake/,
+    `BRAIN_URL_SAFETY is ${pinned}, which is not a backend safety.py knows`);
+});
+
+// This is a configuration invariant.
 test('the source mount targets exactly where the Dockerfile puts the source', () => {
   // A WORKDIR change would otherwise leave the tree mounted in a directory the
   // server does not run from, and :3000 would go back to serving stale assets

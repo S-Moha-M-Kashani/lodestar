@@ -188,6 +188,10 @@ def start_brain():
              # in-process Chroma: e2e must not depend on the Docker server,
              # and must never write into the user's real chat memory
              "BRAIN_CHROMA_URL": "memory",
+             # The real link-reputation backend refuses to build without a key,
+             # which is deliberate — so the offline run names the fake one rather
+             # than letting the brain fail at boot with nothing to search anyway.
+             "BRAIN_URL_SAFETY": "fake",
              "BRAIN_CHAT_COLLECTION": "chat-e2e"},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -214,6 +218,23 @@ def api_trash():
 
 def api_proposals():
     with urllib.request.urlopen(URL + "/api/proposals", timeout=3) as r:
+        return json.loads(r.read())
+
+
+def api_edits():
+    with urllib.request.urlopen(URL + "/api/edits", timeout=3) as r:
+        return json.loads(r.read())
+
+
+def api_suggest_edit(card_id, fields):
+    """Stand in for the Assistant proposing a change. The offline fake chat model
+    has no script that calls update_card, and what this test is about is the
+    review-and-save path, not the model's choice to suggest."""
+    body = json.dumps({"cardId": card_id, "fields": fields}).encode()
+    req = urllib.request.Request(
+        URL + "/api/edits", data=body, method="POST",
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=3) as r:
         return json.loads(r.read())
 
 
@@ -1384,6 +1405,64 @@ try:
                       for c in api_state()["cards"]))
         check("gate: a rejected proposal is recoverable from the Trash",
               any(c["title"] == "A thought I do not want" for c in api_trash()["cards"]))
+
+        # ---- Suggested edits: the agent asks, the user saves -----------------
+        # The guardrail that replaced the one ungated write. A suggestion changes
+        # nothing on its own; the user opens it, may adjust it, and their own save
+        # is what applies it. So the assertions are in that order: unchanged,
+        # then reviewable, then applied only after a save.
+        target = api_state()["cards"][0]
+        api_suggest_edit(target["id"], {"title": "A title the agent suggested",
+                                       "columnId": "in-progress"})
+        # Away and back: setView refreshes the waiting lists on entry, and the
+        # previous block left us already on the Assistant, where a click is a
+        # no-op. A suggestion made by a real chat turn arrives on its own flag.
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector(".suggestion")
+        check("edits: the suggestion renders with review and dismiss",
+              page.locator(".suggestion").count() == 1
+              and page.locator(".suggestion-review").count() == 1
+              and page.locator(".suggestion-dismiss").count() == 1)
+        check("edits: the row says what would change, without opening it",
+              "in progress" in page.inner_text(".suggestion-change").lower())
+        check("edits: the card is untouched while the suggestion waits",
+              next(c for c in api_state()["cards"]
+                   if c["id"] == target["id"])["title"] == target["title"])
+        check("edits: a waiting suggestion counts on the Assistant tab",
+              page.locator('.view-switch button[data-view="assistant"] .view-badge')
+                  .inner_text().strip() == "1")
+
+        page.click(".suggestion-review")
+        page.wait_for_selector("#card-dialog[open]")
+        check("edits: reviewing opens the card with the suggestion filled in",
+              page.input_value("#card-title") == "A title the agent suggested")
+        # The user's own wording wins — that is the whole point of reviewing.
+        page.fill("#card-title", "A title I chose myself")
+        page.click("#card-form button[type=submit]")
+        page.wait_for_function("document.querySelectorAll('.suggestion').length === 0")
+        # The board push is debounced, so wait for the thing being asserted
+        # rather than for a proxy — the way this suite's earlier flakes happened.
+        def saved_card():
+            return next(c for c in api_state()["cards"] if c["id"] == target["id"])
+        applied = wait_until(lambda: saved_card()["title"] == "A title I chose myself")
+        check("edits: saving applies what the USER left in the form", applied)
+        check("edits: a suggested column move rides along with the save",
+              wait_until(lambda: saved_card()["columnId"] == "in-progress"))
+        check("edits: the answered suggestion leaves the list",
+              len(api_edits()["edits"]) == 0)
+
+        # Dismissing answers it the other way and touches nothing.
+        api_suggest_edit(target["id"], {"notes": "notes the agent wanted"})
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector(".suggestion")
+        page.click(".suggestion-dismiss")
+        page.wait_for_function("document.querySelectorAll('.suggestion').length === 0")
+        check("edits: dismissing clears it and leaves the card alone",
+              len(api_edits()["edits"]) == 0
+              and next(c for c in api_state()["cards"]
+                       if c["id"] == target["id"])["notes"] != "notes the agent wanted")
 
         # ---- Assistant model settings ----------------------------------------
         # A "Models" panel with two pickers (text, omni) plus a fixed embedder

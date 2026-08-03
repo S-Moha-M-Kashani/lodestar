@@ -53,6 +53,13 @@ services:
       # shared with a native brain through the published host port. Set
       # BRAIN_CHROMA_URL=memory to run without it (memory is then per-boot).
       BRAIN_CHROMA_URL: ${BRAIN_CHROMA_URL:-http://chroma:8000}
+      # Where a search result leads is checked before the model may cite it, and
+      # the real backend refuses to boot without a key on purpose. Pinning 'off'
+      # here keeps `docker compose up --build` working out of the box for someone
+      # who has no Safe Browsing key; set GOOGLE_SAFE_BROWSING_KEY and
+      # BRAIN_URL_SAFETY=google-safe-browsing to turn the check on.
+      BRAIN_URL_SAFETY: ${BRAIN_URL_SAFETY:-off}
+      GOOGLE_SAFE_BROWSING_KEY: ${GOOGLE_SAFE_BROWSING_KEY:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

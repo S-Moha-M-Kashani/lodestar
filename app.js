@@ -2831,7 +2831,7 @@
 
   // `draft` holds the composer text across re-renders — render() rebuilds the
   // textarea, so anything typed (or dictated) has to live in state, not the DOM.
-  const assistantState = { messages: [], busy: false, draft: '', proposals: [] };
+  const assistantState = { messages: [], busy: false, draft: '', proposals: [], edits: [] };
 
   // The transcript outlives the tab. Only `messages` is stored: `busy` must
   // never come back true — a reload landing mid-stream would restore a disabled
@@ -3476,6 +3476,7 @@
 
     // Nothing proposed, nothing shown — the section must not sit there empty.
     if (assistantState.proposals.length) sheet.appendChild(renderProposals());
+    if (assistantState.edits.length) sheet.appendChild(renderSuggestedEdits());
 
     const log = document.createElement('div');
     log.className = 'chat-log';
@@ -4098,8 +4099,10 @@
       turn.usage = data.usage || null;
       // Two distinct outcomes: an edit changed the board, a proposal did not.
       if (data.mutated) await adoptServerBoard();
-      if (data.proposed) await refreshProposals();
-      announce(data.proposed ? 'Assistant proposed a card for your approval'
+      // One flag for both kinds of waiting suggestion: a card to accept, or a
+      // change to review. Neither has altered the board, so no adoption here.
+      if (data.proposed) { await refreshProposals(); await refreshEdits(); }
+      announce(data.proposed ? 'Assistant has something waiting for your approval'
         : 'Assistant replied');
     } catch {
       // Whatever arrived before the failure is kept — a long answer that dies
@@ -4230,6 +4233,109 @@
       actions.appendChild(approve);
       row.appendChild(actions);
 
+      wrap.appendChild(row);
+    }
+    return wrap;
+  }
+
+  // A suggested EDIT is not a proposed card: the card already exists and is the
+  // user's. So there is no "approve" here that writes anything. Reviewing opens
+  // the ordinary edit dialog with the suggestion filled in, and the user's own
+  // save is what applies it — the same path any hand edit takes. The suggestion
+  // is then discarded, because it has been answered either way.
+  const EDITS_API = '/api/edits';
+  let reviewingEditId = null;
+
+  async function refreshEdits() {
+    try {
+      const res = await fetch(EDITS_API, { headers: { Accept: 'application/json' } });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data && Array.isArray(data.edits)) {
+        assistantState.edits = data.edits;
+        syncProposalBadge();
+        render();
+      }
+    } catch { /* offline — leave the list as it was */ }
+  }
+
+  async function discardEdit(id, spoken) {
+    try {
+      const res = await fetch(`${EDITS_API}/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(`edit ${res.status}`);
+      await refreshEdits();
+      if (spoken) announce(spoken);
+    } catch {
+      announce('Could not reach the server — the suggestion is unchanged');
+    }
+  }
+
+  // What the suggestion would change, in the user's words rather than field
+  // names, so the row can be read without opening anything.
+  function describeEdit(fields, card) {
+    const say = {
+      title: (v) => `title → “${short(v)}”`,
+      notes: () => 'notes rewritten',
+      type: (v) => `stamp → ${TYPE_META[typeVal(v)].label}`,
+      category: (v) => `area → ${v ? catLabel(v) : 'none'}`,
+      columnId: (v) => `move to ${columnTitle(v)}`,
+      importance: (v) => `importance → ${v || 'none'}`,
+      urgency: (v) => `urgency → ${v || 'none'}`,
+      tags: (v) => `tags → ${(v || []).join(', ') || 'none'}`,
+    };
+    return Object.entries(fields)
+      .filter(([key]) => say[key])
+      .map(([key, value]) => say[key](value))
+      .join(' · ') || 'no change';
+  }
+
+  function renderSuggestedEdits() {
+    const wrap = document.createElement('section');
+    wrap.className = 'suggestions';
+    const heading = document.createElement('h3');
+    heading.className = 'suggestions-heading';
+    const n = assistantState.edits.length;
+    heading.textContent = `Suggested — ${n} change${n === 1 ? '' : 's'} to review`;
+    wrap.appendChild(heading);
+
+    for (const edit of assistantState.edits) {
+      const card = getCard(edit.cardId);
+      const row = document.createElement('article');
+      row.className = 'suggestion';
+      row.dataset.id = edit.id;
+
+      const title = document.createElement('p');
+      title.className = 'suggestion-title';
+      // The card it is about, named the way the board names it.
+      title.textContent = card ? `${cardLabel(card)} ${card.title}` : 'a card that has since gone';
+      row.appendChild(title);
+
+      const what = document.createElement('p');
+      what.className = 'suggestion-change';
+      what.textContent = describeEdit(edit.fields, card);
+      row.appendChild(what);
+
+      const actions = document.createElement('div');
+      actions.className = 'suggestion-actions';
+      const dismiss = document.createElement('button');
+      dismiss.type = 'button';
+      dismiss.className = 'btn ghost suggestion-dismiss';
+      dismiss.textContent = 'Dismiss';
+      dismiss.addEventListener('click', () => discardEdit(edit.id, 'Suggestion dismissed'));
+      actions.appendChild(dismiss);
+      if (card) {
+        const review = document.createElement('button');
+        review.type = 'button';
+        review.className = 'btn primary suggestion-review';
+        review.textContent = 'Review & save';
+        review.title = 'Opens the card with this change filled in — nothing is saved until you say so';
+        review.addEventListener('click', () => {
+          reviewingEditId = edit.id;
+          openDialog(edit.cardId, edit.fields);
+        });
+        actions.appendChild(review);
+      }
+      row.appendChild(actions);
       wrap.appendChild(row);
     }
     return wrap;
@@ -4489,22 +4595,27 @@
   $('#card-notes').addEventListener('input', updateBalancePreview);
   $('#card-tags').addEventListener('input', updateBalancePreview);
 
-  function openDialog(cardId) {
+  // `suggested` prefills the form with an Assistant suggestion instead of what
+  // the card currently says. It fills the *form*, deliberately, and not the card:
+  // the values are a draft the user can change or abandon, and until they submit
+  // nothing has happened to the board.
+  function openDialog(cardId, suggested = null) {
     const card = getCard(cardId);
     if (!card) return;
     editingId = cardId;
+    const shown = suggested ? { ...card, ...suggested } : card;
     rebuildCategoryPicker();
-    $('#card-title').value = card.title;
-    $('#card-notes').value = card.notes;
-    $('#card-tags').value = card.tags.join(', ');
+    $('#card-title').value = shown.title;
+    $('#card-notes').value = shown.notes;
+    $('#card-tags').value = (shown.tags || []).join(', ');
     updateBalancePreview();
-    $('#card-importance').value = iuVal(card.importance);
-    $('#card-urgency').value = iuVal(card.urgency);
+    $('#card-importance').value = iuVal(shown.importance);
+    $('#card-urgency').value = iuVal(shown.urgency);
     $('#card-deadline').value = deadlineVal(card.deadline);
     $('#card-effort').value = effortVal(card.effort);
     $('#card-control').value = controlVal(card.control);
-    for (const radio of form.elements.type) radio.checked = radio.value === card.type;
-    for (const radio of form.elements.category) radio.checked = radio.value === (card.category || '');
+    for (const radio of form.elements.type) radio.checked = radio.value === shown.type;
+    for (const radio of form.elements.category) radio.checked = radio.value === (shown.category || '');
     // A card being stamped Habit for the first time starts at once a day.
     $('#card-habit-freq').value = card.habitFreq || 'daily';
     $('#card-habit-count').value = String(card.habitCount || 1);
@@ -4545,8 +4656,18 @@
         .split(',')
         .map((t) => t.trim().toLowerCase())
         .filter(Boolean);
+      // The dialog has no column control, so a suggested move is carried here.
+      // Read from the suggestion rather than the form for that one field.
+      const reviewed = assistantState.edits.find((e) => e.id === reviewingEditId);
+      if (reviewed && COLUMNS.some((c) => c.id === reviewed.fields.columnId)) {
+        card.columnId = reviewed.fields.columnId;
+      }
       card.updatedAt = Date.now();
       commit(`Edited ${cardLabel(card)} “${short(card.title)}”`);
+      // Answered, so it leaves the list. After the commit: the suggestion is the
+      // only record of what was asked, and losing it before the save landed
+      // would leave the user with neither.
+      if (reviewingEditId) discardEdit(reviewingEditId, 'Suggestion applied and saved');
     }
     dialog.close();
   });
@@ -4559,7 +4680,7 @@
     deleteCard(id);
   });
 
-  dialog.addEventListener('close', () => { editingId = null; });
+  dialog.addEventListener('close', () => { editingId = null; reviewingEditId = null; });
 
   // --------------------------------------------------------------------------
   // Categories editor — the ✎ tab on the rail. Add a life area (name + hue) or
@@ -5208,12 +5329,14 @@
     syncProposalBadge();
   }
 
-  // A count on the Assistant tab, so a proposal made while the user is on the
-  // Board is still noticed. Absent entirely when nothing is pending.
+  // A count on the Assistant tab, so something left waiting while the user is on
+  // the Board is still noticed. Absent entirely when nothing is pending.
+  // Proposals and suggested edits share the count: from the Board they are the
+  // same fact — the Assistant is waiting on you.
   function syncProposalBadge() {
     const btn = viewButtons.find((b) => b.dataset.view === 'assistant');
     if (!btn) return;
-    const n = assistantState.proposals.length;
+    const n = assistantState.proposals.length + assistantState.edits.length;
     let badge = btn.querySelector('.view-badge');
     if (!n) {
       if (badge) badge.remove();
@@ -5226,7 +5349,7 @@
       btn.appendChild(badge);
     }
     badge.textContent = String(n);
-    btn.setAttribute('aria-description', `${n} proposal${n === 1 ? '' : 's'} awaiting approval`);
+    btn.setAttribute('aria-description', `${n} item${n === 1 ? '' : 's'} awaiting your approval`);
   }
 
   // --------------------------------------------------------------------------
@@ -6356,7 +6479,7 @@
     try { localStorage.setItem(VIEW_KEY, view); } catch (_) { /* private mode */ }
     syncViewButtons();
     // Entering the Assistant: make sure the list is current, not stale.
-    if (view === 'assistant') refreshProposals();
+    if (view === 'assistant') { refreshProposals(); refreshEdits(); }
     // Entering the lab: probe again unless it already answered. The usual reason
     // for coming back is that the service was just started in a terminal, and
     // making the developer find a retry button for that is silly.
@@ -6376,4 +6499,5 @@
   render();            // instant paint from localStorage
   initServerSync();    // then reconcile with the SQLite backend if one is running
   refreshProposals();  // and surface anything the Assistant left awaiting approval
+  refreshEdits();
 })();

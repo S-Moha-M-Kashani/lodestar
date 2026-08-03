@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from .agent import AgentResult, AgentStep, LodestarAgent
 from .config import Settings, load_settings
 from .llm import make_chat_model, served_models
+from .safety import make_url_safety
 from .retrieval import (CardIndex, ChatStore, coverage, expand_queries,
                         gate_llm, make_embeddings)
 from .tools.board import BoardClient, make_board_tools
@@ -25,8 +26,12 @@ from .voice.base import TranscriptionError
 # `mutated` means the board changed and the client should adopt server state,
 # `proposed` means a card is waiting for the user's approval and only the
 # proposals list needs refreshing. Creating a card no longer changes the board.
-MUTATING_TOOLS = {'update_card'}
-PROPOSING_TOOLS = {'create_card'}
+# Nothing mutates the board any more: create_card proposes a card and
+# update_card suggests a change, and both wait for the user. So the browser is
+# only ever told to refresh its suggestion lists, never to adopt server state
+# mid-conversation — there is no server-side change to adopt.
+MUTATING_TOOLS: set[str] = set()
+PROPOSING_TOOLS = {'create_card', 'update_card'}
 
 # How much conversation one turn may carry. The browser sends the whole history
 # on every turn, so a chat that runs long is a bigger request each time, and
@@ -114,7 +119,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # raises at boot rather than leaving the gate quietly switched off.
     grader = gate_llm(settings.grader, make_chat_model(settings))
     tools = [*make_board_tools(board),
-             make_search_tool(DdgsSearch()),
+             # Built here, not inside the tool: an unconfigured checker must stop
+             # the boot, not be discovered on the first search.
+             make_search_tool(DdgsSearch(),
+                              safety=make_url_safety(settings.url_safety, settings)),
              make_retrieve_tool(index, board, llm=grader,
                                 threshold=settings.grade_threshold)]
     memory = None

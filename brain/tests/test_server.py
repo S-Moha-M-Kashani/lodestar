@@ -129,10 +129,10 @@ def test_chat_add_proposes_a_card_without_mutating_the_board():
 # This is a unit test.
 def test_tool_classification_separates_proposing_from_mutating():
     from lodestar_brain.server import MUTATING_TOOLS, PROPOSING_TOOLS
-    assert PROPOSING_TOOLS == {'create_card'}
-    assert MUTATING_TOOLS == {'update_card'}
-    # An edit still applies immediately, so it must stay a mutation.
-    assert 'update_card' not in PROPOSING_TOOLS
+    assert PROPOSING_TOOLS == {'create_card', 'update_card'}
+    # An edit waits for the user now, so nothing mutates the board and the
+    # browser is never told to adopt server state mid-conversation.
+    assert MUTATING_TOOLS == set()
 
 
 # This is an integration test.

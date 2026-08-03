@@ -2352,6 +2352,48 @@ body[data-view="assistant"] .app-footer { display: none; }
   margin-top: 4px;
 }
 
+/* Suggested edits sit beside proposals and read as the same kind of waiting
+   thing, so they borrow the amber dashed frame rather than inventing a colour.
+   Existing tokens only — colour here means "not yours yet", not a category. */
+.suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px dashed var(--ink-amber);
+  border-radius: var(--radius);
+}
+.suggestions-heading {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-amber);
+  margin: 0;
+}
+.suggestion {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  background: var(--card);
+  border: 1px solid var(--card-line);
+  border-radius: var(--radius);
+}
+.suggestion-title { margin: 0; font-weight: 600; }
+.suggestion-change {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-soft);
+}
+.suggestion-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
 /* The count on the Assistant tab — noticed from any view. */
 .view-badge {
   display: inline-block;

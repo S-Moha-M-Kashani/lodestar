@@ -114,6 +114,18 @@ def test_chroma_url_can_select_the_offline_memory_backend():
     assert load_settings(env={'BRAIN_CHROMA_URL': 'memory'}).chroma_url == 'memory'
 
 
+# This is a configuration invariant: the product checks where links lead, and a
+# Settings built in code does not — the same split `chroma_url` already uses.
+def test_url_safety_is_real_from_the_environment_and_inert_in_code():
+    from lodestar_brain.config import Settings
+    assert load_settings(env={}).url_safety == 'google-safe-browsing'
+    assert Settings().url_safety == 'off'
+    # Opting out is a named choice, and the key travels with the backend.
+    assert load_settings(env={'BRAIN_URL_SAFETY': 'off'}).url_safety == 'off'
+    assert load_settings(
+        env={'GOOGLE_SAFE_BROWSING_KEY': 'k'}).safe_browsing_key == 'k'
+
+
 # Real data and non-real data live in *different Chroma databases*, so all
 # non-production memory can be wiped with a single database drop:
 #   :3000 (board.db)      -> database 'lodestar'      collection chat-board-3000

@@ -10,8 +10,9 @@ still lose a card even with every individual tool behaving.
 | A prompt must not be able to…              | Proven by                                 |
 | ------------------------------------------ | ----------------------------------------- |
 | destroy a card                             | **here** — no such tool exists, and asking anyway gets nowhere |
-| lose a card by saving a partial board       | **here** — every edit saves the whole list |
-| write a habit history the user did not earn | **here** — no edit path reaches those fields |
+| change a card at all                        | **here** — the client has no write method  |
+| apply an edit without the user saving it    | `test_edit_suggestions.py` (a suggestion, not a write) |
+| write a habit history the user did not earn | `test_edit_suggestions.py` (no field reaches it) |
 | reach SQLite, or the board off its API     | **here** — nothing in the package imports it |
 | put a card on the board unconfirmed        | `test_board_tools.py` (proposal, not save)|
 | record a habit completion                  | `test_board_tools.py` (no ticking tool)   |
@@ -22,12 +23,14 @@ still lose a card even with every individual tool behaving.
 | …and be obeyed anyway                      | `evals/test_injection.py` (rate unmeasured)|
 | send the API key to a local model          | `test_llm.py`                             |
 | flood the assistant surface                | `tests/server.test.js` (429 + Retry-After)|
+| offer a link to an unsafe site              | `test_url_safety.py` (destination checked, result dropped) |
 
-**Not on this list, because it does not exist:** nothing screens what the model
-*searches for*. `web_search` hands the query straight to the provider — there is
-no blocklist, no moderation call, no refusal. A test asserting otherwise would be
-fiction. If that guardrail is wanted it is a new seam plus the note explaining
-why it is not a classifier, not a test.
+**Still not on this list:** nothing screens what the model *searches for*, and
+that is a choice rather than an omission. The check is on where a result leads
+(`safety.py`), because a keyword screen on the query would refuse this board's own
+legitimate questions — it holds a private life, and "unlawful eviction, what are
+my rights" is a question it exists to answer — while saying nothing about what
+comes back, which is where the harm is.
 
 The distinction that decides what belongs here: these are **code-enforced**
 limits, true whatever the model decides, so they are asserted rather than
@@ -40,7 +43,6 @@ their input reaches the instruction channel unfenced and unfiltered by design.
 """
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 
@@ -198,63 +200,18 @@ def test_asking_the_agent_to_delete_a_card_gets_nowhere_harmlessly():
     assert [c['id'] for c in client.list_cards()] == ['a', 'b']
 
 
-# This is a unit test.
-@respx.mock
-def test_an_edit_saves_every_card_so_none_is_lost_by_omission():
-    """Invariant 1: the server soft-deletes cards missing from a PUT.
+# This is a configuration invariant: the seam to the board is a closed surface,
+# and a write reappearing on it must break a test rather than ship.
+def test_the_brain_has_no_way_to_write_a_card():
+    """The strongest form this guardrail has taken.
 
-    Which makes "save only what changed" a data-loss bug rather than an
-    optimisation, and makes this the guardrail standing between one edited card
-    and the rest of the board. `update_card` reads the full list and writes the
-    full list back; the test reads the actual request body, because the only
-    thing that protects the other cards is their presence in it.
+    It used to be "every edit saves the whole board", because a partial PUT
+    soft-deletes what it omits. Now the client has no PUT at all: cards are
+    proposed, edits are suggested, and only the user's own save writes. So the
+    old invariant is not enforced here, it is unreachable — and this asserts the
+    surface exactly, because a reintroduced `save_cards` would quietly restore
+    every failure mode the removal closed.
     """
-    board = [_card('a', 'Renew the passport'), _card('b', 'Descale the boiler'),
-             _card('c', 'Restring the acoustic')]
-    respx.get(f'{BOARD}/api/state').mock(return_value=httpx.Response(200, json={
-        'version': 1, 'cards': board}))
-    put = respx.put(f'{BOARD}/api/state').mock(
-        return_value=httpx.Response(200, json={'version': 1, 'cards': board}))
-
-    _tools(BoardClient(BOARD))['update_card'].run(
-        {'id': 'b', 'column_id': 'answered'})
-
-    sent = json.loads(put.calls.last.request.content)['cards']
-    assert [c['id'] for c in sent] == ['a', 'b', 'c'], 'a partial save is data loss'
-    assert next(c for c in sent if c['id'] == 'b')['columnId'] == 'answered'
-
-
-# This is a unit test.
-@respx.mock
-def test_no_edit_can_reach_a_habits_history():
-    """The agent may propose a habit and never claim one was performed.
-
-    A history a model can write into is not a record, so there is no ticking
-    tool — but the honest question is whether the *editing* tool is a way round
-    it. It is not: `update_card` copies a fixed list of fields onto the card, so
-    a habit field named in the call is simply not among them, and a retype cannot
-    take the history with it either. Both attempts here, since they are two
-    different ways to the same loss.
-    """
-    earned = {'2026-07-30': 1, '2026-07-31': 1}
-    habit = _card('h', 'Morning pages', type='habit', habitFreq='daily',
-                  habitCount=1, habitHistory=earned)
-    respx.get(f'{BOARD}/api/state').mock(return_value=httpx.Response(200, json={
-        'version': 1, 'cards': [habit]}))
-    put = respx.put(f'{BOARD}/api/state').mock(
-        return_value=httpx.Response(200, json={'version': 1, 'cards': [habit]}))
-    update = _tools(BoardClient(BOARD))['update_card']
-
-    # 1. Naming the field outright. The args model has no such field, so it never
-    #    survives validation into the call.
-    update.run({'id': 'h', 'notes': 'felt good',
-                'habitHistory': {'2026-08-03': 99}})
-    saved = json.loads(put.calls.last.request.content)['cards'][0]
-    assert saved['habitHistory'] == earned
-    assert saved['notes'] == 'felt good'      # the legitimate edit still applied
-
-    # 2. Retyping to a task and back — the documented way history gets destroyed
-    #    by accident, which is why the fields are validated unconditionally.
-    update.run({'id': 'h', 'type': 'task'})
-    update.run({'id': 'h', 'type': 'habit'})
-    assert json.loads(put.calls.last.request.content)['cards'][0]['habitHistory'] == earned
+    surface = {name for name in vars(BoardClient) if not name.startswith('_')}
+    assert surface == {'list_cards', 'list_chat', 'record_chat',
+                       'create_proposal', 'create_edit'}
