@@ -1162,3 +1162,114 @@ test('package.json pairs the test board with its own brain', async () => {
   assert.match(brain, /BOARD_API_URL=http:\/\/127\.0\.0\.1:3001/);
   assert.match(brain, /--port 9001/);
 });
+
+// ---- Suggested edits -------------------------------------------------------
+// An edit the Assistant wants is a SUGGESTION, not a write. It lives in its own
+// table, never touches the cards table, and is shown to the user in the ordinary
+// card editor. The user's own save is what applies it — the same whole-board PUT
+// a hand edit goes through — so there is no apply path the agent can reach, and
+// nothing here needs a confirmation route or a backup of its own.
+
+const postEdit = (base, body) =>
+  fetch(base + '/api/edits', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+// This is an integration test.
+test('POST /api/edits stores a suggestion and changes no card', async () => {
+  const s = await startServer();
+  try {
+    await putCards(s.base, [{ id: 'a', title: 'Renew the passport', columnId: 'inbox' }]);
+
+    const res = await postEdit(s.base, {
+      cardId: 'a', fields: { title: 'Renew it before June', columnId: 'in-progress' },
+    });
+    assert.equal(res.status, 200);
+    const stored = await res.json();
+    assert.ok(stored.id, 'the server assigns the suggestion an id');
+
+    // The card is exactly as the user left it. This is the whole point.
+    const board = await getJson(s.base, '/api/state');
+    const card = board.cards.find((c) => c.id === 'a');
+    assert.equal(card.title, 'Renew the passport');
+    assert.equal(card.columnId, 'inbox');
+
+    const pending = await getJson(s.base, '/api/edits');
+    assert.equal(pending.edits.length, 1);
+    assert.equal(pending.edits[0].cardId, 'a');
+    assert.deepEqual(pending.edits[0].fields,
+      { title: 'Renew it before June', columnId: 'in-progress' });
+  } finally { await s.stop(); }
+});
+
+// This is an integration test.
+test('a suggestion for a card that does not exist is a bad request', async () => {
+  const s = await startServer();
+  try {
+    const res = await postEdit(s.base, { cardId: 'ghost', fields: { title: 'x' } });
+    assert.equal(res.status, 400);
+    assert.equal((await getJson(s.base, '/api/edits')).edits.length, 0);
+
+    // And a suggestion that changes nothing is equally useless.
+    const empty = await postEdit(s.base, { cardId: 'ghost', fields: {} });
+    assert.equal(empty.status, 400);
+  } finally { await s.stop(); }
+});
+
+// This is an integration test.
+test('DELETE /api/edits/:id discards a suggestion and leaves the card alone', async () => {
+  const s = await startServer();
+  try {
+    await putCards(s.base, [{ id: 'a', title: 'Renew the passport' }]);
+    const stored = await (await postEdit(s.base, {
+      cardId: 'a', fields: { title: 'Renew it' } })).json();
+
+    const gone = await fetch(`${s.base}/api/edits/${encodeURIComponent(stored.id)}`,
+      { method: 'DELETE' });
+    assert.equal(gone.status, 200);
+    assert.equal((await getJson(s.base, '/api/edits')).edits.length, 0);
+
+    // Discarding a suggestion is not a card operation: DELETE /api/cards/:id
+    // stays the only hard delete in the system, and this card is untouched.
+    const board = await getJson(s.base, '/api/state');
+    assert.equal(board.cards.find((c) => c.id === 'a').title, 'Renew the passport');
+
+    assert.equal((await fetch(`${s.base}/api/edits/nope`, { method: 'DELETE' })).status,
+      404, 'discarding twice is a 404, not a silent success');
+  } finally { await s.stop(); }
+});
+
+// This is an integration test.
+test('a board save neither applies nor clears a suggestion', async () => {
+  const s = await startServer();
+  try {
+    await putCards(s.base, [{ id: 'a', title: 'Renew the passport' }]);
+    await postEdit(s.base, { cardId: 'a', fields: { title: 'Renew it' } });
+
+    // The browser saves the board as it always does, knowing nothing about
+    // suggestions. Neither side may leak into the other: a save that silently
+    // applied one would be the agent writing after all, and a save that dropped
+    // one would lose the suggestion the moment the user typed anywhere.
+    await putCards(s.base, [{ id: 'a', title: 'Renew the passport', notes: 'April' }]);
+
+    const board = await getJson(s.base, '/api/state');
+    assert.equal(board.cards.find((c) => c.id === 'a').title, 'Renew the passport');
+    assert.equal((await getJson(s.base, '/api/edits')).edits.length, 1);
+  } finally { await s.stop(); }
+});
+
+// This is an integration test.
+test('a suggestion is discarded with the card it points at', async () => {
+  const s = await startServer();
+  try {
+    await putCards(s.base, [{ id: 'a', title: 'Renew the passport' }]);
+    await postEdit(s.base, { cardId: 'a', fields: { title: 'Renew it' } });
+
+    // Omitting the card soft-deletes it into Trash. A suggestion pointing at a
+    // trashed card would surface in the Assistant with nothing to apply to.
+    await putCards(s.base, []);
+    assert.equal((await getJson(s.base, '/api/edits')).edits.length, 0);
+  } finally { await s.stop(); }
+});

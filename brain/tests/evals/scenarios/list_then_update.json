@@ -1,18 +1,58 @@
 {
-  "name": "list then update an existing card",
+  "name": "list then suggest an edit to an existing card",
   "board": [
-    { "id": "k1", "columnId": "inbox", "title": "Draft the offsite agenda", "type": "task", "tags": [] }
+    {
+      "id": "k1",
+      "columnId": "inbox",
+      "title": "Draft the offsite agenda",
+      "type": "task",
+      "tags": []
+    }
   ],
-  "messages": [{ "role": "user", "content": "move the offsite agenda card to answered" }],
+  "messages": [
+    {
+      "role": "user",
+      "content": "move the offsite agenda card to answered"
+    }
+  ],
   "script": [
-    { "tool_calls": [ { "name": "list_cards", "arguments": { "search": "offsite" } } ] },
-    { "tool_calls": [ { "name": "update_card", "arguments": { "id": "k1", "column_id": "answered" } } ] },
-    { "content": "Moved the offsite agenda card to Answered." }
+    {
+      "tool_calls": [
+        {
+          "name": "list_cards",
+          "arguments": {
+            "search": "offsite"
+          }
+        }
+      ]
+    },
+    {
+      "tool_calls": [
+        {
+          "name": "update_card",
+          "arguments": {
+            "id": "k1",
+            "column_id": "answered"
+          }
+        }
+      ]
+    },
+    {
+      "content": "I have suggested moving the offsite agenda card to Done \u2014 accept it and it will move."
+    }
   ],
   "expect": {
-    "tools_called": ["list_cards", "update_card"],
-    "reply_contains": "Answered",
+    "tools_called": [
+      "list_cards",
+      "update_card"
+    ],
+    "reply_contains": "suggested",
     "board_size": 1,
-    "answered_id": "k1"
+    "unchanged_id": "k1",
+    "edits_size": 1,
+    "edits_field": [
+      "columnId",
+      "answered"
+    ]
   }
 }

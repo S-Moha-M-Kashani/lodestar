@@ -68,43 +68,47 @@ def test_create_card_tool_description_says_it_needs_approval():
 
 # This is a unit test.
 @respx.mock
-def test_update_card_changes_only_named_fields():
+def test_update_card_suggests_only_the_fields_it_named():
+    """The suggestion carries the change, not a copy of the card.
+
+    A suggestion holding every field would overwrite the ones the model never
+    touched with whatever they were when it looked — a stale write wearing an
+    edit's clothes. So `notes` is absent here, and stays whatever the user has
+    made it by the time they save.
+    """
     existing = [card('a', 'Old', notes='keep me'), card('b', 'Other')]
     respx.get(f'{BOARD}/api/state').mock(return_value=httpx.Response(200, json={
         'version': 1, 'cards': existing}))
-    put = respx.put(f'{BOARD}/api/state').mock(return_value=httpx.Response(200, json={
-        'version': 1, 'cards': existing}))
+    edits = respx.post(f'{BOARD}/api/edits').mock(return_value=httpx.Response(
+        200, json={'id': 'e1'}))
     tools = tools_by_name(BoardClient(BOARD))
-    updated = tools['update_card'].run({'id': 'a', 'column_id': 'in-progress',
-                                            'type': 'task', 'category': 'work'})
-    assert updated['columnId'] == 'in-progress'
-    assert updated['type'] == 'task'
-    assert updated['category'] == 'work'
-    assert updated['notes'] == 'keep me'
-    sent = json.loads(put.calls.last.request.content)
-    assert {c['id'] for c in sent['cards']} == {'a', 'b'}
+
+    suggested = tools['update_card'].run({'id': 'a', 'column_id': 'in-progress',
+                                         'type': 'task', 'category': 'work'})
+
+    assert suggested['pending'] is True
+    assert suggested['cardId'] == 'a'
+    sent = json.loads(edits.calls.last.request.content)
+    assert sent['cardId'] == 'a'
+    assert sent['fields'] == {'columnId': 'in-progress', 'type': 'task',
+                              'category': 'work'}
+    assert 'notes' not in sent['fields']
 
 
 # This is a unit test.
 @respx.mock
-def test_update_round_trips_effort_and_control_untouched():
-    # The agent doesn't set effort/control (LLM estimation is out of scope for
-    # now) — but its full-list saves must carry the fields through verbatim.
-    existing = [card('a', 'Old', effort='high', control='none',
-                     effortSrc='user', controlSrc='user'),
-                card('b', 'Other', effort='low', control='act',
-                     effortSrc='default', controlSrc='default')]
+def test_a_suggestion_naming_nothing_is_an_error():
+    """"Update card a" with no field is a question, not an instruction. Storing
+    an empty suggestion would put a row in the user's review list that does
+    nothing when accepted."""
     respx.get(f'{BOARD}/api/state').mock(return_value=httpx.Response(200, json={
-        'version': 1, 'cards': existing}))
-    put = respx.put(f'{BOARD}/api/state').mock(return_value=httpx.Response(200, json={
-        'version': 1, 'cards': existing}))
-    tools = tools_by_name(BoardClient(BOARD))
-    tools['update_card'].run({'id': 'a', 'column_id': 'in-progress'})
-    sent = {c['id']: c for c in json.loads(put.calls.last.request.content)['cards']}
-    assert sent['a']['effort'] == 'high' and sent['a']['control'] == 'none'
-    assert sent['a']['effortSrc'] == 'user' and sent['a']['controlSrc'] == 'user'
-    assert sent['b']['effort'] == 'low' and sent['b']['control'] == 'act'
-    assert sent['a']['columnId'] == 'in-progress'
+        'version': 1, 'cards': [card('a', 'Old')]}))
+    edits = respx.post(f'{BOARD}/api/edits').mock(return_value=httpx.Response(200))
+
+    result = tools_by_name(BoardClient(BOARD))['update_card'].run({'id': 'a'})
+
+    assert 'error' in result
+    assert not edits.called
 
 
 # This is a unit test.

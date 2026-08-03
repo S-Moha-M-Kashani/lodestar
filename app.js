@@ -2831,7 +2831,7 @@
 
   // `draft` holds the composer text across re-renders — render() rebuilds the
   // textarea, so anything typed (or dictated) has to live in state, not the DOM.
-  const assistantState = { messages: [], busy: false, draft: '', proposals: [] };
+  const assistantState = { messages: [], busy: false, draft: '', proposals: [], edits: [] };
 
   // The transcript outlives the tab. Only `messages` is stored: `busy` must
   // never come back true — a reload landing mid-stream would restore a disabled
@@ -2840,6 +2840,52 @@
   // window that refuses storage loses its history, never its session.
   const CHAT_KEY = KEY_PREFIX + 'chat';
   const CHAT_KEEP = 200;
+
+  // What one request carries. CHAT_KEEP above is the READER's transcript —
+  // bigger is better and costs nothing. This is the MODEL's window: the first
+  // user message (where a conversation says what it is about) plus the newest
+  // CONTEXT_MESSAGES, trimmed again if they overrun CONTEXT_CHARS. Everything
+  // older stays on screen and in assistant.db, reachable through recall_chat —
+  // it just stops riding along on every turn, so turn fifty costs what turn
+  // five does. tests/context.test.js pins these against the brain's caps.
+  const CONTEXT_MESSAGES = 16;
+  const CONTEXT_CHARS = 24_000;
+
+  /** A turn the model may be shown again. Errors and abandoned partials are
+   *  rendered but never replayed — the model must not continue from something
+   *  it never finished saying. One definition, shared by the send path and the
+   *  transcript's trim marker, so the two can never disagree about where the
+   *  window starts. */
+  const replayable = (m) => !m.error && !m.partial
+    && (m.role === 'user' || m.role === 'assistant');
+
+  /** The slice of a replayable history one request carries. Returns the
+   *  original message objects plus `from`, the index where the recent window
+   *  begins — 0 when nothing was left out — so the transcript can mark the
+   *  boundary with the same arithmetic the request used. */
+  function contextWindow(history) {
+    let from = Math.max(0, history.length - CONTEXT_MESSAGES);
+    let size = 0;
+    for (let i = from; i < history.length; i += 1) size += history[i].content.length;
+    // The char budget trims the window further, never below the newest message:
+    // one oversized turn should cost context, not the ability to ask at all.
+    // (The brain's own 120k cap remains the backstop for that case.)
+    while (from < history.length - 1 && size > CONTEXT_CHARS) {
+      size -= history[from].content.length;
+      from += 1;
+    }
+    if (from === 0) return { messages: history, from };
+    // The framing message rides outside the budget on purpose: two lines that
+    // keep the model from answering the last question having forgotten the
+    // task. The cheap alternative to a summary, which this project has twice
+    // decided against.
+    const framing = history.find((m) => m.role === 'user');
+    const recent = history.slice(from);
+    return {
+      messages: framing && !recent.includes(framing) ? [framing, ...recent] : recent,
+      from,
+    };
+  }
 
   const persistChat = () => {
     try {
@@ -2864,6 +2910,11 @@
     if (Array.isArray(msg.steps)) out.steps = msg.steps;
     if (Array.isArray(msg.sources)) out.sources = msg.sources;
     if (msg.usage && typeof msg.usage === 'object') out.usage = msg.usage;
+    // The session total is the sum of what each turn cost, so the figures have to
+    // survive a reload with the transcript they belong to. Only a real number is
+    // taken: a restored null or a string would otherwise turn the whole total
+    // into NaN, and one unreadable turn must not erase the bill for the rest.
+    if (typeof msg.cost === 'number' && Number.isFinite(msg.cost)) out.cost = msg.cost;
     // `running` is never restored. It names tools awaiting an answer from a
     // request that died with the old page, so a restored one is a spinner that
     // can never stop.
@@ -3453,6 +3504,8 @@
     const toolbar = document.createElement('div');
     toolbar.className = 'assistant-toolbar';
     toolbar.appendChild(renderRecallPanel());
+    const cost = renderSessionCost();
+    if (cost) toolbar.appendChild(cost);
     const extrasBtn = document.createElement('button');
     extrasBtn.type = 'button';
     extrasBtn.id = 'assistant-extras-btn';
@@ -3474,18 +3527,52 @@
     extras.appendChild(renderChatSettings());
     sheet.appendChild(extras);
 
-    // Nothing proposed, nothing shown — the section must not sit there empty.
-    if (assistantState.proposals.length) sheet.appendChild(renderProposals());
+    // Anything waiting on the user shares one pinned strip directly under the
+    // row above. Pinned because it used to scroll away: it is above the
+    // transcript, which is right until the transcript is long enough to push the
+    // composer past the fold — the reader is then at the bottom typing while the
+    // thing needing their decision sits off the top of the screen. Nothing
+    // waiting, nothing shown: the strip must not sit there empty.
+    if (assistantState.proposals.length || assistantState.edits.length) {
+      const waiting = document.createElement('div');
+      waiting.className = 'assistant-waiting';
+      if (assistantState.proposals.length) waiting.appendChild(renderProposals());
+      if (assistantState.edits.length) waiting.appendChild(renderSuggestedEdits());
+      sheet.appendChild(waiting);
+    }
 
     const log = document.createElement('div');
     log.className = 'chat-log';
+    // Where the reader was, remembered across renders. render() destroys this
+    // element, so without carrying the position every repaint would either lose
+    // the place or yank the view down to the newest message mid-read.
+    log.addEventListener('scroll', () => {
+      chatScroll = { top: log.scrollTop, pinned: isPinnedToBottom(log) };
+    });
     if (!assistantState.messages.length) {
       const hint = document.createElement('p');
       hint.className = 'chat-status';
       hint.textContent = 'Ask about your board — research a question, triage the inbox, or find connections.';
       log.appendChild(hint);
     }
-    for (const msg of assistantState.messages) log.appendChild(renderChatMessage(msg));
+    // Where the sent window begins, marked in the transcript itself. Trimming
+    // nobody can see is the quiet loss this project refuses; the marker is the
+    // difference between "kept but not sent" and "gone". Computed with the same
+    // contextWindow the request uses, over the same replayable filter, so what
+    // it claims is what the next turn will actually carry.
+    const sendable = assistantState.messages.filter(replayable);
+    const boundary = contextWindow(sendable);
+    const firstCarried = boundary.from > 0 ? sendable[boundary.from] : null;
+    for (const msg of assistantState.messages) {
+      if (msg === firstCarried) {
+        const mark = document.createElement('div');
+        mark.className = 'chat-trimmed';
+        mark.textContent = 'Messages above stay here but no longer travel with '
+          + 'each turn — the assistant can search them if asked.';
+        log.appendChild(mark);
+      }
+      log.appendChild(renderChatMessage(msg));
+    }
     sheet.appendChild(log);
 
     const status = document.createElement('div');
@@ -3541,7 +3628,12 @@
     });
     sheet.appendChild(form);
 
-    requestAnimationFrame(() => { log.scrollTop = log.scrollHeight; });
+    // After layout, because scrollHeight is meaningless before it. Following the
+    // newest message is the default and stays the default; a reader who scrolled
+    // up keeps their place instead of being dragged along.
+    requestAnimationFrame(() => {
+      log.scrollTop = chatScroll.pinned ? log.scrollHeight : chatScroll.top;
+    });
     return sheet;
   }
 
@@ -3805,7 +3897,7 @@
     const evidence = document.createElement('div');
     evidence.className = 'chat-meta-body';
     if (sources.length) evidence.appendChild(renderChatSources(sources));
-    if (msg.usage) evidence.appendChild(renderChatUsage(msg.usage));
+    if (msg.usage) evidence.appendChild(renderChatUsage(msg.usage, msg.cost));
     if (done.length || running.length) {
       const steps = document.createElement('div');
       steps.className = 'chat-steps';
@@ -3815,6 +3907,40 @@
     }
     meta.appendChild(evidence);
     el.appendChild(meta);
+    return el;
+  }
+
+  // Three decimals, always — a tenth of a cent is the resolution a chat turn
+  // lives at, and a fixed width keeps the readout from twitching as the total
+  // grows. Rounded only here: the brain sends the figure unrounded so a session
+  // total is the sum of real numbers rather than a sum of rounded ones.
+  const money = (usd) => `${Number(usd).toFixed(3)}$`;
+
+  /** One turn's price, where three decimals is often not enough resolution.
+   *
+   *  A turn on a cheap model costs around $0.0002, which `money` renders as
+   *  "0.000$" — indistinguishable from the local model that really was free. So a
+   *  paid turn below the display resolution says so instead. A genuine zero still
+   *  prints 0.000$, because that one is a fact rather than a rounding. */
+  const moneyTurn = (usd) => (usd > 0 && usd < 0.0005 ? '<0.001$' : money(usd));
+
+  /** What this conversation has cost so far, or nothing if nothing is known.
+   *
+   *  Summed from the turns rather than kept as a running counter, so it survives
+   *  a reload with the transcript and can never drift from the turns it claims to
+   *  add up. Turns the brain could not price are simply absent from the sum; if
+   *  none of them carried a price there is no readout at all, because "0.000$"
+   *  would be a claim about money nobody measured. */
+  function renderSessionCost() {
+    const priced = assistantState.messages
+      .map((m) => m.cost)
+      .filter((c) => typeof c === 'number' && Number.isFinite(c));
+    if (!priced.length) return null;
+    const el = document.createElement('p');
+    el.className = 'assistant-cost';
+    el.textContent = `current session cost = ${money(priced.reduce((a, b) => a + b, 0))}`;
+    el.title = `Summed over ${priced.length} priced turn${priced.length === 1 ? '' : 's'}`
+      + ' at the current model’s published rates';
     return el;
   }
 
@@ -3829,16 +3955,21 @@
     return parts.join(' · ');
   }
 
-  // How the turn's total split. Tokens only, deliberately no money figure: a
-  // price per model is a number this app cannot verify, and one that has
-  // quietly gone stale is worse than none at all. Absent, not zero, when the
-  // model reported nothing — see _usage_from in the brain. The total itself is
-  // on the folded line above, so it is not printed twice.
-  function renderChatUsage(usage) {
+  // How the turn's total split, and what it cost. This used to be tokens only,
+  // on the grounds that a per-model price is a number the app cannot verify and
+  // a stale one is worse than none — which was right about a hardcoded table and
+  // is why the figure now comes from the provider's own live catalogue instead
+  // (pricing.py). The price is still absent, never zero, whenever the brain could
+  // not look it up: unpriced and free are different facts. Absent likewise when
+  // the model reported no usage — see _usage_from. The token total is on the
+  // folded line above, so it is not printed twice.
+  function renderChatUsage(usage, cost) {
     const line = document.createElement('p');
     line.className = 'chat-usage';
     const n = (v) => Number(v || 0).toLocaleString();
-    line.textContent = `${n(usage.input_tokens)} in · ${n(usage.output_tokens)} out`;
+    const parts = [`${n(usage.input_tokens)} in · ${n(usage.output_tokens)} out`];
+    if (typeof cost === 'number') parts.push(moneyTurn(cost));
+    line.textContent = parts.join(' · ');
     return line;
   }
 
@@ -4017,13 +4148,136 @@
     }
   }
 
-  // One repaint per frame at most. A token-per-render would rebuild the whole
-  // view hundreds of times for one reply; coalescing costs nothing and keeps a
-  // single rendering path rather than a second one that can drift from render().
+  // One repaint per frame at most. Used for the *structural* changes a turn
+  // makes — a tool starting, a tool answering — which happen a handful of times
+  // and are worth a full render. Arriving text is not one of them: see
+  // `paintStreamedText`.
   let chatPaint = 0;
   function paintChatSoon() {
     if (chatPaint) return;
-    chatPaint = requestAnimationFrame(() => { chatPaint = 0; render(); });
+    chatPaint = requestAnimationFrame(() => {
+      chatPaint = 0;
+      render();
+      // render() destroyed the bubble the stream was writing into, so the
+      // reveal has to be told where its text lives now.
+      if (streaming) streaming.node = lastAssistantBubble();
+    });
+  }
+
+  // --------------------------------------------------------------------------
+  // Streaming reveal
+  //
+  // Two separate problems, and only one of them was on the wire. The brain has
+  // streamed `token` frames from the start and the Node proxy pipes them, but
+  // both of the things a user actually sees were wrong:
+  //
+  // 1. Every token went through render(), which does `board.innerHTML = ''` and
+  //    rebuilds the whole view. The recreated .chat-log starts at scrollTop 0
+  //    and was scrolled back to the bottom on the *next* frame, so sixty times a
+  //    second the log flashed to the top and snapped down again — the page
+  //    jumping up and down. Text now updates the existing node in place, and
+  //    only a tool call (rare) rebuilds anything.
+  //
+  // 2. A reasoning model thinks for seconds and then releases its whole answer
+  //    in under one, so a correctly streamed reply still landed in a single
+  //    frame. Text is now revealed at a readable rate rather than at whatever
+  //    rate the network delivered it.
+  // --------------------------------------------------------------------------
+
+  // Drain whatever is buffered over roughly this long. A window rather than a
+  // fixed characters-per-second: a burst reveals faster than a trickle, which is
+  // what keeps `done` from arriving while there is still a paragraph to show and
+  // cutting the reveal off mid-sentence. MIN_CPS keeps a slow trickle moving.
+  const REVEAL_WINDOW_MS = 900;
+  const REVEAL_MIN_CPS = 45;
+  // How close to the bottom still counts as "following along". Bigger than a
+  // line so the last line landing does not un-pin the log by itself.
+  const PINNED_SLACK_PX = 28;
+
+  // The turn being streamed into: its message object, the DOM node showing it,
+  // and the text that has arrived but is not yet revealed. One at a time — the
+  // composer is disabled while a turn is running.
+  let streaming = null;
+  let revealRaf = 0;
+  let revealAt = 0;
+  // Survives the log element it describes; see the scroll listener in
+  // renderAssistant. Starts pinned: a chat opens at its newest message.
+  let chatScroll = { top: 0, pinned: true };
+
+  const lastAssistantBubble = () => {
+    const bubbles = document.querySelectorAll('.chat-log .chat-msg.assistant');
+    return bubbles.length ? bubbles[bubbles.length - 1] : null;
+  };
+
+  const isPinnedToBottom = (log) =>
+    log.scrollHeight - log.scrollTop - log.clientHeight <= PINNED_SLACK_PX;
+
+  function beginStreaming(turn) {
+    streaming = { turn, buffer: '' };
+    render();                        // once, to create the bubble to write into
+    streaming.node = lastAssistantBubble();
+  }
+
+  function endStreaming() {
+    if (revealRaf) cancelAnimationFrame(revealRaf);
+    revealRaf = 0;
+    streaming = null;
+  }
+
+  /** Take arrived text. Revealed over the next frames, not on this one. */
+  function pushToken(text) {
+    if (!streaming) { return; }
+    streaming.buffer += text;
+    if (revealRaf) return;
+    revealAt = performance.now();
+    revealRaf = requestAnimationFrame(revealStep);
+  }
+
+  function revealStep(now) {
+    revealRaf = 0;
+    if (!streaming) return;
+    const elapsed = Math.max(0, now - revealAt);
+    revealAt = now;
+    const cps = Math.max(REVEAL_MIN_CPS,
+      streaming.buffer.length / (REVEAL_WINDOW_MS / 1000));
+    // At least one character a frame, so the reveal can never stall while text
+    // is waiting.
+    const take = Math.max(1, Math.round((cps * elapsed) / 1000));
+    streaming.turn.content += streaming.buffer.slice(0, take);
+    streaming.buffer = streaming.buffer.slice(take);
+    paintStreamedText();
+    if (streaming.buffer) revealRaf = requestAnimationFrame(revealStep);
+  }
+
+  /** Everything buffered is now shown. Resolves when the reveal has caught up,
+   *  so a turn settles on the finished text without snapping past what the
+   *  reader had not seen yet. */
+  function drainReveal() {
+    return new Promise((resolve) => {
+      const wait = () => {
+        if (!streaming || !streaming.buffer) return resolve();
+        requestAnimationFrame(wait);
+      };
+      wait();
+    });
+  }
+
+  /** The revealed text, written into the bubble that is already on screen.
+   *
+   *  Never through render(): that is the whole point. The scroll position is
+   *  read *before* the text changes and only restored if the reader was already
+   *  at the bottom — an answer arriving must not yank the view away from
+   *  someone who scrolled up to re-read the question. */
+  function paintStreamedText() {
+    const node = streaming && streaming.node;
+    if (!node || !node.isConnected) return;   // view switched away mid-turn
+    const body = node.querySelector('.chat-text');
+    if (!body) return;
+    const log = node.closest('.chat-log');
+    const follow = log ? isPinnedToBottom(log) : false;
+    body.textContent = '';
+    appendLinked(body, streaming.turn.content);
+    if (follow && log) log.scrollTop = log.scrollHeight;
   }
 
   // What to tell the user when a turn never started. Kept apart from the generic
@@ -4039,6 +4293,9 @@
 
   async function sendChat(text) {
     assistantState.messages.push({ role: 'user', content: text });
+    // Sending is joining the bottom of the conversation: whatever the reader was
+    // scrolled to, they want to see what they just said and what answers it.
+    chatScroll = { top: 0, pinned: true };
     // Stored before the request, not after it: a question that costs a reload
     // to lose is the thing this project promises not to do.
     persistChat();
@@ -4050,15 +4307,13 @@
     const turn = { role: 'assistant', content: '', steps: [], running: [] };
     let failure = CHAT_UNAVAILABLE;
     try {
-      const history = assistantState.messages
-        .filter((m) => !m.error && !m.partial
-          && (m.role === 'user' || m.role === 'assistant'))
-        .map(({ role, content }) => ({ role, content }));
+      const carried = contextWindow(assistantState.messages.filter(replayable))
+        .messages.map(({ role, content }) => ({ role, content }));
       const res = await fetch('/api/agent/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          messages: history,
+          messages: carried,
           model: assistantModels.text,
           // Always sent, including against a brain configured as 'fake'. The
           // offline contract is the server's to keep (make_chat_model checks
@@ -4072,18 +4327,28 @@
         throw new Error(`agent ${res.status}`);
       }
       assistantState.messages.push(turn);
+      // One render to put the bubble on screen; from here text is written into
+      // it in place. Rebuilding the view per token is what made the page jump.
+      beginStreaming(turn);
       let data = null;
       let failed = '';
       for await (const { name, data: payload } of sseFrames(res)) {
-        if (name === 'calling') turn.running.push(payload);
+        // A tool starting or answering changes the shape of the turn, not just
+        // its text, so these repaint — a few times a turn, not hundreds.
+        if (name === 'calling') { turn.running.push(payload); paintChatSoon(); }
         // Steps answer in request order, so the oldest running call is this
         // one. See _steps_from in the brain for why that holds.
-        else if (name === 'step') { turn.steps.push(payload); turn.running.shift(); }
-        else if (name === 'token') turn.content += payload.text;
+        else if (name === 'step') {
+          turn.steps.push(payload); turn.running.shift(); paintChatSoon();
+        } else if (name === 'token') pushToken(payload.text);
         else if (name === 'error') failed = payload.message;
         else if (name === 'done') data = payload;
-        paintChatSoon();
       }
+      // `done` normally arrives while text is still being revealed — the model
+      // finishes writing long before a reader finishes reading. Let the reveal
+      // catch up first, so the turn does not settle by jumping to the end.
+      await drainReveal();
+      endStreaming();
       if (failed) throw new Error(failed);
       if (!data) throw new Error('the stream ended without a result');
       // Tokens were provisional: text can arrive on a message that also
@@ -4096,12 +4361,23 @@
       // but nothing on the wire says how many, and a partial count shown as the
       // total would be wrong in the direction that flatters us.
       turn.usage = data.usage || null;
+      // Absent unless the brain actually knew the price — see pricing.py. Left
+      // undefined rather than set to 0, so an unpriced turn is missing from the
+      // session total instead of quietly reported as free.
+      if (typeof data.cost === 'number' && Number.isFinite(data.cost)) {
+        turn.cost = data.cost;
+      }
       // Two distinct outcomes: an edit changed the board, a proposal did not.
       if (data.mutated) await adoptServerBoard();
-      if (data.proposed) await refreshProposals();
-      announce(data.proposed ? 'Assistant proposed a card for your approval'
+      // One flag for both kinds of waiting suggestion: a card to accept, or a
+      // change to review. Neither has altered the board, so no adoption here.
+      if (data.proposed) { await refreshProposals(); await refreshEdits(); }
+      announce(data.proposed ? 'Assistant has something waiting for your approval'
         : 'Assistant replied');
     } catch {
+      // Before anything else: a dead stream must not leave a reveal loop running
+      // against a turn that will never finish.
+      endStreaming();
       // Whatever arrived before the failure is kept — a long answer that dies
       // at the last frame should not vanish — but it is marked `partial` so a
       // truncated reply is never sent back as if the assistant had finished it.
@@ -4230,6 +4506,109 @@
       actions.appendChild(approve);
       row.appendChild(actions);
 
+      wrap.appendChild(row);
+    }
+    return wrap;
+  }
+
+  // A suggested EDIT is not a proposed card: the card already exists and is the
+  // user's. So there is no "approve" here that writes anything. Reviewing opens
+  // the ordinary edit dialog with the suggestion filled in, and the user's own
+  // save is what applies it — the same path any hand edit takes. The suggestion
+  // is then discarded, because it has been answered either way.
+  const EDITS_API = '/api/edits';
+  let reviewingEditId = null;
+
+  async function refreshEdits() {
+    try {
+      const res = await fetch(EDITS_API, { headers: { Accept: 'application/json' } });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data && Array.isArray(data.edits)) {
+        assistantState.edits = data.edits;
+        syncProposalBadge();
+        render();
+      }
+    } catch { /* offline — leave the list as it was */ }
+  }
+
+  async function discardEdit(id, spoken) {
+    try {
+      const res = await fetch(`${EDITS_API}/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(`edit ${res.status}`);
+      await refreshEdits();
+      if (spoken) announce(spoken);
+    } catch {
+      announce('Could not reach the server — the suggestion is unchanged');
+    }
+  }
+
+  // What the suggestion would change, in the user's words rather than field
+  // names, so the row can be read without opening anything.
+  function describeEdit(fields, card) {
+    const say = {
+      title: (v) => `title → “${short(v)}”`,
+      notes: () => 'notes rewritten',
+      type: (v) => `stamp → ${TYPE_META[typeVal(v)].label}`,
+      category: (v) => `area → ${v ? catLabel(v) : 'none'}`,
+      columnId: (v) => `move to ${columnTitle(v)}`,
+      importance: (v) => `importance → ${v || 'none'}`,
+      urgency: (v) => `urgency → ${v || 'none'}`,
+      tags: (v) => `tags → ${(v || []).join(', ') || 'none'}`,
+    };
+    return Object.entries(fields)
+      .filter(([key]) => say[key])
+      .map(([key, value]) => say[key](value))
+      .join(' · ') || 'no change';
+  }
+
+  function renderSuggestedEdits() {
+    const wrap = document.createElement('section');
+    wrap.className = 'suggestions';
+    const heading = document.createElement('h3');
+    heading.className = 'suggestions-heading';
+    const n = assistantState.edits.length;
+    heading.textContent = `Suggested — ${n} change${n === 1 ? '' : 's'} to review`;
+    wrap.appendChild(heading);
+
+    for (const edit of assistantState.edits) {
+      const card = getCard(edit.cardId);
+      const row = document.createElement('article');
+      row.className = 'suggestion';
+      row.dataset.id = edit.id;
+
+      const title = document.createElement('p');
+      title.className = 'suggestion-title';
+      // The card it is about, named the way the board names it.
+      title.textContent = card ? `${cardLabel(card)} ${card.title}` : 'a card that has since gone';
+      row.appendChild(title);
+
+      const what = document.createElement('p');
+      what.className = 'suggestion-change';
+      what.textContent = describeEdit(edit.fields, card);
+      row.appendChild(what);
+
+      const actions = document.createElement('div');
+      actions.className = 'suggestion-actions';
+      const dismiss = document.createElement('button');
+      dismiss.type = 'button';
+      dismiss.className = 'btn ghost suggestion-dismiss';
+      dismiss.textContent = 'Dismiss';
+      dismiss.addEventListener('click', () => discardEdit(edit.id, 'Suggestion dismissed'));
+      actions.appendChild(dismiss);
+      if (card) {
+        const review = document.createElement('button');
+        review.type = 'button';
+        review.className = 'btn primary suggestion-review';
+        review.textContent = 'Review & save';
+        review.title = 'Opens the card with this change filled in — nothing is saved until you say so';
+        review.addEventListener('click', () => {
+          reviewingEditId = edit.id;
+          openDialog(edit.cardId, edit.fields);
+        });
+        actions.appendChild(review);
+      }
+      row.appendChild(actions);
       wrap.appendChild(row);
     }
     return wrap;
@@ -4489,22 +4868,27 @@
   $('#card-notes').addEventListener('input', updateBalancePreview);
   $('#card-tags').addEventListener('input', updateBalancePreview);
 
-  function openDialog(cardId) {
+  // `suggested` prefills the form with an Assistant suggestion instead of what
+  // the card currently says. It fills the *form*, deliberately, and not the card:
+  // the values are a draft the user can change or abandon, and until they submit
+  // nothing has happened to the board.
+  function openDialog(cardId, suggested = null) {
     const card = getCard(cardId);
     if (!card) return;
     editingId = cardId;
+    const shown = suggested ? { ...card, ...suggested } : card;
     rebuildCategoryPicker();
-    $('#card-title').value = card.title;
-    $('#card-notes').value = card.notes;
-    $('#card-tags').value = card.tags.join(', ');
+    $('#card-title').value = shown.title;
+    $('#card-notes').value = shown.notes;
+    $('#card-tags').value = (shown.tags || []).join(', ');
     updateBalancePreview();
-    $('#card-importance').value = iuVal(card.importance);
-    $('#card-urgency').value = iuVal(card.urgency);
+    $('#card-importance').value = iuVal(shown.importance);
+    $('#card-urgency').value = iuVal(shown.urgency);
     $('#card-deadline').value = deadlineVal(card.deadline);
     $('#card-effort').value = effortVal(card.effort);
     $('#card-control').value = controlVal(card.control);
-    for (const radio of form.elements.type) radio.checked = radio.value === card.type;
-    for (const radio of form.elements.category) radio.checked = radio.value === (card.category || '');
+    for (const radio of form.elements.type) radio.checked = radio.value === shown.type;
+    for (const radio of form.elements.category) radio.checked = radio.value === (shown.category || '');
     // A card being stamped Habit for the first time starts at once a day.
     $('#card-habit-freq').value = card.habitFreq || 'daily';
     $('#card-habit-count').value = String(card.habitCount || 1);
@@ -4545,8 +4929,18 @@
         .split(',')
         .map((t) => t.trim().toLowerCase())
         .filter(Boolean);
+      // The dialog has no column control, so a suggested move is carried here.
+      // Read from the suggestion rather than the form for that one field.
+      const reviewed = assistantState.edits.find((e) => e.id === reviewingEditId);
+      if (reviewed && COLUMNS.some((c) => c.id === reviewed.fields.columnId)) {
+        card.columnId = reviewed.fields.columnId;
+      }
       card.updatedAt = Date.now();
       commit(`Edited ${cardLabel(card)} “${short(card.title)}”`);
+      // Answered, so it leaves the list. After the commit: the suggestion is the
+      // only record of what was asked, and losing it before the save landed
+      // would leave the user with neither.
+      if (reviewingEditId) discardEdit(reviewingEditId, 'Suggestion applied and saved');
     }
     dialog.close();
   });
@@ -4559,7 +4953,7 @@
     deleteCard(id);
   });
 
-  dialog.addEventListener('close', () => { editingId = null; });
+  dialog.addEventListener('close', () => { editingId = null; reviewingEditId = null; });
 
   // --------------------------------------------------------------------------
   // Categories editor — the ✎ tab on the rail. Add a life area (name + hue) or
@@ -5208,12 +5602,14 @@
     syncProposalBadge();
   }
 
-  // A count on the Assistant tab, so a proposal made while the user is on the
-  // Board is still noticed. Absent entirely when nothing is pending.
+  // A count on the Assistant tab, so something left waiting while the user is on
+  // the Board is still noticed. Absent entirely when nothing is pending.
+  // Proposals and suggested edits share the count: from the Board they are the
+  // same fact — the Assistant is waiting on you.
   function syncProposalBadge() {
     const btn = viewButtons.find((b) => b.dataset.view === 'assistant');
     if (!btn) return;
-    const n = assistantState.proposals.length;
+    const n = assistantState.proposals.length + assistantState.edits.length;
     let badge = btn.querySelector('.view-badge');
     if (!n) {
       if (badge) badge.remove();
@@ -5226,7 +5622,7 @@
       btn.appendChild(badge);
     }
     badge.textContent = String(n);
-    btn.setAttribute('aria-description', `${n} proposal${n === 1 ? '' : 's'} awaiting approval`);
+    btn.setAttribute('aria-description', `${n} item${n === 1 ? '' : 's'} awaiting your approval`);
   }
 
   // --------------------------------------------------------------------------
@@ -6356,7 +6752,7 @@
     try { localStorage.setItem(VIEW_KEY, view); } catch (_) { /* private mode */ }
     syncViewButtons();
     // Entering the Assistant: make sure the list is current, not stale.
-    if (view === 'assistant') refreshProposals();
+    if (view === 'assistant') { refreshProposals(); refreshEdits(); }
     // Entering the lab: probe again unless it already answered. The usual reason
     // for coming back is that the service was just started in a terminal, and
     // making the developer find a retry button for that is silly.
@@ -6376,4 +6772,5 @@
   render();            // instant paint from localStorage
   initServerSync();    // then reconcile with the SQLite backend if one is running
   refreshProposals();  // and surface anything the Assistant left awaiting approval
+  refreshEdits();
 })();

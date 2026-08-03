@@ -8,6 +8,7 @@ the board actually persists to (and deletes from) the database.
 """
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -188,6 +189,10 @@ def start_brain():
              # in-process Chroma: e2e must not depend on the Docker server,
              # and must never write into the user's real chat memory
              "BRAIN_CHROMA_URL": "memory",
+             # The real link-reputation backend refuses to build without a key,
+             # which is deliberate — so the offline run names the fake one rather
+             # than letting the brain fail at boot with nothing to search anyway.
+             "BRAIN_URL_SAFETY": "fake",
              "BRAIN_CHAT_COLLECTION": "chat-e2e"},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -214,6 +219,23 @@ def api_trash():
 
 def api_proposals():
     with urllib.request.urlopen(URL + "/api/proposals", timeout=3) as r:
+        return json.loads(r.read())
+
+
+def api_edits():
+    with urllib.request.urlopen(URL + "/api/edits", timeout=3) as r:
+        return json.loads(r.read())
+
+
+def api_suggest_edit(card_id, fields):
+    """Stand in for the Assistant proposing a change. The offline fake chat model
+    has no script that calls update_card, and what this test is about is the
+    review-and-save path, not the model's choice to suggest."""
+    body = json.dumps({"cardId": card_id, "fields": fields}).encode()
+    req = urllib.request.Request(
+        URL + "/api/edits", data=body, method="POST",
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=3) as r:
         return json.loads(r.read())
 
 
@@ -1355,8 +1377,11 @@ try:
         page.fill("#chat-input", "hello brain")
         page.click("#chat-send")
         page.wait_for_selector(".chat-msg.assistant")
+        # wait_until, because the bubble now appears empty and fills in: the
+        # reply is revealed at a readable rate rather than pasted in whole, so
+        # ".chat-msg.assistant exists" no longer means "the text is all there".
         check("assistant: chat roundtrip through the Node proxy",
-              "FAKE: hello brain" in page.inner_text(".chat-log"))
+              wait_until(lambda: "FAKE: hello brain" in page.inner_text(".chat-log")))
         # What the turn spent. The offline backend reports usage precisely so
         # this path is exercised without a paid model in the loop. Read off the
         # folded indicator, which is where the total lives now: what a turn cost
@@ -1367,23 +1392,87 @@ try:
               wait_until(lambda: page.locator(".chat-meta-summary").count() >= 1
                          and "tokens" in page.locator(".chat-meta-summary").last.inner_text()))
 
+        # ---- Streaming: the answer is revealed as it is written --------------
+        # This is an end-to-end test.
+        # The wire was never the problem. The brain has emitted `token` frames
+        # since the stream route existed, the Node proxy pipes rather than
+        # buffers, and the client accumulates. What a user actually meets is a
+        # model that thinks for thirteen seconds and then delivers 51 tokens in
+        # under one — and one animation frame paints all of them, so a correctly
+        # streamed reply still lands as a single lump.
+        #
+        # So what is asserted is the *reveal*: the bubble passes through visible
+        # intermediate states on its way to the finished text. That is the only
+        # half a fake model can prove — it answers in one chunk, which is
+        # precisely the worst case the reveal has to survive — and it is the half
+        # the user sees.
+        long_ask = "watch this arrive: " + " ".join(f"word{i}" for i in range(40))
+        seen_before = page.locator(".chat-msg.assistant").count()
+        # Sampled every frame from inside the page. Polling over the wire would
+        # miss a reveal that completes between two round trips, and the question
+        # here is exactly how many states were paintable.
+        page.evaluate(
+            """(before) => {
+              window.__reveal = [];
+              const tick = () => {
+                const nodes = document.querySelectorAll('.chat-msg.assistant .chat-text');
+                if (nodes.length > before) {
+                  const text = nodes[nodes.length - 1].textContent;
+                  const seen = window.__reveal;
+                  if (!seen.length || seen[seen.length - 1] !== text) seen.push(text);
+                }
+                window.__revealRaf = requestAnimationFrame(tick);
+              };
+              tick();
+            }""",
+            seen_before)
+        page.fill("#chat-input", long_ask)
+        page.click("#chat-send")
+        final = f"FAKE: {long_ask}"
+        settled = wait_until(lambda: final in page.inner_text(".chat-log"))
+        page.evaluate("() => cancelAnimationFrame(window.__revealRaf)")
+        snapshots = page.evaluate("() => window.__reveal")
+        # The states on the way there: non-empty, and not the finished text.
+        partials = [t for t in snapshots if t and t != final]
+        check("assistant: the reply is revealed progressively, not in one lump",
+              settled
+              # Three is the smallest number that cannot be an accident of one
+              # empty bubble followed by one repaint.
+              and len(partials) >= 3
+              # Every state is the finished answer, truncated — never a reflow, a
+              # placeholder, or text that is later taken back.
+              and all(final.startswith(t) for t in partials)
+              and all(len(a) < len(b) for a, b in zip(partials, partials[1:])))
+
         # ---- Agent card confirmation gate -----------------------------------
         # A card the agent invents is a PROPOSAL: nothing reaches the board until
         # the user approves it.
         board_before = len(api_state()["cards"])
+        # Relative to what is already on screen, not an absolute count: this used
+        # to wait for `>= 2`, which any turn added above it satisfies before this
+        # one has even been sent, and the block then read the previous turn's
+        # evidence. The same pattern is used further down for the same reason.
+        replies_before = page.locator(".chat-msg.assistant").count()
         page.fill("#chat-input", "add: What is Leiden clustering?")
         page.click("#chat-send")
         page.wait_for_function(
-            "document.querySelectorAll('.chat-msg.assistant').length >= 2")
+            "n => document.querySelectorAll('.chat-msg.assistant').length > n",
+            arg=replies_before)
         # This is an end-to-end test.
         # The evidence under a reply is folded away behind a one-line indicator:
         # most turns are read for the answer alone, and sources, tool chips and
         # a token receipt under every one of them is a wall of furniture. The
         # indicator still has to say what is behind it.
+        # The strip is built from what the turn *did*, so it is only complete once
+        # the turn has settled. Waited for rather than read immediately: this
+        # check used to pass on the count race above, reading the previous turn's
+        # already-finished strip instead of this one's.
         folded = page.locator(".chat-meta").last
+        settled_meta = wait_until(
+            lambda: folded.locator(".chat-meta-summary").count() == 1
+            and "tool" in folded.locator(".chat-meta-summary").inner_text())
         check("assistant: the evidence under a reply is folded until asked for",
-              not folded.locator(".chat-steps").is_visible()
-              and "tool" in folded.locator(".chat-meta-summary").inner_text())
+              settled_meta and not folded.locator(".chat-steps").is_visible())
         open_meta(page)
         check("assistant: tool chip shown for create_card",
               "create_card" in page.inner_text(".chat-log"))
@@ -1483,6 +1572,75 @@ try:
               and src_box["y"] >= text_box["y"] + text_box["height"])
 
         page.unroute("**/api/agent/chat/stream")
+
+        # ---- What one turn carries -------------------------------------------
+        # The browser used to send the entire transcript on every turn: a long
+        # chat meant a bigger, slower, dearer request each time, and past 80
+        # messages the brain refused it outright — a conversation that rendered
+        # perfectly and could not be talked into.
+        #
+        # Now it sends a window. The transcript is untouched on screen and in
+        # assistant.db; what changes is how much of it rides along, so the cost
+        # of turn fifty is the cost of turn five. Seeded through localStorage
+        # rather than by holding fifty conversations: the fake model would take
+        # minutes to produce them and the assertion is about the request body.
+        # Put back afterwards: every later block in this suite reads the
+        # transcript this one is about to replace.
+        real_chat = page.evaluate("() => localStorage.getItem('lodestar:chat')")
+        seeded = []
+        for i in range(30):
+            seeded.append({"role": "user", "content": f"seeded question {i}"})
+            seeded.append({"role": "assistant", "content": f"seeded answer {i}"})
+        page.evaluate("(msgs) => localStorage.setItem('lodestar:chat', JSON.stringify(msgs))",
+                      seeded)
+        page.reload()
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector("#chat-input")
+
+        sent = []
+        page.route("**/api/agent/chat/stream", lambda route: (
+            sent.append(json.loads(route.request.post_data)),
+            route.fulfill(status=200, content_type="text/event-stream",
+                          body='event: done\ndata: {"reply": "ok", "mutated": false,'
+                               ' "proposed": false, "steps": []}\n\n')))
+        page.fill("#chat-input", "the newest question")
+        page.click("#chat-send")
+        wait_until(lambda: len(sent) == 1)
+        body = sent[0] if sent else {"messages": []}
+        carried = [m["content"] for m in body["messages"]]
+
+        # This is an end-to-end test.
+        check("context: a long chat is not resent whole on every turn",
+              # 61 messages are on screen; far fewer travel.
+              len(carried) < 25
+              # The turn being asked is always the last thing the model reads.
+              and carried[-1] == "the newest question")
+        # This is an end-to-end test.
+        # The first message is kept deliberately, at the cost of two lines of
+        # window: it is where a conversation says what it is *about*, and a model
+        # given only the tail of a long thread answers the last question while
+        # having forgotten the task. Cheap framing beats a summary — which this
+        # project has decided twice not to reintroduce.
+        check("context: the opening message is kept as the conversation's framing",
+              "seeded question 0" in carried
+              # And it is the recent end that is kept, not an arbitrary slice.
+              and "seeded question 29" in carried
+              and "seeded question 5" not in carried)
+        # This is an end-to-end test.
+        # Trimming that nobody can see is the quiet loss this project refuses. The
+        # transcript keeps every message; the marker is what makes the difference
+        # between "kept but not sent" and "gone" visible in the one place the
+        # reader is looking.
+        check("context: the reader is told where the sent window begins",
+              page.locator(".chat-trimmed").count() == 1
+              and page.locator(".chat-msg").count() >= 61)
+        page.unroute("**/api/agent/chat/stream")
+        page.evaluate(
+            "(saved) => saved === null ? localStorage.removeItem('lodestar:chat')"
+            " : localStorage.setItem('lodestar:chat', saved)", real_chat)
+        page.reload()
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector("#chat-input")
 
         # This is an end-to-end test.
         # The sheet was pinned at 720px while the replies it holds are card
@@ -1628,6 +1786,37 @@ try:
               page.locator('.view-switch button[data-view="assistant"] .view-badge')
                   .inner_text().strip() == "1")
 
+        # This is an end-to-end test.
+        # Something waiting for approval has to stay findable. It sits above the
+        # transcript, which is correct until the transcript is long enough to push
+        # the composer past the fold: the reader is then at the bottom typing, and
+        # what needs their decision is somewhere off the top of the screen. So the
+        # panel is pinned — scroll wherever you like, it is still on screen.
+        page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+        waiting = page.locator(".assistant-waiting")
+        box = waiting.bounding_box() if waiting.count() else None
+        height = page.evaluate("() => window.innerHeight")
+        check("gate: what is waiting for approval stays on screen when scrolled away",
+              box is not None
+              # Wholly inside the viewport, not merely overlapping its edge.
+              and box["y"] >= 0 and box["y"] + box["height"] <= height
+              # And it is not inside the transcript, which scrolls on its own:
+              # nesting it there would hide it behind the same problem again.
+              and page.locator(".chat-log .assistant-waiting").count() == 0)
+
+        # This is an end-to-end test.
+        # What the session has cost so far, in money rather than tokens. Offline
+        # the backend is a local fake, so the honest figure is 0.000$ — which is
+        # the formatting this pins. That it is *true* of a local model rather than
+        # a missing number is brain/tests/test_pricing.py's job.
+        cost = page.locator(".assistant-cost")
+        check("assistant: the session's cost is shown to three decimals",
+              cost.count() == 1
+              and re.search(r"= ?0\.000\$", cost.inner_text()) is not None
+              # Beside the conversation, not inside it: a running total that
+              # scrolls out of view with the transcript is not a running total.
+              and page.locator(".chat-log .assistant-cost").count() == 0)
+
         page.click(".proposal-approve")
         page.wait_for_function("document.querySelectorAll('.proposal').length === 0")
         check("gate: approving puts the card on the board",
@@ -1657,6 +1846,64 @@ try:
                       for c in api_state()["cards"]))
         check("gate: a rejected proposal is recoverable from the Trash",
               any(c["title"] == "A thought I do not want" for c in api_trash()["cards"]))
+
+        # ---- Suggested edits: the agent asks, the user saves -----------------
+        # The guardrail that replaced the one ungated write. A suggestion changes
+        # nothing on its own; the user opens it, may adjust it, and their own save
+        # is what applies it. So the assertions are in that order: unchanged,
+        # then reviewable, then applied only after a save.
+        target = api_state()["cards"][0]
+        api_suggest_edit(target["id"], {"title": "A title the agent suggested",
+                                       "columnId": "in-progress"})
+        # Away and back: setView refreshes the waiting lists on entry, and the
+        # previous block left us already on the Assistant, where a click is a
+        # no-op. A suggestion made by a real chat turn arrives on its own flag.
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector(".suggestion")
+        check("edits: the suggestion renders with review and dismiss",
+              page.locator(".suggestion").count() == 1
+              and page.locator(".suggestion-review").count() == 1
+              and page.locator(".suggestion-dismiss").count() == 1)
+        check("edits: the row says what would change, without opening it",
+              "in progress" in page.inner_text(".suggestion-change").lower())
+        check("edits: the card is untouched while the suggestion waits",
+              next(c for c in api_state()["cards"]
+                   if c["id"] == target["id"])["title"] == target["title"])
+        check("edits: a waiting suggestion counts on the Assistant tab",
+              page.locator('.view-switch button[data-view="assistant"] .view-badge')
+                  .inner_text().strip() == "1")
+
+        page.click(".suggestion-review")
+        page.wait_for_selector("#card-dialog[open]")
+        check("edits: reviewing opens the card with the suggestion filled in",
+              page.input_value("#card-title") == "A title the agent suggested")
+        # The user's own wording wins — that is the whole point of reviewing.
+        page.fill("#card-title", "A title I chose myself")
+        page.click("#card-form button[type=submit]")
+        page.wait_for_function("document.querySelectorAll('.suggestion').length === 0")
+        # The board push is debounced, so wait for the thing being asserted
+        # rather than for a proxy — the way this suite's earlier flakes happened.
+        def saved_card():
+            return next(c for c in api_state()["cards"] if c["id"] == target["id"])
+        applied = wait_until(lambda: saved_card()["title"] == "A title I chose myself")
+        check("edits: saving applies what the USER left in the form", applied)
+        check("edits: a suggested column move rides along with the save",
+              wait_until(lambda: saved_card()["columnId"] == "in-progress"))
+        check("edits: the answered suggestion leaves the list",
+              len(api_edits()["edits"]) == 0)
+
+        # Dismissing answers it the other way and touches nothing.
+        api_suggest_edit(target["id"], {"notes": "notes the agent wanted"})
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector(".suggestion")
+        page.click(".suggestion-dismiss")
+        page.wait_for_function("document.querySelectorAll('.suggestion').length === 0")
+        check("edits: dismissing clears it and leaves the card alone",
+              len(api_edits()["edits"]) == 0
+              and next(c for c in api_state()["cards"]
+                       if c["id"] == target["id"])["notes"] != "notes the agent wanted")
 
         # ---- Assistant model settings ----------------------------------------
         # A "Models" panel with two pickers (text, omni) plus a fixed embedder

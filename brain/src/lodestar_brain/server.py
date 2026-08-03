@@ -4,6 +4,7 @@ import base64
 import binascii
 import json
 import logging
+from dataclasses import replace
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException
@@ -13,7 +14,10 @@ from pydantic import BaseModel, Field
 from .agent import AgentResult, AgentStep, LodestarAgent
 from .config import Settings, load_settings
 from .llm import make_chat_model, served_models
-from .retrieval import CardIndex, ChatStore, coverage, gate_llm, make_embeddings
+from .pricing import model_prices, turn_cost
+from .safety import make_url_safety
+from .retrieval import (CardIndex, ChatStore, coverage, expand_queries,
+                        gate_llm, make_embeddings)
 from .tools.board import BoardClient, make_board_tools
 from .tools.retrieve import make_recall_tool, make_retrieve_tool
 from .tools.websearch import DdgsSearch, make_search_tool
@@ -24,8 +28,12 @@ from .voice.base import TranscriptionError
 # `mutated` means the board changed and the client should adopt server state,
 # `proposed` means a card is waiting for the user's approval and only the
 # proposals list needs refreshing. Creating a card no longer changes the board.
-MUTATING_TOOLS = {'update_card'}
-PROPOSING_TOOLS = {'create_card'}
+# Nothing mutates the board any more: create_card proposes a card and
+# update_card suggests a change, and both wait for the user. So the browser is
+# only ever told to refresh its suggestion lists, never to adopt server state
+# mid-conversation — there is no server-side change to adopt.
+MUTATING_TOOLS: set[str] = set()
+PROPOSING_TOOLS = {'create_card', 'update_card'}
 
 # How much conversation one turn may carry. The browser sends the whole history
 # on every turn, so a chat that runs long is a bigger request each time, and
@@ -84,7 +92,7 @@ def _step_json(step: AgentStep) -> dict:
     return {'tool': step.tool, 'arguments': step.arguments, 'result': step.result}
 
 
-def _turn_json(result: AgentResult) -> dict:
+def _turn_json(result: AgentResult, cost: float | None = None) -> dict:
     """The whole turn. Built here so the buffered route and the stream's `done`
     event cannot drift into reporting the same turn differently."""
     return {'reply': result.reply,
@@ -93,7 +101,11 @@ def _turn_json(result: AgentResult) -> dict:
             'steps': [_step_json(s) for s in result.steps],
             # null when the model reported nothing, so the Assistant can stay
             # silent rather than claim a turn cost zero.
-            'usage': result.usage}
+            'usage': result.usage,
+            # USD, unrounded — how many decimals to show is the reader's
+            # question. null when the price is not known, which the Assistant
+            # renders as no figure at all rather than as free. See pricing.py.
+            'cost': cost}
 
 
 def _sse(event: str, data: dict) -> str:
@@ -112,17 +124,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # its own. `gate_llm` is where BRAIN_GRADER is validated: an unknown value
     # raises at boot rather than leaving the gate quietly switched off.
     grader = gate_llm(settings.grader, make_chat_model(settings))
-    tools = [*make_board_tools(board),
-             make_search_tool(DdgsSearch()),
-             make_retrieve_tool(index, board, llm=grader,
-                                threshold=settings.grade_threshold)]
     memory = None
     if settings.chroma_url:
         try:
             memory = ChatStore(settings.chroma_url, embeddings,
                                collection=settings.chat_collection,
                                database=settings.chroma_database)
-            tools.append(make_recall_tool(memory))
         except Exception as exc:
             # Chroma is optional infrastructure: the agent, board tools, web
             # search and card retrieval all work without it. Taking the whole
@@ -132,6 +139,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             logging.getLogger(__name__).warning(
                 'chat memory disabled: Chroma at %s is unreachable (%s)',
                 settings.chroma_url, exc)
+    tools = [*make_board_tools(board),
+             # Built here, not inside the tool: an unconfigured checker must stop
+             # the boot, not be discovered on the first search.
+             make_search_tool(DdgsSearch(),
+                              safety=make_url_safety(settings.url_safety, settings)),
+             # find_related is the agent's one search over everything the user
+             # has: the board, and — when Chroma is up — the chat record too.
+             make_retrieve_tool(index, board, llm=grader,
+                                threshold=settings.grade_threshold,
+                                memory=memory)]
+    if memory is not None:
+        tools.append(make_recall_tool(memory))
     if memory is not None:
         # Chroma is a derived index over assistant.db: rebuild what it missed
         # (turns recorded while it was down). Best-effort — compose starts the
@@ -162,6 +181,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         Only a local backend answers with a list: see `served_models`."""
         return served_models(settings)
+
+    def priced(result: AgentResult, body: ChatBody) -> float | None:
+        """What this turn cost, in USD, or None if that is not knowable.
+
+        Priced against the model and provider the *request* named, not the ones
+        the brain booted with: the picker can move between models mid-conversation
+        and a turn's price is the price of whatever served it. Shared by both chat
+        routes for the same reason `_turn_json` is — two routes pricing one turn
+        differently is a bug nobody would find.
+        """
+        settings_for_turn = settings
+        if body.provider and body.provider != settings.llm_provider:
+            settings_for_turn = replace(settings, llm_provider=body.provider)
+        return turn_cost(result.usage, model_prices(settings_for_turn, body.model))
 
     def remember(messages: list[dict], reply: str) -> None:
         """Record both sides of the exchange — durably first (assistant.db,
@@ -201,7 +234,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         result = await agent.arun(body.messages, model=body.model,
                                   provider=body.provider)
         remember(body.messages, result.reply)
-        return _turn_json(result)
+        return _turn_json(result, priced(result, body))
 
     @app.post('/agent/chat/stream')
     async def chat_stream(body: ChatBody) -> StreamingResponse:
@@ -229,7 +262,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         yield _sse('token', {'text': payload})
                     else:
                         remember(body.messages, payload.reply)
-                        yield _sse('done', _turn_json(payload))
+                        yield _sse('done', _turn_json(payload,
+                                                      priced(payload, body)))
             except Exception as exc:
                 # The headers left long ago, so there is no status code to fail
                 # with. Staying quiet would leave the browser on "Thinking…"
@@ -296,11 +330,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # llm=None: the search box answers directly, so it gets the fast
             # ungated pipeline — the gate exists for contexts a model reads.
             hits = index.search(body.text, k=body.k, llm=None)
-            cards = [{'text': doc.page_content,
-                      'score': round(coverage(body.text, doc.page_content,
-                                              index.bm25.idf), 4),
+            # Coverage over the expanded query (synonyms, other scripts) is
+            # both the displayed score and the floor: a card sharing no term
+            # with any spelling of the query is dense noise, not a match.
+            expanded = ' '.join(expand_queries(body.text))
+            scored = ((doc, round(coverage(expanded, doc.page_content,
+                                           index.bm25.idf), 4))
+                      for doc in hits)
+            cards = [{'text': doc.page_content, 'score': score,
                       'metadata': dict(doc.metadata), 'source': 'card'}
-                     for doc in hits]
+                     for doc, score in scored if score > 0]
         except Exception as exc:
             logging.getLogger(__name__).warning(
                 'recall: cards unsearchable, answering from chat only (%s)', exc)

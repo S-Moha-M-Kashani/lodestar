@@ -248,6 +248,22 @@ if (!columnNames.has('habit_count')) db.exec('ALTER TABLE cards ADD COLUMN habit
 if (!columnNames.has('habit_times')) db.exec("ALTER TABLE cards ADD COLUMN habit_times TEXT NOT NULL DEFAULT '[]'");
 if (!columnNames.has('habit_history')) db.exec("ALTER TABLE cards ADD COLUMN habit_history TEXT NOT NULL DEFAULT '{}'");
 
+// An edit the Assistant wants is a SUGGESTION, and it lives here rather than in
+// `cards`. A pending row in `cards` would be a card — it would need a title, a
+// ledger number, a place in Trash when discarded, and `readBoard` would have to
+// learn to hide a second kind of thing. A suggestion is none of those: it is a
+// note saying "these fields, on that card, if you agree". Nothing in this table
+// can change a card. Only the user's own save does that, through the same
+// whole-board PUT a hand edit goes through.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS card_edits (
+    id         TEXT PRIMARY KEY,
+    card_id    TEXT    NOT NULL,
+    fields     TEXT    NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+`);
+
 // The user's category registry. Seeded with the default life areas the first
 // time; from then on the client's edits (add/remove/import) are the truth.
 db.exec(`
@@ -503,6 +519,10 @@ function writeBoard(cards) {
     db.exec('ROLLBACK');
     throw err;
   }
+  // A save can trash the card a suggestion points at. Cleared here rather than
+  // filtered on read, so the row does not linger and reappear if the card is
+  // later restored from Trash carrying an edit the user never saw.
+  pruneOrphanedEdits();
   return { board: readBoard(), created };
 }
 
@@ -543,6 +563,58 @@ function confirmProposal(id) {
   return db.prepare(
     'UPDATE cards SET pending = 0, updated_at = ? WHERE id = ? AND pending = 1 AND deleted_at IS NULL',
   ).run(Date.now(), id).changes > 0;
+}
+
+// Fields a suggestion may name. The same set `update_card` has always been able
+// to touch, so a suggestion is not a new way into anything — habit history and
+// the ledger number are absent here exactly as they are absent there.
+const EDITABLE_FIELDS = ['title', 'notes', 'type', 'category', 'columnId',
+  'importance', 'urgency', 'tags'];
+
+/**
+ * Store a suggested edit. Returns null when there is nothing to suggest or
+ * nothing to suggest it about: a suggestion pointing at a card that is not on the
+ * board would surface in the Assistant with nothing to apply to.
+ */
+function writeEdit(raw) {
+  const cardId = String(raw?.cardId ?? '');
+  const live = db.prepare(
+    'SELECT id FROM cards WHERE id = ? AND deleted_at IS NULL AND pending = 0').get(cardId);
+  if (!live) return null;
+  const fields = {};
+  for (const key of EDITABLE_FIELDS) {
+    if (raw?.fields && Object.hasOwn(raw.fields, key)) fields[key] = raw.fields[key];
+  }
+  if (!Object.keys(fields).length) return null;
+  const row = { id: cryptoId(), cardId, fields, createdAt: Date.now() };
+  db.prepare('INSERT INTO card_edits (id, card_id, fields, created_at) VALUES (?, ?, ?, ?)')
+    .run(row.id, row.cardId, JSON.stringify(row.fields), row.createdAt);
+  return row;
+}
+
+/** Suggestions still worth showing: oldest first, like the proposal list. */
+function readEdits() {
+  return db.prepare('SELECT * FROM card_edits ORDER BY created_at ASC').all()
+    .map((r) => ({ id: r.id, cardId: r.card_id, fields: JSON.parse(r.fields),
+      createdAt: r.created_at }));
+}
+
+/**
+ * Drop a suggestion — the user applied it (their save already did the writing) or
+ * dismissed it. A hard delete, and deliberately not a second exception to the
+ * durability promise: that promise is about *cards*, and a suggestion the user
+ * has answered is not one. Nothing the user wrote is in here.
+ */
+function discardEdit(id) {
+  return db.prepare('DELETE FROM card_edits WHERE id = ?').run(id).changes > 0;
+}
+
+/** Suggestions whose card has left the board have nothing to apply to. */
+function pruneOrphanedEdits() {
+  db.exec(`
+    DELETE FROM card_edits WHERE card_id NOT IN
+      (SELECT id FROM cards WHERE deleted_at IS NULL AND pending = 0)
+  `);
 }
 
 /**
@@ -705,6 +777,34 @@ const server = createServer(async (req, res) => {
   }
 
   // Accept or decline one proposal.
+  // Suggested edits. No confirm route on purpose: accepting one is the user
+  // saving the board, which is PUT /api/state like any other edit they make.
+  // All this surface can do is hold a suggestion and let go of it.
+  if (path === '/api/edits') {
+    if (req.method === 'GET') return sendJson(res, 200, { edits: readEdits() });
+    if (req.method === 'POST') {
+      try {
+        const stored = writeEdit(JSON.parse(await readBody(req)));
+        if (!stored) {
+          return sendJson(res, 400, {
+            error: 'A suggestion needs a live card id and at least one editable field',
+          });
+        }
+        // No backup: nothing changed, so there is nothing to snapshot.
+        return sendJson(res, 200, stored);
+      } catch (err) {
+        return sendJson(res, 400, { error: 'Invalid JSON: ' + err.message });
+      }
+    }
+    return sendJson(res, 405, { error: 'Method not allowed' });
+  }
+  if (path.startsWith('/api/edits/')) {
+    const id = decodeURIComponent(path.slice('/api/edits/'.length));
+    if (req.method !== 'DELETE') return sendJson(res, 405, { error: 'Method not allowed' });
+    if (!discardEdit(id)) return sendJson(res, 404, { error: 'No such suggestion' });
+    return sendJson(res, 200, { ok: true });
+  }
+
   if (path.startsWith('/api/proposals/')) {
     const rest = path.slice('/api/proposals/'.length);
     const slash = rest.lastIndexOf('/');

@@ -1,6 +1,11 @@
-"""Board tools. All writes go through the Node API so the soft-delete
-durability guarantee holds. CRITICAL: PUT /api/state soft-deletes any card
-omitted from the payload — every save must send the FULL card list."""
+"""Board tools — and none of them writes a card.
+
+`create_card` proposes one and `update_card` suggests a change to one; both wait
+for the user, who applies them by saving the board themselves. So `BoardClient`
+carries no whole-board PUT at all, which is what retires the old rule here about
+never sending a partial card list: there is no list to send. The agent reads the
+board, and asks.
+"""
 from typing import Literal
 
 import httpx
@@ -37,12 +42,6 @@ class BoardClient:
         res.raise_for_status()
         return res.json()['cards']
 
-    def save_cards(self, cards: list[dict]) -> list[dict]:
-        res = httpx.put(f'{self.base_url}/api/state',
-                        json={'version': 1, 'cards': cards}, timeout=self.timeout)
-        res.raise_for_status()
-        return res.json()['cards']
-
     def list_chat(self) -> list[dict]:
         """The live chat record, oldest first."""
         res = httpx.get(f'{self.base_url}/api/chat/messages', timeout=self.timeout)
@@ -61,12 +60,26 @@ class BoardClient:
     def create_proposal(self, card: dict) -> dict:
         """Offer one card for the user's approval.
 
-        Deliberately NOT save_cards: a proposal is a single card on its own
-        endpoint, so it never travels through the whole-board PUT and the
-        "always send the full list" contract above stays intact.
+        On its own endpoint, never the whole-board PUT — which this client no
+        longer has at all. Removing it is the guardrail: the brain cannot write a
+        card even by mistake, so "never send a partial card list" stops being a
+        rule anyone has to remember here.
         """
         res = httpx.post(f'{self.base_url}/api/proposals',
                          json=card, timeout=self.timeout)
+        res.raise_for_status()
+        return res.json()
+
+    def create_edit(self, card_id: str, fields: dict) -> dict:
+        """Offer a change to an existing card, for the user to review and save.
+
+        The counterpart to create_proposal, and for the same reason: this cannot
+        reach the whole-board PUT, so an agent edit is a note about a card rather
+        than a write to one. Nothing on the board moves until the user saves.
+        """
+        res = httpx.post(f'{self.base_url}/api/edits',
+                         json={'cardId': card_id, 'fields': fields},
+                         timeout=self.timeout)
         res.raise_for_status()
         return res.json()
 
@@ -155,19 +168,30 @@ def make_board_tools(client: BoardClient) -> list[BaseTool]:
                         column_id: str | None = None,
                         importance: str | None = None, urgency: str | None = None,
                         tags: list | None = None) -> dict:
-        """Update fields of an existing card (move columns, set type/category,
-        importance/urgency, tags, or append findings to notes)."""
+        """Suggest a change to an existing card (move columns, set type/category,
+        importance/urgency, tags, or add findings to notes).
+
+        The change is NOT applied. It goes to the user as a suggestion they open,
+        adjust if they want, and save themselves — so say you have suggested an
+        edit, and never that you made one.
+        """
         cards = client.list_cards()
         target = next((c for c in cards if c['id'] == id), None)
         if target is None:
             return {'error': f'no card with id {id!r} — use list_cards first'}
-        updates = {'title': title, 'notes': notes, 'type': type,
-                   'category': category, 'columnId': column_id,
-                   'importance': importance, 'urgency': urgency, 'tags': tags}
-        for key, value in updates.items():
-            if value is not None:
-                target[key] = value
-        client.save_cards(cards)  # full list — never partial
-        return _brief(target)
+        # Only the fields this call named. A suggestion carrying every field would
+        # overwrite the untouched ones with values that were current when the
+        # model looked, which is a stale-write dressed as an edit.
+        named = {'title': title, 'notes': notes, 'type': type,
+                 'category': category, 'columnId': column_id,
+                 'importance': importance, 'urgency': urgency, 'tags': tags}
+        fields = {key: value for key, value in named.items() if value is not None}
+        if not fields:
+            return {'error': 'name at least one field to change'}
+        suggestion = client.create_edit(id, fields)
+        # `pending` is the same signal create_card sends, so the model reports a
+        # suggestion rather than claiming the board changed.
+        return {'id': suggestion.get('id', ''), 'cardId': id, 'fields': fields,
+                'title': target['title'], 'pending': True}
 
     return [list_cards, create_card, update_card]
