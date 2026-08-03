@@ -26,9 +26,18 @@ node_modules/
 *.db
 *.db-journal
 *.db-wal
-# Every database's home — board.db, assistant.db, and Chroma's chroma-data/,
-# whose files are not *.db and would otherwise be committed.
-databases/
+# Real data never leaves this machine: board.db, assistant.db, and Chroma's
+# chroma-data/, whose files are not *.db and would otherwise be committed.
+databases/real/
+# The :3001 sandbox's two boards ship with the repo, so a checkout gets a working
+# test board instead of an empty one. They need an explicit exception because the
+# *.db rule above would otherwise swallow them.
+!databases/test/board-3001.db
+!databases/test/assistant-3001.db
+# Its Chroma store does not ship: 94 MB across 786 files, and every byte of it is
+# derived — `npm run chroma-test` plus a re-index rebuilds it from the boards
+# above. Not *.db, so nothing else here would have stopped it.
+databases/test/chroma-data-3001/
 
 .idea
 
