@@ -3480,6 +3480,12 @@
 
     const log = document.createElement('div');
     log.className = 'chat-log';
+    // Where the reader was, remembered across renders. render() destroys this
+    // element, so without carrying the position every repaint would either lose
+    // the place or yank the view down to the newest message mid-read.
+    log.addEventListener('scroll', () => {
+      chatScroll = { top: log.scrollTop, pinned: isPinnedToBottom(log) };
+    });
     if (!assistantState.messages.length) {
       const hint = document.createElement('p');
       hint.className = 'chat-status';
@@ -3542,7 +3548,12 @@
     });
     sheet.appendChild(form);
 
-    requestAnimationFrame(() => { log.scrollTop = log.scrollHeight; });
+    // After layout, because scrollHeight is meaningless before it. Following the
+    // newest message is the default and stays the default; a reader who scrolled
+    // up keeps their place instead of being dragged along.
+    requestAnimationFrame(() => {
+      log.scrollTop = chatScroll.pinned ? log.scrollHeight : chatScroll.top;
+    });
     return sheet;
   }
 
@@ -4018,13 +4029,136 @@
     }
   }
 
-  // One repaint per frame at most. A token-per-render would rebuild the whole
-  // view hundreds of times for one reply; coalescing costs nothing and keeps a
-  // single rendering path rather than a second one that can drift from render().
+  // One repaint per frame at most. Used for the *structural* changes a turn
+  // makes — a tool starting, a tool answering — which happen a handful of times
+  // and are worth a full render. Arriving text is not one of them: see
+  // `paintStreamedText`.
   let chatPaint = 0;
   function paintChatSoon() {
     if (chatPaint) return;
-    chatPaint = requestAnimationFrame(() => { chatPaint = 0; render(); });
+    chatPaint = requestAnimationFrame(() => {
+      chatPaint = 0;
+      render();
+      // render() destroyed the bubble the stream was writing into, so the
+      // reveal has to be told where its text lives now.
+      if (streaming) streaming.node = lastAssistantBubble();
+    });
+  }
+
+  // --------------------------------------------------------------------------
+  // Streaming reveal
+  //
+  // Two separate problems, and only one of them was on the wire. The brain has
+  // streamed `token` frames from the start and the Node proxy pipes them, but
+  // both of the things a user actually sees were wrong:
+  //
+  // 1. Every token went through render(), which does `board.innerHTML = ''` and
+  //    rebuilds the whole view. The recreated .chat-log starts at scrollTop 0
+  //    and was scrolled back to the bottom on the *next* frame, so sixty times a
+  //    second the log flashed to the top and snapped down again — the page
+  //    jumping up and down. Text now updates the existing node in place, and
+  //    only a tool call (rare) rebuilds anything.
+  //
+  // 2. A reasoning model thinks for seconds and then releases its whole answer
+  //    in under one, so a correctly streamed reply still landed in a single
+  //    frame. Text is now revealed at a readable rate rather than at whatever
+  //    rate the network delivered it.
+  // --------------------------------------------------------------------------
+
+  // Drain whatever is buffered over roughly this long. A window rather than a
+  // fixed characters-per-second: a burst reveals faster than a trickle, which is
+  // what keeps `done` from arriving while there is still a paragraph to show and
+  // cutting the reveal off mid-sentence. MIN_CPS keeps a slow trickle moving.
+  const REVEAL_WINDOW_MS = 900;
+  const REVEAL_MIN_CPS = 45;
+  // How close to the bottom still counts as "following along". Bigger than a
+  // line so the last line landing does not un-pin the log by itself.
+  const PINNED_SLACK_PX = 28;
+
+  // The turn being streamed into: its message object, the DOM node showing it,
+  // and the text that has arrived but is not yet revealed. One at a time — the
+  // composer is disabled while a turn is running.
+  let streaming = null;
+  let revealRaf = 0;
+  let revealAt = 0;
+  // Survives the log element it describes; see the scroll listener in
+  // renderAssistant. Starts pinned: a chat opens at its newest message.
+  let chatScroll = { top: 0, pinned: true };
+
+  const lastAssistantBubble = () => {
+    const bubbles = document.querySelectorAll('.chat-log .chat-msg.assistant');
+    return bubbles.length ? bubbles[bubbles.length - 1] : null;
+  };
+
+  const isPinnedToBottom = (log) =>
+    log.scrollHeight - log.scrollTop - log.clientHeight <= PINNED_SLACK_PX;
+
+  function beginStreaming(turn) {
+    streaming = { turn, buffer: '' };
+    render();                        // once, to create the bubble to write into
+    streaming.node = lastAssistantBubble();
+  }
+
+  function endStreaming() {
+    if (revealRaf) cancelAnimationFrame(revealRaf);
+    revealRaf = 0;
+    streaming = null;
+  }
+
+  /** Take arrived text. Revealed over the next frames, not on this one. */
+  function pushToken(text) {
+    if (!streaming) { return; }
+    streaming.buffer += text;
+    if (revealRaf) return;
+    revealAt = performance.now();
+    revealRaf = requestAnimationFrame(revealStep);
+  }
+
+  function revealStep(now) {
+    revealRaf = 0;
+    if (!streaming) return;
+    const elapsed = Math.max(0, now - revealAt);
+    revealAt = now;
+    const cps = Math.max(REVEAL_MIN_CPS,
+      streaming.buffer.length / (REVEAL_WINDOW_MS / 1000));
+    // At least one character a frame, so the reveal can never stall while text
+    // is waiting.
+    const take = Math.max(1, Math.round((cps * elapsed) / 1000));
+    streaming.turn.content += streaming.buffer.slice(0, take);
+    streaming.buffer = streaming.buffer.slice(take);
+    paintStreamedText();
+    if (streaming.buffer) revealRaf = requestAnimationFrame(revealStep);
+  }
+
+  /** Everything buffered is now shown. Resolves when the reveal has caught up,
+   *  so a turn settles on the finished text without snapping past what the
+   *  reader had not seen yet. */
+  function drainReveal() {
+    return new Promise((resolve) => {
+      const wait = () => {
+        if (!streaming || !streaming.buffer) return resolve();
+        requestAnimationFrame(wait);
+      };
+      wait();
+    });
+  }
+
+  /** The revealed text, written into the bubble that is already on screen.
+   *
+   *  Never through render(): that is the whole point. The scroll position is
+   *  read *before* the text changes and only restored if the reader was already
+   *  at the bottom — an answer arriving must not yank the view away from
+   *  someone who scrolled up to re-read the question. */
+  function paintStreamedText() {
+    const node = streaming && streaming.node;
+    if (!node || !node.isConnected) return;   // view switched away mid-turn
+    const body = node.querySelector('.chat-text');
+    if (!body) return;
+    const log = node.closest('.chat-log');
+    const follow = log ? isPinnedToBottom(log) : false;
+    body.textContent = '';
+    appendLinked(body, streaming.turn.content);
+    if (follow && log) log.scrollTop = log.scrollHeight;
   }
 
   // What to tell the user when a turn never started. Kept apart from the generic
@@ -4040,6 +4174,9 @@
 
   async function sendChat(text) {
     assistantState.messages.push({ role: 'user', content: text });
+    // Sending is joining the bottom of the conversation: whatever the reader was
+    // scrolled to, they want to see what they just said and what answers it.
+    chatScroll = { top: 0, pinned: true };
     // Stored before the request, not after it: a question that costs a reload
     // to lose is the thing this project promises not to do.
     persistChat();
@@ -4073,18 +4210,28 @@
         throw new Error(`agent ${res.status}`);
       }
       assistantState.messages.push(turn);
+      // One render to put the bubble on screen; from here text is written into
+      // it in place. Rebuilding the view per token is what made the page jump.
+      beginStreaming(turn);
       let data = null;
       let failed = '';
       for await (const { name, data: payload } of sseFrames(res)) {
-        if (name === 'calling') turn.running.push(payload);
+        // A tool starting or answering changes the shape of the turn, not just
+        // its text, so these repaint — a few times a turn, not hundreds.
+        if (name === 'calling') { turn.running.push(payload); paintChatSoon(); }
         // Steps answer in request order, so the oldest running call is this
         // one. See _steps_from in the brain for why that holds.
-        else if (name === 'step') { turn.steps.push(payload); turn.running.shift(); }
-        else if (name === 'token') turn.content += payload.text;
+        else if (name === 'step') {
+          turn.steps.push(payload); turn.running.shift(); paintChatSoon();
+        } else if (name === 'token') pushToken(payload.text);
         else if (name === 'error') failed = payload.message;
         else if (name === 'done') data = payload;
-        paintChatSoon();
       }
+      // `done` normally arrives while text is still being revealed — the model
+      // finishes writing long before a reader finishes reading. Let the reveal
+      // catch up first, so the turn does not settle by jumping to the end.
+      await drainReveal();
+      endStreaming();
       if (failed) throw new Error(failed);
       if (!data) throw new Error('the stream ended without a result');
       // Tokens were provisional: text can arrive on a message that also
@@ -4105,6 +4252,9 @@
       announce(data.proposed ? 'Assistant has something waiting for your approval'
         : 'Assistant replied');
     } catch {
+      // Before anything else: a dead stream must not leave a reveal loop running
+      // against a turn that will never finish.
+      endStreaming();
       // Whatever arrived before the failure is kept — a long answer that dies
       // at the last frame should not vanish — but it is marked `partial` so a
       // truncated reply is never sent back as if the assistant had finished it.

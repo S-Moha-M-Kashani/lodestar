@@ -25,6 +25,10 @@ still lose a card even with every individual tool behaving.
 | flood the assistant surface                | `tests/server.test.js` (429 + Retry-After)|
 | offer a link to an unsafe site              | `test_url_safety.py` (destination checked, result dropped) |
 
+A withheld capability the user is never told about is indistinguishable from a
+broken one, so one row of this catalogue is about the *telling* rather than the
+withholding: **here** — the prompt names the delete limit and what to do instead.
+
 **Still not on this list:** nothing screens what the model *searches for*, and
 that is a choice rather than an omission. The check is on where a result leads
 (`safety.py`), because a keyword screen on the query would refuse this board's own
@@ -52,7 +56,7 @@ from langchain_core.messages import AIMessage
 
 import lodestar_brain
 from lodestar_brain import server
-from lodestar_brain.agent import LodestarAgent
+from lodestar_brain.agent import SYSTEM_PROMPT, LodestarAgent
 from lodestar_brain.config import Settings
 from lodestar_brain.llm import FakeChat
 from lodestar_brain.tools.board import BoardClient, make_board_tools
@@ -144,6 +148,38 @@ def test_the_brain_reaches_the_board_only_through_its_http_api():
     destructive = [name for name in dir(BoardClient)
                    if any(verb in name for verb in ('delete', 'purge', 'remove'))]
     assert not destructive, f'BoardClient must expose no hard delete: {destructive}'
+
+
+# This is a unit test: the prompt is the only place the user finds out what the
+# assistant cannot do, so its wording is a contract like any other.
+def test_the_prompt_says_it_cannot_delete_and_what_to_do_instead():
+    """The other half of the delete guardrail — the half the user can see.
+
+    Every other row in the catalogue above is enforced in code, which is why it
+    is asserted rather than measured. This one is not enforceable: `delete_card`
+    does not exist, so the model has no tool to fail against and nothing to
+    reason from, and an unprompted model improvises — it claims it deleted the
+    card, or refuses flatly and offers nothing. Both are worse than the limit
+    itself, because the user is left believing a card is gone, or stuck with no
+    idea where the real delete lives.
+
+    So the limit and the way out must travel *together*, in one breath. A prompt
+    that says "cannot delete" three paragraphs away from "move it to Done" leaves
+    the model free to pair the refusal with silence, which is the bug being
+    fixed. Asserted as one clause for exactly that reason.
+    """
+    prompt = SYSTEM_PROMPT.lower()
+    assert 'cannot delete' in prompt, 'the prompt must state the limit outright'
+
+    # The paragraph the limit is stated in, not a character count: a window of
+    # n characters would break on an unrelated extra word, which is a test
+    # failing about its own arithmetic rather than about the guardrail.
+    guidance = prompt[prompt.index('cannot delete'):].split('\n\n')[0]
+    # The three things a stuck user needs: what the assistant can do instead,
+    # where their own delete lives, and that reaching it is a card they open.
+    for alternative in ('done', 'trash', 'open the card'):
+        assert alternative in guidance, (
+            f'the refusal must offer {alternative!r} in the same breath')
 
 
 def _card(id, title, column='inbox', **extra):

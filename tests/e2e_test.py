@@ -1103,8 +1103,11 @@ try:
         page.fill("#chat-input", "hello brain")
         page.click("#chat-send")
         page.wait_for_selector(".chat-msg.assistant")
+        # wait_until, because the bubble now appears empty and fills in: the
+        # reply is revealed at a readable rate rather than pasted in whole, so
+        # ".chat-msg.assistant exists" no longer means "the text is all there".
         check("assistant: chat roundtrip through the Node proxy",
-              "FAKE: hello brain" in page.inner_text(".chat-log"))
+              wait_until(lambda: "FAKE: hello brain" in page.inner_text(".chat-log")))
         # What the turn spent. The offline backend reports usage precisely so
         # this path is exercised without a paid model in the loop. Read off the
         # folded indicator, which is where the total lives now: what a turn cost
@@ -1115,23 +1118,87 @@ try:
               wait_until(lambda: page.locator(".chat-meta-summary").count() >= 1
                          and "tokens" in page.locator(".chat-meta-summary").last.inner_text()))
 
+        # ---- Streaming: the answer is revealed as it is written --------------
+        # This is an end-to-end test.
+        # The wire was never the problem. The brain has emitted `token` frames
+        # since the stream route existed, the Node proxy pipes rather than
+        # buffers, and the client accumulates. What a user actually meets is a
+        # model that thinks for thirteen seconds and then delivers 51 tokens in
+        # under one — and one animation frame paints all of them, so a correctly
+        # streamed reply still lands as a single lump.
+        #
+        # So what is asserted is the *reveal*: the bubble passes through visible
+        # intermediate states on its way to the finished text. That is the only
+        # half a fake model can prove — it answers in one chunk, which is
+        # precisely the worst case the reveal has to survive — and it is the half
+        # the user sees.
+        long_ask = "watch this arrive: " + " ".join(f"word{i}" for i in range(40))
+        seen_before = page.locator(".chat-msg.assistant").count()
+        # Sampled every frame from inside the page. Polling over the wire would
+        # miss a reveal that completes between two round trips, and the question
+        # here is exactly how many states were paintable.
+        page.evaluate(
+            """(before) => {
+              window.__reveal = [];
+              const tick = () => {
+                const nodes = document.querySelectorAll('.chat-msg.assistant .chat-text');
+                if (nodes.length > before) {
+                  const text = nodes[nodes.length - 1].textContent;
+                  const seen = window.__reveal;
+                  if (!seen.length || seen[seen.length - 1] !== text) seen.push(text);
+                }
+                window.__revealRaf = requestAnimationFrame(tick);
+              };
+              tick();
+            }""",
+            seen_before)
+        page.fill("#chat-input", long_ask)
+        page.click("#chat-send")
+        final = f"FAKE: {long_ask}"
+        settled = wait_until(lambda: final in page.inner_text(".chat-log"))
+        page.evaluate("() => cancelAnimationFrame(window.__revealRaf)")
+        snapshots = page.evaluate("() => window.__reveal")
+        # The states on the way there: non-empty, and not the finished text.
+        partials = [t for t in snapshots if t and t != final]
+        check("assistant: the reply is revealed progressively, not in one lump",
+              settled
+              # Three is the smallest number that cannot be an accident of one
+              # empty bubble followed by one repaint.
+              and len(partials) >= 3
+              # Every state is the finished answer, truncated — never a reflow, a
+              # placeholder, or text that is later taken back.
+              and all(final.startswith(t) for t in partials)
+              and all(len(a) < len(b) for a, b in zip(partials, partials[1:])))
+
         # ---- Agent card confirmation gate -----------------------------------
         # A card the agent invents is a PROPOSAL: nothing reaches the board until
         # the user approves it.
         board_before = len(api_state()["cards"])
+        # Relative to what is already on screen, not an absolute count: this used
+        # to wait for `>= 2`, which any turn added above it satisfies before this
+        # one has even been sent, and the block then read the previous turn's
+        # evidence. The same pattern is used further down for the same reason.
+        replies_before = page.locator(".chat-msg.assistant").count()
         page.fill("#chat-input", "add: What is Leiden clustering?")
         page.click("#chat-send")
         page.wait_for_function(
-            "document.querySelectorAll('.chat-msg.assistant').length >= 2")
+            "n => document.querySelectorAll('.chat-msg.assistant').length > n",
+            arg=replies_before)
         # This is an end-to-end test.
         # The evidence under a reply is folded away behind a one-line indicator:
         # most turns are read for the answer alone, and sources, tool chips and
         # a token receipt under every one of them is a wall of furniture. The
         # indicator still has to say what is behind it.
+        # The strip is built from what the turn *did*, so it is only complete once
+        # the turn has settled. Waited for rather than read immediately: this
+        # check used to pass on the count race above, reading the previous turn's
+        # already-finished strip instead of this one's.
         folded = page.locator(".chat-meta").last
+        settled_meta = wait_until(
+            lambda: folded.locator(".chat-meta-summary").count() == 1
+            and "tool" in folded.locator(".chat-meta-summary").inner_text())
         check("assistant: the evidence under a reply is folded until asked for",
-              not folded.locator(".chat-steps").is_visible()
-              and "tool" in folded.locator(".chat-meta-summary").inner_text())
+              settled_meta and not folded.locator(".chat-steps").is_visible())
         open_meta(page)
         check("assistant: tool chip shown for create_card",
               "create_card" in page.inner_text(".chat-log"))
