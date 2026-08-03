@@ -249,7 +249,7 @@ input, select, textarea { font: inherit; color: inherit; }
 .brand-mark {
   display: grid;
   place-items: center;
-  width: 46px; height: 46px;
+  width: 138px; height: 138px;
   flex: none;
 }
 
