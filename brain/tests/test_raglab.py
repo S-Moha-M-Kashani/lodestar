@@ -4025,3 +4025,178 @@ def test_a_query_whose_gate_cannot_reach_its_model_says_so(client, monkeypatch):
     job = _finished(client, res.json()['job_id'])
     assert job['state'] == 'error'
     assert 'grade' in job['error'].lower() and 'not running' in job['error']
+
+
+# --- provider modes: local vs OpenRouter -------------------------------------
+# The models column grows a mode dropdown. A mode is a served preset: which
+# backend runs the LLM stages and which model each stage defaults to. Served
+# rather than kept in a frontend, so the two panels cannot disagree about what
+# picking "openrouter" configures.
+
+
+# This is a unit test.
+def test_the_lab_offers_a_local_and_an_openrouter_mode():
+    # Local first: it is the lab default, and an option list leads with its
+    # default here (see test_every_option_list_leads_with_the_default).
+    assert [mode.key for mode in models.MODES] == ['local', 'openrouter']
+    by_key = {mode.key: mode for mode in models.MODES}
+    assert by_key['local'].provider == 'ollama'
+    assert by_key['openrouter'].provider == 'openrouter'
+    # A mode explains itself like every other control on the page.
+    assert all(mode.label and mode.note for mode in models.MODES)
+
+
+# This is a unit test.
+def test_openrouter_mode_runs_every_llm_stage_on_gpt5_nano(monkeypatch):
+    """The preset: the whole LLM pipeline switched on, every stage on
+    gpt-5-nano — and the index deliberately untouched, because
+    heydariAI/persian-embeddings is the measured winner and stays local."""
+    monkeypatch.setattr(models, 'openrouter_ids', lambda settings: frozenset())
+    patch = models.mode_config('openrouter', LAB_SETTINGS)
+    ret, gen = patch['retrieval'], patch['generation']
+    nano = 'openai/gpt-5-nano'
+    assert ret['hyde'] is True and ret['expansion_model'] == nano
+    assert ret['reranker'] == 'llm' and ret['reranker_model'] == nano
+    assert ret['grader'] == 'llm'
+    assert ret['grader_model'] == nano       # nothing verified → the fallback
+    assert ret['grade_threshold'] == 0.4     # the measured gate setting
+    assert gen['answerer'] == 'llm' and gen['model'] == nano
+    assert gen['key_facts_judge'] is True and gen['judge_model'] == nano
+    assert gen['ragas_model'] == nano
+    assert 'index' not in patch
+
+
+# This is a unit test.
+def test_the_gate_prefers_a_cohere_reranker_the_account_can_reach(monkeypatch):
+    """cohere/rerank-4-fast is a purpose-built relevance scorer (query + text →
+    score), so the gate prefers it; the -pro build is next. A slug OpenRouter's
+    own model list does not verify falls back to gpt-5-nano rather than
+    gambling a run on it — 'cannot verify' must not become a refused run."""
+    def gate(served):
+        monkeypatch.setattr(models, 'openrouter_ids',
+                            lambda settings: frozenset(served))
+        return models.mode_config('openrouter',
+                                  LAB_SETTINGS)['retrieval']['grader_model']
+
+    assert gate({'cohere/rerank-4-fast', 'cohere/rerank-4-pro',
+                 'openai/gpt-5-nano'}) == 'cohere/rerank-4-fast'
+    assert gate({'cohere/rerank-4-pro',
+                 'openai/gpt-5-nano'}) == 'cohere/rerank-4-pro'
+    assert gate({'openai/gpt-5-nano'}) == 'openai/gpt-5-nano'
+    assert gate(set()) == 'openai/gpt-5-nano'
+
+
+# This is a unit test.
+def test_local_mode_resets_the_same_fields_openrouter_sets(monkeypatch):
+    """Switching back must be a full reset to the lab defaults: a field one
+    mode sets and the other forgets would leak a remote model into a local
+    run's label."""
+    monkeypatch.setattr(models, 'openrouter_ids', lambda settings: frozenset())
+    local = models.mode_config('local', LAB_SETTINGS)
+    remote = models.mode_config('openrouter', LAB_SETTINGS)
+    assert ({group: set(names) for group, names in local.items()}
+            == {group: set(names) for group, names in remote.items()})
+    defaults = LabConfig().to_dict()
+    for group, names in local.items():
+        for name, value in names.items():
+            assert value == defaults[group][name], f'{group}.{name}'
+    # No auto modes anywhere in this repo: an unknown mode raises, never guesses.
+    with pytest.raises(ValueError):
+        models.mode_config('cloud', LAB_SETTINGS)
+
+
+# This is a unit test.
+def test_a_provider_override_rebuilds_the_settings_it_names():
+    """The dropdown must move the backend, not just the model labels: a run
+    whose models say openrouter while the settings still say ollama would be
+    refused over models the user never picked."""
+    swapped = config.settings_for_provider(LAB_SETTINGS, 'openrouter')
+    assert swapped.provider == 'openrouter'
+    # The old backend's default model must not survive the switch — a slug
+    # only means something to the backend that serves it...
+    assert swapped.llm_model == config.PROVIDER_MODELS['openrouter']
+    back = config.settings_for_provider(swapped, 'ollama')
+    assert back.llm_model == config.PROVIDER_MODELS['ollama']
+    # ...but an explicitly named model (RAGLAB_MODEL) is never replaced.
+    named = replace(LAB_SETTINGS, llm_model='someone/custom-7b')
+    assert (config.settings_for_provider(named, 'openrouter').llm_model
+            == 'someone/custom-7b')
+    # '' means "no override": the settings pass through untouched.
+    assert config.settings_for_provider(LAB_SETTINGS, '') is LAB_SETTINGS
+    with pytest.raises(ValueError):
+        config.settings_for_provider(LAB_SETTINGS, 'huggingface')
+
+
+# This is an integration test.
+def test_options_serves_the_provider_modes(client):
+    body = client.get('/api/options').json()
+    modes = {mode['key']: mode for mode in body['modes']}
+    assert set(modes) == {'local', 'openrouter'}
+    assert modes['openrouter']['provider'] == 'openrouter'
+    served = modes['openrouter']['config']
+    assert served['generation']['model'] == 'openai/gpt-5-nano'
+    # The gate default is resolved against whatever this machine could verify
+    # right now, so any of the three legal answers passes — never a fourth.
+    assert served['retrieval']['grader_model'] in (
+        'cohere/rerank-4-fast', 'cohere/rerank-4-pro', 'openai/gpt-5-nano')
+    # The dropdown explains itself behind the same '!' as every other control.
+    assert 'run.mode' in body['help']
+
+
+# This is an integration test.
+def test_both_run_routes_refuse_an_unknown_provider(client):
+    """Both run routes apply the same screen — the two disagreeing about which
+    configs are legal was a bug once already."""
+    for route in ('/api/queries', '/api/evaluations'):
+        res = client.post(route, json={'question': 'x',
+                                       'provider': 'huggingface'})
+        assert res.status_code == 400, route
+        assert 'huggingface' in res.json()['detail']
+
+
+# This is a unit test.
+def test_a_mode_only_presets_models_its_own_catalogue_offers(monkeypatch):
+    """The bug this pins: the panel's dropdowns were filled from the boot
+    provider's catalogue, so under the openrouter mode gpt-5-nano was not
+    offerable — and the panel's config-follows-the-panel rule then silently
+    wiped the preset back to ''. Every model a mode presets must be offered by
+    the catalogue that same mode carries."""
+    monkeypatch.setattr(models, 'openrouter_ids', lambda settings: frozenset())
+    for entry in models.mode_catalogue(LAB_SETTINGS):
+        offered = {option['id'] for option in entry['models']}
+        for group, names in entry['config'].items():
+            for name, value in names.items():
+                if name.endswith('model') and value:
+                    assert value in offered, (
+                        f"{entry['key']} presets {group}.{name}={value!r} "
+                        'but its own catalogue does not offer it')
+
+
+# This is an integration test.
+def test_each_mode_carries_the_catalogue_of_its_own_backend(client):
+    """A slug only means something to the backend that serves it, so the mode
+    that moves the backend must bring that backend's model list with it."""
+    body = client.get('/api/options').json()
+    modes = {mode['key']: mode for mode in body['modes']}
+    remote = {option['id'] for option in modes['openrouter']['models']}
+    local = {option['id'] for option in modes['local']['models']}
+    assert 'openai/gpt-5-nano' in remote
+    assert '4skl/gemma4-e2b-mtp' in local
+    # Disjoint apart from the '' lab-default entry and a model the user named
+    # by RAGLAB_MODEL — an explicitly named model is offered everywhere by the
+    # catalogue's own rule. The two known lists must never blur into one
+    # dropdown of half-unusable choices.
+    named = body['capabilities']['llm_model']
+    assert (remote & local) <= {'', named}
+
+
+# This is a unit test.
+def test_both_panels_offer_the_mode_dropdown():
+    """The dropdown sits in the models column of the board's page and in the
+    standalone panel, both reading the served modes rather than a local copy —
+    a preset kept in a frontend is a preset that will drift."""
+    from .raglab.server import STATIC
+    html = (STATIC / 'index.html').read_text(encoding='utf-8')
+    appjs = (config.ROOT / 'app.js').read_text(encoding='utf-8')
+    assert 'raglab-mode' in appjs and 'options.modes' in appjs
+    assert 'modes' in html

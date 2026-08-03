@@ -126,6 +126,26 @@ def load_lab_settings(env: dict | None = None) -> LabSettings:
     )
 
 
+def settings_for_provider(settings: LabSettings, provider: str) -> LabSettings:
+    """One run's backend override — how the panel's mode dropdown moves the
+    LLM stages without restarting the lab. '' means no override: the settings
+    pass through untouched.
+
+    The old backend's *default* model does not survive the switch, because a
+    slug only means something to the backend that serves it (PROVIDER_MODELS);
+    a model the user explicitly named (RAGLAB_MODEL) is never replaced, or the
+    run's label and the model that produced it would disagree."""
+    if not provider:
+        return settings
+    if provider not in LLM_PROVIDERS:
+        raise ValueError(
+            f'unknown provider {provider!r}; expected one of '
+            + ', '.join(repr(name) for name in LLM_PROVIDERS if name))
+    model = ('' if settings.llm_model == PROVIDER_MODELS.get(settings.provider)
+             else settings.llm_model)
+    return replace(settings, llm_provider=provider, llm_model=model)
+
+
 # Every option tuple below leads with the value the lab actually defaults to.
 # That is not cosmetic ordering: these tuples are what both panels render, so a
 # default buried sixth reads as an exotic choice while three hash embedders that
@@ -508,6 +528,15 @@ HELP = {
         'model. The facts are English and the answers Farsi, so no lexical metric '
         'can do this — and it is the metric that exposed generation as the '
         'bottleneck (coverage 0.261 against faithfulness 0.743).'),
+    'run.mode': (
+        'Where the LLM stages run. "Local (Ollama)" is the lab default — free '
+        'and private — and resets every stage to the lab\'s own defaults. '
+        '"OpenRouter" switches the backend and presets the full pipeline onto '
+        'gpt-5-nano (HyDE, LLM reranker, relevance gate, answerer and both '
+        'judges); the relevance gate prefers a purpose-built reranker when '
+        'OpenRouter\'s model list verifies one. The embedder stays the local '
+        'Persian-tuned encoder either way. Picking a mode overwrites those '
+        'stage choices; every knob can still be changed afterwards.'),
     'run.ragas_mode': (
         '"offline" scores the retrieved context against the ground-truth quotes '
         'with string similarity — no model, no key, no variance. "judged" adds '
