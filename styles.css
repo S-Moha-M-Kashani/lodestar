@@ -2478,6 +2478,19 @@ body[data-view="assistant"] .app-footer { display: none; }
 .chat-msg.assistant { align-self: stretch; background: var(--card); }
 .chat-msg.error { border-color: var(--danger); color: var(--danger); }
 
+/* The rule across the ledger where the sent window begins. Everything above it
+   is transcript the model no longer carries — kept, not lost, so the marker is
+   a quiet ruled line, not a warning. */
+.chat-trimmed {
+  align-self: stretch;
+  text-align: center;
+  font-size: 0.72rem;
+  color: var(--ink-soft);
+  border-top: 1px dashed var(--card-line);
+  padding-top: 6px;
+  margin: 4px 24px 0;
+}
+
 /* The annotation strip under an answer: what it cited, what it cost, which
    tools ran. Folded to a single quiet line — a receipt pasted face-down under a
    ledger entry — and opened only when the evidence is what you came for. Once

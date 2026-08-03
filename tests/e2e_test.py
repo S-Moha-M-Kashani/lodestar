@@ -1300,6 +1300,75 @@ try:
 
         page.unroute("**/api/agent/chat/stream")
 
+        # ---- What one turn carries -------------------------------------------
+        # The browser used to send the entire transcript on every turn: a long
+        # chat meant a bigger, slower, dearer request each time, and past 80
+        # messages the brain refused it outright — a conversation that rendered
+        # perfectly and could not be talked into.
+        #
+        # Now it sends a window. The transcript is untouched on screen and in
+        # assistant.db; what changes is how much of it rides along, so the cost
+        # of turn fifty is the cost of turn five. Seeded through localStorage
+        # rather than by holding fifty conversations: the fake model would take
+        # minutes to produce them and the assertion is about the request body.
+        # Put back afterwards: every later block in this suite reads the
+        # transcript this one is about to replace.
+        real_chat = page.evaluate("() => localStorage.getItem('lodestar:chat')")
+        seeded = []
+        for i in range(30):
+            seeded.append({"role": "user", "content": f"seeded question {i}"})
+            seeded.append({"role": "assistant", "content": f"seeded answer {i}"})
+        page.evaluate("(msgs) => localStorage.setItem('lodestar:chat', JSON.stringify(msgs))",
+                      seeded)
+        page.reload()
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector("#chat-input")
+
+        sent = []
+        page.route("**/api/agent/chat/stream", lambda route: (
+            sent.append(json.loads(route.request.post_data)),
+            route.fulfill(status=200, content_type="text/event-stream",
+                          body='event: done\ndata: {"reply": "ok", "mutated": false,'
+                               ' "proposed": false, "steps": []}\n\n')))
+        page.fill("#chat-input", "the newest question")
+        page.click("#chat-send")
+        wait_until(lambda: len(sent) == 1)
+        body = sent[0] if sent else {"messages": []}
+        carried = [m["content"] for m in body["messages"]]
+
+        # This is an end-to-end test.
+        check("context: a long chat is not resent whole on every turn",
+              # 61 messages are on screen; far fewer travel.
+              len(carried) < 25
+              # The turn being asked is always the last thing the model reads.
+              and carried[-1] == "the newest question")
+        # This is an end-to-end test.
+        # The first message is kept deliberately, at the cost of two lines of
+        # window: it is where a conversation says what it is *about*, and a model
+        # given only the tail of a long thread answers the last question while
+        # having forgotten the task. Cheap framing beats a summary — which this
+        # project has decided twice not to reintroduce.
+        check("context: the opening message is kept as the conversation's framing",
+              "seeded question 0" in carried
+              # And it is the recent end that is kept, not an arbitrary slice.
+              and "seeded question 29" in carried
+              and "seeded question 5" not in carried)
+        # This is an end-to-end test.
+        # Trimming that nobody can see is the quiet loss this project refuses. The
+        # transcript keeps every message; the marker is what makes the difference
+        # between "kept but not sent" and "gone" visible in the one place the
+        # reader is looking.
+        check("context: the reader is told where the sent window begins",
+              page.locator(".chat-trimmed").count() == 1
+              and page.locator(".chat-msg").count() >= 61)
+        page.unroute("**/api/agent/chat/stream")
+        page.evaluate(
+            "(saved) => saved === null ? localStorage.removeItem('lodestar:chat')"
+            " : localStorage.setItem('lodestar:chat', saved)", real_chat)
+        page.reload()
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector("#chat-input")
+
         # This is an end-to-end test.
         # The sheet was pinned at 720px while the replies it holds are card
         # dumps with uuids in them, so every second line wrapped. On a desktop

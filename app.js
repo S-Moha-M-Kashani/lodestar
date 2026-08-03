@@ -2841,6 +2841,52 @@
   const CHAT_KEY = KEY_PREFIX + 'chat';
   const CHAT_KEEP = 200;
 
+  // What one request carries. CHAT_KEEP above is the READER's transcript —
+  // bigger is better and costs nothing. This is the MODEL's window: the first
+  // user message (where a conversation says what it is about) plus the newest
+  // CONTEXT_MESSAGES, trimmed again if they overrun CONTEXT_CHARS. Everything
+  // older stays on screen and in assistant.db, reachable through recall_chat —
+  // it just stops riding along on every turn, so turn fifty costs what turn
+  // five does. tests/context.test.js pins these against the brain's caps.
+  const CONTEXT_MESSAGES = 16;
+  const CONTEXT_CHARS = 24_000;
+
+  /** A turn the model may be shown again. Errors and abandoned partials are
+   *  rendered but never replayed — the model must not continue from something
+   *  it never finished saying. One definition, shared by the send path and the
+   *  transcript's trim marker, so the two can never disagree about where the
+   *  window starts. */
+  const replayable = (m) => !m.error && !m.partial
+    && (m.role === 'user' || m.role === 'assistant');
+
+  /** The slice of a replayable history one request carries. Returns the
+   *  original message objects plus `from`, the index where the recent window
+   *  begins — 0 when nothing was left out — so the transcript can mark the
+   *  boundary with the same arithmetic the request used. */
+  function contextWindow(history) {
+    let from = Math.max(0, history.length - CONTEXT_MESSAGES);
+    let size = 0;
+    for (let i = from; i < history.length; i += 1) size += history[i].content.length;
+    // The char budget trims the window further, never below the newest message:
+    // one oversized turn should cost context, not the ability to ask at all.
+    // (The brain's own 120k cap remains the backstop for that case.)
+    while (from < history.length - 1 && size > CONTEXT_CHARS) {
+      size -= history[from].content.length;
+      from += 1;
+    }
+    if (from === 0) return { messages: history, from };
+    // The framing message rides outside the budget on purpose: two lines that
+    // keep the model from answering the last question having forgotten the
+    // task. The cheap alternative to a summary, which this project has twice
+    // decided against.
+    const framing = history.find((m) => m.role === 'user');
+    const recent = history.slice(from);
+    return {
+      messages: framing && !recent.includes(framing) ? [framing, ...recent] : recent,
+      from,
+    };
+  }
+
   const persistChat = () => {
     try {
       localStorage.setItem(CHAT_KEY,
@@ -3509,7 +3555,24 @@
       hint.textContent = 'Ask about your board — research a question, triage the inbox, or find connections.';
       log.appendChild(hint);
     }
-    for (const msg of assistantState.messages) log.appendChild(renderChatMessage(msg));
+    // Where the sent window begins, marked in the transcript itself. Trimming
+    // nobody can see is the quiet loss this project refuses; the marker is the
+    // difference between "kept but not sent" and "gone". Computed with the same
+    // contextWindow the request uses, over the same replayable filter, so what
+    // it claims is what the next turn will actually carry.
+    const sendable = assistantState.messages.filter(replayable);
+    const boundary = contextWindow(sendable);
+    const firstCarried = boundary.from > 0 ? sendable[boundary.from] : null;
+    for (const msg of assistantState.messages) {
+      if (msg === firstCarried) {
+        const mark = document.createElement('div');
+        mark.className = 'chat-trimmed';
+        mark.textContent = 'Messages above stay here but no longer travel with '
+          + 'each turn — the assistant can search them if asked.';
+        log.appendChild(mark);
+      }
+      log.appendChild(renderChatMessage(msg));
+    }
     sheet.appendChild(log);
 
     const status = document.createElement('div');
@@ -4244,15 +4307,13 @@
     const turn = { role: 'assistant', content: '', steps: [], running: [] };
     let failure = CHAT_UNAVAILABLE;
     try {
-      const history = assistantState.messages
-        .filter((m) => !m.error && !m.partial
-          && (m.role === 'user' || m.role === 'assistant'))
-        .map(({ role, content }) => ({ role, content }));
+      const carried = contextWindow(assistantState.messages.filter(replayable))
+        .messages.map(({ role, content }) => ({ role, content }));
       const res = await fetch('/api/agent/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          messages: history,
+          messages: carried,
           model: assistantModels.text,
           // Always sent, including against a brain configured as 'fake'. The
           // offline contract is the server's to keep (make_chat_model checks
