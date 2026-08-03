@@ -518,11 +518,40 @@ try:
         check("export: Cancel closes the dialog", page.locator("#export-dialog[open]").count() == 0)
 
         # ---- Themes ---------------------------------------------------------
-        for theme in ("white", "sepia", "dark", "light"):
-            page.select_option("#theme-select", theme)
+        # This is an end-to-end test. 'star' is the fifth theme; it must switch,
+        # persist and fall back exactly like the other four.
+        #
+        # These two helpers exist because this suite is one script with a shared
+        # check() collector and no per-test isolation: a missing option or a
+        # missing element raises, and the raise takes every later check with it.
+        # Measured — the first run of these checks aborted the suite at
+        # select_option('star') and hid the ~180 assertions after it. So a gap in
+        # the feature has to come back as False, never as an exception.
+        def select_theme(theme):
+            try:
+                page.select_option("#theme-select", theme, timeout=1500)
+                return True
+            except Exception:
+                return False
+
+        def css(sel, prop):
+            return page.evaluate(
+                """([sel, prop]) => {
+                     const el = document.querySelector(sel);
+                     return el ? getComputedStyle(el)[prop] : null;
+                   }""", [sel, prop])
+
+        for theme in ("white", "sepia", "dark", "star", "light"):
+            picked = select_theme(theme)
             page.wait_for_timeout(40)
             check(f"theme: '{theme}' mode applied",
-                  page.evaluate("document.documentElement.dataset.theme") == theme)
+                  picked and page.evaluate("document.documentElement.dataset.theme") == theme)
+        # An unknown stored theme must not strand the board on a blank sky.
+        page.evaluate("() => localStorage.setItem('lodestar:theme', 'supernova')")
+        page.reload()
+        page.wait_for_selector(".card")
+        check("theme: an unknown stored theme falls back to Morning",
+              page.evaluate("document.documentElement.dataset.theme") == "light")
         page.select_option("#theme-select", "white")
         page.reload()
         page.wait_for_selector(".card")
@@ -540,6 +569,134 @@ try:
             day_bg_white = False
         check("theme: Day mode uses a plain white background", day_bg_white)
         page.select_option("#theme-select", "light")
+
+        # ---- The brand mark -------------------------------------------------
+        # This is an end-to-end test. The header mark is the nova, drawn as two
+        # scene variants that swap on theme: the colour wash on the paper themes,
+        # the wash plus a star field on the dark ones. Both live in the DOM and
+        # CSS chooses; the test pins which one is showing, because a variant that
+        # silently never renders is the failure this cannot catch by eye.
+        def mark_variant():
+            return page.evaluate("""() => {
+              const vis = (sel) => {
+                const el = document.querySelector('.brand-mark ' + sel);
+                return !!el && getComputedStyle(el).display !== 'none';
+              };
+              return { colour: vis('.scene-colour'), stars: vis('.scene-stars') };
+            }""")
+
+        check("brand: the question mark is gone from the header",
+              page.locator(".brand-mark").inner_text().strip() == "")
+        check("brand: the mark is an SVG, not a glyph",
+              page.locator(".brand-mark svg").count() > 0)
+        for theme, want in (("light", "colour"), ("white", "colour"), ("sepia", "colour"),
+                            ("dark", "stars")):
+            select_theme(theme)
+            page.wait_for_timeout(40)
+            v = mark_variant()
+            check(f"brand: '{theme}' shows the {want} scene and only that one",
+                  v[want] and not v["stars" if want == "colour" else "colour"])
+        # Under the star theme the sky already carries a nova, so the header mark
+        # would be a second one. It goes; the words stay.
+        select_theme("star")
+        page.wait_for_timeout(40)
+        check("brand: the star theme drops the header mark",
+              css(".brand-mark", "display") == "none")
+        check("brand: the star theme keeps the name and the tagline",
+              page.locator(".brand h1").is_visible() and page.locator(".tagline").is_visible())
+        select_theme("light")
+
+        # ---- The Star theme's sky -------------------------------------------
+        # This is an end-to-end test. The sky belongs to the star theme alone:
+        # it must not leak onto the other four, its nova is anchored low-right,
+        # and the clouds drift while the nova stays put.
+        select_theme("star")
+        page.wait_for_timeout(120)
+        sky_display = css(".star-sky", "display")
+        check("star: the sky renders under the star theme",
+              page.locator(".star-sky").count() == 1
+              and sky_display is not None and sky_display != "none")
+        clouds_anim = css(".star-sky-clouds", "animationName")
+        check("star: the clouds are animating",
+              clouds_anim is not None and clouds_anim != "none")
+        check("star: the nova is not animating - only the clouds move",
+              css(".star-sky-nova", "animationName") == "none")
+        # Anchored into the lower-right corner: its centre sits in that quadrant.
+        nova_low_right = page.evaluate("""() => {
+          const el = document.querySelector('.star-sky-nova');
+          if (!el) return false;
+          const r = el.getBoundingClientRect();
+          return (r.left + r.width / 2) > innerWidth / 2
+              && (r.top + r.height / 2) > innerHeight / 2;
+        }""")
+        check("star: the nova sits in the lower-right corner", nova_low_right)
+        # "Somewhere no card is placed": the sky is background, so the nova must
+        # land in empty board, not behind a card where it fights the text.
+        nova_clear_of_cards = page.evaluate("""() => {
+          const el = document.querySelector('.star-sky-nova');
+          if (!el) return false;
+          const n = el.getBoundingClientRect();
+          return [...document.querySelectorAll('.card')].every((c) => {
+            const r = c.getBoundingClientRect();
+            return n.right < r.left || n.left > r.right
+                || n.bottom < r.top || n.top > r.bottom;
+          });
+        }""")
+        check("star: the nova does not sit behind a card", nova_clear_of_cards)
+        # The sky is furniture, not a card: it must never take pointer events or
+        # a tab stop away from the board underneath it.
+        check("star: the sky ignores the pointer",
+              css(".star-sky", "pointerEvents") == "none")
+        select_theme("light")
+        page.wait_for_timeout(40)
+        check("star: the sky is hidden on the other themes",
+              css(".star-sky", "display") == "none")
+
+        # Reduced motion is a promise the rest of the app already keeps.
+        page.emulate_media(reduced_motion="reduce")
+        select_theme("star")
+        page.wait_for_timeout(120)
+        check("star: prefers-reduced-motion stops the clouds",
+              css(".star-sky-clouds", "animationName") == "none")
+        page.emulate_media(reduced_motion="no-preference")
+
+        # ---- The Assistant over the sky -------------------------------------
+        # This is an end-to-end test. On the Assistant view the sheet fills the
+        # width, so an opaque sheet would hide the whole sky. Under the star
+        # theme it goes translucent and the clouds drift behind it; on every
+        # other theme it stays solid, because a see-through sheet over quad
+        # paper is unreadable.
+        def sheet_alpha():
+            return page.evaluate("""() => {
+              const el = document.querySelector('.assistant-sheet');
+              if (!el) return null;
+              const m = getComputedStyle(el).backgroundColor.match(/rgba?\\(([^)]+)\\)/);
+              if (!m) return null;
+              const parts = m[1].split(',').map((s) => parseFloat(s));
+              return parts.length > 3 ? parts[3] : 1;
+            }""")
+
+        # Back to a paper theme first: the reduced-motion block above left the
+        # board on 'star', so without this the next check asserts paper-theme
+        # behaviour while the star theme is still applied. It passed before the
+        # feature existed only because 'star' was unselectable.
+        select_theme("light")
+        page.click('[data-view="assistant"]')
+        page.wait_for_selector(".assistant-sheet")
+        check("assistant: the sheet is opaque on the paper themes", sheet_alpha() == 1)
+        select_theme("star")
+        page.wait_for_timeout(120)
+        a = sheet_alpha()
+        check("assistant: the star theme makes the sheet translucent so the sky shows",
+              a is not None and a < 1)
+        anim = css(".star-sky-clouds", "animationName")
+        check("assistant: the clouds keep drifting behind the sheet",
+              anim is not None and anim != "none")
+        check("assistant: the header mark is gone but the tagline remains",
+              css(".brand-mark", "display") == "none" and page.locator(".tagline").is_visible())
+        select_theme("light")
+        page.click('[data-view="board"]')
+        page.wait_for_selector(".card")
 
         # ---- Delete (in-app confirm dialog) ---------------------------------
         target = page.locator('[data-col="answered"] .card').first
