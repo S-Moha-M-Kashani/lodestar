@@ -1818,7 +1818,8 @@ kbd {
 
 @media (max-width: 640px) {
   .app-header { padding: 14px 16px 8px; }
-  .board { padding: 10px 16px 16px; }
+  .board,
+  #board.assistant { padding: 10px 16px 16px; }
   .toolbar input[type="search"] { min-width: 140px; flex: 1; }
 }
 
@@ -2106,9 +2107,33 @@ kbd {
 /* ----------------------------------------------------------------------------
    Assistant view — chat sheet in the ledger idiom
 ---------------------------------------------------------------------------- */
-.assistant { display: flex; justify-content: center; }
+/* Scoped to the view container on purpose. `board.className = view` puts the
+   bare class `assistant` on #board, and a reply bubble is `.chat-msg
+   .assistant` — an unscoped `.assistant { display: flex }` reaches both, and
+   the bubble's answer, tool chips, sources and token line stop stacking and
+   break into four narrow centred columns. */
+#board.assistant {
+  display: flex;
+  justify-content: center;
+  padding: 14px 28px 24px;
+}
+/* Nothing in the board's toolbar acts on a conversation. Left above the
+   Assistant it is a row of controls that do nothing to what is on screen. The
+   theme picker is the app's, not the board's, so it stays. */
+body[data-view="assistant"] #search,
+body[data-view="assistant"] #type-filter,
+body[data-view="assistant"] #prio-filter,
+body[data-view="assistant"] .toolbar-menu,
+body[data-view="assistant"] #cat-rail,
+body[data-view="assistant"] #tag-bar,
+/* The footer explains dragging cards and the keys that move them. */
+body[data-view="assistant"] .app-footer { display: none; }
+
 .assistant-sheet {
-  width: min(720px, 100%);
+  /* Wide, because a reply is mostly card rows — ids, columns, categories — and
+     at a reading measure every one of them wrapped mid-uuid. Matched to the
+     board's own width so switching views does not resize the page. */
+  width: min(1240px, 100%);
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -2118,6 +2143,55 @@ kbd {
   box-shadow: var(--shadow-card);
   padding: 16px;
 }
+/* One row above the transcript: the search fold takes the width, the sign for
+   everything else sits at its right end. Aligned to the top so opening the
+   search fold grows it downwards and leaves the sign where it was. */
+.assistant-toolbar {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.assistant-toolbar .chat-recall { flex: 1 1 auto; min-width: 0; }
+/* The extras drawer. Shut it is one sign the width of a button, and the
+   conversation below it has the whole sheet; a rail beside the transcript took
+   300px off it permanently to hold controls that are touched once. */
+.assistant-extras-btn {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  /* Squared off against the closed search fold beside it. */
+  width: 31px;
+  height: 31px;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--ink-soft);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.assistant-extras-btn:hover { color: var(--ink); border-color: var(--ink-soft); }
+.assistant-extras-btn[aria-expanded="true"] {
+  color: var(--ink);
+  border-color: var(--ink-soft);
+}
+.assistant-extras {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+/* display:flex would otherwise defeat the [hidden] attribute */
+.assistant-extras[hidden] { display: none; }
+.assistant-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.chat-menu { position: relative; }
+/* Opens rightwards from its button, unlike the board's, which hangs off the
+   right edge of the window: this one sits at the left of the sheet. */
+.chat-menu .menu-panel { left: 0; right: auto; }
 .assistant-sheet h2 {
   font-family: var(--display);
   text-transform: uppercase;
@@ -2128,32 +2202,53 @@ kbd {
   border-bottom: 2px solid var(--rule-red);
 }
 /* The Models panel — one picker per capability, quiet mono furniture */
+/* Folded like the recall panel above it — same box, same ▸ — because it is the
+   same kind of thing: a panel you open when you want it and otherwise leave
+   shut. The line names the model in use, so the common question is answered
+   without opening anything. */
 .chat-settings {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 14px;
+  flex: 1 1 260px;
+  min-width: 0;
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  padding: 8px 12px 10px;
+  padding: 8px 12px;
   margin: 0;
 }
-.chat-settings legend {
+.chat-settings-name {
   font-family: var(--mono);
-  font-size: 10.5px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-size: 0.72rem;
   color: var(--ink-soft);
-  padding: 0 4px;
+  cursor: pointer;
+  list-style: none;
+  /* A long slug must not push the rail wider than the rail. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-settings-name::-webkit-details-marker { display: none; }
+.chat-settings-name::before { content: '▸ '; }
+.chat-settings[open] .chat-settings-name::before { content: '▾ '; }
+.chat-settings-name:hover { color: var(--ink); }
+/* A grid, not wrapped flex: every picker is the same kind of thing, so they
+   get the same width and sit on a shared baseline. Flex sized them by their
+   labels, and one label long enough to wrap dragged its select down out of
+   line with the rest. */
+.chat-settings-body {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px 18px;
+  align-items: end;
+  margin-top: 10px;
 }
 .chat-settings .field {
   display: flex;
   flex-direction: column;
+  justify-content: flex-end;
   gap: 3px;
   font-family: var(--mono);
   font-size: 10.5px;
   color: var(--ink-soft);
-  flex: 1 1 180px;
+  min-width: 0;
 }
 .chat-settings select {
   font-family: var(--mono);
@@ -2198,11 +2293,20 @@ kbd {
   font-size: 10px;
   opacity: 0.8;
 }
+/* Footnotes to the panel, ruled off from the controls they explain. */
 .chat-settings .field-hint {
-  flex-basis: 100%;
+  grid-column: 1 / -1;
   margin: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
   font-size: 10.5px;
+  line-height: 1.55;
   color: var(--ink-soft);
+  max-width: 92ch;
+}
+.chat-settings .field-hint ~ .field-hint {
+  padding-top: 0;
+  border-top: 0;
 }
 
 /* Proposals — the Assistant's suggestions, pending the user's yes. Inked in
@@ -2266,26 +2370,70 @@ kbd {
 .chat-log {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 14px;
   overflow-y: auto;
   flex: 1;
-  min-height: 200px;
-  max-height: 60vh;
-  padding: 4px;
+  min-height: 240px;
+  max-height: 62vh;
+  padding: 4px 2px;
 }
 .chat-msg {
-  max-width: 85%;
-  padding: 8px 12px;
+  padding: 10px 14px;
   border: 1px solid var(--card-line);
   border-radius: var(--radius);
   font-size: 0.95rem;
+  line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.chat-msg.user { align-self: flex-end; background: var(--paper); }
-.chat-msg.assistant { align-self: flex-start; background: var(--card); }
+/* What was asked is a note in the margin; the answer is the entry. So the
+   question stays short and right-hung, and the reply takes the whole sheet —
+   its content is card rows, which want the width. */
+.chat-msg.user {
+  align-self: flex-end;
+  max-width: min(62ch, 80%);
+  background: var(--paper);
+}
+.chat-msg.assistant { align-self: stretch; background: var(--card); }
 .chat-msg.error { border-color: var(--danger); color: var(--danger); }
-.chat-steps { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+
+/* The annotation strip under an answer: what it cited, what it cost, which
+   tools ran. Folded to a single quiet line — a receipt pasted face-down under a
+   ledger entry — and opened only when the evidence is what you came for. Once
+   open: sources take the width, the cost sits flush right the way a total does,
+   and the tool chips get their own line so opening one has the full strip to
+   expand into. */
+.chat-meta {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--card-line);
+}
+.chat-meta-summary {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+  cursor: pointer;
+  list-style: none;
+  width: fit-content;
+}
+.chat-meta-summary::-webkit-details-marker { display: none; }
+.chat-meta-summary::before { content: '▸ '; }
+.chat-meta[open] .chat-meta-summary::before { content: '▾ '; }
+.chat-meta-summary:hover { color: var(--ink); }
+.chat-meta-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 24px;
+  align-items: start;
+  margin-top: 9px;
+}
+.chat-steps {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
 /* A tool call: a pill until you open it, then the evidence underneath. The
    pill styling moved from .chat-step to its summary when the chip became a
    <details> — the class name stays, because the e2e suite selects on it. */
@@ -2295,6 +2443,8 @@ kbd {
   display: inline-block;
   font-family: var(--mono);
   font-size: 0.7rem;
+  /* A tool's name is one token — never broken down the middle of itself. */
+  white-space: nowrap;
   padding: 1px 8px;
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -2373,17 +2523,43 @@ kbd {
 .chat-link { color: var(--rule-red); text-decoration: underline; }
 /* Where the answer came from. Kept quiet — it is the evidence behind the
    reply, not a second reply. */
-.chat-sources { margin-top: 8px; border-top: 1px solid var(--card-line); padding-top: 6px; }
+.chat-sources { grid-column: 1; min-width: 0; }
 .chat-sources-label {
-  margin: 0 0 4px;
+  margin: 0 0 5px;
   font-family: var(--mono);
   font-size: 0.65rem;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
   color: var(--ink-soft);
 }
-.chat-source-list { margin: 0; padding-left: 1.4em; }
-.chat-source { font-size: 0.8rem; margin-bottom: 3px; }
+/* Entries side by side rather than a tall numbered list: two or three cited
+   cards read as one row of the receipt, and the strip stays a strip. */
+.chat-source-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 6px 20px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  /* Numbered by hand: laying an entry out as a grid drops `display:
+     list-item`, and the built-in list-item counter stops counting with it. */
+  counter-reset: chat-source;
+}
+.chat-source {
+  display: grid;
+  grid-template-columns: 1.5em minmax(0, 1fr);
+  align-items: baseline;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  counter-increment: chat-source;
+}
+.chat-source::before {
+  content: counter(chat-source);
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-soft);
+}
 .chat-source-link { color: var(--rule-red); text-decoration: underline; }
 /* The card source is a button so it can open the editor in place; it has to
    read as the link it behaves like, not as a form control. */
@@ -2397,8 +2573,10 @@ button.chat-source-card {
 }
 .chat-source-said { color: var(--ink); }
 .chat-source-note {
+  grid-column: 2;
   display: block;
-  font-size: 0.72rem;
+  font-family: var(--mono);
+  font-size: 0.68rem;
   color: var(--ink-soft);
   /* One line: a snippet is a hint about the source, and three of them at full
      length would bury the reply they are supposed to support. */
@@ -2410,11 +2588,25 @@ button.chat-source-card {
 /* What the turn spent. A receipt line, so it reads like the source label above
    it rather than like part of the answer. */
 .chat-usage {
-  margin: 6px 0 0;
+  grid-column: 2;
+  margin: 0;
   font-family: var(--mono);
-  font-size: 0.65rem;
+  font-size: 0.68rem;
+  line-height: 1.5;
   letter-spacing: 0.04em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
   color: var(--ink-soft);
+  white-space: nowrap;
+}
+/* Too narrow to hold a total out to the right without starving the sources
+   beside it — the strip becomes stacked lines instead. Placed after the rules
+   it overrides, not beside .chat-meta: `.chat-usage { grid-column: 2 }` further
+   down would otherwise win and open an implicit second column, which is the
+   whole thing this is undoing. */
+@media (max-width: 720px) {
+  .chat-meta-body { grid-template-columns: minmax(0, 1fr); }
+  .chat-usage { grid-column: 1; text-align: left; }
 }
 
 .chat-composer { display: flex; gap: 8px; align-items: flex-end; }
