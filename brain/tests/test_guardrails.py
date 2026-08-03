@@ -64,9 +64,10 @@ from lodestar_brain.tools.board import BoardClient, make_board_tools
 BOARD = 'http://board.test'
 
 # What create_app is allowed to hand the agent. Nothing here can delete a card,
-# write a habit completion, or reach the database.
+# write a habit completion, or reach the database. daily_recap reads the board
+# and the chat record and writes nothing.
 CORE_TOOLS = {'list_cards', 'create_card', 'update_card', 'web_search',
-              'find_related'}
+              'find_related', 'daily_recap'}
 # The one conditional tool: appended only when Chroma answers, since chat memory
 # is optional infrastructure.
 OPTIONAL_TOOLS = {'recall_chat'}

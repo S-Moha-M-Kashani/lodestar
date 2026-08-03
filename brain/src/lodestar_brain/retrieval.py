@@ -1057,6 +1057,13 @@ class ChatStore:
         self.index_messages(missing)
         return len(missing)
 
+    def chunks_on(self, day: int) -> list[dict]:
+        """Every chunk stamped with that created_day, as its metadata dict.
+        Not a search: the recap tool reports what a day holds, and a query
+        would decide relevance where the question was only 'how much'."""
+        got = self.store.get(where={'created_day': day})
+        return [dict(meta) for meta in got.get('metadatas') or []]
+
     def search(self, text: str, k: int = 5,
                scope: TimeScope | None = None, *,
                evidence: bool = True) -> list[dict]:
