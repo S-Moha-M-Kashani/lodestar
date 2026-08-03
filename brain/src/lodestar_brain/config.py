@@ -85,6 +85,16 @@ class Settings:
     omni_model: str = 'google/gemini-2.5-flash-lite'
     # Local checkpoint for the Parakeet backend (Apple Silicon, MLX).
     parakeet_model: str = 'mlx-community/parakeet-tdt-0.6b-v3'
+    # 'google-safe-browsing' | 'fake' | 'off' — where a search result leads is
+    # checked before the model may cite it (`safety.py`).
+    #
+    # Inert here and real in `load_settings`, exactly as `chroma_url` is: a
+    # Settings built in code is a test or a script, and one built from the
+    # environment is the product. So the *env* default is the real backend, which
+    # raises at boot without a key rather than reporting a check that never ran,
+    # and `off` is how you say you meant to run without one.
+    url_safety: str = 'off'
+    safe_browsing_key: str = ''
 
     def __post_init__(self):
         # An unknown provider gets the remote slug and is rejected by
@@ -140,6 +150,8 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         max_agent_steps=int(env.get('BRAIN_MAX_STEPS', '8')),
         transcriber=env.get('BRAIN_TRANSCRIBER', 'parakeet'),
         omni_model=env.get('BRAIN_OMNI_MODEL', 'google/gemini-2.5-flash-lite'),
+        url_safety=env.get('BRAIN_URL_SAFETY', 'google-safe-browsing'),
+        safe_browsing_key=env.get('GOOGLE_SAFE_BROWSING_KEY', ''),
         parakeet_model=env.get('BRAIN_PARAKEET_MODEL',
                                'mlx-community/parakeet-tdt-0.6b-v3'),
     )

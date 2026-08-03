@@ -331,7 +331,11 @@ def test_expansion_reaches_the_words_the_corpus_actually_uses():
     assert variants[0] == question          # the question itself always leads
     assert any('مهسا' in variant for variant in variants)
     assert len(variants) == len(set(variants))
-    assert retrieval.expand_queries('renew the visa') == ['renew the visa']
+    # Cross-script expansion is always on: an English query grows a variant
+    # with Persian spellings, so «ویسا» on the board is reachable from "visa".
+    english = retrieval.expand_queries('renew the visa')
+    assert english[0] == 'renew the visa'   # the question itself still leads
+    assert any('ویسا' in variant for variant in english)
     # The LLM-backed alternative is LangChain's, wired to the chat model rather
     # than reimplemented. It is a seam, so it only has to answer.
     llm = FakeChat(script=[AIMessage(content='dispute with wife\ntax fine')])

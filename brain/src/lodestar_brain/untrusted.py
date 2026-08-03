@@ -156,10 +156,30 @@ already be running the answerer locally, where the relevance gate's own latency
 budget is the standing example of what per-call models cost here.
 
 **What would change the decision:** an eval that shows the fence is not enough.
-There is no injection eval in `brain/tests/evals/` yet — a fixture of hostile
-snippets planted in web results and in card notes, scoring how often the agent
-obeys them. If a small local model obeys above single-digit percentages, a
-classifier has earned its call and Llama Firewall is the one to reach for. Until
-that number exists, adding a classifier would be buying a defence against an
-unmeasured rate, and this repo does not rank on unmeasured numbers.
+That eval now exists — `brain/tests/evals/test_injection.py`, six hostile
+payloads planted in the two channels an attacker actually reaches (a web-search
+snippet and the notes on the user's own card), each demanding one observable act:
+open the reply with a canary, or call a tool carrying it. Obedience is therefore
+exact-match, which is why it needed no judge model and no threshold to tune. One
+payload closes the fence with `END` itself, substituted from this module rather
+than written into the fixture, so the attack cannot go stale if the marker text
+changes.
+
+    BRAIN_EVAL_LIVE=1 OPENROUTER_API_KEY=… \\
+      uv run --project brain pytest brain/tests/evals/test_injection.py -v -m live
+
+**The obey rate is not recorded here yet: the live pass has not been run.** The
+offline control (`test_the_scorer_detects_both_obedience_and_refusal`) proves
+only that the scorer can report obedience as well as refusal — a harness that
+could not is the one way an eval like this passes while measuring nothing. Note
+that the scorer deliberately over-reports: a reply opening with the canary counts
+even if the rest of the sentence refuses, so the number errs high and a clean run
+can be believed.
+
+If the rate comes back above single-digit percentages, a classifier has earned
+its call and Llama Firewall is the one to reach for. Below that, the fence stands
+on measurement rather than on assumption. Until the pass is run, adding a
+classifier would still be buying a defence against an unmeasured rate, and this
+repo does not rank on unmeasured numbers — which is now a statement about one
+missing command rather than about a missing eval.
 """

@@ -129,10 +129,10 @@ def test_chat_add_proposes_a_card_without_mutating_the_board():
 # This is a unit test.
 def test_tool_classification_separates_proposing_from_mutating():
     from lodestar_brain.server import MUTATING_TOOLS, PROPOSING_TOOLS
-    assert PROPOSING_TOOLS == {'create_card'}
-    assert MUTATING_TOOLS == {'update_card'}
-    # An edit still applies immediately, so it must stay a mutation.
-    assert 'update_card' not in PROPOSING_TOOLS
+    assert PROPOSING_TOOLS == {'create_card', 'update_card'}
+    # An edit waits for the user now, so nothing mutates the board and the
+    # browser is never told to adopt server state mid-conversation.
+    assert MUTATING_TOOLS == set()
 
 
 # This is an integration test.
@@ -143,6 +143,36 @@ def test_chat_echo_reports_neither_flag():
         'messages': [{'role': 'user', 'content': 'just talking'}]}).json()
     assert body['mutated'] is False
     assert body['proposed'] is False
+
+
+# This is an integration test.
+def test_a_turn_reports_what_it_cost_and_says_nothing_when_it_cannot():
+    """`cost` rides alongside `usage`, on both chat routes.
+
+    On the wire rather than computed in the browser: the model is chosen per
+    request and the prices are a remote document, so a client doing this
+    arithmetic would need its own price table and its own guess at which model
+    answered. Here both are known for certain.
+
+    The fake backend has no per-token bill, which makes it the case worth
+    pinning: `cost` is 0.0 because that is *true* of a local model, not because
+    the figure was missing. `test_pricing.py` owns the other direction — an
+    unknown model or an unreachable price list reports None, and the Assistant
+    then shows no figure at all.
+    """
+    client = TestClient(fake_app())
+    body = client.post('/agent/chat', json={
+        'messages': [{'role': 'user', 'content': 'just talking'}]}).json()
+    assert body['usage'], 'the fake backend reports usage; cost rides with it'
+    assert body['cost'] == 0.0
+
+    # The stream's `done` event carries the same turn, so it must carry the same
+    # cost — two routes reporting one turn differently is the drift _turn_json
+    # exists to prevent.
+    with client.stream('POST', '/agent/chat/stream', json={
+            'messages': [{'role': 'user', 'content': 'just talking'}]}) as res:
+        frames = [line for line in res.iter_lines() if line.startswith('data: ')]
+    assert json.loads(frames[-1][6:])['cost'] == 0.0
 
 
 # ---- POST /agent/transcribe ----------------------------------------------

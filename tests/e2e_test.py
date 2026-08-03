@@ -8,6 +8,7 @@ the board actually persists to (and deletes from) the database.
 """
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -65,6 +66,52 @@ def wait_until(cond, timeout=5.0):
     while time.time() < deadline and not cond():
         time.sleep(0.05)
     return cond()
+
+def open_meta(page):
+    """Unfold the evidence strip under the newest reply.
+
+    Sources, tool chips and the token split live behind a one-line indicator, so
+    every check that reads them has to open it first. Guarded rather than
+    clicked outright: a missing indicator must read as the red lines of the
+    checks that needed it, not as a TimeoutError that abandons the rest."""
+    meta = page.locator(".chat-meta").last
+    if meta.count() == 1 and meta.get_attribute("open") is None:
+        # .chat-meta-summary, not "summary": each tool chip inside the strip is
+        # its own <details>, so the loose tag matches several.
+        meta.locator(".chat-meta-summary").click()
+
+
+def open_extras(page):
+    """Open the Assistant's extras — the lab, the chat menu and the models.
+
+    Shut, the conversation gets the whole sheet, so everything that drives one of
+    those controls has to open this first."""
+    btn = page.locator("#assistant-extras-btn")
+    if btn.count() == 1 and btn.get_attribute("aria-expanded") != "true":
+        btn.click()
+
+
+def open_models(page):
+    """Unfold the Models panel, opening the extras around it if need be.
+
+    Which model answers is picked once and then left alone, so it is folded
+    inside the extras and everything reading a picker has to open both."""
+    open_extras(page)
+    box = page.locator(".chat-settings")
+    if box.count() == 1 and box.get_attribute("open") is None:
+        box.locator(".chat-settings-name").click()
+
+
+def open_chat_menu(page):
+    """Open the Assistant's Chat menu, where export and import now live.
+
+    Same idiom as the board's Menu, closing itself after any action inside it,
+    so anything driving those two controls has to open it again first."""
+    open_extras(page)
+    btn = page.locator("#chat-menu-btn")
+    if btn.count() == 1 and btn.get_attribute("aria-expanded") != "true":
+        btn.click()
+
 
 ARTIFACTS = os.path.join(os.path.dirname(__file__), "artifacts")
 os.makedirs(ARTIFACTS, exist_ok=True)
@@ -142,6 +189,10 @@ def start_brain():
              # in-process Chroma: e2e must not depend on the Docker server,
              # and must never write into the user's real chat memory
              "BRAIN_CHROMA_URL": "memory",
+             # The real link-reputation backend refuses to build without a key,
+             # which is deliberate — so the offline run names the fake one rather
+             # than letting the brain fail at boot with nothing to search anyway.
+             "BRAIN_URL_SAFETY": "fake",
              "BRAIN_CHAT_COLLECTION": "chat-e2e"},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -168,6 +219,23 @@ def api_trash():
 
 def api_proposals():
     with urllib.request.urlopen(URL + "/api/proposals", timeout=3) as r:
+        return json.loads(r.read())
+
+
+def api_edits():
+    with urllib.request.urlopen(URL + "/api/edits", timeout=3) as r:
+        return json.loads(r.read())
+
+
+def api_suggest_edit(card_id, fields):
+    """Stand in for the Assistant proposing a change. The offline fake chat model
+    has no script that calls update_card, and what this test is about is the
+    review-and-save path, not the model's choice to suggest."""
+    body = json.dumps({"cardId": card_id, "fields": fields}).encode()
+    req = urllib.request.Request(
+        URL + "/api/edits", data=body, method="POST",
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=3) as r:
         return json.loads(r.read())
 
 
@@ -472,11 +540,40 @@ try:
         check("export: Cancel closes the dialog", page.locator("#export-dialog[open]").count() == 0)
 
         # ---- Themes ---------------------------------------------------------
-        for theme in ("white", "sepia", "dark", "light"):
-            page.select_option("#theme-select", theme)
+        # This is an end-to-end test. 'star' is the fifth theme; it must switch,
+        # persist and fall back exactly like the other four.
+        #
+        # These two helpers exist because this suite is one script with a shared
+        # check() collector and no per-test isolation: a missing option or a
+        # missing element raises, and the raise takes every later check with it.
+        # Measured — the first run of these checks aborted the suite at
+        # select_option('star') and hid the ~180 assertions after it. So a gap in
+        # the feature has to come back as False, never as an exception.
+        def select_theme(theme):
+            try:
+                page.select_option("#theme-select", theme, timeout=1500)
+                return True
+            except Exception:
+                return False
+
+        def css(sel, prop):
+            return page.evaluate(
+                """([sel, prop]) => {
+                     const el = document.querySelector(sel);
+                     return el ? getComputedStyle(el)[prop] : null;
+                   }""", [sel, prop])
+
+        for theme in ("white", "sepia", "dark", "star", "light"):
+            picked = select_theme(theme)
             page.wait_for_timeout(40)
             check(f"theme: '{theme}' mode applied",
-                  page.evaluate("document.documentElement.dataset.theme") == theme)
+                  picked and page.evaluate("document.documentElement.dataset.theme") == theme)
+        # An unknown stored theme must not strand the board on a blank sky.
+        page.evaluate("() => localStorage.setItem('lodestar:theme', 'supernova')")
+        page.reload()
+        page.wait_for_selector(".card")
+        check("theme: an unknown stored theme falls back to Morning",
+              page.evaluate("document.documentElement.dataset.theme") == "light")
         page.select_option("#theme-select", "white")
         page.reload()
         page.wait_for_selector(".card")
@@ -494,6 +591,250 @@ try:
             day_bg_white = False
         check("theme: Day mode uses a plain white background", day_bg_white)
         page.select_option("#theme-select", "light")
+
+        # ---- The brand mark -------------------------------------------------
+        # This is an end-to-end test. The header mark is the nova, drawn as two
+        # scene variants that swap on theme: the colour wash on the paper themes,
+        # the wash plus a star field on the dark ones. Both live in the DOM and
+        # CSS chooses; the test pins which one is showing, because a variant that
+        # silently never renders is the failure this cannot catch by eye.
+        def mark_variant():
+            return page.evaluate("""() => {
+              const vis = (sel) => {
+                const el = document.querySelector('.brand-mark ' + sel);
+                return !!el && getComputedStyle(el).display !== 'none';
+              };
+              return { colour: vis('.scene-colour'), stars: vis('.scene-stars') };
+            }""")
+
+        check("brand: the question mark is gone from the header",
+              page.locator(".brand-mark").inner_text().strip() == "")
+        check("brand: the mark is an SVG, not a glyph",
+              page.locator(".brand-mark svg").count() > 0)
+        for theme, want in (("light", "colour"), ("white", "colour"), ("sepia", "colour"),
+                            ("dark", "stars")):
+            select_theme(theme)
+            page.wait_for_timeout(40)
+            v = mark_variant()
+            check(f"brand: '{theme}' shows the {want} scene and only that one",
+                  v[want] and not v["stars" if want == "colour" else "colour"])
+        # Under the star theme the sky already carries a nova, so the header mark
+        # would be a second one. It goes; the words stay.
+        select_theme("star")
+        page.wait_for_timeout(40)
+        check("brand: the star theme drops the header mark",
+              css(".brand-mark", "display") == "none")
+        check("brand: the star theme keeps the name and the tagline",
+              page.locator(".brand h1").is_visible() and page.locator(".tagline").is_visible())
+        select_theme("light")
+
+        # ---- The Star theme's sky -------------------------------------------
+        # This is an end-to-end test. The sky belongs to the star theme alone:
+        # it must not leak onto the other four, its nova is anchored low-right,
+        # and the clouds drift while the nova stays put.
+        select_theme("star")
+        page.wait_for_timeout(120)
+        sky_display = css(".star-sky", "display")
+        check("star: the sky renders under the star theme",
+              page.locator(".star-sky").count() == 1
+              and sky_display is not None and sky_display != "none")
+        clouds_anim = css(".star-sky-clouds", "animationName")
+        check("star: the clouds are animating",
+              clouds_anim is not None and clouds_anim != "none")
+        check("star: the nova is not animating - only the clouds move",
+              css(".star-sky-nova", "animationName") == "none")
+        # Anchored into the lower-right corner: its centre sits in that quadrant.
+        nova_low_right = page.evaluate("""() => {
+          const el = document.querySelector('.star-sky-nova');
+          if (!el) return false;
+          const r = el.getBoundingClientRect();
+          return (r.left + r.width / 2) > innerWidth / 2
+              && (r.top + r.height / 2) > innerHeight / 2;
+        }""")
+        check("star: the nova sits in the lower-right corner", nova_low_right)
+        # "Somewhere no card is placed": the sky is background, so the nova must
+        # land in empty board, not behind a card where it fights the text.
+        nova_clear_of_cards = page.evaluate("""() => {
+          const el = document.querySelector('.star-sky-nova');
+          if (!el) return false;
+          const n = el.getBoundingClientRect();
+          return [...document.querySelectorAll('.card')].every((c) => {
+            const r = c.getBoundingClientRect();
+            return n.right < r.left || n.left > r.right
+                || n.bottom < r.top || n.top > r.bottom;
+          });
+        }""")
+        check("star: the nova does not sit behind a card", nova_clear_of_cards)
+        # The sky is furniture, not a card: it must never take pointer events or
+        # a tab stop away from the board underneath it.
+        check("star: the sky ignores the pointer",
+              css(".star-sky", "pointerEvents") == "none")
+        select_theme("light")
+        page.wait_for_timeout(40)
+        check("star: the sky is hidden on the other themes",
+              css(".star-sky", "display") == "none")
+
+        # Reduced motion is a promise the rest of the app already keeps.
+        page.emulate_media(reduced_motion="reduce")
+        select_theme("star")
+        page.wait_for_timeout(120)
+        check("star: prefers-reduced-motion stops the clouds",
+              css(".star-sky-clouds", "animationName") == "none")
+        page.emulate_media(reduced_motion="no-preference")
+
+        # ---- The Assistant over the sky -------------------------------------
+        # This is an end-to-end test. On the Assistant view the sheet fills the
+        # width, so an opaque sheet would hide the whole sky. Under the star
+        # theme it goes translucent and the clouds drift behind it; on every
+        # other theme it stays solid, because a see-through sheet over quad
+        # paper is unreadable.
+        def sheet_alpha():
+            return page.evaluate("""() => {
+              const el = document.querySelector('.assistant-sheet');
+              if (!el) return null;
+              const m = getComputedStyle(el).backgroundColor.match(/rgba?\\(([^)]+)\\)/);
+              if (!m) return null;
+              const parts = m[1].split(',').map((s) => parseFloat(s));
+              return parts.length > 3 ? parts[3] : 1;
+            }""")
+
+        # Back to a paper theme first: the reduced-motion block above left the
+        # board on 'star', so without this the next check asserts paper-theme
+        # behaviour while the star theme is still applied. It passed before the
+        # feature existed only because 'star' was unselectable.
+        select_theme("light")
+        page.click('[data-view="assistant"]')
+        page.wait_for_selector(".assistant-sheet")
+        check("assistant: the sheet is opaque on the paper themes", sheet_alpha() == 1)
+
+        # The composer must never need a scroll to reach. An empty transcript
+        # always fits, so the interesting case is a full one: .chat-log caps at
+        # 62vh, which plus the header and the sheet's own chrome adds up past the
+        # viewport, and the page - not the transcript - takes up the slack.
+        page.evaluate("""() => {
+          const log = document.querySelector('.chat-log');
+          for (let i = 0; i < 40; i++) {
+            const d = document.createElement('div');
+            d.className = 'chat-msg ' + (i % 2 ? 'assistant' : 'user');
+            d.textContent = 'filler turn ' + i + ' - '.repeat(20);
+            log.append(d);
+          }
+        }""")
+        page.wait_for_timeout(200)
+        fit = page.evaluate("""() => {
+          const c = document.querySelector('#chat-input').getBoundingClientRect();
+          return {bottom: Math.round(c.bottom), vh: innerHeight,
+                  over: Math.round(document.documentElement.scrollHeight - innerHeight)};
+        }""")
+        check(f"assistant: the composer is in view with a full transcript "
+              f"(bottom {fit['bottom']} of {fit['vh']})",
+              fit["bottom"] <= fit["vh"])
+        check(f"assistant: a full transcript scrolls itself, not the page "
+              f"(overflow {fit['over']}px)", fit["over"] <= 1)
+        page.reload()
+        page.wait_for_selector("#chat-input")
+        select_theme("star")
+        page.wait_for_timeout(120)
+        a = sheet_alpha()
+        check("assistant: the star theme makes the sheet translucent so the sky shows",
+              a is not None and a < 1)
+        anim = css(".star-sky-clouds", "animationName")
+        check("assistant: the clouds keep drifting behind the sheet",
+              anim is not None and anim != "none")
+        check("assistant: the header mark is gone but the tagline remains",
+              css(".brand-mark", "display") == "none" and page.locator(".tagline").is_visible())
+        select_theme("light")
+        page.click('[data-view="board"]')
+        page.wait_for_selector(".card")
+
+        # ---- The header fits one row ----------------------------------------
+        # This is an end-to-end test. The view switch and the toolbar are already
+        # children of one flex row; they wrapped onto two lines because the mark
+        # and the paddings ate the width, which cost ~200px of vertical space
+        # before a single card. Measured at 375px tall on a 1440-wide window.
+        page.set_viewport_size({"width": 1440, "height": 900})
+        page.wait_for_timeout(150)
+        rows = page.evaluate("""() => {
+          const r = (s) => document.querySelector(s).getBoundingClientRect();
+          const vs = r('.view-switch'), tb = r('.toolbar');
+          return {same: Math.abs(vs.top - tb.top) < 12,
+                  header: Math.round(r('.app-header').height)};
+        }""")
+        check("header: the view switch and the toolbar share one row", rows["same"])
+        check(f"header: the top panel is under 240px tall (got {rows['header']})",
+              rows["header"] <= 240)
+
+        # ---- The board fits the window --------------------------------------
+        # This is an end-to-end test. .column caps at calc(100vh - 200px), a
+        # guess at the header's height, so the board fits only while the header
+        # stays under 200px. Add a habit banner, an eleventh category and a
+        # second line of tags - all ordinary states - and the page overflows and
+        # the footer goes under the fold. The columns already scroll themselves;
+        # what must not scroll is the page.
+        def board_fits():
+            return page.evaluate("""() => {
+              const f = document.querySelector('.app-footer').getBoundingClientRect();
+              return {footer: Math.round(f.bottom), vh: innerHeight,
+                      over: Math.round(document.documentElement.scrollHeight - innerHeight)};
+            }""")
+
+        fits = board_fits()
+        check(f"board: the footer is in view (bottom {fits['footer']} of {fits['vh']})",
+              fits["footer"] <= fits["vh"])
+        check(f"board: the page does not scroll (overflow {fits['over']}px)",
+              fits["over"] <= 1)
+
+        # The real regression is column content, not header height: a seeded
+        # board is short enough that scrollHeight alone reports no overflow even
+        # when a column is free to grow to 3800px. So load a column past the
+        # window and then try to scroll - whether the page moves is the property
+        # the user actually feels.
+        page.evaluate("""() => {
+          const probe = document.createElement('div');
+          probe.id = 'tall-column-probe';
+          probe.style.height = '2400px';
+          document.querySelector('.column .cards').append(probe);
+          const hdr = document.createElement('div');
+          hdr.id = 'tall-header-probe';
+          hdr.style.height = '120px';
+          document.querySelector('.app-header').append(hdr);
+        }""")
+        page.wait_for_timeout(200)
+        page.evaluate("window.scrollTo(0, 3000)")
+        page.wait_for_timeout(150)
+        tall = page.evaluate("""() => {
+          const f = document.querySelector('.app-footer').getBoundingClientRect();
+          return {footer: Math.round(f.bottom), vh: innerHeight, y: Math.round(scrollY),
+                  col: Math.round(document.querySelector('.column').getBoundingClientRect().height)};
+        }""")
+        check(f"board: an overloaded column leaves the footer in view "
+              f"(bottom {tall['footer']} of {tall['vh']})",
+              tall["footer"] <= tall["vh"])
+        check(f"board: the page refuses to scroll past the window "
+              f"(scrollY {tall['y']})", tall["y"] == 0)
+        # The discriminating measurement. Against the old rules this column grew
+        # to 5146px on a 49-card board; a scrollHeight assertion alone passed on
+        # the seeded board and would have shipped the bug.
+        check(f"board: the column stays inside the window "
+              f"({tall['col']}px of {tall['vh']})", tall["col"] <= tall["vh"])
+        page.evaluate("""() => {
+          document.querySelector('#tall-column-probe').remove();
+          document.querySelector('#tall-header-probe').remove();
+        }""")
+
+        # ---- The star theme's paper ------------------------------------------
+        # This is an end-to-end test. Day drops the quad grid because a ruled
+        # sheet fights high-contrast reading; the sky is a photograph, and a
+        # grid ruled over it reads as a bug rather than as paper.
+        select_theme("star")
+        page.wait_for_timeout(80)
+        check("star: the sky has no quad grid, like Day",
+              page.evaluate(
+                  "getComputedStyle(document.body).backgroundImage") == "none")
+        select_theme("light")
+        check("theme: Morning keeps its quad grid",
+              page.evaluate(
+                  "getComputedStyle(document.body).backgroundImage") != "none")
 
         # ---- Delete (in-app confirm dialog) ---------------------------------
         target = page.locator('[data-col="answered"] .card').first
@@ -1036,22 +1377,103 @@ try:
         page.fill("#chat-input", "hello brain")
         page.click("#chat-send")
         page.wait_for_selector(".chat-msg.assistant")
+        # wait_until, because the bubble now appears empty and fills in: the
+        # reply is revealed at a readable rate rather than pasted in whole, so
+        # ".chat-msg.assistant exists" no longer means "the text is all there".
         check("assistant: chat roundtrip through the Node proxy",
-              "FAKE: hello brain" in page.inner_text(".chat-log"))
+              wait_until(lambda: "FAKE: hello brain" in page.inner_text(".chat-log")))
         # What the turn spent. The offline backend reports usage precisely so
-        # this path is exercised without a paid model in the loop.
+        # this path is exercised without a paid model in the loop. Read off the
+        # folded indicator, which is where the total lives now: what a turn cost
+        # is worth a glance, the in/out split is not.
+        # wait_until, because the bubble appears while the turn is still
+        # streaming and the usage lands with the `done` event after it.
         check("assistant: the turn reports the tokens it spent",
-              page.locator(".chat-usage").count() >= 1
-              and "tokens" in page.locator(".chat-usage").last.inner_text())
+              wait_until(lambda: page.locator(".chat-meta-summary").count() >= 1
+                         and "tokens" in page.locator(".chat-meta-summary").last.inner_text()))
+
+        # ---- Streaming: the answer is revealed as it is written --------------
+        # This is an end-to-end test.
+        # The wire was never the problem. The brain has emitted `token` frames
+        # since the stream route existed, the Node proxy pipes rather than
+        # buffers, and the client accumulates. What a user actually meets is a
+        # model that thinks for thirteen seconds and then delivers 51 tokens in
+        # under one — and one animation frame paints all of them, so a correctly
+        # streamed reply still lands as a single lump.
+        #
+        # So what is asserted is the *reveal*: the bubble passes through visible
+        # intermediate states on its way to the finished text. That is the only
+        # half a fake model can prove — it answers in one chunk, which is
+        # precisely the worst case the reveal has to survive — and it is the half
+        # the user sees.
+        long_ask = "watch this arrive: " + " ".join(f"word{i}" for i in range(40))
+        seen_before = page.locator(".chat-msg.assistant").count()
+        # Sampled every frame from inside the page. Polling over the wire would
+        # miss a reveal that completes between two round trips, and the question
+        # here is exactly how many states were paintable.
+        page.evaluate(
+            """(before) => {
+              window.__reveal = [];
+              const tick = () => {
+                const nodes = document.querySelectorAll('.chat-msg.assistant .chat-text');
+                if (nodes.length > before) {
+                  const text = nodes[nodes.length - 1].textContent;
+                  const seen = window.__reveal;
+                  if (!seen.length || seen[seen.length - 1] !== text) seen.push(text);
+                }
+                window.__revealRaf = requestAnimationFrame(tick);
+              };
+              tick();
+            }""",
+            seen_before)
+        page.fill("#chat-input", long_ask)
+        page.click("#chat-send")
+        final = f"FAKE: {long_ask}"
+        settled = wait_until(lambda: final in page.inner_text(".chat-log"))
+        page.evaluate("() => cancelAnimationFrame(window.__revealRaf)")
+        snapshots = page.evaluate("() => window.__reveal")
+        # The states on the way there: non-empty, and not the finished text.
+        partials = [t for t in snapshots if t and t != final]
+        check("assistant: the reply is revealed progressively, not in one lump",
+              settled
+              # Three is the smallest number that cannot be an accident of one
+              # empty bubble followed by one repaint.
+              and len(partials) >= 3
+              # Every state is the finished answer, truncated — never a reflow, a
+              # placeholder, or text that is later taken back.
+              and all(final.startswith(t) for t in partials)
+              and all(len(a) < len(b) for a, b in zip(partials, partials[1:])))
 
         # ---- Agent card confirmation gate -----------------------------------
         # A card the agent invents is a PROPOSAL: nothing reaches the board until
         # the user approves it.
         board_before = len(api_state()["cards"])
+        # Relative to what is already on screen, not an absolute count: this used
+        # to wait for `>= 2`, which any turn added above it satisfies before this
+        # one has even been sent, and the block then read the previous turn's
+        # evidence. The same pattern is used further down for the same reason.
+        replies_before = page.locator(".chat-msg.assistant").count()
         page.fill("#chat-input", "add: What is Leiden clustering?")
         page.click("#chat-send")
         page.wait_for_function(
-            "document.querySelectorAll('.chat-msg.assistant').length >= 2")
+            "n => document.querySelectorAll('.chat-msg.assistant').length > n",
+            arg=replies_before)
+        # This is an end-to-end test.
+        # The evidence under a reply is folded away behind a one-line indicator:
+        # most turns are read for the answer alone, and sources, tool chips and
+        # a token receipt under every one of them is a wall of furniture. The
+        # indicator still has to say what is behind it.
+        # The strip is built from what the turn *did*, so it is only complete once
+        # the turn has settled. Waited for rather than read immediately: this
+        # check used to pass on the count race above, reading the previous turn's
+        # already-finished strip instead of this one's.
+        folded = page.locator(".chat-meta").last
+        settled_meta = wait_until(
+            lambda: folded.locator(".chat-meta-summary").count() == 1
+            and "tool" in folded.locator(".chat-meta-summary").inner_text())
+        check("assistant: the evidence under a reply is folded until asked for",
+              settled_meta and not folded.locator(".chat-steps").is_visible())
+        open_meta(page)
         check("assistant: tool chip shown for create_card",
               "create_card" in page.inner_text(".chat-log"))
         # The chip used to be the whole story: a tool's name, with what it was
@@ -1107,6 +1529,7 @@ try:
         # thing under test, and it must read as red lines rather than a
         # TimeoutError that abandons every check after this one.
         cited = wait_until(lambda: page.locator(".chat-source").count() == 3)
+        open_meta(page)
         reply = page.locator(".chat-msg.assistant").last
 
         check("assistant: a url in the reply is a real link, not inert text",
@@ -1132,7 +1555,170 @@ try:
               and page.input_value("#card-title") == seed["title"])
         if opens_card:
             page.keyboard.press("Escape")
+
+        # This is an end-to-end test.
+        # A reply is one column of prose with its evidence beneath it. The view
+        # container is `#board.assistant` and a reply bubble is `.chat-msg
+        # .assistant`, so an unscoped `.assistant` rule lands on both: the reply
+        # became a flex row and broke into four narrow centred columns — answer,
+        # tool chips, sources, tokens — each a few words wide. Measured rather
+        # than asserted on the stylesheet, because any rule that reaches the
+        # bubble breaks it the same way.
+        box = reply.bounding_box()
+        text_box = reply.locator(".chat-text").bounding_box()
+        src_box = reply.locator(".chat-sources").bounding_box()
+        check("assistant: a reply is one column, not columns beside its footnotes",
+              text_box["width"] >= box["width"] * 0.85
+              and src_box["y"] >= text_box["y"] + text_box["height"])
+
         page.unroute("**/api/agent/chat/stream")
+
+        # ---- What one turn carries -------------------------------------------
+        # The browser used to send the entire transcript on every turn: a long
+        # chat meant a bigger, slower, dearer request each time, and past 80
+        # messages the brain refused it outright — a conversation that rendered
+        # perfectly and could not be talked into.
+        #
+        # Now it sends a window. The transcript is untouched on screen and in
+        # assistant.db; what changes is how much of it rides along, so the cost
+        # of turn fifty is the cost of turn five. Seeded through localStorage
+        # rather than by holding fifty conversations: the fake model would take
+        # minutes to produce them and the assertion is about the request body.
+        # Put back afterwards: every later block in this suite reads the
+        # transcript this one is about to replace.
+        real_chat = page.evaluate("() => localStorage.getItem('lodestar:chat')")
+        seeded = []
+        for i in range(30):
+            seeded.append({"role": "user", "content": f"seeded question {i}"})
+            seeded.append({"role": "assistant", "content": f"seeded answer {i}"})
+        page.evaluate("(msgs) => localStorage.setItem('lodestar:chat', JSON.stringify(msgs))",
+                      seeded)
+        page.reload()
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector("#chat-input")
+
+        sent = []
+        page.route("**/api/agent/chat/stream", lambda route: (
+            sent.append(json.loads(route.request.post_data)),
+            route.fulfill(status=200, content_type="text/event-stream",
+                          body='event: done\ndata: {"reply": "ok", "mutated": false,'
+                               ' "proposed": false, "steps": []}\n\n')))
+        page.fill("#chat-input", "the newest question")
+        page.click("#chat-send")
+        wait_until(lambda: len(sent) == 1)
+        body = sent[0] if sent else {"messages": []}
+        carried = [m["content"] for m in body["messages"]]
+
+        # This is an end-to-end test.
+        check("context: a long chat is not resent whole on every turn",
+              # 61 messages are on screen; far fewer travel.
+              len(carried) < 25
+              # The turn being asked is always the last thing the model reads.
+              and carried[-1] == "the newest question")
+        # This is an end-to-end test.
+        # The first message is kept deliberately, at the cost of two lines of
+        # window: it is where a conversation says what it is *about*, and a model
+        # given only the tail of a long thread answers the last question while
+        # having forgotten the task. Cheap framing beats a summary — which this
+        # project has decided twice not to reintroduce.
+        check("context: the opening message is kept as the conversation's framing",
+              "seeded question 0" in carried
+              # And it is the recent end that is kept, not an arbitrary slice.
+              and "seeded question 29" in carried
+              and "seeded question 5" not in carried)
+        # This is an end-to-end test.
+        # Trimming that nobody can see is the quiet loss this project refuses. The
+        # transcript keeps every message; the marker is what makes the difference
+        # between "kept but not sent" and "gone" visible in the one place the
+        # reader is looking.
+        check("context: the reader is told where the sent window begins",
+              page.locator(".chat-trimmed").count() == 1
+              and page.locator(".chat-msg").count() >= 61)
+        page.unroute("**/api/agent/chat/stream")
+        page.evaluate(
+            "(saved) => saved === null ? localStorage.removeItem('lodestar:chat')"
+            " : localStorage.setItem('lodestar:chat', saved)", real_chat)
+        page.reload()
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector("#chat-input")
+
+        # This is an end-to-end test.
+        # The sheet was pinned at 720px while the replies it holds are card
+        # dumps with uuids in them, so every second line wrapped. On a desktop
+        # window it must take the room that is there.
+        check("assistant: the sheet uses the width of a desktop window",
+              page.locator(".assistant-sheet").bounding_box()["width"] >= 900)
+
+        # This is an end-to-end test.
+        # A side rail for the settings cost the transcript 300px of width and
+        # stood mostly empty, because a model is chosen once and then left alone.
+        # Everything that is not the conversation now hides behind one sign above
+        # it, and while that is shut the conversation has the whole sheet. Width
+        # is measured rather than assumed: a rail that is merely invisible would
+        # still be holding the column open.
+        sheet_box = page.locator(".assistant-sheet").bounding_box()
+        log_box = page.locator(".chat-log").bounding_box()
+        check("assistant: with the extras shut the conversation has the full width",
+              page.locator(".assistant-extras").count() == 1
+              and not page.locator("#raglab-open").is_visible()
+              and not page.locator("#chat-menu-btn").is_visible()
+              and not page.locator(".chat-settings").is_visible()
+              and log_box["width"] >= sheet_box["width"] - 40)
+        # This is an end-to-end test.
+        # The sign shares the search fold's row, at its right end — one line of
+        # furniture above the transcript rather than two. Measured, because a
+        # button that has wrapped onto its own line still reads as "present".
+        gear_box = page.locator("#assistant-extras-btn").bounding_box()
+        recall_box = page.locator(".chat-recall").bounding_box()
+        check("assistant: the sign sits at the right end of the search row",
+              gear_box["x"] >= recall_box["x"] + recall_box["width"]
+              and gear_box["y"] < recall_box["y"] + recall_box["height"])
+
+        open_extras(page)
+        check("assistant: the sign opens onto the lab, the chat menu and the models",
+              page.locator("#raglab-open").is_visible()
+              and page.locator("#chat-menu-btn").is_visible()
+              and page.locator(".chat-settings").is_visible()
+              and page.locator(".assistant-extras #model-provider").count() == 1)
+
+        # This is an end-to-end test.
+        # Two buttons for one job became one menu, built out of the board's own
+        # menu parts — the same control in two places must not be two designs.
+        closed = (page.locator("#chat-menu-btn").count() == 1
+                  and not page.locator("#chat-export-btn").is_visible())
+        open_chat_menu(page)
+        check("assistant: export and import are one menu in the board's idiom",
+              closed
+              and page.locator("#chat-menu-panel.menu-panel .menu-item").count() == 2
+              and page.locator("#chat-export-btn").is_visible()
+              and page.locator("#chat-import-btn").is_visible())
+        page.keyboard.press("Escape")
+
+        # This is an end-to-end test.
+        # The board's search, filters, category tabs, tag bar and Menu filter and
+        # act on cards, and the footer explains dragging cards and the keys that
+        # move them. None of it reaches the Assistant, so around a conversation
+        # they are furniture that does nothing. The theme picker stays: it is the
+        # app's, not the board's.
+        hidden_here = (not page.locator("#search").is_visible()
+                       and not page.locator("#type-filter").is_visible()
+                       and not page.locator("#prio-filter").is_visible()
+                       and not page.locator("#menu-btn").is_visible()
+                       and not page.locator("#cat-rail").is_visible()
+                       and not page.locator("#tag-bar").is_visible()
+                       and not page.locator(".app-footer").is_visible()
+                       and page.locator("#theme-select").is_visible())
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector(".board .column")
+        back_on_board = (page.locator("#search").is_visible()
+                         and page.locator("#type-filter").is_visible()
+                         and page.locator("#menu-btn").is_visible()
+                         and page.locator("#cat-rail").is_visible()
+                         and page.locator(".app-footer").is_visible())
+        check("assistant: the board's own controls leave with the board",
+              hidden_here and back_on_board)
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector("#chat-input")
 
         # ---- Recall: /rag/recall has existed with no UI at all ---------------
         # Until now the only route to a past conversation was to ask the agent
@@ -1200,6 +1786,37 @@ try:
               page.locator('.view-switch button[data-view="assistant"] .view-badge')
                   .inner_text().strip() == "1")
 
+        # This is an end-to-end test.
+        # Something waiting for approval has to stay findable. It sits above the
+        # transcript, which is correct until the transcript is long enough to push
+        # the composer past the fold: the reader is then at the bottom typing, and
+        # what needs their decision is somewhere off the top of the screen. So the
+        # panel is pinned — scroll wherever you like, it is still on screen.
+        page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+        waiting = page.locator(".assistant-waiting")
+        box = waiting.bounding_box() if waiting.count() else None
+        height = page.evaluate("() => window.innerHeight")
+        check("gate: what is waiting for approval stays on screen when scrolled away",
+              box is not None
+              # Wholly inside the viewport, not merely overlapping its edge.
+              and box["y"] >= 0 and box["y"] + box["height"] <= height
+              # And it is not inside the transcript, which scrolls on its own:
+              # nesting it there would hide it behind the same problem again.
+              and page.locator(".chat-log .assistant-waiting").count() == 0)
+
+        # This is an end-to-end test.
+        # What the session has cost so far, in money rather than tokens. Offline
+        # the backend is a local fake, so the honest figure is 0.000$ — which is
+        # the formatting this pins. That it is *true* of a local model rather than
+        # a missing number is brain/tests/test_pricing.py's job.
+        cost = page.locator(".assistant-cost")
+        check("assistant: the session's cost is shown to three decimals",
+              cost.count() == 1
+              and re.search(r"= ?0\.000\$", cost.inner_text()) is not None
+              # Beside the conversation, not inside it: a running total that
+              # scrolls out of view with the transcript is not a running total.
+              and page.locator(".chat-log .assistant-cost").count() == 0)
+
         page.click(".proposal-approve")
         page.wait_for_function("document.querySelectorAll('.proposal').length === 0")
         check("gate: approving puts the card on the board",
@@ -1229,6 +1846,64 @@ try:
                       for c in api_state()["cards"]))
         check("gate: a rejected proposal is recoverable from the Trash",
               any(c["title"] == "A thought I do not want" for c in api_trash()["cards"]))
+
+        # ---- Suggested edits: the agent asks, the user saves -----------------
+        # The guardrail that replaced the one ungated write. A suggestion changes
+        # nothing on its own; the user opens it, may adjust it, and their own save
+        # is what applies it. So the assertions are in that order: unchanged,
+        # then reviewable, then applied only after a save.
+        target = api_state()["cards"][0]
+        api_suggest_edit(target["id"], {"title": "A title the agent suggested",
+                                       "columnId": "in-progress"})
+        # Away and back: setView refreshes the waiting lists on entry, and the
+        # previous block left us already on the Assistant, where a click is a
+        # no-op. A suggestion made by a real chat turn arrives on its own flag.
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector(".suggestion")
+        check("edits: the suggestion renders with review and dismiss",
+              page.locator(".suggestion").count() == 1
+              and page.locator(".suggestion-review").count() == 1
+              and page.locator(".suggestion-dismiss").count() == 1)
+        check("edits: the row says what would change, without opening it",
+              "in progress" in page.inner_text(".suggestion-change").lower())
+        check("edits: the card is untouched while the suggestion waits",
+              next(c for c in api_state()["cards"]
+                   if c["id"] == target["id"])["title"] == target["title"])
+        check("edits: a waiting suggestion counts on the Assistant tab",
+              page.locator('.view-switch button[data-view="assistant"] .view-badge')
+                  .inner_text().strip() == "1")
+
+        page.click(".suggestion-review")
+        page.wait_for_selector("#card-dialog[open]")
+        check("edits: reviewing opens the card with the suggestion filled in",
+              page.input_value("#card-title") == "A title the agent suggested")
+        # The user's own wording wins — that is the whole point of reviewing.
+        page.fill("#card-title", "A title I chose myself")
+        page.click("#card-form button[type=submit]")
+        page.wait_for_function("document.querySelectorAll('.suggestion').length === 0")
+        # The board push is debounced, so wait for the thing being asserted
+        # rather than for a proxy — the way this suite's earlier flakes happened.
+        def saved_card():
+            return next(c for c in api_state()["cards"] if c["id"] == target["id"])
+        applied = wait_until(lambda: saved_card()["title"] == "A title I chose myself")
+        check("edits: saving applies what the USER left in the form", applied)
+        check("edits: a suggested column move rides along with the save",
+              wait_until(lambda: saved_card()["columnId"] == "in-progress"))
+        check("edits: the answered suggestion leaves the list",
+              len(api_edits()["edits"]) == 0)
+
+        # Dismissing answers it the other way and touches nothing.
+        api_suggest_edit(target["id"], {"notes": "notes the agent wanted"})
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector(".suggestion")
+        page.click(".suggestion-dismiss")
+        page.wait_for_function("document.querySelectorAll('.suggestion').length === 0")
+        check("edits: dismissing clears it and leaves the card alone",
+              len(api_edits()["edits"]) == 0
+              and next(c for c in api_state()["cards"]
+                       if c["id"] == target["id"])["notes"] != "notes the agent wanted")
 
         # ---- Assistant model settings ----------------------------------------
         # A "Models" panel with two pickers (text, omni) plus a fixed embedder
@@ -1263,6 +1938,23 @@ try:
         FIXED_EMBED = "heydariAI/persian-embeddings"
         page.locator('.view-switch button[data-view="assistant"]').click()
         page.wait_for_selector("#chat-input")
+
+        # This is an end-to-end test.
+        # A model is chosen once and then left alone, so the panel is folded like
+        # the evidence strip under a reply rather than filling the rail with
+        # controls nobody is using. Staying open is the load-bearing half:
+        # choosing a provider re-renders the rail, and a panel that refolded
+        # itself after every pick would be unusable.
+        folded_first = not page.locator("#model-text").is_visible()
+        open_models(page)
+        unfolded = page.locator("#model-text").is_visible()
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector(".board .column")
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector("#chat-input")
+        check("assistant: the models panel is folded until asked for, then stays open",
+              folded_first and unfolded and page.locator("#model-text").is_visible())
+
         check("assistant: settings panel offers the two model pickers",
               page.locator(".chat-settings").count() == 1
               and page.locator("#model-text").count() == 1
@@ -1276,6 +1968,12 @@ try:
               and FIXED_EMBED in page.locator("#model-embed-fixed").inner_text())
         check("assistant: the fixed embedder says it runs locally",
               "local" in page.locator("#model-embed-fixed").inner_text().lower())
+        # The note read "Persian-tuned", which undersells the model and reads as a
+        # warning to anyone whose board is in English. It handles both.
+        embed_note = page.locator("#model-embed-fixed").inner_text().lower()
+        check("assistant: the embedder is described as multilingual, not Farsi-only",
+              "multilingual" in embed_note and "english" in embed_note
+              and "farsi" in embed_note and "persian-tuned" not in embed_note)
         check("assistant: the stale embedding-pick hint sentence is gone",
               "embedding pick is saved"
               not in page.locator(".chat-settings").inner_text())
@@ -1354,7 +2052,11 @@ try:
         page.reload()
         page.wait_for_selector("#board")
         page.locator('.view-switch button[data-view="assistant"]').click()
-        page.wait_for_selector("#model-text")
+        # attached, not visible: the Models panel is folded after a reload, so
+        # waiting for the select to be *visible* would wait for a click that has
+        # not happened yet.
+        page.wait_for_selector("#model-text", state="attached")
+        open_models(page)
         check("assistant: model choice survives a reload",
               page.input_value("#model-text") == ALT_TEXT)
         page.select_option("#model-text", DEFAULT_TEXT)
@@ -1369,7 +2071,11 @@ try:
         page.reload()
         page.wait_for_selector("#board")
         page.locator('.view-switch button[data-view="assistant"]').click()
-        page.wait_for_selector("#model-text")
+        # attached, not visible: the Models panel is folded after a reload, so
+        # waiting for the select to be *visible* would wait for a click that has
+        # not happened yet.
+        page.wait_for_selector("#model-text", state="attached")
+        open_models(page)
         check("assistant: a stale saved embed pick resurrects no dropdown",
               page.locator("#model-embed").count() == 0
               and page.locator("#model-embed-fixed").count() == 1)
@@ -1386,7 +2092,11 @@ try:
         page.reload()
         page.wait_for_selector("#board")
         page.locator('.view-switch button[data-view="assistant"]').click()
-        page.wait_for_selector("#model-text")
+        # attached, not visible: the Models panel is folded after a reload, so
+        # waiting for the select to be *visible* would wait for a click that has
+        # not happened yet.
+        page.wait_for_selector("#model-text", state="attached")
+        open_models(page)
         check("assistant: a deliberately hand-set model is still honoured",
               page.input_value("#model-text") == HAND_PICKED
               and HAND_PICKED in option_values("#model-text"))
@@ -1526,6 +2236,7 @@ try:
         check("chat: the Assistant offers an export control",
               page.locator("#chat-export-btn").count() == 1)
         if page.locator("#chat-export-btn").count() == 1:
+            open_chat_menu(page)
             page.click("#chat-export-btn")
             check("chat export: the shared export dialog opens",
                   wait_until(lambda: page.locator("#export-dialog").is_visible()))
@@ -1581,6 +2292,7 @@ try:
               and page.locator("#chat-import-file").count() == 1)
         if page.locator("#chat-import-btn").count() == 1:
             # This browser's own transcript, read back out of the export dialog.
+            open_chat_menu(page)
             page.click("#chat-export-btn")
             wait_until(lambda: page.locator("#export-dialog").is_visible())
             page.select_option("#chat-export-format", "json")
@@ -1639,6 +2351,7 @@ try:
               and page.locator(".view-switch button").count() == 7)
 
         n_before = len(errors)
+        open_extras(page)
         page.click("#raglab-open")
         page.wait_for_selector(".raglab-sheet")
         check("raglab: the button opens the lab page",
@@ -2073,6 +2786,7 @@ try:
                                  body=json.dumps(payload))
 
         page.route("**/api/raglab/**", lab_route)
+        open_extras(page)
         page.click("#raglab-open")
         page.wait_for_selector(".rag-grid")
         check("raglab: every stage of the pipeline gets a panel",

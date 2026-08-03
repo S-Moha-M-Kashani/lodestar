@@ -73,6 +73,42 @@ def test_find_related_ranks_the_board_and_claims_no_score():
                     for hit in tool.run({'text': 'kubernetes notes', 'k': 3})}
 
 
+# This is an integration test (in-process Chroma, no server, no disk).
+@respx.mock
+def test_find_related_also_answers_from_the_chat_record():
+    """find_related is the agent's one search over everything the user has:
+    the board (board.db via the paired board API) AND the chat record
+    (assistant.db, through its Chroma chunk index) — which board and which
+    record follows from the brain's own wiring, so the :3001 test brain reads
+    only test data. The chat side is *semantic*: «دعوا» must reach a chunk
+    saying «دعوامون» even though they share no BM25 token — the recall box's
+    lexical-evidence floor is for humans reading a result list, not for a
+    model that judges relevance itself."""
+    from lodestar_brain.retrieval import ChatStore, MEMORY_URL
+    respx.get('http://board.test/api/state').mock(return_value=board_state(CARDS))
+    index, client = index_and_board()
+    store = ChatStore(MEMORY_URL, LexicalHashEmbeddings(),
+                      collection='find-related-chat')
+    store.index_messages([{'id': 1, 'role': 'user', 'createdAt': 1753995600000,
+                           'content': 'دیشب دعوامون شد سر برنامه آخر هفته'}])
+
+    tool = make_retrieve_tool(index, client, memory=store)
+    hits = tool.run({'text': 'دعوا', 'k': 3})
+    chat_rows = [hit for hit in hits if 'chat' in hit]
+    assert chat_rows, 'find_related must also answer from the chat record'
+    assert any('دعوامون' in hit['chat']['text'] for hit in chat_rows), (
+        'a chunk related only semantically (no shared token) must reach '
+        'the agent')
+    assert {'text', 'role'} <= set(chat_rows[0]['chat']), (
+        'the model needs the words and who said them')
+    assert [hit['rank'] for hit in chat_rows] == list(
+        range(1, len(chat_rows) + 1))
+    # Cards keep their shape exactly — the Assistant's source list reads
+    # row.card to build a clickable citation.
+    assert all(set(hit) == {'card', 'rank'} or set(hit) == {'chat', 'rank'}
+               for hit in hits)
+
+
 # This is a unit test.
 def test_recall_chat_hands_back_what_the_store_found():
     store = FakeStore()

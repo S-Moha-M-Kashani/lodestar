@@ -33,7 +33,8 @@ def _brief(card: dict) -> dict:
 
 
 def make_retrieve_tool(index: CardIndex, client: BoardClient, llm=None,
-                       threshold: float = GRADE_THRESHOLD) -> BaseTool:
+                       threshold: float = GRADE_THRESHOLD,
+                       memory: ChatStore | None = None) -> BaseTool:
     @tool('find_related', args_schema=FindRelatedArgs)
     def find_related(text: str, k: int = 5) -> list[dict]:
         """Find board cards related to a text, best first. Use it to answer from
@@ -43,11 +44,30 @@ def make_retrieve_tool(index: CardIndex, client: BoardClient, llm=None,
         by_id = {card['id']: card for card in cards}
         hits = index.search(text, k=k, llm=llm, threshold=threshold)
         # `rank`, not a score: RRF fuses ranks and exposes no fused score, and a
-        # number invented from a position would look like a measurement.
-        return [{'card': _brief(by_id[doc.metadata['id']]), 'rank': rank}
+        # number invented from a position would look like a measurement. Card
+        # and chat rows each rank from 1 — two indexes, two rankings; a merged
+        # ordering would compare scores that never met.
+        rows = [{'card': _brief(by_id[doc.metadata['id']]), 'rank': rank}
                 for rank, doc in enumerate(hits, start=1)
                 if doc.metadata.get('id') in by_id]
+        if memory is not None:
+            # evidence=False: the lexical floor protects a human scanning the
+            # recall box; in front of a model that judges relevance itself it
+            # would silently drop the semantic matches that are the point of
+            # having a dense index (see ChatStore.search).
+            rows += [{'chat': {'text': hit['text'],
+                               'role': hit['metadata'].get('role', '')},
+                      'rank': rank}
+                     for rank, hit in enumerate(
+                         memory.search(text, k=k, evidence=False), start=1)]
+        return rows
 
+    if memory is not None:
+        # Told only when true: without Chroma there is no chat half, and a
+        # description promising one would send the model looking for snippets
+        # this tool can never return.
+        find_related.description += (
+            ' Also returns snippets from past conversations on this board.')
     return find_related
 
 

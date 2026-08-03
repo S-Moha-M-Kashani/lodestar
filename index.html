@@ -4,14 +4,202 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Lodestar</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>❓</text></svg>">
+  <!-- The tab icon draws at 16px, so the glyph fills the canvas nearly edge to
+     edge — the header mark can afford margins; a favicon cannot. Every point
+     stays within radius 29 of the centre, so the -14° rotation never clips.
+     tests/favicon.test.js pins the fill ratio. -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><g transform=%22rotate(-14 32 32)%22 fill=%22%234a7bb5%22><path d=%22M32 4.5 L36.6 32 L32 59.5 L27.4 32 Z%22/><path d=%22M3 32 L32 36.4 L61 32 L32 27.6 Z%22/></g><circle cx=%2232%22 cy=%2232%22 r=%226%22 fill=%22%234a7bb5%22/></svg>">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <!-- ==========================================================================
+       The nova, authored once. Four needle spikes with concave flanks, the cross
+       tilted off the axes, and a bloom; the wash and star field behind it are the
+       reference photograph's palette, so those hexes are literal rather than
+       theme tokens - the scene carries its own darkness instead of borrowing the
+       page's. Instanced by <use> in the header mark and again in the star sky.
+       Blur is geometry so it themes safely; a gradient would not, because a
+       gradient referenced by id resolves stop-color where the gradient lives.
+       ========================================================================== -->
+  <svg width="0" height="0" class="svg-sprite" aria-hidden="true" focusable="false">
+    <defs>
+      <filter id="nv-wide" x="-60%" y="-60%" width="220%" height="220%">
+        <feGaussianBlur stdDeviation="5.4"/>
+      </filter>
+      <filter id="nv-tight" x="-60%" y="-60%" width="220%" height="220%">
+        <feGaussianBlur stdDeviation="2.1"/>
+      </filter>
+      <filter id="nv-spikes" x="-40%" y="-40%" width="180%" height="180%">
+        <feGaussianBlur stdDeviation="1.1"/>
+      </filter>
+      <filter id="nv-soft" x="-15%" y="-15%" width="130%" height="130%">
+        <feGaussianBlur stdDeviation="13"/>
+      </filter>
+      <filter id="nv-noise" x="0%" y="0%" width="100%" height="100%">
+        <feTurbulence type="fractalNoise" baseFrequency="0.048" numOctaves="5" seed="11" stitchTiles="stitch"/>
+        <feColorMatrix type="saturate" values="0"/>
+        <feComponentTransfer>
+          <feFuncR type="gamma" exponent="1.7" amplitude="1.35"/>
+          <feFuncG type="gamma" exponent="1.7" amplitude="1.35"/>
+          <feFuncB type="gamma" exponent="1.7" amplitude="1.35"/>
+        </feComponentTransfer>
+      </filter>
+      <mask id="nv-cloudmask"><rect width="200" height="200" filter="url(#nv-noise)"/></mask>
+
+      <!-- Super-Gaussian alpha, exp(-(r/R/0.68)^4): a broad plateau over the star
+           then a fast drop. r=42% closes the disc inside the box, so the panel is
+           a circle and no side flattens into a rounded-square corner. -->
+      <radialGradient id="nv-fade" cx="50%" cy="50%" r="42%">
+        <stop offset="0%" stop-color="#fff" stop-opacity="1"/>
+        <stop offset="25%" stop-color="#fff" stop-opacity="0.982"/>
+        <stop offset="40%" stop-color="#fff" stop-opacity="0.887"/>
+        <stop offset="50%" stop-color="#fff" stop-opacity="0.747"/>
+        <stop offset="57.5%" stop-color="#fff" stop-opacity="0.6"/>
+        <stop offset="65%" stop-color="#fff" stop-opacity="0.434"/>
+        <stop offset="72.5%" stop-color="#fff" stop-opacity="0.275"/>
+        <stop offset="80%" stop-color="#fff" stop-opacity="0.147"/>
+        <stop offset="85%" stop-color="#fff" stop-opacity="0.087"/>
+        <stop offset="90%" stop-color="#fff" stop-opacity="0.046"/>
+        <stop offset="95%" stop-color="#fff" stop-opacity="0.022"/>
+        <stop offset="100%" stop-color="#fff" stop-opacity="0"/>
+      </radialGradient>
+      <mask id="nv-vignette"><rect width="200" height="200" fill="url(#nv-fade)"/></mask>
+
+      <g id="nova-art">
+        <circle cx="32" cy="32" r="7" fill="var(--star-halo)" filter="url(#nv-wide)"/>
+        <circle cx="32" cy="32" r="4" fill="var(--star-halo)" filter="url(#nv-tight)"/>
+        <g transform="rotate(-14 32 32)">
+          <g fill="var(--star-ink)" opacity="0.28">
+            <path transform="rotate(45 32 32)" d="M32 24 Q32.1 30.8 32.35 32 Q32.1 33.2 32 40 Q31.9 33.2 31.65 32 Q31.9 30.8 32 24 Z"/>
+            <path transform="rotate(-45 32 32)" d="M32 24 Q32.1 30.8 32.35 32 Q32.1 33.2 32 40 Q31.9 33.2 31.65 32 Q31.9 30.8 32 24 Z"/>
+          </g>
+          <g fill="var(--star-ink)">
+            <g filter="url(#nv-spikes)" opacity="0.5">
+              <path d="M32 21.5 Q32.23 27.6 32.75 32 Q32.23 36.4 32 42.5 Q31.77 36.4 31.25 32 Q31.77 27.6 32 21.5 Z"/>
+              <path d="M21 32 Q27.5 32.2 32 32.68 Q36.5 32.2 43 32 Q36.5 31.8 32 31.32 Q27.5 31.8 21 32 Z"/>
+            </g>
+            <path d="M32 21.5 Q32.23 27.6 32.75 32 Q32.23 36.4 32 42.5 Q31.77 36.4 31.25 32 Q31.77 27.6 32 21.5 Z"/>
+            <path d="M21 32 Q27.5 32.2 32 32.68 Q36.5 32.2 43 32 Q36.5 31.8 32 31.32 Q27.5 31.8 21 32 Z"/>
+          </g>
+        </g>
+        <circle cx="32" cy="32" r="1.5" fill="var(--star-core)"/>
+      </g>
+
+      <g id="nv-colour" filter="url(#nv-soft)">
+        <rect width="200" height="200" fill="#080b1e"/>
+        <ellipse cx="72.8" cy="66.4" rx="57.6" ry="44.8" fill="#2b1f57"/>
+        <ellipse cx="144.8" cy="58.4" rx="46.4" ry="40" fill="#161238"/>
+        <ellipse cx="47.2" cy="136.8" rx="51.2" ry="40" fill="#5b3a75"/>
+        <ellipse cx="132.7" cy="141" rx="50.4" ry="38.9" fill="#a3557e"/>
+        <ellipse cx="112.4" cy="148.5" rx="37.4" ry="24.5" fill="#c97f9f"/>
+        <ellipse cx="168.8" cy="106.4" rx="28.8" ry="36.8" fill="#04060f"/>
+        <ellipse cx="36" cy="47.2" rx="25.6" ry="30.4" fill="#04060f"/>
+      </g>
+      <g id="nv-cloud" mask="url(#nv-cloudmask)" opacity="0.68">
+        <g filter="url(#nv-soft)">
+          <rect width="200" height="200" fill="#d894b8"/>
+          <ellipse cx="72.8" cy="140" rx="67.2" ry="48" fill="#e8f0ff"/>
+          <ellipse cx="140" cy="63.2" rx="56" ry="44.8" fill="#7d5cc0"/>
+          <ellipse cx="109.6" cy="103.2" rx="41.6" ry="32" fill="#fff" opacity="0.55"/>
+        </g>
+      </g>
+      <!-- the nova is pinned to its night colouring inside a scene: the scene
+           supplies the darkness, so the star is hot white whatever the theme -->
+      <g id="nv-star" style="--star-ink:#eaf2ff; --star-core:#fff; --star-halo:rgba(186,212,255,0.62)">
+        <use href="#nova-art" transform="translate(4 4) scale(3)"/>
+      </g>
+
+      <g id="nv-field">
+        <circle cx="158.7" cy="58.6" r="0.79" fill="#ffffff" opacity="0.81"/>
+        <circle cx="141.0" cy="79.8" r="0.58" fill="#f0cfe2" opacity="0.37"/>
+        <circle cx="130.1" cy="37.4" r="0.65" fill="#dfe8ff" opacity="0.89"/>
+        <circle cx="141.6" cy="120.4" r="0.39" fill="#ffffff" opacity="0.55"/>
+        <circle cx="46.1" cy="133.8" r="0.76" fill="#ffffff" opacity="0.80"/>
+        <circle cx="150.8" cy="51.7" r="0.39" fill="#ffffff" opacity="0.29"/>
+        <circle cx="144.3" cy="114.4" r="0.65" fill="#ffffff" opacity="0.60"/>
+        <circle cx="96.5" cy="146.5" r="0.51" fill="#cfe0ff" opacity="0.39"/>
+        <circle cx="60.4" cy="124.7" r="0.68" fill="#cfe0ff" opacity="0.88"/>
+        <circle cx="131.6" cy="164.7" r="0.82" fill="#ffffff" opacity="0.29"/>
+        <circle cx="148.2" cy="106.5" r="0.81" fill="#dfe8ff" opacity="0.70"/>
+        <circle cx="33.6" cy="77.7" r="0.58" fill="#f0cfe2" opacity="0.50"/>
+        <circle cx="58.6" cy="142.1" r="0.86" fill="#dfe8ff" opacity="0.48"/>
+        <circle cx="91.5" cy="153.6" r="0.34" fill="#ffffff" opacity="0.58"/>
+        <circle cx="99.3" cy="41.1" r="0.69" fill="#cfe0ff" opacity="0.95"/>
+        <circle cx="48.6" cy="134.8" r="0.79" fill="#ffffff" opacity="0.68"/>
+        <circle cx="123.7" cy="167.5" r="0.76" fill="#f0cfe2" opacity="0.43"/>
+        <circle cx="38.2" cy="104.0" r="0.50" fill="#f0cfe2" opacity="0.76"/>
+        <circle cx="148.6" cy="73.1" r="0.37" fill="#dfe8ff" opacity="0.75"/>
+        <circle cx="169.6" cy="102.3" r="0.43" fill="#dfe8ff" opacity="0.31"/>
+        <circle cx="79.2" cy="139.0" r="0.81" fill="#ffffff" opacity="0.28"/>
+        <circle cx="103.5" cy="37.8" r="0.41" fill="#dfe8ff" opacity="0.72"/>
+        <circle cx="154.7" cy="85.6" r="0.63" fill="#ffffff" opacity="0.29"/>
+        <circle cx="87.8" cy="40.8" r="1.06" fill="#cfe0ff" opacity="0.48"/>
+        <circle cx="164.9" cy="107.2" r="0.60" fill="#cfe0ff" opacity="0.42"/>
+        <circle cx="35.1" cy="131.5" r="1.04" fill="#dfe8ff" opacity="0.84"/>
+        <circle cx="49.6" cy="61.5" r="0.61" fill="#f0cfe2" opacity="0.61"/>
+        <circle cx="95.5" cy="153.6" r="1.05" fill="#f0cfe2" opacity="0.80"/>
+        <circle cx="119.6" cy="49.2" r="0.43" fill="#dfe8ff" opacity="0.60"/>
+        <circle cx="121.8" cy="51.3" r="0.45" fill="#ffffff" opacity="0.59"/>
+        <circle cx="61.9" cy="88.3" r="0.75" fill="#f0cfe2" opacity="0.61"/>
+        <circle cx="87.4" cy="30.2" r="0.69" fill="#ffffff" opacity="0.27"/>
+        <circle cx="91.6" cy="164.7" r="0.81" fill="#dfe8ff" opacity="0.93"/>
+        <circle cx="87.0" cy="44.8" r="0.55" fill="#cfe0ff" opacity="0.27"/>
+        <circle cx="59.6" cy="128.8" r="1.05" fill="#f0cfe2" opacity="0.84"/>
+        <circle cx="44.9" cy="147.1" r="0.70" fill="#dfe8ff" opacity="0.72"/>
+        <circle cx="115.1" cy="148.9" r="0.50" fill="#ffffff" opacity="0.28"/>
+        <circle cx="76.2" cy="45.8" r="0.64" fill="#cfe0ff" opacity="0.46"/>
+        <circle cx="144.3" cy="114.1" r="0.60" fill="#ffffff" opacity="0.72"/>
+        <circle cx="77.4" cy="159.7" r="1.02" fill="#ffffff" opacity="0.71"/>
+        <circle cx="52.2" cy="79.5" r="0.61" fill="#cfe0ff" opacity="0.25"/>
+        <circle cx="122.2" cy="32.1" r="1.01" fill="#dfe8ff" opacity="0.56"/>
+        <circle cx="69.0" cy="135.6" r="0.96" fill="#cfe0ff" opacity="0.43"/>
+        <circle cx="58.6" cy="54.8" r="0.58" fill="#dfe8ff" opacity="0.43"/>
+        <g opacity="0.8" fill="#eaf2ff"><circle cx="56.7" cy="81.5" r="1.05"/><path d="M56.7 78.0 L57.1 81.5 L56.7 85.0 L56.3 81.5 Z"/><path d="M53.2 81.5 L56.7 81.9 L60.2 81.5 L56.7 81.1 Z"/></g>
+        <g opacity="0.8" fill="#eaf2ff"><circle cx="153.0" cy="135.3" r="1.05"/><path d="M153.0 131.7 L153.4 135.3 L153.0 138.9 L152.6 135.3 Z"/><path d="M149.4 135.3 L153.0 135.7 L156.5 135.3 L153.0 134.9 Z"/></g>
+        <g opacity="0.8" fill="#eaf2ff"><circle cx="47.7" cy="136.1" r="1.05"/><path d="M47.7 133.6 L48.1 136.1 L47.7 138.6 L47.3 136.1 Z"/><path d="M45.2 136.1 L47.7 136.5 L50.2 136.1 L47.7 135.7 Z"/></g>
+        <g opacity="0.8" fill="#eaf2ff"><circle cx="131.6" cy="54.2" r="1.05"/><path d="M131.6 50.9 L132.0 54.2 L131.6 57.5 L131.2 54.2 Z"/><path d="M128.3 54.2 L131.6 54.6 L135.0 54.2 L131.6 53.8 Z"/></g>
+      </g>
+
+      <!-- The mark's own star and scenes. The disc went to 4/7 and the star to
+           3/4, so within the mark the star occupies 51% of the disc instead of
+           39%; the sky keeps #nv-star at scale 3 and is untouched. -->
+      <g id="nv-star-mark" style="--star-ink:#eaf2ff; --star-core:#fff; --star-halo:rgba(186,212,255,0.62)">
+        <use href="#nova-art" transform="translate(-25.44 -25.44) scale(3.92)"/>
+      </g>
+      <g id="mark-colour-art">
+        <g mask="url(#nv-vignette)"><use href="#nv-colour"/></g>
+        <use href="#nv-star-mark"/>
+      </g>
+      <g id="mark-stars-art">
+        <g mask="url(#nv-vignette)"><use href="#nv-colour"/><use href="#nv-cloud"/><use href="#nv-field"/></g>
+        <use href="#nv-star-mark"/>
+      </g>
+
+      <g id="scene-colour-art">
+        <g mask="url(#nv-vignette)"><use href="#nv-colour"/></g>
+        <use href="#nv-star"/>
+      </g>
+      <g id="scene-stars-art">
+        <g mask="url(#nv-vignette)"><use href="#nv-colour"/><use href="#nv-cloud"/><use href="#nv-field"/></g>
+        <use href="#nv-star"/>
+      </g>
+    </defs>
+  </svg>
+
+  <!-- The star theme's sky. Background furniture: the clouds drift, the nova is
+       anchored into the lower-right where the board has no cards. -->
+  <div class="star-sky" aria-hidden="true">
+    <div class="star-sky-clouds"></div>
+    <svg class="star-sky-nova" viewBox="16 16 168 168"><use href="#scene-stars-art"/></svg>
+  </div>
+
   <header class="app-header">
     <div class="header-row">
       <div class="brand">
-        <span class="brand-mark" aria-hidden="true">?</span>
+        <span class="brand-mark" aria-hidden="true">
+          <svg class="scene-colour" viewBox="16 16 168 168"><use href="#mark-colour-art"/></svg>
+          <svg class="scene-stars" viewBox="16 16 168 168"><use href="#mark-stars-art"/></svg>
+        </span>
         <div>
           <h1>Lodestar</h1>
           <p class="tagline">Your compass for life!</p>
@@ -61,6 +249,7 @@
           <option value="white">Day</option>
           <option value="sepia">Dusk</option>
           <option value="dark">Night</option>
+          <option value="star">Star</option>
         </select>
       </div>
     </div>
