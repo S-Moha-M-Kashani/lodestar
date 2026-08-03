@@ -1,4 +1,4 @@
-from .raglab import pipeline, corpus
+from .raglab import pipeline, corpus, inspector
 from .raglab.config import IndexConfig, RetrievalConfig, LabSettings
 from .raglab.index import IndexRegistry
 
@@ -48,3 +48,19 @@ def test_retrieve_traced_records_ranks_and_dropped_candidates():
                          if c['grade_score'] is not None]
     assert any(isinstance(c['grade_score'], float) for c in graded_candidates), \
         'expected at least one candidate with float grade_score'
+
+
+# This is a unit test.
+def test_mark_gold_matches_evidence_quote_either_direction():
+    quotes = ['قسط‌بندی جریمه اوکی شد شیش قسط']
+    texts = [
+        'خبر خوب: قسط‌بندی جریمه اوکی شد شیش قسط، از اول ماه دیگه',  # contains quote
+        'امروز هوا خیلی گرم بود و کاری پیش نرفت',                    # unrelated
+    ]
+    flags = inspector.mark_gold(texts, quotes)
+    assert flags == [True, False]
+
+    # quote longer than a small chunk: chunk contained by the quote also counts
+    assert inspector.mark_gold(['شیش قسط'], quotes) == [True]
+    # no quotes → nothing is gold
+    assert inspector.mark_gold(texts, []) == [False, False]
