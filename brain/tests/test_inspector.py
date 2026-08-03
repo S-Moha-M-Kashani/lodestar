@@ -79,3 +79,70 @@ def test_chunks_by_session_groups_and_counts():
     first = groups[0]
     assert first['session_id'] and 'date' in first
     assert all('id' in c and 'text' in c for c in first['chunks'])
+
+
+import time
+
+from fastapi.testclient import TestClient
+
+
+def _client(monkeypatch):
+    from .raglab import inspector
+    # Pin the offline/fake backend so no test needs a key or a network.
+    monkeypatch.setattr(inspector, 'load_lab_settings', lambda: LAB_SETTINGS)
+    return TestClient(inspector.create_inspector_app())
+
+
+# This is an integration test (FastAPI TestClient over the read-only app).
+def test_groundtruth_endpoint_returns_full_pairs(monkeypatch):
+    client = _client(monkeypatch)
+    body = client.get('/api/groundtruth').json()
+    q = body['questions'][0]
+    # the fields the :9002 /api/questions endpoint strips must be present here
+    for key in ('answer_fa', 'key_facts', 'evidence', 'question_fa',
+                'type', 'difficulty', 'answerable'):
+        assert key in q, f'missing {key}'
+    assert 'quote' in q['evidence'][0]
+
+
+# This is an integration test (FastAPI TestClient over the read-only app; real
+# in-memory index build via the job runner).
+def test_chunks_job_returns_sessions(monkeypatch):
+    client = _client(monkeypatch)
+    cfg = {'index': {'chunker': 'session', 'embedder': 'ascii-hash'}}
+    acc = client.post('/api/chunks', json=cfg)
+    assert acc.status_code == 202
+    job_id = acc.json()['job_id']
+    # jobs run on a daemon thread; poll until done
+    for _ in range(200):
+        job = client.get(f'/api/jobs/{job_id}').json()
+        if job['state'] in ('done', 'error'):
+            break
+        time.sleep(0.02)
+    assert job['state'] == 'done', job.get('error')
+    result = job['result']
+    assert result['total'] == sum(len(g['chunks'])
+                                  for g in result['chunks_by_session'])
+
+
+# This is an integration test (FastAPI TestClient over the read-only app; real
+# in-memory index build and retrieval trace via the job runner).
+def test_trace_job_marks_gold(monkeypatch):
+    client = _client(monkeypatch)
+    gt_q = client.get('/api/groundtruth').json()['questions'][0]
+    payload = {'index': {'chunker': 'session', 'embedder': 'ascii-hash'},
+               'retrieval': {'retriever': 'hybrid-rrf', 'reranker': 'none',
+                             'grader': 'none', 'k': 3, 'rerank_depth': 20,
+                             'time_filter': False},
+               'question_id': gt_q['id']}
+    acc = client.post('/api/trace', json=payload)
+    assert acc.status_code == 202
+    job_id = acc.json()['job_id']
+    for _ in range(200):
+        job = client.get(f'/api/jobs/{job_id}').json()
+        if job['state'] in ('done', 'error'):
+            break
+        time.sleep(0.02)
+    assert job['state'] == 'done', job.get('error')
+    cands = job['result']['trace']['candidates']
+    assert cands and all('gold' in c for c in cands)
