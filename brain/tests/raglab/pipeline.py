@@ -102,7 +102,8 @@ def lexical_grade(index, question: str, text: str) -> float:
 
 
 def retrieve(index, cfg: RetrievalConfig, question: str, query_date: str,
-             llm=None, models: Roles | None = None) -> Outcome:
+             llm=None, models: Roles | None = None,
+             trace: dict | None = None) -> Outcome:
     # Each stage asks for its own model. An empty Roles means "whatever the
     # provider defaults to", which is how a caller with nothing to say about
     # models still works.
@@ -155,6 +156,9 @@ def retrieve(index, cfg: RetrievalConfig, question: str, query_date: str,
     else:
         base = retrieval.rrf([dense_ranked, lexical_ranked], cfg.rrf_k)
     if not base:
+        if trace is not None:
+            trace.update({'dense': list(dense_ranked), 'bm25': list(lexical_ranked),
+                          'fused': [], 'candidates': []})
         return Outcome(question=question, contexts=[], abstained=True,
                        time_scope=scope.as_dict() if scope else None,
                        diagnostics=diagnostics | {'reason': 'no candidates'},
@@ -192,6 +196,28 @@ def retrieve(index, cfg: RetrievalConfig, question: str, query_date: str,
     diagnostics['graded_out'] = len(contexts) - len(kept)
 
     kept = _fit_budget(kept, cfg.max_context_chars)
+    if trace is not None:
+        fused_order = sorted(base, key=lambda cid: -base[cid])
+        dense_pos = {cid: r + 1 for r, cid in enumerate(dense_ranked)}
+        bm25_pos = {cid: r + 1 for r, cid in enumerate(lexical_ranked)}
+        fused_pos = {cid: r + 1 for r, cid in enumerate(fused_order)}
+        kept_ids = {c.chunk_id for c in kept}
+        grade_by_id = {c.chunk_id: c.stages.get('grade') for c in contexts}
+        candidates = []
+        for i, chunk in enumerate(chunks):
+            cid = chunk.id
+            grade = grade_by_id.get(cid)
+            candidates.append({
+                'chunk_id': cid, 'text': chunk.text,
+                'session_id': chunk.session_id, 'date': chunk.date,
+                'dense_rank': dense_pos.get(cid), 'bm25_rank': bm25_pos.get(cid),
+                'fused_rank': fused_pos.get(cid),
+                'retrieval_score': round(float(relevance[i]), 4),
+                'rerank_score': round(float(final[i]), 4),
+                'grade_score': (round(float(grade), 4) if grade is not None else None),
+                'kept': cid in kept_ids})
+        trace.update({'dense': list(dense_ranked), 'bm25': list(lexical_ranked),
+                      'fused': fused_order, 'candidates': candidates})
     return Outcome(question=question, contexts=kept, abstained=abstained,
                    time_scope=scope.as_dict() if scope else None,
                    diagnostics=diagnostics, timings=timings)
@@ -361,3 +387,15 @@ def _llm_answer(outcome: Outcome, llm, model: str) -> str:
     except Exception as error:
         outcome.diagnostics['answer_error'] = str(error)[:200]
         return REFUSAL
+
+
+def retrieve_traced(index, cfg: RetrievalConfig, question: str, query_date: str,
+                    llm=None, models: Roles | None = None) -> tuple[Outcome, dict]:
+    """`retrieve`, plus the full per-candidate step ladder for the Inspector.
+
+    A thin wrapper so the eval path never carries the trace's cost: it passes a
+    fresh dict, which `retrieve` fills only because it was asked."""
+    trace: dict = {}
+    outcome = retrieve(index, cfg, question, query_date,
+                       llm=llm, models=models, trace=trace)
+    return outcome, trace
