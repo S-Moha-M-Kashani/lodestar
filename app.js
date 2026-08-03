@@ -5179,7 +5179,7 @@
     }
   }
 
-  const THEMES = ['light', 'white', 'sepia', 'dark'];
+  const THEMES = ['light', 'white', 'sepia', 'dark', 'star'];
   const themeSelect = $('#theme-select');
 
   function applyTheme(theme) {
