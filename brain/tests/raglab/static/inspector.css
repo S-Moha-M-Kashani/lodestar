@@ -26,3 +26,15 @@ body { margin: 0; background: var(--paper); color: var(--ink);
                       border-bottom: 1px solid var(--rule); vertical-align: top; }
 .retrieval-row--gold { background: var(--paper); }     /* relevant */
 .retrieval-row--plain { background: var(--gray-row); }  /* not relevant */
+
+/* The config that produced whatever is currently on screen — followed from
+   the lab (:9002) or from the manual fallback controls, either way stated
+   above the results rather than left for the reader to guess. */
+.inspector-active-config { font-size: .85rem; opacity: .8; margin-bottom: .6rem;
+                            min-height: 1.1em; }
+
+/* The generation half of a followed query: the answer text beside its
+   retrieval table, inked like every other generation-step element. */
+.inspector-answer { margin-top: .75rem; padding: .6rem .8rem;
+                     border: 1px solid var(--rule); background: var(--gray-row);
+                     min-height: 1.2em; }

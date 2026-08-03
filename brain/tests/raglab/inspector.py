@@ -3,49 +3,20 @@
 Three views (ground-truth pairs, chunks-by-session, per-question retrieval
 trace) over the same fixtures and pipeline the lab measures with. It builds its
 own in-memory index and writes nothing. Composition root: `create_inspector_app`.
+
+It is also a **live follower of the lab itself**: `GET /api/follow` polls the
+lab (:9002, `RAGLAB_INSPECTOR_LAB_URL`) over plain `urllib` for its newest
+finished index and query jobs, so the two panels stay separate OS processes
+sharing nothing but HTTP — the lab keeps no database and the Inspector keeps
+no write path, so this is the only link between them. A lab that is not
+running is a normal state, not an error: every failure to reach it comes back
+as `{'lab': 'down', ...}` rather than an exception, the same rule the rest of
+this file follows for a missing service.
 """
-from lodestar_brain import textnorm
-
-
-def _norm(text: str) -> str:
-    return ' '.join(textnorm.tokens(text, drop_stopwords=False))
-
-
-def mark_gold(candidate_texts: list[str],
-              evidence_quotes: list[str]) -> list[bool]:
-    """Which candidates contain a question's gold evidence quote.
-
-    Substring either direction over the shared normaliser: a chunk may be
-    smaller than a quote (part of one message) or larger (several). Normalising
-    first means a whitespace or zero-width difference cannot hide a real match —
-    the same reason the tokeniser is shared across the whole brain. A candidate
-    that normalises to the empty string (blank, whitespace-only, or nothing the
-    tokeniser keeps) is never gold — the empty string is a substring of every
-    quote, which would mark a chunk with no evidence at all as a match. The same
-    guard applies to a quote: one that normalises to nothing (punctuation-only,
-    or a single short token the tokeniser drops) is dropped from the quote list
-    rather than matching every candidate for the same reason."""
-    quotes = [n for n in (_norm(q) for q in evidence_quotes) if n]
-    out = []
-    for text in candidate_texts:
-        norm = _norm(text)
-        out.append(bool(norm) and any(q in norm or norm in q for q in quotes))
-    return out
-
-
-def chunks_by_session(index) -> list[dict]:
-    """Every chunk the index holds, grouped by session in index order — the
-    'chunks after indexing' view. `by_session` is built in chunk order, which
-    follows diary order, so no sorting is needed or wanted."""
-    groups = []
-    for session_id, chunks in index.by_session.items():
-        groups.append({
-            'session_id': session_id,
-            'date': chunks[0].date if chunks else '',
-            'chunks': [{'id': c.id, 'text': c.text} for c in chunks]})
-    return groups
-
-
+import json
+import os
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -55,9 +26,36 @@ from . import evaluate, models, pipeline
 from .config import LabConfig, load_lab_settings, settings_for_provider
 from .corpus import load_diary, load_ground_truth
 from .index import IndexRegistry, _lab_llm
+from .present import chunks_by_session, mark_gold
 from .server import Jobs
 
 STATIC = Path(__file__).resolve().parent / 'static'
+
+LAB_URL_ENV = 'RAGLAB_INSPECTOR_LAB_URL'
+DEFAULT_LAB_URL = 'http://localhost:9002'
+# Short on purpose: the Inspector polls this every ~2s from the page, so a lab
+# that is merely slow to answer must not stack up hung requests behind it.
+LAB_TIMEOUT = 2.5
+
+
+def lab_base_url() -> str:
+    return os.environ.get(LAB_URL_ENV, DEFAULT_LAB_URL).rstrip('/')
+
+
+def _lab_get(path: str) -> dict | None:
+    """GET one path from the lab. Every way this can fail — connection
+    refused, timeout, a non-200, a body that is not JSON — comes back as
+    `None`. stdlib `urllib` only: the lab and the Inspector are both test-only
+    tooling, and a poller of another local service does not earn a new
+    dependency."""
+    url = f'{lab_base_url()}{path}'
+    try:
+        with urllib.request.urlopen(url, timeout=LAB_TIMEOUT) as response:
+            if response.status != 200:
+                return None
+            return json.loads(response.read().decode('utf-8'))
+    except (urllib.error.URLError, OSError, ValueError, TimeoutError):
+        return None
 
 # Candidate F — the chosen architecture — as the Inspector's default config:
 # the sweep baseline plus the LLM relevance gate. One source for the endpoint
@@ -160,6 +158,41 @@ def create_inspector_app() -> FastAPI:
         if data is None:
             raise HTTPException(404, 'unknown run')
         return data
+
+    @app.get('/api/follow')
+    def follow():
+        """What the page needs to render an auto-following view, in one call:
+        the lab's own newest *finished* index and query jobs, or a plain
+        'down' when :9002 cannot be reached at all. HTTP 200 either way — a
+        lab that is not running is a normal state here, same as everywhere
+        else in this file."""
+        jobs_index = _lab_get('/api/jobs')
+        if jobs_index is None:
+            return {'lab': 'down', 'lab_url': lab_base_url(),
+                    'index': None, 'query': None}
+
+        def newest_done(kind: str) -> dict | None:
+            for entry in jobs_index.get('jobs', []):
+                if entry.get('kind') == kind and entry.get('state') == 'done':
+                    return entry
+            return None
+
+        def view(kind: str, fields: tuple[str, ...]) -> dict | None:
+            entry = newest_done(kind)
+            if entry is None:
+                return None
+            full = _lab_get(f"/api/jobs/{entry['id']}")
+            if full is None or full.get('result') is None:
+                return None
+            result = full['result']
+            out = {'job_id': entry['id'], 'config': full.get('config')}
+            out.update({field: result.get(field) for field in fields})
+            return out
+
+        index_view = view('index', ('chunks_by_session',))
+        query_view = view('query', ('trace', 'question', 'question_id', 'answer'))
+        return {'lab': 'up', 'lab_url': lab_base_url(),
+                'index': index_view, 'query': query_view}
 
     return app
 

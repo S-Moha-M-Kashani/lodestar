@@ -31,6 +31,7 @@ from .config import (ANSWERERS, BALANCES, CHUNKERS, DEPENDENCIES,
                      load_lab_settings, settings_for_provider)
 from .corpus import load_diary, load_ground_truth
 from .index import IndexRegistry, _lab_llm
+from .present import chunks_by_session, mark_gold
 
 STATIC = Path(__file__).resolve().parent / 'static'
 
@@ -48,7 +49,7 @@ class Jobs:
         self.jobs: dict[str, dict] = {}
         self.current: str | None = None
 
-    def start(self, kind: str, target) -> str:
+    def start(self, kind: str, target, config: dict | None = None) -> str:
         with self.lock:
             if self.current and self.jobs[self.current]['state'] in ('running', 'cancelling'):
                 # One message per state, because they ask different things of the
@@ -67,7 +68,7 @@ class Jobs:
             job_id = uuid.uuid4().hex[:10]
             self.jobs[job_id] = {'id': job_id, 'kind': kind, 'state': 'running',
                                  'stage': 'starting', 'progress': 0.0,
-                                 'detail': '',
+                                 'detail': '', 'config': config,
                                  'result': None, 'error': None,
                                  'cancel_requested': False,
                                  '_cancel': threading.Event()}
@@ -116,6 +117,14 @@ class Jobs:
             raise HTTPException(404, 'unknown job')
         # The event is an implementation detail, not JSON the browser can read.
         return {key: value for key, value in job.items() if key != '_cancel'}
+
+    def list(self) -> list[dict]:
+        """Newest first, and deliberately thin: an index of what has run
+        (id/kind/state/config) for a follower like the Inspector to scan, not
+        a dump of every job's result or its traceback."""
+        return [{'id': job['id'], 'kind': job['kind'], 'state': job['state'],
+                 'config': job.get('config')}
+                for job in reversed(list(self.jobs.values()))]
 
     def cancel(self, job_id: str) -> dict:
         job = self.jobs.get(job_id)
@@ -251,9 +260,12 @@ def create_app() -> FastAPI:
                     'p95_chars': index.stats.p95_chars,
                     'embed_dim': index.stats.embed_dim,
                     'build_seconds': index.stats.build_seconds,
-                    'reused': index.stats.reused, 'notes': index.stats.notes}
+                    'reused': index.stats.reused, 'notes': index.stats.notes,
+                    # So a follower (the Inspector, :9003) can render what an
+                    # index job actually built without holding its own index.
+                    'chunks_by_session': chunks_by_session(index)}
 
-        return _accepted(jobs.start('index', work))
+        return _accepted(jobs.start('index', work, config=cfg.to_dict()))
 
     @app.post('/api/evaluations')
     def start_evaluation(payload: dict):
@@ -282,7 +294,14 @@ def create_app() -> FastAPI:
                 cancelled=check_cancelled)
             return result.as_dict()
 
-        return _accepted(jobs.start('run', work))
+        return _accepted(jobs.start('run', work, config=cfg.to_dict()))
+
+    @app.get('/api/jobs')
+    def list_jobs():
+        """An index of every job this process has run — newest first, id/kind/
+        state/config only — so a follower (the Inspector) can find the newest
+        finished one of a kind without fetching every job's full result."""
+        return {'jobs': jobs.list()}
 
     @app.get('/api/jobs/{job_id}')
     def job_status(job_id: str):
@@ -338,14 +357,37 @@ def create_app() -> FastAPI:
             llm = _lab_llm(run_settings)
             roles = models.resolve(cfg, run_settings)
             report('retrieving', 0.75, question[:80])
-            outcome = pipeline.retrieve(index, cfg.retrieval, question,
-                                        query_date, llm=llm, models=roles)
+            # Traced rather than plain `retrieve`: the per-step ranks are what
+            # the Inspector's followed retrieval table needs, and this is the
+            # one place a followed run and a manual /api/trace one share ranks
+            # at all.
+            outcome, trace = pipeline.retrieve_traced(
+                index, cfg.retrieval, question, query_date,
+                llm=llm, models=roles)
             report('answering', 0.9)
             outcome = pipeline.answer(outcome, cfg.generation, llm=llm,
                                       models=roles)
-            return outcome.as_dict() | {'models': roles.as_dict()}
+            # Exact match only, never fuzzy: a question that happens to equal
+            # a ground-truth one gets its gold marks, everything else is
+            # plainly ungraded rather than guessed at.
+            gt_question = next((q for q in ground_truth['questions']
+                                if q['question_fa'] == question), None)
+            if gt_question is not None:
+                quotes = [ev['quote'] for ev in gt_question.get('evidence', [])]
+                gold_flags = mark_gold(
+                    [c['text'] for c in trace['candidates']], quotes)
+                question_id = gt_question['id']
+            else:
+                gold_flags = [False] * len(trace['candidates'])
+                question_id = None
+            for candidate, gold in zip(trace['candidates'], gold_flags):
+                candidate['gold'] = gold
+                candidate['question_id'] = question_id
+            return (outcome.as_dict()
+                   | {'models': roles.as_dict(), 'trace': trace,
+                      'question_id': question_id})
 
-        return _accepted(jobs.start('query', work))
+        return _accepted(jobs.start('query', work, config=cfg.to_dict()))
 
     @app.get('/api/questions')
     def questions(limit: int = 200):

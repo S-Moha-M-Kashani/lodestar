@@ -162,5 +162,103 @@ def test_inspector_page_exposes_the_three_views(monkeypatch):
     client = _client(monkeypatch)
     html = client.get('/').text
     for hook in ('tab-groundtruth', 'tab-chunks', 'tab-retrieval',
-                 'inspector-tab', 'retrieval-table'):
+                 'inspector-tab', 'retrieval-table',
+                 # the followed view's config statement and the answer text
+                 # from the generation half of a followed query
+                 'inspector-active-config', 'inspector-answer'):
         assert hook in html, f'missing {hook}'
+
+
+# --- following the lab (:9002) ----------------------------------------------
+
+import json as _json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import pytest
+
+FAKE_INDEX_JOB = {
+    'id': 'idx-fake-1', 'kind': 'index', 'state': 'done',
+    'config': {'index': {'chunker': 'session', 'embedder': 'ascii-hash'}},
+    'result': {'chunks': 1, 'chunks_by_session': [
+        {'session_id': 's1', 'date': '2026-01-01',
+         'chunks': [{'id': 's1-0', 'text': 'chunk one'}]}]}}
+
+FAKE_QUERY_JOB = {
+    'id': 'q-fake-1', 'kind': 'query', 'state': 'done',
+    'config': {'retrieval': {'retriever': 'hybrid-rrf', 'k': 8}},
+    'result': {
+        'question': 'یک سوال؟', 'question_id': 'q-001', 'answer': 'یک جواب.',
+        'trace': {'candidates': [{'chunk_id': 's1-0', 'text': 'chunk one',
+                                  'gold': True, 'dense_rank': 1, 'bm25_rank': 1,
+                                  'fused_rank': 1, 'kept': True}]}}}
+
+
+class _FakeLabHandler(BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass  # a canned test server has nothing worth logging
+
+    def do_GET(self):
+        if self.path == '/api/jobs':
+            body = {'jobs': [
+                {'id': FAKE_INDEX_JOB['id'], 'kind': 'index', 'state': 'done',
+                 'config': FAKE_INDEX_JOB['config']},
+                {'id': FAKE_QUERY_JOB['id'], 'kind': 'query', 'state': 'done',
+                 'config': FAKE_QUERY_JOB['config']}]}
+        elif self.path == f"/api/jobs/{FAKE_INDEX_JOB['id']}":
+            body = FAKE_INDEX_JOB
+        elif self.path == f"/api/jobs/{FAKE_QUERY_JOB['id']}":
+            body = FAKE_QUERY_JOB
+        else:
+            self.send_response(404)
+            self.end_headers()
+            return
+        payload = _json.dumps(body).encode('utf-8')
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+
+@pytest.fixture
+def fake_lab():
+    """A tiny stand-in :9002 — canned `/api/jobs` and `/api/jobs/{id}` JSON —
+    so the follow test is fast, offline and independent of the real lab's own
+    behaviour."""
+    server = ThreadingHTTPServer(('127.0.0.1', 0), _FakeLabHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f'http://127.0.0.1:{server.server_port}'
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+
+# This is an integration test (FastAPI TestClient; the lab it points at is an
+# unreachable port, pinning "a lab that is not running is a normal state").
+def test_follow_reports_lab_down_without_raising(monkeypatch):
+    monkeypatch.setenv('RAGLAB_INSPECTOR_LAB_URL', 'http://127.0.0.1:9')
+    client = _client(monkeypatch)
+    res = client.get('/api/follow')
+    assert res.status_code == 200
+    body = res.json()
+    assert body['lab'] == 'down'
+    assert body['index'] is None and body['query'] is None
+
+
+# This is an integration test (FastAPI TestClient over the read-only app; the
+# lab is a canned fake HTTP server, not the real :9002).
+def test_follow_reads_a_finished_index_and_query_job(monkeypatch, fake_lab):
+    monkeypatch.setenv('RAGLAB_INSPECTOR_LAB_URL', fake_lab)
+    client = _client(monkeypatch)
+    body = client.get('/api/follow').json()
+
+    assert body['lab'] == 'up'
+    assert body['index']['config']['index']['chunker'] == 'session'
+    assert body['index']['chunks_by_session'][0]['session_id'] == 's1'
+    assert body['query']['config']['retrieval']['retriever'] == 'hybrid-rrf'
+    assert body['query']['answer'] == 'یک جواب.'
+    assert body['query']['question_id'] == 'q-001'
+    assert body['query']['trace']['candidates'][0]['gold'] is True

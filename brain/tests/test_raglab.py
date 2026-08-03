@@ -3797,6 +3797,32 @@ def test_a_second_job_is_refused_in_readable_english(client):
         assert 'an index job is already running' in detail
 
 
+# This is an integration test.
+def test_jobs_index_lists_runs_with_their_config(client):
+    """The Inspector (:9003) follows the lab by polling this index for the
+    newest finished job of a kind, so it has to carry the config that job
+    actually ran — not the raw posted body, but `LabConfig`'s own normalised
+    form — and nothing heavier than id/kind/state/config."""
+    posted = client.post('/api/indexes', json={
+        'index': {'chunker': 'session', 'embedder': 'ascii-hash'}})
+    assert posted.status_code == 202
+    job = _finished(client, posted.json()['job_id'])
+    assert job['state'] == 'done', job.get('error')
+
+    entries = client.get('/api/jobs').json()['jobs']
+    assert entries, 'expected at least one job listed'
+    newest = entries[0]
+    assert newest['id'] == job['id']
+    assert newest['kind'] == 'index'
+    assert newest['config']['index']['chunker'] == 'session'
+    assert newest['config']['index']['embedder'] == 'ascii-hash'
+    assert 'result' not in newest and '_cancel' not in newest
+
+    chunks_total = sum(len(g['chunks'])
+                       for g in job['result']['chunks_by_session'])
+    assert chunks_total == job['result']['chunks']
+
+
 # ---------------------------------------------------------------------------
 # The panel's two usability guarantees, held by the served data rather than by
 # either frontend — a rule copied into two panels is a rule that will disagree.
