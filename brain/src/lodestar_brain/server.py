@@ -124,20 +124,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # its own. `gate_llm` is where BRAIN_GRADER is validated: an unknown value
     # raises at boot rather than leaving the gate quietly switched off.
     grader = gate_llm(settings.grader, make_chat_model(settings))
-    tools = [*make_board_tools(board),
-             # Built here, not inside the tool: an unconfigured checker must stop
-             # the boot, not be discovered on the first search.
-             make_search_tool(DdgsSearch(),
-                              safety=make_url_safety(settings.url_safety, settings)),
-             make_retrieve_tool(index, board, llm=grader,
-                                threshold=settings.grade_threshold)]
     memory = None
     if settings.chroma_url:
         try:
             memory = ChatStore(settings.chroma_url, embeddings,
                                collection=settings.chat_collection,
                                database=settings.chroma_database)
-            tools.append(make_recall_tool(memory))
         except Exception as exc:
             # Chroma is optional infrastructure: the agent, board tools, web
             # search and card retrieval all work without it. Taking the whole
@@ -147,6 +139,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             logging.getLogger(__name__).warning(
                 'chat memory disabled: Chroma at %s is unreachable (%s)',
                 settings.chroma_url, exc)
+    tools = [*make_board_tools(board),
+             # Built here, not inside the tool: an unconfigured checker must stop
+             # the boot, not be discovered on the first search.
+             make_search_tool(DdgsSearch(),
+                              safety=make_url_safety(settings.url_safety, settings)),
+             # find_related is the agent's one search over everything the user
+             # has: the board, and — when Chroma is up — the chat record too.
+             make_retrieve_tool(index, board, llm=grader,
+                                threshold=settings.grade_threshold,
+                                memory=memory)]
+    if memory is not None:
+        tools.append(make_recall_tool(memory))
     if memory is not None:
         # Chroma is a derived index over assistant.db: rebuild what it missed
         # (turns recorded while it was down). Best-effort — compose starts the

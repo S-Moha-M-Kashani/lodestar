@@ -1058,12 +1058,20 @@ class ChatStore:
         return len(missing)
 
     def search(self, text: str, k: int = 5,
-               scope: TimeScope | None = None) -> list[dict]:
+               scope: TimeScope | None = None, *,
+               evidence: bool = True) -> list[dict]:
         """Hybrid, BM25-heavy: dense from Chroma, BM25 over the same chunks,
         each fused across the expanded queries (synonyms, cross-script), then
         combined by weighted RRF (RECALL_WEIGHTS). Fused inline rather than
         via `hybrid_retriever` because `EnsembleRetriever` discards the fused
-        score, and this result carries one all the way to the UI."""
+        score, and this result carries one all the way to the UI.
+
+        `evidence` keeps or drops the lexical floor below. It exists for who
+        is reading: the recall box keeps it, because a human scanning a result
+        list cannot tell an unexplained hit from a broken search; the agent's
+        find_related turns it off, because a model judges relevance itself and
+        the floor would silently drop exactly the semantic matches — «دعوا»
+        reaching «دعوامون» — that are the point of having a dense index."""
         total = self.count()
         if total == 0:
             return []   # an empty store is a normal state, not a failed query
@@ -1098,12 +1106,13 @@ class ChatStore:
         # Evidence means sharing an informative term with any spelling of the
         # query — deliberately not "a positive BM25 score", which a tiny
         # corpus denies even to an exact match (negative IDF).
-        query_terms = ({token for q in queries for token in textnorm.tokens(q)}
-                       - QUESTION_WORDS)
-        evidenced = {key for key in scores
-                     if query_terms & set(textnorm.tokens(key))}
-        ordered = [key for key in sorted(scores, key=lambda key: -scores[key])
-                   if key in evidenced][:k]
+        ordered = sorted(scores, key=lambda key: -scores[key])
+        if evidence:
+            query_terms = ({token for q in queries
+                            for token in textnorm.tokens(q)} - QUESTION_WORDS)
+            ordered = [key for key in ordered
+                       if query_terms & set(textnorm.tokens(key))]
+        ordered = ordered[:k]
         return [{'text': key, 'score': round(scores[key], 4),
                  'metadata': dict(seen[key].metadata)} for key in ordered]
 
