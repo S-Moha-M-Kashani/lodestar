@@ -684,6 +684,33 @@ try:
         page.click('[data-view="assistant"]')
         page.wait_for_selector(".assistant-sheet")
         check("assistant: the sheet is opaque on the paper themes", sheet_alpha() == 1)
+
+        # The composer must never need a scroll to reach. An empty transcript
+        # always fits, so the interesting case is a full one: .chat-log caps at
+        # 62vh, which plus the header and the sheet's own chrome adds up past the
+        # viewport, and the page - not the transcript - takes up the slack.
+        page.evaluate("""() => {
+          const log = document.querySelector('.chat-log');
+          for (let i = 0; i < 40; i++) {
+            const d = document.createElement('div');
+            d.className = 'chat-msg ' + (i % 2 ? 'assistant' : 'user');
+            d.textContent = 'filler turn ' + i + ' - '.repeat(20);
+            log.append(d);
+          }
+        }""")
+        page.wait_for_timeout(200)
+        fit = page.evaluate("""() => {
+          const c = document.querySelector('#chat-input').getBoundingClientRect();
+          return {bottom: Math.round(c.bottom), vh: innerHeight,
+                  over: Math.round(document.documentElement.scrollHeight - innerHeight)};
+        }""")
+        check(f"assistant: the composer is in view with a full transcript "
+              f"(bottom {fit['bottom']} of {fit['vh']})",
+              fit["bottom"] <= fit["vh"])
+        check(f"assistant: a full transcript scrolls itself, not the page "
+              f"(overflow {fit['over']}px)", fit["over"] <= 1)
+        page.reload()
+        page.wait_for_selector("#chat-input")
         select_theme("star")
         page.wait_for_timeout(120)
         a = sheet_alpha()
@@ -697,6 +724,23 @@ try:
         select_theme("light")
         page.click('[data-view="board"]')
         page.wait_for_selector(".card")
+
+        # ---- The header fits one row ----------------------------------------
+        # This is an end-to-end test. The view switch and the toolbar are already
+        # children of one flex row; they wrapped onto two lines because the mark
+        # and the paddings ate the width, which cost ~200px of vertical space
+        # before a single card. Measured at 375px tall on a 1440-wide window.
+        page.set_viewport_size({"width": 1440, "height": 900})
+        page.wait_for_timeout(150)
+        rows = page.evaluate("""() => {
+          const r = (s) => document.querySelector(s).getBoundingClientRect();
+          const vs = r('.view-switch'), tb = r('.toolbar');
+          return {same: Math.abs(vs.top - tb.top) < 12,
+                  header: Math.round(r('.app-header').height)};
+        }""")
+        check("header: the view switch and the toolbar share one row", rows["same"])
+        check(f"header: the top panel is under 240px tall (got {rows['header']})",
+              rows["header"] <= 240)
 
         # ---- Delete (in-app confirm dialog) ---------------------------------
         target = page.locator('[data-col="answered"] .card').first

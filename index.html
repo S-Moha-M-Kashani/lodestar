@@ -156,6 +156,21 @@
         <g opacity="0.8" fill="#eaf2ff"><circle cx="131.6" cy="54.2" r="1.05"/><path d="M131.6 50.9 L132.0 54.2 L131.6 57.5 L131.2 54.2 Z"/><path d="M128.3 54.2 L131.6 54.6 L135.0 54.2 L131.6 53.8 Z"/></g>
       </g>
 
+      <!-- The mark's own star and scenes. The disc went to 4/7 and the star to
+           3/4, so within the mark the star occupies 51% of the disc instead of
+           39%; the sky keeps #nv-star at scale 3 and is untouched. -->
+      <g id="nv-star-mark" style="--star-ink:#eaf2ff; --star-core:#fff; --star-halo:rgba(186,212,255,0.62)">
+        <use href="#nova-art" transform="translate(-25.44 -25.44) scale(3.92)"/>
+      </g>
+      <g id="mark-colour-art">
+        <g mask="url(#nv-vignette)"><use href="#nv-colour"/></g>
+        <use href="#nv-star-mark"/>
+      </g>
+      <g id="mark-stars-art">
+        <g mask="url(#nv-vignette)"><use href="#nv-colour"/><use href="#nv-cloud"/><use href="#nv-field"/></g>
+        <use href="#nv-star-mark"/>
+      </g>
+
       <g id="scene-colour-art">
         <g mask="url(#nv-vignette)"><use href="#nv-colour"/></g>
         <use href="#nv-star"/>
@@ -178,8 +193,8 @@
     <div class="header-row">
       <div class="brand">
         <span class="brand-mark" aria-hidden="true">
-          <svg class="scene-colour" viewBox="16 16 168 168"><use href="#scene-colour-art"/></svg>
-          <svg class="scene-stars" viewBox="16 16 168 168"><use href="#scene-stars-art"/></svg>
+          <svg class="scene-colour" viewBox="16 16 168 168"><use href="#mark-colour-art"/></svg>
+          <svg class="scene-stars" viewBox="16 16 168 168"><use href="#mark-stars-art"/></svg>
         </span>
         <div>
           <h1>Lodestar</h1>
