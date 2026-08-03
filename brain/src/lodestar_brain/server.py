@@ -19,6 +19,7 @@ from .safety import make_url_safety
 from .retrieval import (CardIndex, ChatStore, coverage, expand_queries,
                         gate_llm, make_embeddings)
 from .tools.board import BoardClient, make_board_tools
+from .tools.recap import make_recap_tool
 from .tools.retrieve import make_recall_tool, make_retrieve_tool
 from .tools.websearch import DdgsSearch, make_search_tool
 from .voice import make_transcriber
@@ -120,10 +121,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     embeddings = make_embeddings(settings.embedder, settings,
                                  settings.embed_model)
     index = CardIndex(embeddings)
-    # The gate grades with the same model that answers, so it needs no model of
-    # its own. `gate_llm` is where BRAIN_GRADER is validated: an unknown value
-    # raises at boot rather than leaving the gate quietly switched off.
-    grader = gate_llm(settings.grader, make_chat_model(settings))
+    # One chat model serves the gate and the recap summary — the same model
+    # that answers, so neither needs a model of its own. `gate_llm` is where
+    # BRAIN_GRADER is validated: an unknown value raises at boot rather than
+    # leaving the gate quietly switched off.
+    chat_model = make_chat_model(settings)
+    grader = gate_llm(settings.grader, chat_model)
     memory = None
     if settings.chroma_url:
         try:
@@ -148,7 +151,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
              # has: the board, and — when Chroma is up — the chat record too.
              make_retrieve_tool(index, board, llm=grader,
                                 threshold=settings.grade_threshold,
-                                memory=memory)]
+                                memory=memory),
+             # daily_recap answers "what were my concerns?" from the records —
+             # a missing Chroma costs it the chunk count, never the recap.
+             make_recap_tool(board, store=memory, llm=chat_model)]
     if memory is not None:
         tools.append(make_recall_tool(memory))
     if memory is not None:
