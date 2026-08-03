@@ -218,6 +218,36 @@ test('the RAG lab launcher installs the backend its default embedder needs', () 
 });
 
 // This is a configuration invariant.
+const INSPECTOR_PORT = 9003;
+const inspectorPort = () => portOf('raglab:inspector', /--port\s+(\d+)/);
+
+test('the RAG lab Inspector lives in the 9000 block on its own port', () => {
+  const port = inspectorPort();
+  assert.equal(port, INSPECTOR_PORT);
+  assert.notEqual(port, RAGLAB_PORT, 'the Inspector is a second service, not the lab');
+  assert.notEqual(port, MAIN_BOARD_PORT);
+  assert.notEqual(port, testBoardPort());
+  assert.notEqual(port, MAIN_BRAIN_PORT);
+  assert.notEqual(port, testBrainPort());
+  assert.ok(!CHROMA_PORTS.includes(port), `inspector binds :${port}, Chroma's port`);
+});
+
+// This is a configuration invariant.
+test('the Inspector launcher installs the backend its default embedder needs', () => {
+  const cfg = read('brain/tests/raglab/config.py');
+  const chosen = cfg.match(/embedder: str = '([^']+)'/);
+  const needed = { fastembed: 'semantic', 'sentence-transformers': 'local-embeddings' }[chosen[1]];
+  if (!needed) return;
+  assert.match(scripts['raglab:inspector'], new RegExp(`--extra\\s+${needed}\\b`));
+});
+
+// This is a configuration invariant: no raglab* command may name a database.
+test('the Inspector command names no database', () => {
+  assert.ok(!/DATABASE|chroma/i.test(scripts['raglab:inspector']),
+    'a raglab command must not name a database');
+});
+
+// This is a configuration invariant.
 test('the one-command lab runner delegates the launch instead of copying it', () => {
   // `npm run lab` runs the suite and then starts the lab. The launch line it
   // starts has to be *the* launch line: raglab carries four version pins and an
