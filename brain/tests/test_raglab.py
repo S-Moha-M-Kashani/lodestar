@@ -4155,6 +4155,42 @@ def test_both_run_routes_refuse_an_unknown_provider(client):
 
 
 # This is a unit test.
+def test_a_mode_only_presets_models_its_own_catalogue_offers(monkeypatch):
+    """The bug this pins: the panel's dropdowns were filled from the boot
+    provider's catalogue, so under the openrouter mode gpt-5-nano was not
+    offerable — and the panel's config-follows-the-panel rule then silently
+    wiped the preset back to ''. Every model a mode presets must be offered by
+    the catalogue that same mode carries."""
+    monkeypatch.setattr(models, 'openrouter_ids', lambda settings: frozenset())
+    for entry in models.mode_catalogue(LAB_SETTINGS):
+        offered = {option['id'] for option in entry['models']}
+        for group, names in entry['config'].items():
+            for name, value in names.items():
+                if name.endswith('model') and value:
+                    assert value in offered, (
+                        f"{entry['key']} presets {group}.{name}={value!r} "
+                        'but its own catalogue does not offer it')
+
+
+# This is an integration test.
+def test_each_mode_carries_the_catalogue_of_its_own_backend(client):
+    """A slug only means something to the backend that serves it, so the mode
+    that moves the backend must bring that backend's model list with it."""
+    body = client.get('/api/options').json()
+    modes = {mode['key']: mode for mode in body['modes']}
+    remote = {option['id'] for option in modes['openrouter']['models']}
+    local = {option['id'] for option in modes['local']['models']}
+    assert 'openai/gpt-5-nano' in remote
+    assert '4skl/gemma4-e2b-mtp' in local
+    # Disjoint apart from the '' lab-default entry and a model the user named
+    # by RAGLAB_MODEL — an explicitly named model is offered everywhere by the
+    # catalogue's own rule. The two known lists must never blur into one
+    # dropdown of half-unusable choices.
+    named = body['capabilities']['llm_model']
+    assert (remote & local) <= {'', named}
+
+
+# This is a unit test.
 def test_both_panels_offer_the_mode_dropdown():
     """The dropdown sits in the models column of the board's page and in the
     standalone panel, both reading the served modes rather than a local copy —

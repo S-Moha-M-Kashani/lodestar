@@ -367,8 +367,17 @@ function fillEmbedders() {
 // ink. A role whose step this page has no group for still renders, in the
 // catch-all under them: a stage added in the service must never silently vanish
 // from the panel.
+// The chat-model list for the backend the runs will actually use: the picked
+// mode's own catalogue, or the boot catalogue when no mode is picked. A slug
+// only means something to the backend that serves it — filled from the wrong
+// list, a dropdown cannot display a preset and quietly resets it.
+function modelList() {
+  const mode = (OPTIONS.modes || []).find((m) => m.key === $('mode').value);
+  return (mode && mode.models) || OPTIONS.models || [];
+}
+
 function fillModels() {
-  const options = (OPTIONS.models || []).map((m) =>
+  const options = modelList().map((m) =>
     `<option value="${escapeHtml(m.id)}">${escapeHtml(modelLabel(m))}</option>`).join('');
   const row = (role) =>
     `<label>${escapeHtml(role.label)} <span class="muted">· ${escapeHtml(role.only_when)}</span>`
@@ -402,11 +411,15 @@ function fillModes() {
       `<option value="${escapeHtml(m.key)}">${escapeHtml(m.label)}</option>`).join('');
   $('mode').onchange = () => {
     const mode = (OPTIONS.modes || []).find((m) => m.key === $('mode').value);
-    if (!mode || !mode.config) return;
+    // Read the controls before the model dropdowns are rebuilt for the new
+    // backend's catalogue, then write the merged config back over them.
     const cfg = readConfig();
-    for (const group of Object.keys(mode.config)) {
-      Object.assign(cfg[group], mode.config[group]);
+    if (mode && mode.config) {
+      for (const group of Object.keys(mode.config)) {
+        Object.assign(cfg[group], mode.config[group]);
+      }
     }
+    fillModels();
     applyDefaults(cfg);
     applyDependencies();
   };

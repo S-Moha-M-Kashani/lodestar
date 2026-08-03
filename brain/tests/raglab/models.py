@@ -27,7 +27,7 @@ present, and never guessed when it is not.
 """
 from dataclasses import dataclass, fields
 
-from .config import LabConfig, LabSettings
+from .config import LabConfig, LabSettings, settings_for_provider
 
 SOURCES = ('default', 'open', 'closed', 'unknown')
 
@@ -405,11 +405,15 @@ def mode_config(key: str, settings: LabSettings) -> dict:
 
 
 def mode_catalogue(settings: LabSettings) -> list[dict]:
-    """The dropdown contents: each mode with the backend it runs on and the
-    exact patch picking it applies — served, so neither panel keeps a preset
-    of its own to drift."""
+    """The dropdown contents: each mode with the backend it runs on, the exact
+    patch picking it applies, and — because a slug only means something to the
+    backend that serves it — that backend's own model catalogue. Without the
+    list riding along, the panels filled their dropdowns from the boot
+    provider's catalogue, could not display the preset under the other mode,
+    and their config-follows-the-panel rule silently wiped it back to ''."""
     return [{'key': mode.key, 'label': mode.label, 'provider': mode.provider,
-             'note': mode.note, 'config': mode_config(mode.key, settings)}
+             'note': mode.note, 'config': mode_config(mode.key, settings),
+             'models': catalogue(settings_for_provider(settings, mode.provider))}
             for mode in MODES]
 
 

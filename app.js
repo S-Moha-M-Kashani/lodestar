@@ -5882,11 +5882,25 @@
   // The backend the picked mode runs on, or '' when no mode is picked and the
   // run should follow whatever the lab booted with. Read from the served modes
   // (options.modes) — the provider is a fact about the mode, not this file.
-  function ragProvider() {
+  function ragPickedMode() {
     const cfg = ragConfig();
-    const mode = ((ragState.options && ragState.options.modes) || [])
+    return ((ragState.options && ragState.options.modes) || [])
       .find((m) => m.key === (cfg && cfg.mode));
+  }
+
+  function ragProvider() {
+    const mode = ragPickedMode();
     return mode ? mode.provider : '';
+  }
+
+  // The chat-model list for the backend the runs will actually use: the picked
+  // mode's own catalogue, or the boot catalogue when no mode is picked. A slug
+  // only means something to the backend that serves it — filled from the wrong
+  // list, the dropdown cannot display a preset and quietly resets it.
+  function ragModelList() {
+    const mode = ragPickedMode();
+    return (mode && mode.models)
+      || (ragState.options && ragState.options.models) || [];
   }
 
   async function ragStart(kind, extra) {
@@ -6101,7 +6115,6 @@
   }
 
   function ragModelRow(role, cfg) {
-    const options = ragState.options;
     const [group, key] = role.field.split('.');
     const label = document.createElement('label');
     label.className = 'field';
@@ -6121,7 +6134,7 @@
     const select = document.createElement('select');
     select.className = 'rag-model';
     select.dataset.role = role.key;
-    for (const model of options.models || []) {
+    for (const model of ragModelList()) {
       const opt = document.createElement('option');
       opt.value = model.id;
       opt.textContent = ragModelLabel(model);
