@@ -728,27 +728,34 @@ function table(head, rows) {
     '</tbody></table>';
 }
 
+// A query is a job like a build or a run: the index it builds implicitly can
+// take minutes, so the ask watches the same job box — stage, fraction, detail —
+// instead of blocking behind a static placeholder.
 $('ask').onclick = async () => {
   const body = Object.assign(readConfig(), { question: $('question').value });
-  $('queryOut').innerHTML = '<div class="muted">retrieving…</div>';
+  $('queryOut').innerHTML = '';
   try {
-    const out = await api('/api/queries', body);
-    const scope = out.time_scope
-      ? `time scope <b>${out.time_scope.label}</b> ${out.time_scope.from} → ${out.time_scope.to} (${out.time_scope.kind})`
-      : 'no time scope detected';
-    $('queryOut').innerHTML =
-      `<div class="muted">${scope} · ${out.diagnostics.candidates_in_scope} chunks in scope · ` +
-      `dense ${out.diagnostics.dense_hits} · bm25 ${out.diagnostics.bm25_hits} · ` +
-      `graded out ${out.diagnostics.graded_out ?? 0} · ` +
-      Object.entries(out.timings).map(([k, v]) => `${k} ${v}`).join(' · ') + '</div>' +
-      (out.answer ? `<div class="ctx fa"><b>${out.abstained ? '(abstained) ' : ''}</b>${out.answer}</div>` : '') +
-      out.contexts.map((c) => `<div class="ctx">
-          <div class="meta">${c.chunk_id} · ${c.date} · score ${fmt(c.score)} ·
-            ${Object.entries(c.stages).map(([k, v]) => k + ' ' + fmt(v, 2)).join(' · ')}
-            ${c.expanded_from ? ' · expanded from ' + c.expanded_from : ''}</div>
-          <div class="fa">${escapeHtml(c.text).replace(/\n/g, '<br>')}</div></div>`).join('');
+    const { job_id } = await api('/api/queries', body);
+    poll(job_id, renderQuery);
   } catch (e) { $('queryOut').innerHTML = `<div class="note">${e.message}</div>`; }
 };
+
+function renderQuery(out) {
+  const scope = out.time_scope
+    ? `time scope <b>${out.time_scope.label}</b> ${out.time_scope.from} → ${out.time_scope.to} (${out.time_scope.kind})`
+    : 'no time scope detected';
+  $('queryOut').innerHTML =
+    `<div class="muted">${scope} · ${out.diagnostics.candidates_in_scope} chunks in scope · ` +
+    `dense ${out.diagnostics.dense_hits} · bm25 ${out.diagnostics.bm25_hits} · ` +
+    `graded out ${out.diagnostics.graded_out ?? 0} · ` +
+    Object.entries(out.timings).map(([k, v]) => `${k} ${v}`).join(' · ') + '</div>' +
+    (out.answer ? `<div class="ctx fa"><b>${out.abstained ? '(abstained) ' : ''}</b>${out.answer}</div>` : '') +
+    out.contexts.map((c) => `<div class="ctx">
+        <div class="meta">${c.chunk_id} · ${c.date} · score ${fmt(c.score)} ·
+          ${Object.entries(c.stages).map(([k, v]) => k + ' ' + fmt(v, 2)).join(' · ')}
+          ${c.expanded_from ? ' · expanded from ' + c.expanded_from : ''}</div>
+        <div class="fa">${escapeHtml(c.text).replace(/\n/g, '<br>')}</div></div>`).join('');
+}
 
 function escapeHtml(s) {
   return s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));

@@ -2245,6 +2245,26 @@ def client():
     return TestClient(create_app())
 
 
+def _finished(client, job_id: str, timeout: float = 30.0) -> dict:
+    """Poll a job to its terminal state, the way both frontends do."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        job = client.get(f'/api/jobs/{job_id}').json()
+        if job['state'] not in ('running', 'cancelling'):
+            return job
+        time.sleep(0.01)
+    raise AssertionError(f'job {job_id} still running after {timeout}s')
+
+
+def _ask(client, payload: dict) -> dict:
+    """POST one question and wait for its job — the panel's ask flow."""
+    res = client.post('/api/queries', json=payload)
+    assert res.status_code == 202, res.text
+    job = _finished(client, res.json()['job_id'])
+    assert job['state'] == 'done', job.get('error')
+    return job['result']
+
+
 # This is an integration test.
 def test_options_describes_the_corpus_and_capabilities(client):
     body = client.get('/api/options').json()
@@ -2321,12 +2341,12 @@ def test_panel_is_served(client):
 
 # This is an integration test.
 def test_ad_hoc_query_returns_stages_and_contexts(client):
-    body = client.post('/api/queries', json={
+    body = _ask(client, {
         'question': 'آذر چه خبر بود؟',
         'index': {'chunker': 'message', 'embedder': 'char-hash',
                   'layers': ['chunk']},
         'retrieval': {'k': 4},
-        'generation': {'answerer': 'extractive'}}).json()
+        'generation': {'answerer': 'extractive'}})
     assert body['contexts'] and body['answer']
     assert body['time_scope']['label'] == 'آذر'
     assert 'retrieve_ms' in body['timings']
@@ -2387,15 +2407,14 @@ def test_defaults_carry_the_per_task_model_fields(client):
 
 # This is an integration test.
 def test_a_per_task_model_is_accepted_by_the_query_endpoint(client):
-    res = client.post('/api/queries', json={
+    body = _ask(client, {
         'question': 'آذر چه خبر بود؟',
         'index': {'chunker': 'message', 'embedder': 'char-hash', 'layers': ['chunk']},
         'retrieval': {'k': 4,
                       'grader_model': 'anthropic/claude-haiku-4.5'},
         'generation': {'answerer': 'extractive',
                        'judge_model': 'openai/gpt-5-mini'}})
-    assert res.status_code == 200
-    assert res.json()['contexts']
+    assert body['contexts']
 
 
 # This is a unit test.
@@ -2473,15 +2492,14 @@ def test_options_offer_farsi_capable_embedding_models(client):
 def test_an_embedding_model_is_accepted_by_the_query_endpoint(client):
     """The field has to survive the panel round trip even when the running
     embedder ignores it, or a stale tab breaks a query."""
-    res = client.post('/api/queries', json={
+    body = _ask(client, {
         'question': 'آذر چه خبر بود؟',
         'index': {'chunker': 'message', 'embedder': 'char-hash',
                   'embed_model': 'intfloat/multilingual-e5-small',
                   'layers': ['chunk']},
         'retrieval': {'k': 4},
         'generation': {'answerer': 'extractive'}})
-    assert res.status_code == 200
-    assert res.json()['contexts']
+    assert body['contexts']
 
 
 # This is a unit test.
@@ -3695,19 +3713,72 @@ def test_evaluations_lists_and_fetches_the_same_resource(client):
 
 
 # This is an integration test.
-def test_a_query_is_posted_to_its_collection(client):
-    """`/api/queries` rather than `/api/query`: every other collection on this
-    service is plural, and a surface where one route breaks the rule is a
-    surface you have to remember instead of infer."""
+def test_a_query_is_a_job_like_its_sibling_collections(client):
+    """The ask button used to block on a synchronous POST: an implicit index
+    build (on a real embedder, a 2.2 GB download plus 167 sessions of
+    encoding) and every LLM stage ran behind a static 'retrieving…' note,
+    indistinguishable from a dead lab. A query is accepted as a job — 202, a
+    Location to poll, stage/fraction/detail while it runs — like /api/indexes
+    and /api/evaluations before it, and for the same reason: the work can
+    outlive anything a spinner honestly promises."""
     res = client.post('/api/queries', json={
         'index': {'chunker': 'session', 'embedder': 'ascii-hash'},
         'retrieval': {'retriever': 'dense', 'k': 2},
         'generation': {'answerer': 'none'},
         'question': 'وام مسکن'})
-    assert res.status_code == 200
-    assert 'contexts' in res.json()
-    # The precondition still refuses, and still says which one.
+    assert res.status_code == 202
+    job_id = res.json()['job_id']
+    assert res.headers['Location'] == f'/api/jobs/{job_id}'
+    job = _finished(client, job_id)
+    assert job['kind'] == 'query'
+    assert job['state'] == 'done', job.get('error')
+    assert 'contexts' in job['result'] and 'diagnostics' in job['result']
+    # The preconditions still refuse synchronously, and still say which one:
+    # a bad payload is a 400 the panel shows at once, never a job that dies.
     assert client.post('/api/queries', json={}).status_code == 400
+
+
+# This is an integration test.
+def test_the_query_job_hands_its_reporter_to_the_index_build(monkeypatch):
+    """The longest silent wait behind the ask button is the index the query
+    builds implicitly when its fingerprint is new. If the job does not pass
+    its reporter down to the registry, the bar sits on 'starting 0%' for the
+    whole build — the old bug wearing a new box."""
+    from fastapi.testclient import TestClient
+
+    from .raglab.server import create_app
+    seen = {}
+    original = IndexRegistry.get
+
+    def spy(self, cfg, progress=None, force=False):
+        seen['progress'] = progress
+        return original(self, cfg, progress=progress, force=force)
+
+    monkeypatch.setattr(IndexRegistry, 'get', spy)
+    fresh = TestClient(create_app())
+    res = fresh.post('/api/queries', json={
+        'index': {'chunker': 'session', 'embedder': 'ascii-hash'},
+        'retrieval': {'retriever': 'bm25', 'k': 2},
+        'generation': {'answerer': 'none'},
+        'question': 'وام مسکن'})
+    assert res.status_code == 202
+    job = _finished(fresh, res.json()['job_id'])
+    assert job['state'] == 'done', job.get('error')
+    assert callable(seen.get('progress'))
+
+
+# This is a unit test.
+def test_both_frontends_watch_the_ask_as_a_job():
+    """Neither panel may block on a bare fetch behind a static note: the ask
+    goes through the same job box as builds and runs, so the reader sees
+    stage, fraction and detail instead of guessing whether anything is
+    happening at all."""
+    panel = (RAGLAB_DIR / 'static' / 'index.html').read_text(encoding='utf-8')
+    board = (REPO_ROOT / 'app.js').read_text(encoding='utf-8')
+    # The static placeholder was the bug: it moves at no point of a build.
+    assert 'retrieving…' not in panel
+    # The ask joins the job-kind map the board already polls through.
+    assert "query: '/queries'" in board
 
 
 # This is an integration test.
@@ -3937,10 +4008,10 @@ def test_both_run_routes_screen_the_models_the_backend_serves(client, monkeypatc
 # This is an integration test.
 def test_a_query_whose_gate_cannot_reach_its_model_says_so(client, monkeypatch):
     """The other half of the gate fix. Refusing to score is only an improvement
-    if the refusal reaches the caller as something they can read: 502 because
-    the lab is up and its model is not, and the message names the stage —
-    otherwise the panel shows an empty result and the reader blames retrieval
-    for what the grader did."""
+    if the refusal reaches the caller as something they can read: now that a
+    query is a job, that is the job's error — surfaced, never swallowed — and
+    it still has to name the stage that went missing, or the panel shows a
+    blank result and the reader blames retrieval for what the grader did."""
     def unreachable(*args, **kwargs):
         raise ConnectionError('the model daemon is not running')
 
@@ -3950,6 +4021,7 @@ def test_a_query_whose_gate_cannot_reach_its_model_says_so(client, monkeypatch):
         'index': {'chunker': 'session', 'embedder': 'ascii-hash'},
         'retrieval': {'k': 4, 'grader': 'llm', 'grade_threshold': 0.4},
         'generation': {'answerer': 'none'}})
-    assert res.status_code == 502, res.status_code
-    detail = res.json()['detail']
-    assert 'grade' in detail.lower() and 'not running' in detail
+    assert res.status_code == 202, res.status_code
+    job = _finished(client, res.json()['job_id'])
+    assert job['state'] == 'error'
+    assert 'grade' in job['error'].lower() and 'not running' in job['error']

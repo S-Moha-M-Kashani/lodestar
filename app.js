@@ -5874,7 +5874,7 @@
   // map rather than '/' + kind: the two names stopped matching when the routes
   // became resource collections, and a concatenated path would have gone on
   // looking correct while 404ing.
-  const RAG_COLLECTIONS = { index: '/indexes', run: '/evaluations' };
+  const RAG_COLLECTIONS = { index: '/indexes', run: '/evaluations', query: '/queries' };
 
   async function ragStart(kind, extra) {
     if (ragState.busy) return;
@@ -5916,6 +5916,10 @@
     }
   }
 
+  // A question is a job like a build or a run — the index it builds implicitly
+  // can take minutes — so it goes through the same poll and progress bar. Only
+  // the synchronous refusals (empty question, bad config) land beside the ask
+  // box; a job that dies reports through the shared problem note like any run.
   async function ragAsk() {
     const question = ragState.question.trim();
     if (!question || ragState.busy) return;
@@ -5923,13 +5927,17 @@
     ragState.queryProblem = '';
     render();
     try {
-      ragState.queryOut = await ragApi('/queries', { ...ragConfig(), question });
+      const { job_id: jobId } = await ragApi(RAG_COLLECTIONS.query,
+                                             { ...ragConfig(), question });
+      ragState.jobId = jobId;
+      render();
+      ragPoll(jobId, (result) => { ragState.queryOut = result; });
     } catch (error) {
+      ragState.busy = false;
       ragState.queryOut = null;
       ragState.queryProblem = error.message;
+      render();
     }
-    ragState.busy = false;
-    render();
   }
 
   /** Is this control live under the current config, and if not, why not?
