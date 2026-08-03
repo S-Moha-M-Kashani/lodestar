@@ -298,7 +298,11 @@ def create_app() -> FastAPI:
     @app.post('/api/queries')
     def ad_hoc_query(payload: dict):
         """Run one question through the current settings and return every stage.
-        The fastest way to understand *why* a config scores the way it does."""
+        The fastest way to understand *why* a config scores the way it does —
+        but a job all the same: the index a query builds implicitly can outwait
+        any HTTP timeout, and the panel needs a stage to watch, not a spinner.
+        The preconditions still refuse synchronously, so a bad payload is a 400
+        the panel shows at once, never a job that dies later."""
         cfg = LabConfig.from_dict(payload)
         question = (payload.get('question') or '').strip()
         if not question:
@@ -311,14 +315,26 @@ def create_app() -> FastAPI:
         problems = cfg.validate() + models.provider_problems(cfg, settings)
         if problems:
             raise HTTPException(400, '; '.join(problems))
-        index = registry.get(cfg.index)
-        llm = _lab_llm(settings)
-        roles = models.resolve(cfg, settings)
         query_date = payload.get('query_date') or ground_truth['meta']['query_date']
-        outcome = pipeline.retrieve(index, cfg.retrieval, question, query_date,
-                                    llm=llm, models=roles)
-        outcome = pipeline.answer(outcome, cfg.generation, llm=llm, models=roles)
-        return outcome.as_dict() | {'models': roles.as_dict()}
+
+        def work(report):
+            # The implicit build is the long silent part — hand it the front of
+            # the bar, or it all happens on 'starting 0%'.
+            index = registry.get(
+                cfg.index,
+                progress=lambda stage, fraction, detail='':
+                    report(stage, 0.7 * fraction, detail))
+            llm = _lab_llm(settings)
+            roles = models.resolve(cfg, settings)
+            report('retrieving', 0.75, question[:80])
+            outcome = pipeline.retrieve(index, cfg.retrieval, question,
+                                        query_date, llm=llm, models=roles)
+            report('answering', 0.9)
+            outcome = pipeline.answer(outcome, cfg.generation, llm=llm,
+                                      models=roles)
+            return outcome.as_dict() | {'models': roles.as_dict()}
+
+        return _accepted(jobs.start('query', work))
 
     @app.get('/api/questions')
     def questions(limit: int = 200):
@@ -340,14 +356,9 @@ def create_app() -> FastAPI:
     def value_error(_request, error: ValueError):
         return JSONResponse({'detail': str(error)}, status_code=400)
 
-    @app.exception_handler(retrieval.GradeUnavailable)
-    def grade_unavailable(_request, error: Exception):
-        """502, not 500: the lab is fine, the model it was told to grade with is
-        not. The gate refuses to score rather than passing everything at 0.5, so
-        this is the reply a caller gets — and it has to say which stage went
-        missing, or the panel shows a blank result and the reader blames
-        retrieval."""
-        return JSONResponse({'detail': str(error)}, status_code=502)
+    # GradeUnavailable needs no handler any more: both routes that run the
+    # pipeline are jobs, so the gate's refusal surfaces as the job's error —
+    # named stage and all — rather than as an HTTP status.
 
     return app
 
