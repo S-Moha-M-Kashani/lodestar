@@ -22,9 +22,17 @@ async function pollJob(jobId) {
   for (;;) {
     const job = await (await fetch(`/api/jobs/${jobId}`)).json();
     if (job.state === 'done') return job.result;
-    if (job.state === 'error') throw new Error(job.error);
+    if (job.state === 'error') throw new Error(job.error || 'job failed');
     await new Promise(r => setTimeout(r, 500));
   }
+}
+
+// Turn a POST response into its job id, or throw the server's own reason
+// (400/404/409) instead of letting callers poll `/api/jobs/undefined` forever.
+async function startedJob(response) {
+  const body = await response.json();
+  if (!body.job_id) throw new Error(body.detail || 'could not start job');
+  return body.job_id;
 }
 
 // --- Ground truth ---
@@ -53,51 +61,59 @@ loadGroundTruth();
 // --- Chunks ---
 document.getElementById('build-chunks').addEventListener('click', async () => {
   const status = document.getElementById('chunks-status');
-  status.textContent = 'building…';
-  const acc = await (await fetch('/api/chunks',
-    { method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(CHOSEN) })).json();
-  const result = await pollJob(acc.job_id);
-  status.textContent = `${result.total} chunks`;
-  const body = document.getElementById('chunks-body');
-  body.innerHTML = '';
-  for (const g of result.chunks_by_session) {
-    const det = document.createElement('details');
-    det.className = 'chunk-session';
-    det.innerHTML = `<summary>${g.session_id} (${g.chunks.length} chunks)</summary>`;
-    g.chunks.forEach((c, i) => {
-      const p = document.createElement('div');
-      p.dir = 'rtl';
-      p.textContent = `chunk ${i + 1}: ${c.text}`;
-      det.appendChild(p);
-    });
-    body.appendChild(det);
+  try {
+    status.textContent = 'building…';
+    const response = await fetch('/api/chunks',
+      { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(CHOSEN) });
+    const result = await pollJob(await startedJob(response));
+    status.textContent = `${result.total} chunks`;
+    const body = document.getElementById('chunks-body');
+    body.innerHTML = '';
+    for (const g of result.chunks_by_session) {
+      const det = document.createElement('details');
+      det.className = 'chunk-session';
+      det.innerHTML = `<summary>${g.session_id} (${g.chunks.length} chunks)</summary>`;
+      g.chunks.forEach((c, i) => {
+        const p = document.createElement('div');
+        p.dir = 'rtl';
+        p.textContent = `chunk ${i + 1}: ${c.text}`;
+        det.appendChild(p);
+      });
+      body.appendChild(det);
+    }
+  } catch (error) {
+    status.textContent = error.message;
   }
 });
 
 // --- Retrieval ---
 document.getElementById('run-trace').addEventListener('click', async () => {
   const status = document.getElementById('retrieval-status');
-  const qid = document.getElementById('retrieval-question').value;
-  status.textContent = 'retrieving…';
-  const acc = await (await fetch('/api/trace',
-    { method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ...CHOSEN, question_id: qid }) })).json();
-  const result = await pollJob(acc.job_id);
-  status.textContent = qid;
-  const table = document.querySelector('.retrieval-table');
-  const rows = document.getElementById('retrieval-rows');
-  table.hidden = false;
-  rows.innerHTML = '';
-  for (const c of result.trace.candidates) {
-    const tr = document.createElement('tr');
-    tr.className = 'retrieval-row ' + (c.gold ? 'retrieval-row--gold' : 'retrieval-row--plain');
-    const cell = v => (v === null || v === undefined) ? '·' : v;
-    tr.innerHTML = `<td dir="rtl">${c.text.slice(0, 60)}</td>
-      <td>${cell(c.dense_rank)}</td><td>${cell(c.bm25_rank)}</td>
-      <td>${cell(c.fused_rank)}</td><td>${cell(c.rerank_score)}</td>
-      <td>${cell(c.grade_score)}</td><td>${c.kept ? '✓' : '✗'}</td>
-      <td>${c.gold ? '●' : ''}</td>`;
-    rows.appendChild(tr);
+  try {
+    const qid = document.getElementById('retrieval-question').value;
+    status.textContent = 'retrieving…';
+    const response = await fetch('/api/trace',
+      { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...CHOSEN, question_id: qid }) });
+    const result = await pollJob(await startedJob(response));
+    status.textContent = qid;
+    const table = document.querySelector('.retrieval-table');
+    const rows = document.getElementById('retrieval-rows');
+    table.hidden = false;
+    rows.innerHTML = '';
+    for (const c of result.trace.candidates) {
+      const tr = document.createElement('tr');
+      tr.className = 'retrieval-row ' + (c.gold ? 'retrieval-row--gold' : 'retrieval-row--plain');
+      const cell = v => (v === null || v === undefined) ? '·' : v;
+      tr.innerHTML = `<td dir="rtl">${c.text.slice(0, 60)}</td>
+        <td>${cell(c.dense_rank)}</td><td>${cell(c.bm25_rank)}</td>
+        <td>${cell(c.fused_rank)}</td><td>${cell(c.rerank_score)}</td>
+        <td>${cell(c.grade_score)}</td><td>${c.kept ? '✓' : '✗'}</td>
+        <td>${c.gold ? '●' : ''}</td>`;
+      rows.appendChild(tr);
+    }
+  } catch (error) {
+    status.textContent = error.message;
   }
 });

@@ -21,8 +21,11 @@ def mark_gold(candidate_texts: list[str],
     the same reason the tokeniser is shared across the whole brain. A candidate
     that normalises to the empty string (blank, whitespace-only, or nothing the
     tokeniser keeps) is never gold — the empty string is a substring of every
-    quote, which would mark a chunk with no evidence at all as a match."""
-    quotes = [_norm(q) for q in evidence_quotes if q.strip()]
+    quote, which would mark a chunk with no evidence at all as a match. The same
+    guard applies to a quote: one that normalises to nothing (punctuation-only,
+    or a single short token the tokeniser drops) is dropped from the quote list
+    rather than matching every candidate for the same reason."""
+    quotes = [n for n in (_norm(q) for q in evidence_quotes) if n]
     out = []
     for text in candidate_texts:
         norm = _norm(text)

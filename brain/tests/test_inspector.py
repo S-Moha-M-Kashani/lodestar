@@ -68,6 +68,12 @@ def test_mark_gold_matches_evidence_quote_either_direction():
     # empty normalisation (blank, whitespace-only, punctuation-only) → never gold
     assert inspector.mark_gold(['', '   ', '...!!!'], quotes) == [False, False, False]
 
+    # a QUOTE that normalises to empty (punctuation-only, or a single short
+    # token the tokeniser drops) must not mark every candidate gold
+    assert inspector.mark_gold(
+        ['یک متن کاملا بی ربط', 'هر چیز دیگر'], ['؟!...']) == [False, False]
+    assert inspector.mark_gold(['یک متن کاملا بی ربط'], ['۶']) == [False]
+
 
 # This is an integration test (real in-memory index, offline).
 def test_chunks_by_session_groups_and_counts():
