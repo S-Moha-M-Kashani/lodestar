@@ -742,6 +742,78 @@ try:
         check(f"header: the top panel is under 240px tall (got {rows['header']})",
               rows["header"] <= 240)
 
+        # ---- The board fits the window --------------------------------------
+        # This is an end-to-end test. .column caps at calc(100vh - 200px), a
+        # guess at the header's height, so the board fits only while the header
+        # stays under 200px. Add a habit banner, an eleventh category and a
+        # second line of tags - all ordinary states - and the page overflows and
+        # the footer goes under the fold. The columns already scroll themselves;
+        # what must not scroll is the page.
+        def board_fits():
+            return page.evaluate("""() => {
+              const f = document.querySelector('.app-footer').getBoundingClientRect();
+              return {footer: Math.round(f.bottom), vh: innerHeight,
+                      over: Math.round(document.documentElement.scrollHeight - innerHeight)};
+            }""")
+
+        fits = board_fits()
+        check(f"board: the footer is in view (bottom {fits['footer']} of {fits['vh']})",
+              fits["footer"] <= fits["vh"])
+        check(f"board: the page does not scroll (overflow {fits['over']}px)",
+              fits["over"] <= 1)
+
+        # The real regression is column content, not header height: a seeded
+        # board is short enough that scrollHeight alone reports no overflow even
+        # when a column is free to grow to 3800px. So load a column past the
+        # window and then try to scroll - whether the page moves is the property
+        # the user actually feels.
+        page.evaluate("""() => {
+          const probe = document.createElement('div');
+          probe.id = 'tall-column-probe';
+          probe.style.height = '2400px';
+          document.querySelector('.column .cards').append(probe);
+          const hdr = document.createElement('div');
+          hdr.id = 'tall-header-probe';
+          hdr.style.height = '120px';
+          document.querySelector('.app-header').append(hdr);
+        }""")
+        page.wait_for_timeout(200)
+        page.evaluate("window.scrollTo(0, 3000)")
+        page.wait_for_timeout(150)
+        tall = page.evaluate("""() => {
+          const f = document.querySelector('.app-footer').getBoundingClientRect();
+          return {footer: Math.round(f.bottom), vh: innerHeight, y: Math.round(scrollY),
+                  col: Math.round(document.querySelector('.column').getBoundingClientRect().height)};
+        }""")
+        check(f"board: an overloaded column leaves the footer in view "
+              f"(bottom {tall['footer']} of {tall['vh']})",
+              tall["footer"] <= tall["vh"])
+        check(f"board: the page refuses to scroll past the window "
+              f"(scrollY {tall['y']})", tall["y"] == 0)
+        # The discriminating measurement. Against the old rules this column grew
+        # to 5146px on a 49-card board; a scrollHeight assertion alone passed on
+        # the seeded board and would have shipped the bug.
+        check(f"board: the column stays inside the window "
+              f"({tall['col']}px of {tall['vh']})", tall["col"] <= tall["vh"])
+        page.evaluate("""() => {
+          document.querySelector('#tall-column-probe').remove();
+          document.querySelector('#tall-header-probe').remove();
+        }""")
+
+        # ---- The star theme's paper ------------------------------------------
+        # This is an end-to-end test. Day drops the quad grid because a ruled
+        # sheet fights high-contrast reading; the sky is a photograph, and a
+        # grid ruled over it reads as a bug rather than as paper.
+        select_theme("star")
+        page.wait_for_timeout(80)
+        check("star: the sky has no quad grid, like Day",
+              page.evaluate(
+                  "getComputedStyle(document.body).backgroundImage") == "none")
+        select_theme("light")
+        check("theme: Morning keeps its quad grid",
+              page.evaluate(
+                  "getComputedStyle(document.body).backgroundImage") != "none")
+
         # ---- Delete (in-app confirm dialog) ---------------------------------
         target = page.locator('[data-col="answered"] .card').first
         target.click()

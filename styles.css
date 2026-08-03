@@ -158,7 +158,7 @@
   --cat-c: 0.11;
 
   --paper: #070a18;
-  --grid: rgba(150, 175, 225, 0.05);
+  --grid: transparent;
   --ink: #e8ecf8;
   --ink-soft: #9aa6c4;
   --line: #2a3150;
@@ -595,9 +595,37 @@ input, select, textarea { font: inherit; color: inherit; }
 .column {
   display: flex;
   flex-direction: column;
+  /* Height comes from the flex parent under body[data-view="board"] below. The
+     vh fallback is for any view that renders columns without that wrapper. */
   max-height: calc(100vh - 200px);
   padding: 0 14px;
 }
+
+/* The board is one column the height of the window, so a taller header takes
+   room from the card columns instead of pushing the footer off the page. This
+   replaces the constant above rather than tuning it: the next category or habit
+   banner would have broken any number chosen here. */
+body[data-view="board"] {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+body[data-view="board"] .app-header,
+body[data-view="board"] #habit-banner-slot,
+body[data-view="board"] .app-footer { flex: none; }
+/* align-items:start sizes each column to its own content, which is what a
+   percentage max-height had nothing to resolve against - so the column grew to
+   3782px and the page scrolled anyway. stretch gives every column the grid
+   row's height, which the flex parent has already made definite, and overflow
+   on .board stops anything escaping to the viewport. */
+body[data-view="board"] .board {
+  min-height: 0;
+  align-items: stretch;
+  overflow: hidden;
+}
+body[data-view="board"] .column { max-height: none; min-height: 0; }
+body[data-view="board"] .cards { min-height: 0; }
 
 .column:not(:first-child) { border-left: 1px dashed var(--line); }
 
@@ -2227,6 +2255,10 @@ body[data-view="assistant"] .app-footer { display: none; }
   box-shadow: var(--shadow-card);
   padding: 16px;
 }
+/* The sky is a photograph, not paper: --grid alone leaves the gradients in
+   place, so the image is dropped outright the way Day does it. */
+[data-theme="star"] body { background-image: none; }
+
 /* ---------------------------------------------------------------------------
    The star theme's sky
 
