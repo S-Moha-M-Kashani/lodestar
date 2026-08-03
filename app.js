@@ -682,6 +682,10 @@
   function render() {
     const board = $('#board');
     board.className = view;
+    // The header's controls are the board's — search, the filters, the category
+    // tabs, the tag bar, the Menu. Which view is showing decides whether they
+    // are furniture that does nothing; the theme picker is the app's and stays.
+    document.body.dataset.view = view;
     board.innerHTML = '';
     hidePlotTip();
     if (view === 'backlog') {
@@ -2984,12 +2988,29 @@
     }
   } catch { /* corrupted or private mode — keep defaults */ }
 
+  // Whether the extras drawer and the Models panel inside it are unfolded. Kept
+  // here rather than read off the DOM: choosing a provider re-renders the whole
+  // view, and a panel that refolded itself after every pick would be unusable.
+  // Deliberately not persisted — it is where you are in the page, not a
+  // preference.
+  let extrasOpen = false;
+  let settingsOpen = false;
+
+  // Folded away by default, like the evidence strip under a reply: a model is
+  // chosen once and then left alone, and four pickers open in the rail is a wall
+  // of controls nobody is using. The summary names the model that is answering,
+  // which is the question you would open the panel to ask.
   function renderChatSettings() {
-    const panel = document.createElement('fieldset');
+    const panel = document.createElement('details');
     panel.className = 'chat-settings';
-    const legend = document.createElement('legend');
-    legend.textContent = 'Models';
-    panel.appendChild(legend);
+    panel.open = settingsOpen;
+    panel.addEventListener('toggle', () => { settingsOpen = panel.open; });
+    const name = document.createElement('summary');
+    name.className = 'chat-settings-name';
+    name.textContent = `Models · ${assistantModels.text}`;
+    panel.appendChild(name);
+    const fields = document.createElement('div');
+    fields.className = 'chat-settings-body';
     const providerLabel = document.createElement('label');
     providerLabel.className = 'field';
     providerLabel.append('Text provider');
@@ -3012,7 +3033,7 @@
       render();
     });
     providerLabel.append(provider);
-    panel.appendChild(providerLabel);
+    fields.appendChild(providerLabel);
     for (const picker of MODEL_PICKERS) {
       const label = document.createElement('label');
       label.className = 'field';
@@ -3036,7 +3057,7 @@
         persistModels();
       });
       label.appendChild(sel);
-      panel.appendChild(label);
+      fields.appendChild(label);
     }
     // The embedder is a fact, not a pick: the brain runs exactly one model,
     // locally. A filled-in ledger cell where the dropdown used to stand —
@@ -3056,13 +3077,13 @@
     embedValue.append(embedName, embedStamp);
     const embedNote = document.createElement('span');
     embedNote.className = 'model-fixed-note';
-    embedNote.textContent = 'Persian-tuned · embeds your cards inside the brain, never remote';
+    embedNote.textContent = 'Multilingual — English and Farsi · embeds your cards inside the brain, never remote';
     embedField.append(embedValue, embedNote);
-    panel.appendChild(embedField);
+    fields.appendChild(embedField);
     const hint = document.createElement('p');
     hint.className = 'field-hint';
     hint.textContent = 'Text generation applies to the chat. Ollama uses models pulled on this machine; OpenRouter currently offers GPT-5 Nano and requires an API key. The omni model transcribes your voice, unless the brain is dictating locally with Parakeet — that ignores this pick.';
-    panel.appendChild(hint);
+    fields.appendChild(hint);
     // Where the chat model runs, when the brain told us. Worth saying out loud:
     // a local backend is free and private but answers in tens of seconds, and
     // the list above is then the daemon's, not ours.
@@ -3070,8 +3091,9 @@
       const where = document.createElement('p');
       where.className = 'field-hint';
       where.textContent = `The configured backend serves local models through ${brainModels.provider} — free and private, and the list is whatever is pulled on this machine.`;
-      panel.appendChild(where);
+      fields.appendChild(where);
     }
+    panel.appendChild(fields);
     return panel;
   }
 
@@ -3416,50 +3438,41 @@
     const heading = document.createElement('h2');
     heading.textContent = 'Assistant';
     head.appendChild(heading);
-    const labBtn = document.createElement('button');
-    labBtn.type = 'button';
-    labBtn.id = 'raglab-open';
-    labBtn.className = 'btn ghost';
-    labBtn.textContent = 'RAG test lab';
-    labBtn.title = 'Tune and grade diary retrieval against the test fixtures';
-    labBtn.addEventListener('click', () => setView('raglab'));
-    head.appendChild(labBtn);
-    // Offered even with an empty transcript: a disabled control that appears
-    // only sometimes is harder to find than one that always sits in the same
-    // place and exports nothing.
-    const exportBtn = document.createElement('button');
-    exportBtn.type = 'button';
-    exportBtn.id = 'chat-export-btn';
-    exportBtn.className = 'btn ghost';
-    exportBtn.textContent = 'Export chat';
-    exportBtn.title = 'Save this conversation as JSON or Markdown';
-    exportBtn.addEventListener('click', () => openExportDialog('chat'));
-    head.appendChild(exportBtn);
-    // Import — the missing half of export: a saved JSON transcript goes into
-    // the durable chat record (databases/assistant.db) through the Node API.
-    const importBtn = document.createElement('button');
-    importBtn.type = 'button';
-    importBtn.id = 'chat-import-btn';
-    importBtn.className = 'btn ghost';
-    importBtn.textContent = 'Import chat';
-    importBtn.title = 'Read a chat JSON export into the durable chat record';
-    const importFile = document.createElement('input');
-    importFile.type = 'file';
-    importFile.id = 'chat-import-file';
-    importFile.accept = 'application/json,.json';
-    importFile.hidden = true;
-    importFile.addEventListener('change', () => {
-      const file = importFile.files && importFile.files[0];
-      if (file) importChatFile(file);
-      importFile.value = '';   // same file again must re-fire the change event
-    });
-    importBtn.addEventListener('click', () => importFile.click());
-    head.appendChild(importBtn);
-    head.appendChild(importFile);
     sheet.appendChild(head);
 
-    sheet.appendChild(renderChatSettings());
-    sheet.appendChild(renderRecallPanel());
+    // Everything that is not the conversation lives behind one sign, sharing the
+    // search fold's row so that row is the only furniture above the transcript.
+    // A rail beside the transcript cost it 300px of width and stood mostly empty
+    // — a model is chosen once and then left alone — so shut, which is how it
+    // starts, the conversation has the whole sheet.
+    //
+    // A button and a panel rather than a <details>: a disclosure's body lives
+    // inside its own subtree, so with the summary in this row's narrow right-hand
+    // cell the panel would open into that cell instead of across the sheet. Same
+    // wiring as the board's Menu.
+    const toolbar = document.createElement('div');
+    toolbar.className = 'assistant-toolbar';
+    toolbar.appendChild(renderRecallPanel());
+    const extrasBtn = document.createElement('button');
+    extrasBtn.type = 'button';
+    extrasBtn.id = 'assistant-extras-btn';
+    extrasBtn.className = 'assistant-extras-btn';
+    extrasBtn.textContent = '\u2699';
+    extrasBtn.title = 'Models, the RAG lab, export and import';
+    extrasBtn.setAttribute('aria-label', 'Assistant settings');
+    extrasBtn.setAttribute('aria-expanded', String(extrasOpen));
+    extrasBtn.setAttribute('aria-controls', 'assistant-extras');
+    extrasBtn.addEventListener('click', () => setExtrasOpen(!extrasOpen));
+    toolbar.appendChild(extrasBtn);
+    sheet.appendChild(toolbar);
+
+    const extras = document.createElement('div');
+    extras.id = 'assistant-extras';
+    extras.className = 'assistant-extras';
+    extras.hidden = !extrasOpen;
+    extras.appendChild(renderChatActions());
+    extras.appendChild(renderChatSettings());
+    sheet.appendChild(extras);
 
     // Nothing proposed, nothing shown — the section must not sit there empty.
     if (assistantState.proposals.length) sheet.appendChild(renderProposals());
@@ -3530,6 +3543,100 @@
 
     requestAnimationFrame(() => { log.scrollTop = log.scrollHeight; });
     return sheet;
+  }
+
+  // The rail's controls: one button out to the lab, and one menu holding what
+  // you do to a transcript. Export and import were two buttons competing with
+  // the heading for the top of the sheet; they are the same shape of thing the
+  // board's Menu already holds, so they are built from its parts — .menu-panel
+  // and .menu-item — rather than as a second design for one job.
+  function renderChatActions() {
+    const wrap = document.createElement('div');
+    wrap.className = 'assistant-actions';
+
+    const labBtn = document.createElement('button');
+    labBtn.type = 'button';
+    labBtn.id = 'raglab-open';
+    labBtn.className = 'btn ghost';
+    labBtn.textContent = 'RAG test lab';
+    labBtn.title = 'Tune and grade diary retrieval against the test fixtures';
+    labBtn.addEventListener('click', () => setView('raglab'));
+    wrap.appendChild(labBtn);
+
+    const menu = document.createElement('div');
+    menu.className = 'chat-menu';
+    const menuBtn = document.createElement('button');
+    menuBtn.type = 'button';
+    menuBtn.id = 'chat-menu-btn';
+    menuBtn.className = 'btn ghost';
+    menuBtn.setAttribute('aria-haspopup', 'true');
+    menuBtn.setAttribute('aria-expanded', 'false');
+    menuBtn.textContent = 'Chat ▾';
+    menuBtn.title = 'Export or import this conversation';
+    const panel = document.createElement('div');
+    panel.id = 'chat-menu-panel';
+    panel.className = 'menu-panel';
+    panel.hidden = true;
+    menuBtn.addEventListener('click', () => setChatMenuOpen(panel.hidden));
+    // Offered even with an empty transcript: a control that appears only
+    // sometimes is harder to find than one that always sits in the same place
+    // and exports nothing.
+    const exportBtn = document.createElement('button');
+    exportBtn.type = 'button';
+    exportBtn.id = 'chat-export-btn';
+    exportBtn.className = 'menu-item';
+    exportBtn.textContent = 'Export chat';
+    exportBtn.title = 'Save this conversation as JSON or Markdown';
+    exportBtn.addEventListener('click', () => openExportDialog('chat'));
+    // Import — the missing half of export: a saved JSON transcript goes into
+    // the durable chat record (databases/assistant.db) through the Node API.
+    const importBtn = document.createElement('button');
+    importBtn.type = 'button';
+    importBtn.id = 'chat-import-btn';
+    importBtn.className = 'menu-item';
+    importBtn.textContent = 'Import chat';
+    importBtn.title = 'Read a chat JSON export into the durable chat record';
+    const importFile = document.createElement('input');
+    importFile.type = 'file';
+    importFile.id = 'chat-import-file';
+    importFile.accept = 'application/json,.json';
+    importFile.hidden = true;
+    importFile.addEventListener('change', () => {
+      const file = importFile.files && importFile.files[0];
+      if (file) importChatFile(file);
+      importFile.value = '';   // same file again must re-fire the change event
+    });
+    importBtn.addEventListener('click', () => importFile.click());
+    panel.append(exportBtn, importBtn);
+    // Closes after any action inside it, exactly as the board's Menu does.
+    panel.addEventListener('click', (e) => {
+      if (e.target.closest('button')) setChatMenuOpen(false);
+    });
+    menu.append(menuBtn, panel, importFile);
+    wrap.appendChild(menu);
+    return wrap;
+  }
+
+  // Toggled in place rather than through render(): re-rendering the view would
+  // rebuild the transcript and lose the log's scroll position, and nothing else
+  // on the sheet depends on whether this drawer is open.
+  function setExtrasOpen(open) {
+    extrasOpen = open;
+    const panel = $('#assistant-extras');
+    const btn = $('#assistant-extras-btn');
+    if (!panel || !btn) return;
+    panel.hidden = !open;
+    btn.setAttribute('aria-expanded', String(open));
+  }
+
+  // Looked up rather than closed over: the rail is rebuilt on every render, so
+  // a captured element would be the one from a render ago.
+  function setChatMenuOpen(open) {
+    const btn = $('#chat-menu-btn');
+    const panel = $('#chat-menu-panel');
+    if (!btn || !panel) return;
+    panel.hidden = !open;
+    btn.setAttribute('aria-expanded', String(open));
   }
 
   // Chat memory has been searchable by HTTP since the brain gained a Chroma
@@ -3675,31 +3782,63 @@
     appendLinked(body, msg.content);
     el.appendChild(body);
 
+    // Everything that is *about* the answer rather than part of it goes in one
+    // ruled strip beneath it — what it cited, what it cost, which tools ran —
+    // folded behind a line that says what is in there. Most turns are read for
+    // the answer alone, and a source list, a row of tool chips and a token
+    // receipt under every one of them is a wall of furniture.
     const done = msg.steps || [];
     const running = msg.running || [];
+    const sources = sourcesOf(done);
+    if (!done.length && !running.length && !sources.length && !msg.usage) return el;
+
+    const meta = document.createElement('details');
+    meta.className = 'chat-meta';
+    // Open while the turn is still working: which tool is running right now is
+    // progress, not an afterthought. It folds itself away once the turn lands.
+    meta.open = running.length > 0;
+    const summary = document.createElement('summary');
+    summary.className = 'chat-meta-summary';
+    summary.textContent = metaSummary(sources.length, done.length + running.length, msg.usage);
+    meta.appendChild(summary);
+
+    const evidence = document.createElement('div');
+    evidence.className = 'chat-meta-body';
+    if (sources.length) evidence.appendChild(renderChatSources(sources));
+    if (msg.usage) evidence.appendChild(renderChatUsage(msg.usage));
     if (done.length || running.length) {
       const steps = document.createElement('div');
       steps.className = 'chat-steps';
       for (const step of done) steps.appendChild(renderChatStep(step, false));
       for (const call of running) steps.appendChild(renderChatStep(call, true));
-      el.appendChild(steps);
+      evidence.appendChild(steps);
     }
-    const sources = sourcesOf(done);
-    if (sources.length) el.appendChild(renderChatSources(sources));
-    if (msg.usage) el.appendChild(renderChatUsage(msg.usage));
+    meta.appendChild(evidence);
+    el.appendChild(meta);
     return el;
   }
 
-  // What the turn spent. Tokens only, deliberately no money figure: a price per
-  // model is a number this app cannot verify, and one that has quietly gone
-  // stale is worse than none at all. Absent, not zero, when the model reported
-  // nothing — see _usage_from in the brain.
+  // What the folded strip says about itself. Counts, plus what the turn cost —
+  // a total is worth a glance, the in/out split is not, so only the total is
+  // named out here and the breakdown waits inside.
+  function metaSummary(nSources, nTools, usage) {
+    const parts = [];
+    if (nSources) parts.push(`${nSources} source${nSources === 1 ? '' : 's'}`);
+    if (nTools) parts.push(`${nTools} tool${nTools === 1 ? '' : 's'}`);
+    if (usage) parts.push(`${Number(usage.total_tokens || 0).toLocaleString()} tokens`);
+    return parts.join(' · ');
+  }
+
+  // How the turn's total split. Tokens only, deliberately no money figure: a
+  // price per model is a number this app cannot verify, and one that has
+  // quietly gone stale is worse than none at all. Absent, not zero, when the
+  // model reported nothing — see _usage_from in the brain. The total itself is
+  // on the folded line above, so it is not printed twice.
   function renderChatUsage(usage) {
     const line = document.createElement('p');
     line.className = 'chat-usage';
     const n = (v) => Number(v || 0).toLocaleString();
-    line.textContent = `${n(usage.total_tokens)} tokens · ${n(usage.input_tokens)} in`
-      + ` · ${n(usage.output_tokens)} out`;
+    line.textContent = `${n(usage.input_tokens)} in · ${n(usage.output_tokens)} out`;
     return line;
   }
 
@@ -4581,6 +4720,21 @@
     if (e.key === 'Escape' && !menuPanel.hidden) {
       setMenuOpen(false);
       menuBtn.focus();
+    }
+  });
+
+  // The Assistant's Chat menu closes the same two ways. Registered here, once,
+  // rather than in renderChatActions: the rail is rebuilt on every render, and
+  // a listener added there would be added again on each one.
+  document.addEventListener('click', (e) => {
+    const panel = $('#chat-menu-panel');
+    if (panel && !panel.hidden && !e.target.closest('.chat-menu')) setChatMenuOpen(false);
+  });
+  document.addEventListener('keydown', (e) => {
+    const panel = $('#chat-menu-panel');
+    if (e.key === 'Escape' && panel && !panel.hidden) {
+      setChatMenuOpen(false);
+      $('#chat-menu-btn').focus();
     }
   });
 

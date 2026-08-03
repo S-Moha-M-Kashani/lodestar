@@ -66,6 +66,52 @@ def wait_until(cond, timeout=5.0):
         time.sleep(0.05)
     return cond()
 
+def open_meta(page):
+    """Unfold the evidence strip under the newest reply.
+
+    Sources, tool chips and the token split live behind a one-line indicator, so
+    every check that reads them has to open it first. Guarded rather than
+    clicked outright: a missing indicator must read as the red lines of the
+    checks that needed it, not as a TimeoutError that abandons the rest."""
+    meta = page.locator(".chat-meta").last
+    if meta.count() == 1 and meta.get_attribute("open") is None:
+        # .chat-meta-summary, not "summary": each tool chip inside the strip is
+        # its own <details>, so the loose tag matches several.
+        meta.locator(".chat-meta-summary").click()
+
+
+def open_extras(page):
+    """Open the Assistant's extras — the lab, the chat menu and the models.
+
+    Shut, the conversation gets the whole sheet, so everything that drives one of
+    those controls has to open this first."""
+    btn = page.locator("#assistant-extras-btn")
+    if btn.count() == 1 and btn.get_attribute("aria-expanded") != "true":
+        btn.click()
+
+
+def open_models(page):
+    """Unfold the Models panel, opening the extras around it if need be.
+
+    Which model answers is picked once and then left alone, so it is folded
+    inside the extras and everything reading a picker has to open both."""
+    open_extras(page)
+    box = page.locator(".chat-settings")
+    if box.count() == 1 and box.get_attribute("open") is None:
+        box.locator(".chat-settings-name").click()
+
+
+def open_chat_menu(page):
+    """Open the Assistant's Chat menu, where export and import now live.
+
+    Same idiom as the board's Menu, closing itself after any action inside it,
+    so anything driving those two controls has to open it again first."""
+    open_extras(page)
+    btn = page.locator("#chat-menu-btn")
+    if btn.count() == 1 and btn.get_attribute("aria-expanded") != "true":
+        btn.click()
+
+
 ARTIFACTS = os.path.join(os.path.dirname(__file__), "artifacts")
 os.makedirs(ARTIFACTS, exist_ok=True)
 shot = lambda name: os.path.join(ARTIFACTS, name)
@@ -1039,10 +1085,14 @@ try:
         check("assistant: chat roundtrip through the Node proxy",
               "FAKE: hello brain" in page.inner_text(".chat-log"))
         # What the turn spent. The offline backend reports usage precisely so
-        # this path is exercised without a paid model in the loop.
+        # this path is exercised without a paid model in the loop. Read off the
+        # folded indicator, which is where the total lives now: what a turn cost
+        # is worth a glance, the in/out split is not.
+        # wait_until, because the bubble appears while the turn is still
+        # streaming and the usage lands with the `done` event after it.
         check("assistant: the turn reports the tokens it spent",
-              page.locator(".chat-usage").count() >= 1
-              and "tokens" in page.locator(".chat-usage").last.inner_text())
+              wait_until(lambda: page.locator(".chat-meta-summary").count() >= 1
+                         and "tokens" in page.locator(".chat-meta-summary").last.inner_text()))
 
         # ---- Agent card confirmation gate -----------------------------------
         # A card the agent invents is a PROPOSAL: nothing reaches the board until
@@ -1052,6 +1102,16 @@ try:
         page.click("#chat-send")
         page.wait_for_function(
             "document.querySelectorAll('.chat-msg.assistant').length >= 2")
+        # This is an end-to-end test.
+        # The evidence under a reply is folded away behind a one-line indicator:
+        # most turns are read for the answer alone, and sources, tool chips and
+        # a token receipt under every one of them is a wall of furniture. The
+        # indicator still has to say what is behind it.
+        folded = page.locator(".chat-meta").last
+        check("assistant: the evidence under a reply is folded until asked for",
+              not folded.locator(".chat-steps").is_visible()
+              and "tool" in folded.locator(".chat-meta-summary").inner_text())
+        open_meta(page)
         check("assistant: tool chip shown for create_card",
               "create_card" in page.inner_text(".chat-log"))
         # The chip used to be the whole story: a tool's name, with what it was
@@ -1107,6 +1167,7 @@ try:
         # thing under test, and it must read as red lines rather than a
         # TimeoutError that abandons every check after this one.
         cited = wait_until(lambda: page.locator(".chat-source").count() == 3)
+        open_meta(page)
         reply = page.locator(".chat-msg.assistant").last
 
         check("assistant: a url in the reply is a real link, not inert text",
@@ -1132,7 +1193,101 @@ try:
               and page.input_value("#card-title") == seed["title"])
         if opens_card:
             page.keyboard.press("Escape")
+
+        # This is an end-to-end test.
+        # A reply is one column of prose with its evidence beneath it. The view
+        # container is `#board.assistant` and a reply bubble is `.chat-msg
+        # .assistant`, so an unscoped `.assistant` rule lands on both: the reply
+        # became a flex row and broke into four narrow centred columns — answer,
+        # tool chips, sources, tokens — each a few words wide. Measured rather
+        # than asserted on the stylesheet, because any rule that reaches the
+        # bubble breaks it the same way.
+        box = reply.bounding_box()
+        text_box = reply.locator(".chat-text").bounding_box()
+        src_box = reply.locator(".chat-sources").bounding_box()
+        check("assistant: a reply is one column, not columns beside its footnotes",
+              text_box["width"] >= box["width"] * 0.85
+              and src_box["y"] >= text_box["y"] + text_box["height"])
+
         page.unroute("**/api/agent/chat/stream")
+
+        # This is an end-to-end test.
+        # The sheet was pinned at 720px while the replies it holds are card
+        # dumps with uuids in them, so every second line wrapped. On a desktop
+        # window it must take the room that is there.
+        check("assistant: the sheet uses the width of a desktop window",
+              page.locator(".assistant-sheet").bounding_box()["width"] >= 900)
+
+        # This is an end-to-end test.
+        # A side rail for the settings cost the transcript 300px of width and
+        # stood mostly empty, because a model is chosen once and then left alone.
+        # Everything that is not the conversation now hides behind one sign above
+        # it, and while that is shut the conversation has the whole sheet. Width
+        # is measured rather than assumed: a rail that is merely invisible would
+        # still be holding the column open.
+        sheet_box = page.locator(".assistant-sheet").bounding_box()
+        log_box = page.locator(".chat-log").bounding_box()
+        check("assistant: with the extras shut the conversation has the full width",
+              page.locator(".assistant-extras").count() == 1
+              and not page.locator("#raglab-open").is_visible()
+              and not page.locator("#chat-menu-btn").is_visible()
+              and not page.locator(".chat-settings").is_visible()
+              and log_box["width"] >= sheet_box["width"] - 40)
+        # This is an end-to-end test.
+        # The sign shares the search fold's row, at its right end — one line of
+        # furniture above the transcript rather than two. Measured, because a
+        # button that has wrapped onto its own line still reads as "present".
+        gear_box = page.locator("#assistant-extras-btn").bounding_box()
+        recall_box = page.locator(".chat-recall").bounding_box()
+        check("assistant: the sign sits at the right end of the search row",
+              gear_box["x"] >= recall_box["x"] + recall_box["width"]
+              and gear_box["y"] < recall_box["y"] + recall_box["height"])
+
+        open_extras(page)
+        check("assistant: the sign opens onto the lab, the chat menu and the models",
+              page.locator("#raglab-open").is_visible()
+              and page.locator("#chat-menu-btn").is_visible()
+              and page.locator(".chat-settings").is_visible()
+              and page.locator(".assistant-extras #model-provider").count() == 1)
+
+        # This is an end-to-end test.
+        # Two buttons for one job became one menu, built out of the board's own
+        # menu parts — the same control in two places must not be two designs.
+        closed = (page.locator("#chat-menu-btn").count() == 1
+                  and not page.locator("#chat-export-btn").is_visible())
+        open_chat_menu(page)
+        check("assistant: export and import are one menu in the board's idiom",
+              closed
+              and page.locator("#chat-menu-panel.menu-panel .menu-item").count() == 2
+              and page.locator("#chat-export-btn").is_visible()
+              and page.locator("#chat-import-btn").is_visible())
+        page.keyboard.press("Escape")
+
+        # This is an end-to-end test.
+        # The board's search, filters, category tabs, tag bar and Menu filter and
+        # act on cards, and the footer explains dragging cards and the keys that
+        # move them. None of it reaches the Assistant, so around a conversation
+        # they are furniture that does nothing. The theme picker stays: it is the
+        # app's, not the board's.
+        hidden_here = (not page.locator("#search").is_visible()
+                       and not page.locator("#type-filter").is_visible()
+                       and not page.locator("#prio-filter").is_visible()
+                       and not page.locator("#menu-btn").is_visible()
+                       and not page.locator("#cat-rail").is_visible()
+                       and not page.locator("#tag-bar").is_visible()
+                       and not page.locator(".app-footer").is_visible()
+                       and page.locator("#theme-select").is_visible())
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector(".board .column")
+        back_on_board = (page.locator("#search").is_visible()
+                         and page.locator("#type-filter").is_visible()
+                         and page.locator("#menu-btn").is_visible()
+                         and page.locator("#cat-rail").is_visible()
+                         and page.locator(".app-footer").is_visible())
+        check("assistant: the board's own controls leave with the board",
+              hidden_here and back_on_board)
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector("#chat-input")
 
         # ---- Recall: /rag/recall has existed with no UI at all ---------------
         # Until now the only route to a past conversation was to ask the agent
@@ -1263,6 +1418,23 @@ try:
         FIXED_EMBED = "heydariAI/persian-embeddings"
         page.locator('.view-switch button[data-view="assistant"]').click()
         page.wait_for_selector("#chat-input")
+
+        # This is an end-to-end test.
+        # A model is chosen once and then left alone, so the panel is folded like
+        # the evidence strip under a reply rather than filling the rail with
+        # controls nobody is using. Staying open is the load-bearing half:
+        # choosing a provider re-renders the rail, and a panel that refolded
+        # itself after every pick would be unusable.
+        folded_first = not page.locator("#model-text").is_visible()
+        open_models(page)
+        unfolded = page.locator("#model-text").is_visible()
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector(".board .column")
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector("#chat-input")
+        check("assistant: the models panel is folded until asked for, then stays open",
+              folded_first and unfolded and page.locator("#model-text").is_visible())
+
         check("assistant: settings panel offers the two model pickers",
               page.locator(".chat-settings").count() == 1
               and page.locator("#model-text").count() == 1
@@ -1276,6 +1448,12 @@ try:
               and FIXED_EMBED in page.locator("#model-embed-fixed").inner_text())
         check("assistant: the fixed embedder says it runs locally",
               "local" in page.locator("#model-embed-fixed").inner_text().lower())
+        # The note read "Persian-tuned", which undersells the model and reads as a
+        # warning to anyone whose board is in English. It handles both.
+        embed_note = page.locator("#model-embed-fixed").inner_text().lower()
+        check("assistant: the embedder is described as multilingual, not Farsi-only",
+              "multilingual" in embed_note and "english" in embed_note
+              and "farsi" in embed_note and "persian-tuned" not in embed_note)
         check("assistant: the stale embedding-pick hint sentence is gone",
               "embedding pick is saved"
               not in page.locator(".chat-settings").inner_text())
@@ -1354,7 +1532,11 @@ try:
         page.reload()
         page.wait_for_selector("#board")
         page.locator('.view-switch button[data-view="assistant"]').click()
-        page.wait_for_selector("#model-text")
+        # attached, not visible: the Models panel is folded after a reload, so
+        # waiting for the select to be *visible* would wait for a click that has
+        # not happened yet.
+        page.wait_for_selector("#model-text", state="attached")
+        open_models(page)
         check("assistant: model choice survives a reload",
               page.input_value("#model-text") == ALT_TEXT)
         page.select_option("#model-text", DEFAULT_TEXT)
@@ -1369,7 +1551,11 @@ try:
         page.reload()
         page.wait_for_selector("#board")
         page.locator('.view-switch button[data-view="assistant"]').click()
-        page.wait_for_selector("#model-text")
+        # attached, not visible: the Models panel is folded after a reload, so
+        # waiting for the select to be *visible* would wait for a click that has
+        # not happened yet.
+        page.wait_for_selector("#model-text", state="attached")
+        open_models(page)
         check("assistant: a stale saved embed pick resurrects no dropdown",
               page.locator("#model-embed").count() == 0
               and page.locator("#model-embed-fixed").count() == 1)
@@ -1386,7 +1572,11 @@ try:
         page.reload()
         page.wait_for_selector("#board")
         page.locator('.view-switch button[data-view="assistant"]').click()
-        page.wait_for_selector("#model-text")
+        # attached, not visible: the Models panel is folded after a reload, so
+        # waiting for the select to be *visible* would wait for a click that has
+        # not happened yet.
+        page.wait_for_selector("#model-text", state="attached")
+        open_models(page)
         check("assistant: a deliberately hand-set model is still honoured",
               page.input_value("#model-text") == HAND_PICKED
               and HAND_PICKED in option_values("#model-text"))
@@ -1526,6 +1716,7 @@ try:
         check("chat: the Assistant offers an export control",
               page.locator("#chat-export-btn").count() == 1)
         if page.locator("#chat-export-btn").count() == 1:
+            open_chat_menu(page)
             page.click("#chat-export-btn")
             check("chat export: the shared export dialog opens",
                   wait_until(lambda: page.locator("#export-dialog").is_visible()))
@@ -1581,6 +1772,7 @@ try:
               and page.locator("#chat-import-file").count() == 1)
         if page.locator("#chat-import-btn").count() == 1:
             # This browser's own transcript, read back out of the export dialog.
+            open_chat_menu(page)
             page.click("#chat-export-btn")
             wait_until(lambda: page.locator("#export-dialog").is_visible())
             page.select_option("#chat-export-format", "json")
@@ -1639,6 +1831,7 @@ try:
               and page.locator(".view-switch button").count() == 7)
 
         n_before = len(errors)
+        open_extras(page)
         page.click("#raglab-open")
         page.wait_for_selector(".raglab-sheet")
         check("raglab: the button opens the lab page",
@@ -2073,6 +2266,7 @@ try:
                                  body=json.dumps(payload))
 
         page.route("**/api/raglab/**", lab_route)
+        open_extras(page)
         page.click("#raglab-open")
         page.wait_for_selector(".rag-grid")
         check("raglab: every stage of the pipeline gets a panel",
