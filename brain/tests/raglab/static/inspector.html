@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lodestar RAG Lab — Inspector</title>
+  <link rel="stylesheet" href="/inspector.css">
+</head>
+<body>
+  <header class="inspector-header">
+    <h1>RAG Lab Inspector</h1>
+    <nav class="inspector-tabs">
+      <button class="inspector-tab" id="tab-groundtruth" data-view="groundtruth">Ground truth</button>
+      <button class="inspector-tab" id="tab-chunks" data-view="chunks" data-step="index">Chunks</button>
+      <button class="inspector-tab" id="tab-retrieval" data-view="retrieval" data-step="retrieval">Retrieval</button>
+    </nav>
+  </header>
+
+  <main>
+    <section id="view-groundtruth" class="inspector-view"></section>
+
+    <section id="view-chunks" class="inspector-view" hidden>
+      <div class="inspector-controls">
+        <button id="build-chunks">Build index &amp; list chunks</button>
+        <span id="chunks-status"></span>
+      </div>
+      <div id="chunks-body"></div>
+    </section>
+
+    <section id="view-retrieval" class="inspector-view" hidden>
+      <div class="inspector-controls">
+        <label>Question <select id="retrieval-question"></select></label>
+        <button id="run-trace">Run retrieval</button>
+        <span id="retrieval-status"></span>
+      </div>
+      <div id="retrieval-body">
+        <table class="retrieval-table" hidden>
+          <thead>
+            <tr>
+              <th>chunk</th>
+              <th data-step="retrieval">dense rank</th>
+              <th data-step="retrieval">bm25 rank</th>
+              <th data-step="retrieval">RRF rank</th>
+              <th data-step="retrieval">rerank</th>
+              <th data-step="generation">grade</th>
+              <th>kept</th>
+              <th>gold</th>
+            </tr>
+          </thead>
+          <tbody id="retrieval-rows"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+  <script src="/inspector.js"></script>
+</body>
+</html>

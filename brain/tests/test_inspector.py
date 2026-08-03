@@ -146,3 +146,12 @@ def test_trace_job_marks_gold(monkeypatch):
     assert job['state'] == 'done', job.get('error')
     cands = job['result']['trace']['candidates']
     assert cands and all('gold' in c for c in cands)
+
+
+# This is an integration test (the served shell exposes its test-stable hooks).
+def test_inspector_page_exposes_the_three_views(monkeypatch):
+    client = _client(monkeypatch)
+    html = client.get('/').text
+    for hook in ('tab-groundtruth', 'tab-chunks', 'tab-retrieval',
+                 'inspector-tab', 'retrieval-table'):
+        assert hook in html, f'missing {hook}'

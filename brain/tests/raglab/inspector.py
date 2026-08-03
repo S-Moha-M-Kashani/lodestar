@@ -79,6 +79,15 @@ def create_inspector_app() -> FastAPI:
     def page():
         return FileResponse(STATIC / 'inspector.html')
 
+    @app.get('/inspector.css')
+    def css():
+        return FileResponse(STATIC / 'inspector.css', media_type='text/css')
+
+    @app.get('/inspector.js')
+    def js():
+        return FileResponse(STATIC / 'inspector.js',
+                            media_type='application/javascript')
+
     @app.get('/api/health')
     def health():
         return {'ok': True, 'storage': 'memory'}
