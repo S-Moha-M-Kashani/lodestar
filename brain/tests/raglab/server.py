@@ -28,7 +28,7 @@ from . import (embedding, evaluate, explain, metrics, models, pipeline,
 from .config import (ANSWERERS, BALANCES, CHUNKERS, DEPENDENCIES,
                      DIFFICULTIES, EMBEDDERS, GRADERS, RERANKERS,
                      RETRIEVERS, ROOT, RUNS_DIR, STEPS, LabConfig,
-                     load_lab_settings)
+                     load_lab_settings, settings_for_provider)
 from .corpus import load_diary, load_ground_truth
 from .index import IndexRegistry, _lab_llm
 
@@ -178,6 +178,10 @@ def create_app() -> FastAPI:
             # appears in the panel without touching app.js.
             'models': models.catalogue(settings),
             'model_roles': [role.as_dict() for role in models.ROLES],
+            # The mode dropdown: local vs OpenRouter, each with the backend it
+            # runs on and the exact per-stage preset picking it applies. Served
+            # so neither panel keeps a preset of its own to drift.
+            'modes': models.mode_catalogue(settings),
             # What every number on the results screen means: its label, the step
             # it grades, the exact arithmetic, and what computed it. Served rather
             # than kept in the frontend so a metric's name cannot drift from its
@@ -254,7 +258,11 @@ def create_app() -> FastAPI:
     @app.post('/api/evaluations')
     def start_evaluation(payload: dict):
         cfg = LabConfig.from_dict(payload)
-        problems = cfg.validate() + models.provider_problems(cfg, settings)
+        # The mode dropdown's backend override, applied before the screen so
+        # the settings that refuse a model are the settings that would run it.
+        run_settings = settings_for_provider(settings,
+                                             payload.get('provider') or '')
+        problems = cfg.validate() + models.provider_problems(cfg, run_settings)
         if problems:
             raise HTTPException(400, '; '.join(problems))
 
@@ -263,7 +271,7 @@ def create_app() -> FastAPI:
                 if cancelled():
                     raise JobCancelled()
             result = evaluate.run_eval(
-                registry, ground_truth, cfg, settings,
+                registry, ground_truth, cfg, run_settings,
                 types=payload.get('types') or None,
                 difficulty=payload.get('difficulty') or None,
                 limit=payload.get('limit') or None,
@@ -311,8 +319,11 @@ def create_app() -> FastAPI:
         # so one route refused a model the backend does not serve while the
         # other ran it — and now that a dead grade stage raises instead of
         # scoring everything 0.5, the difference between the two routes would
-        # be a 400 naming the model against a bare 500.
-        problems = cfg.validate() + models.provider_problems(cfg, settings)
+        # be a 400 naming the model against a bare 500. The provider override
+        # is applied the same way too, for the same reason.
+        run_settings = settings_for_provider(settings,
+                                             payload.get('provider') or '')
+        problems = cfg.validate() + models.provider_problems(cfg, run_settings)
         if problems:
             raise HTTPException(400, '; '.join(problems))
         query_date = payload.get('query_date') or ground_truth['meta']['query_date']
@@ -324,8 +335,8 @@ def create_app() -> FastAPI:
                 cfg.index,
                 progress=lambda stage, fraction, detail='':
                     report(stage, 0.7 * fraction, detail))
-            llm = _lab_llm(settings)
-            roles = models.resolve(cfg, settings)
+            llm = _lab_llm(run_settings)
+            roles = models.resolve(cfg, run_settings)
             report('retrieving', 0.75, question[:80])
             outcome = pipeline.retrieve(index, cfg.retrieval, question,
                                         query_date, llm=llm, models=roles)

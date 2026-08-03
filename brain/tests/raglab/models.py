@@ -312,6 +312,107 @@ def catalogue(settings: LabSettings) -> list[dict]:
             ] + entries
 
 
+@dataclass(frozen=True)
+class ProviderMode:
+    """One entry in the panel's mode dropdown: which backend runs the LLM
+    stages, and therefore which per-stage preset picking it applies."""
+    key: str        # 'local'
+    label: str      # what the dropdown shows
+    provider: str   # the LabSettings.llm_provider this mode runs on
+    note: str       # why you would pick it
+
+
+# Local first: it is the lab default — a default must never silently spend API
+# credit — so this list leads with it like every other option list here.
+MODES = (
+    ProviderMode('local', 'Local (Ollama)', 'ollama',
+                 note='every LLM stage on a model on this machine — free and '
+                      'private — with the lab\'s own stage defaults: '
+                      'extractive answerer, lexical reranker, no gate'),
+    ProviderMode('openrouter', 'OpenRouter', 'openrouter',
+                 note='the full LLM pipeline on gpt-5-nano — HyDE, LLM '
+                      'reranker, relevance gate, answerer and both judges — '
+                      'while the embedder stays the local Persian-tuned '
+                      'encoder, the measured winner'),
+)
+
+# What the openrouter mode runs every stage on: the model every grade in
+# .runs/ so far was measured on (see CHAT_MODELS).
+MODE_MODEL = 'openai/gpt-5-nano'
+
+# Preferred relevance-gate models, in order. A purpose-built reranker (query +
+# text → relevance score) beats a prompted chat model at exactly this job — but
+# one is picked only when OpenRouter's own model list verifies it, and the
+# resolution happens when the preset is served, never at run time: a runtime
+# fallback would produce a row labelled with a model that did not score it.
+# Measured 2026-07-31: OpenRouter's catalogue had no rerank entries at all
+# (test_no_knob_offers_an_openrouter_embedding_or_rerank_model), so today this
+# chain resolves to MODE_MODEL; the preference stands so the day the list
+# gains one, the preset starts offering it without a code change.
+GATE_MODELS = ('cohere/rerank-4-fast', 'cohere/rerank-4-pro')
+
+# The fields a mode presets — and only these. Index is deliberately absent:
+# heydariAI/persian-embeddings is the measured winner regardless of where the
+# chat models run. Both modes patch the same fields, read off this one table,
+# so switching back is a full reset rather than a remote model leaking into a
+# local run's label.
+_MODE_FIELDS = {
+    'retrieval': ('hyde', 'expansion_model', 'reranker', 'reranker_model',
+                  'grader', 'grader_model', 'grade_threshold'),
+    'generation': ('answerer', 'model', 'key_facts_judge', 'judge_model',
+                   'ragas_model'),
+}
+
+
+def gate_model(settings: LabSettings) -> str:
+    """The openrouter mode's relevance-gate default: the first of GATE_MODELS
+    that OpenRouter's model list verifies, else MODE_MODEL. An empty list means
+    "cannot verify", and an unverifiable model must not be a default."""
+    served = openrouter_ids(settings)
+    for candidate in GATE_MODELS:
+        if candidate in served:
+            return candidate
+    return MODE_MODEL
+
+
+def mode_config(key: str, settings: LabSettings) -> dict:
+    """The config patch a mode applies, shaped like LabConfig.to_dict().
+    Unknown mode raises — no auto modes anywhere in this repo."""
+    if key not in {mode.key for mode in MODES}:
+        raise ValueError(f'unknown mode {key!r}; expected one of '
+                         + ', '.join(repr(mode.key) for mode in MODES))
+    if key == 'openrouter':
+        patch = {
+            'retrieval': {
+                'hyde': True, 'expansion_model': MODE_MODEL,
+                'reranker': 'llm', 'reranker_model': MODE_MODEL,
+                'grader': 'llm', 'grader_model': gate_model(settings),
+                # The measured setting: an LLM gate at 0.4 refused all five
+                # unanswerable questions with 3% false refusals.
+                'grade_threshold': 0.4},
+            'generation': {
+                'answerer': 'llm', 'model': MODE_MODEL,
+                'key_facts_judge': True, 'judge_model': MODE_MODEL,
+                'ragas_model': MODE_MODEL},
+        }
+    else:
+        defaults = LabConfig().to_dict()
+        patch = {group: {name: defaults[group][name] for name in names}
+                 for group, names in _MODE_FIELDS.items()}
+    assert {g: set(f) for g, f in patch.items()} == {
+        g: set(f) for g, f in _MODE_FIELDS.items()}
+    return patch
+
+
+def mode_catalogue(settings: LabSettings) -> list[dict]:
+    """The dropdown contents: each mode with the backend it runs on and the
+    exact patch picking it applies — served, so neither panel keeps a preset
+    of its own to drift."""
+    return [{'key': mode.key, 'label': mode.label, 'provider': mode.provider,
+             'note': mode.note, 'config': mode_config(mode.key, settings)}
+            for mode in MODES]
+
+
 def note_for(cfg: LabConfig, settings: LabSettings) -> str:
     """A one-line description of the stage/model split, for a run's notes.
 

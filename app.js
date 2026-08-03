@@ -5804,6 +5804,9 @@
         retrieval: { ...defaults.retrieval, ...(saved && saved.retrieval) },
         generation: { ...defaults.generation, ...(saved && saved.generation) },
         label: (saved && saved.label) || '',
+        // '' = no mode picked: runs follow whatever backend the lab booted
+        // with, and no preset has touched the knobs.
+        mode: (saved && saved.mode) || '',
       };
     }
     return ragState.cfg;
@@ -5876,14 +5879,27 @@
   // looking correct while 404ing.
   const RAG_COLLECTIONS = { index: '/indexes', run: '/evaluations', query: '/queries' };
 
+  // The backend the picked mode runs on, or '' when no mode is picked and the
+  // run should follow whatever the lab booted with. Read from the served modes
+  // (options.modes) — the provider is a fact about the mode, not this file.
+  function ragProvider() {
+    const cfg = ragConfig();
+    const mode = ((ragState.options && ragState.options.modes) || [])
+      .find((m) => m.key === (cfg && cfg.mode));
+    return mode ? mode.provider : '';
+  }
+
   async function ragStart(kind, extra) {
     if (ragState.busy) return;
     ragState.busy = true;
     ragState.problem = '';
     render();
     try {
+      const provider = ragProvider();
       const { job_id: jobId } = await ragApi(RAG_COLLECTIONS[kind],
-                                             { ...ragConfig(), ...extra });
+                                             { ...ragConfig(),
+                                               ...(provider ? { provider } : {}),
+                                               ...extra });
       ragState.jobId = jobId;
       render();
       ragPoll(jobId, async (result) => {
@@ -5927,8 +5943,11 @@
     ragState.queryProblem = '';
     render();
     try {
+      const provider = ragProvider();
       const { job_id: jobId } = await ragApi(RAG_COLLECTIONS.query,
-                                             { ...ragConfig(), question });
+                                             { ...ragConfig(),
+                                               ...(provider ? { provider } : {}),
+                                               question });
       ragState.jobId = jobId;
       render();
       ragPoll(jobId, (result) => { ragState.queryOut = result; });
@@ -6141,6 +6160,45 @@
     const legend = document.createElement('legend');
     legend.textContent = 'Models — one per task';
     box.appendChild(legend);
+    // Where the LLM stages run. A mode is a served preset (options.modes):
+    // picking one applies the lab's own patch — models, gate, judges — and
+    // every run is sent with that backend, so this panel cannot invent a
+    // backend/model pairing the lab never served.
+    const modes = options.modes || [];
+    if (modes.length) {
+      const row = document.createElement('label');
+      row.className = 'field';
+      row.append('Backend');
+      const why = ragWhy('run.mode', row);
+      if (why) row.appendChild(why);
+      const sel = document.createElement('select');
+      sel.id = 'raglab-mode';
+      const boot = document.createElement('option');
+      boot.value = '';
+      const caps = options.capabilities || {};
+      boot.textContent = `lab boot (${caps.llm_provider || 'unknown'})`;
+      sel.appendChild(boot);
+      for (const mode of modes) {
+        const opt = document.createElement('option');
+        opt.value = mode.key;
+        opt.textContent = mode.label;
+        sel.appendChild(opt);
+      }
+      sel.value = cfg.mode || '';
+      sel.addEventListener('change', () => {
+        cfg.mode = sel.value;
+        const mode = modes.find((m) => m.key === sel.value);
+        if (mode && mode.config) {
+          for (const group of Object.keys(mode.config)) {
+            cfg[group] = { ...cfg[group], ...mode.config[group] };
+          }
+        }
+        ragPersist();
+        render(); // the preset moves knobs in the step panels too
+      });
+      row.appendChild(sel);
+      box.appendChild(row);
+    }
     for (const step of ragSteps()) {
       const roles = (options.model_roles || []).filter(
         (role) => (role.step || role.field.split('.')[0]) === step.key);
