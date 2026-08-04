@@ -3195,28 +3195,22 @@ try:
               "composite" in header and "quote" in header)
         page.screenshot(path=shot("raglab-leaderboard.png"))
 
-        # ---- a retrieved context ----------------------------------------------
-        # There is one kind of row in the index now, so the meta line's whole job
-        # is saying which chunk this is and when it was written. It reads straight
-        # off the payload, so a field the lab has stopped sending renders as the
-        # word "undefined" — visible, unfailing, and easy to ship.
-        page.fill("#raglab-question", "باشگاه هفته‌ای چند بار بود؟")
-        page.click("#raglab-ask")
-        # An ask is a job like a run, so it reports through the same watched
-        # box before its contexts land. Read atomically in one evaluate: the
-        # running state lasts only until the next poll, and a locator that
-        # resolves and then reads would race the box detaching.
-        ask_progress = lambda: page.evaluate(
-            "() => { const el = document.querySelector('.rag-progress .rag-meta');"
-            " return el ? el.textContent : ''; }")
-        check("raglab: an ask reports its stage through the watched-job box",
-              wait_until(lambda: "query: retrieving" in ask_progress()))
-        page.wait_for_selector(".rag-context")
-        context_meta = page.locator(".rag-context .rag-meta").first.inner_text()
-        check("raglab: a retrieved context says which chunk it is and when",
-              "2026-05-16-a#3" in context_meta and "2026-05-16" in context_meta
-              and "undefined" not in context_meta)
-        page.screenshot(path=shot("raglab-context.png"))
+        # ---- the door to the Inspector ----------------------------------------
+        # The ask box that stood here retired on 2026-08-04. Asking one question
+        # moved to the Inspector on :9003, where the answer arrives beside that
+        # question's rank at every retrieval step, its gold evidence and its
+        # scores — so this panel now names the door instead of offering the
+        # lesser of two boxes that do the same thing.
+        link = page.locator("#raglab-inspector-link")
+        check("raglab: the panel sends you to the Inspector",
+              link.count() == 1
+              and link.get_attribute("href") == "http://localhost:9003/"
+              # a new tab, because the two panels are meant to be read together
+              and link.get_attribute("target") == "_blank")
+        check("raglab: the panel no longer asks one question itself",
+              page.locator("#raglab-ask").count() == 0
+              and page.locator("#raglab-question").count() == 0)
+        page.screenshot(path=shot("raglab-inspector-link.png"))
 
         # A chosen strategy is what a developer changes twenty times in a sitting;
         # losing it on every reload would make the page useless.

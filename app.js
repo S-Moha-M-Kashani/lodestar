@@ -5645,11 +5645,7 @@
     jobId: null,          // server job currently running or stopping
     result: null,
     runs: [],
-    questions: [],        // ground truth without its answers, for the picker
     indexInfo: null,      // stats from the last build
-    question: '',
-    queryOut: null,
-    queryProblem: '',
     busy: false,
   };
 
@@ -5835,10 +5831,9 @@
       ragConfig();
       ragState.phase = 'ready';
       ragState.problem = '';
-      // Both are conveniences: a lab with no run history and no question picker
-      // is still fully usable, so neither failure blocks the page.
+      // A convenience: a lab with no run history is still fully usable, so the
+      // failure does not block the page.
       try { ragState.runs = (await ragApi('/evaluations?limit=30')).runs; } catch (_) { ragState.runs = []; }
-      try { ragState.questions = (await ragApi('/questions?limit=200')).questions; } catch (_) { ragState.questions = []; }
     } catch (error) {
       ragState.phase = 'absent';
       ragState.problem = error.message;
@@ -5877,6 +5872,8 @@
   // map rather than '/' + kind: the two names stopped matching when the routes
   // became resource collections, and a concatenated path would have gone on
   // looking correct while 404ing.
+  // 'query' is kept though this panel no longer asks: the lab still serves the
+  // route, and the Inspector (:9003) is what drives it now.
   const RAG_COLLECTIONS = { index: '/indexes', run: '/evaluations', query: '/queries' };
 
   // The backend the picked mode runs on, or '' when no mode is picked and the
@@ -5943,33 +5940,6 @@
     } catch (error) {
       ragState.problem = error.message;
       if (view === 'raglab') render();
-    }
-  }
-
-  // A question is a job like a build or a run — the index it builds implicitly
-  // can take minutes — so it goes through the same poll and progress bar. Only
-  // the synchronous refusals (empty question, bad config) land beside the ask
-  // box; a job that dies reports through the shared problem note like any run.
-  async function ragAsk() {
-    const question = ragState.question.trim();
-    if (!question || ragState.busy) return;
-    ragState.busy = true;
-    ragState.queryProblem = '';
-    render();
-    try {
-      const provider = ragProvider();
-      const { job_id: jobId } = await ragApi(RAG_COLLECTIONS.query,
-                                             { ...ragConfig(),
-                                               ...(provider ? { provider } : {}),
-                                               question });
-      ragState.jobId = jobId;
-      render();
-      ragPoll(jobId, (result) => { ragState.queryOut = result; });
-    } catch (error) {
-      ragState.busy = false;
-      ragState.queryOut = null;
-      ragState.queryProblem = error.message;
-      render();
     }
   }
 
@@ -6420,95 +6390,6 @@
     return wrap;
   }
 
-  function renderRagQuery() {
-    const box = document.createElement('section');
-    box.className = 'rag-panel rag-query';
-    const legend = document.createElement('h3');
-    legend.textContent = 'Ask one question';
-    box.appendChild(legend);
-
-    const form = document.createElement('form');
-    form.className = 'rag-ask';
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.id = 'raglab-question';
-    input.className = 'rag-question';
-    input.dir = 'rtl';
-    input.placeholder = 'الان وضعیت کارم چیه؟';
-    input.value = ragState.question;
-    input.addEventListener('input', () => { ragState.question = input.value; });
-    const pick = document.createElement('select');
-    pick.className = 'rag-pick';
-    const blank = document.createElement('option');
-    blank.value = '';
-    blank.textContent = 'from the ground truth…';
-    pick.appendChild(blank);
-    for (const q of ragState.questions || []) {
-      const opt = document.createElement('option');
-      opt.value = q.question_fa;
-      opt.textContent = `${q.id} · ${q.type} · ${q.question_en.slice(0, 54)}`;
-      pick.appendChild(opt);
-    }
-    pick.addEventListener('change', () => {
-      if (!pick.value) return;
-      ragState.question = pick.value;
-      input.value = pick.value;
-    });
-    const ask = document.createElement('button');
-    ask.type = 'submit';
-    ask.className = 'btn primary';
-    ask.id = 'raglab-ask';
-    ask.textContent = 'Retrieve';
-    ask.disabled = ragState.busy;
-    form.append(input, pick, ask);
-    form.addEventListener('submit', (event) => { event.preventDefault(); ragAsk(); });
-    box.appendChild(form);
-
-    if (ragState.queryProblem) {
-      const problem = document.createElement('p');
-      problem.className = 'rag-note';
-      problem.textContent = ragState.queryProblem;
-      box.appendChild(problem);
-    }
-
-    const out = ragState.queryOut;
-    if (out) {
-      const diag = document.createElement('p');
-      diag.className = 'rag-meta';
-      const scope = out.time_scope
-        ? `time scope ${out.time_scope.label} (${out.time_scope.from} → ${out.time_scope.to})`
-        : 'no time scope detected';
-      diag.textContent = `${scope} · ${out.diagnostics.candidates_in_scope} chunks in scope`
-        + ` · dense ${out.diagnostics.dense_hits} · lexical ${out.diagnostics.bm25_hits}`
-        + ` · graded out ${out.diagnostics.graded_out || 0}`;
-      box.appendChild(diag);
-      if (out.answer) {
-        const answer = document.createElement('p');
-        answer.className = 'rag-answer';
-        answer.dir = 'rtl';
-        answer.textContent = (out.abstained ? '(abstained) ' : '') + out.answer;
-        box.appendChild(answer);
-      }
-      for (const context of out.contexts) {
-        const item = document.createElement('div');
-        item.className = 'rag-context';
-        const meta = document.createElement('div');
-        meta.className = 'rag-meta';
-        // There is one kind of row in the index, so the chunk id and its date
-        // are the whole of what identifies a hit.
-        meta.textContent = `${context.chunk_id} · ${context.date}`
-          + ` · score ${ragNum(context.score)}`;
-        const text = document.createElement('div');
-        text.className = 'rag-context-text';
-        text.dir = 'rtl';
-        text.textContent = context.text;
-        item.append(meta, text);
-        box.appendChild(item);
-      }
-    }
-    return box;
-  }
-
   function renderRagLab() {
     const sheet = document.createElement('section');
     sheet.className = 'raglab-sheet';
@@ -6518,6 +6399,20 @@
     const heading = document.createElement('h2');
     heading.textContent = 'RAG test lab';
     head.appendChild(heading);
+    // The lab measures; the Inspector shows why — the chunks an index produced,
+    // where every candidate ranked at each step, and what the run wrote against
+    // what the diary says. It is a separate service on its own port, so without
+    // a door named here :9003 is something you have to already know about. A
+    // real link rather than a button: it leaves this app, and it opens beside it
+    // because the two are meant to be read side by side.
+    const inspector = document.createElement('a');
+    inspector.id = 'raglab-inspector-link';
+    inspector.className = 'btn ghost';
+    inspector.href = 'http://localhost:9003/';
+    inspector.target = '_blank';
+    inspector.rel = 'noopener';
+    inspector.textContent = 'Inspector (:9003) ↗';
+    head.appendChild(inspector);
     const back = document.createElement('button');
     back.type = 'button';
     back.id = 'raglab-back';
@@ -6743,8 +6638,6 @@
     }
 
     if (ragState.result) sheet.appendChild(renderRagResult());
-
-    sheet.appendChild(renderRagQuery());
 
     if (ragState.runs.length) {
       const boardTitle = document.createElement('h3');

@@ -131,6 +131,11 @@
           border-radius: 8px; color: var(--ink-soft); }
   .right { margin-left: auto; }
   .hidden { display: none; }
+  /* A door to another service, so it looks like a link and not like one of this
+     panel's own run buttons. */
+  .lab-link { color: var(--rule-red); text-decoration: none; font-size: .78rem;
+              border-bottom: 1px solid var(--rule-red); padding-bottom: 1px; }
+  .lab-link:hover { color: var(--ink); border-bottom-color: var(--ink); }
 </style>
 </head>
 <body>
@@ -141,6 +146,14 @@
        from /api/options -> production (derived from the brain's own constants),
        then builds and retrieves, because "what does the real thing do" is a
        question you ask before you start changing knobs. -->
+  <!-- The lab measures; the Inspector shows why. It is a separate service on its
+       own port, so without a door named here :9003 is something you have to
+       already know about. Opens in a tab of its own, because the two are meant
+       to be read side by side. -->
+  <div class="inline" style="margin-top:.5rem">
+    <a class="lab-link" id="open-inspector" href="http://localhost:9003/"
+       target="_blank" rel="noopener">Open the Inspector (:9003) &rarr;</a>
+  </div>
   <div class="inline" style="margin-top:.5rem">
     <button class="ghost" id="use-production"
       title="Fill every setting with the shipped Assistant's own, then build and retrieve. Downloads the real Persian embedder (~2.2 GB) on first use.">Use the real assistant's settings, then run</button>
@@ -308,16 +321,11 @@
       <div id="rows" style="max-height:26rem;overflow:auto"></div></details>
   </section>
 
-  <section class="card full">
-    <h2>Query inspector</h2>
-    <div class="inline">
-      <div style="flex:2"><label>Question (Farsi)</label>
-        <input type="text" id="question" class="fa" placeholder="الان وضعیت کارم چیه؟"></div>
-      <div><label>Pick from ground truth</label><select id="gtPick"></select></div>
-      <div style="flex:0 0 9rem;align-self:flex-end"><button id="ask">Retrieve</button></div>
-    </div>
-    <div id="queryOut" style="margin-top:.6rem"></div>
-  </section>
+  <!-- The "Query inspector" card that stood here retired on 2026-08-04. Asking
+       one question now happens on the Inspector (:9003), where the answer lands
+       beside that question's ranks at every step, its gold evidence and its
+       scores. Two boxes that both retrieve one question, one of them showing far
+       less, is a choice nobody should have to make. -->
 
   <section class="card full">
     <h2>Leaderboard</h2>
@@ -640,11 +648,6 @@ async function boot() {
     $('notes').innerHTML = caps.ragas.notes.map((n) => `<div class="note">${n}</div>`).join('');
   }
 
-  const gt = await api('/api/questions');
-  $('gtPick').innerHTML = '<option value="">—</option>' + gt.questions.map((q) =>
-    `<option value="${q.question_fa.replace(/"/g, '&quot;')}">${q.id} · ${q.type} · ${q.question_en.slice(0, 60)}</option>`).join('');
-  $('gtPick').onchange = () => { if ($('gtPick').value) $('question').value = $('gtPick').value; };
-
   renderIndexes(o.indexes);
   loadBoard();
 }
@@ -845,36 +848,6 @@ function table(head, rows) {
   return `<table><thead><tr>${head.map((h) => `<th>${h}</th>`).join('')}</tr></thead><tbody>` +
     rows.map((r) => `<tr>${r.map((c) => `<td>${c === null || c === undefined ? '—' : c}</td>`).join('')}</tr>`).join('') +
     '</tbody></table>';
-}
-
-// A query is a job like a build or a run: the index it builds implicitly can
-// take minutes, so the ask watches the same job box — stage, fraction, detail —
-// instead of blocking behind a static placeholder.
-$('ask').onclick = async () => {
-  const body = Object.assign(readConfig(), pickedProvider(),
-                             { question: $('question').value });
-  $('queryOut').innerHTML = '';
-  try {
-    const { job_id } = await api('/api/queries', body);
-    poll(job_id, renderQuery);
-  } catch (e) { $('queryOut').innerHTML = `<div class="note">${e.message}</div>`; }
-};
-
-function renderQuery(out) {
-  const scope = out.time_scope
-    ? `time scope <b>${out.time_scope.label}</b> ${out.time_scope.from} → ${out.time_scope.to} (${out.time_scope.kind})`
-    : 'no time scope detected';
-  $('queryOut').innerHTML =
-    `<div class="muted">${scope} · ${out.diagnostics.candidates_in_scope} chunks in scope · ` +
-    `dense ${out.diagnostics.dense_hits} · bm25 ${out.diagnostics.bm25_hits} · ` +
-    `graded out ${out.diagnostics.graded_out ?? 0} · ` +
-    Object.entries(out.timings).map(([k, v]) => `${k} ${v}`).join(' · ') + '</div>' +
-    (out.answer ? `<div class="ctx fa"><b>${out.abstained ? '(abstained) ' : ''}</b>${out.answer}</div>` : '') +
-    out.contexts.map((c) => `<div class="ctx">
-        <div class="meta">${c.chunk_id} · ${c.date} · score ${fmt(c.score)} ·
-          ${Object.entries(c.stages).map(([k, v]) => k + ' ' + fmt(v, 2)).join(' · ')}
-          ${c.expanded_from ? ' · expanded from ' + c.expanded_from : ''}</div>
-        <div class="fa">${escapeHtml(c.text).replace(/\n/g, '<br>')}</div></div>`).join('');
 }
 
 function escapeHtml(s) {

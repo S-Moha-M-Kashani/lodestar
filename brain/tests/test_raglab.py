@@ -2443,15 +2443,16 @@ def test_the_standalone_panel_reads_only_fields_the_lab_still_produces():
         'the panel reads summary fields the lab no longer returns: '
         f'{sorted(read - served)}')
 
-    # Scoped to the contexts loop on purpose: `c` names the corpus object
-    # elsewhere in the same file, so an unscoped `c.` would match its fields too.
-    loop = html.split('out.contexts.map')[1].split(".join('')")[0]
-    sent = set(pipeline.Context(chunk_id='c1', text='t', session_id='s1',
-                                date='2026-01-01', score=1.0).as_dict())
-    read = set(re.findall(r'\bc\.(\w+)', loop))
-    assert read <= sent, (
-        'the panel reads context fields the lab no longer returns: '
-        f'{sorted(read - sent)}')
+    # The other half of this invariant covered the contexts loop in the panel's
+    # query inspector, which retired on 2026-08-04: this panel renders no
+    # retrieved context at all now, so there is nothing here that can read a
+    # field the lab stopped sending. The same risk moved with the feature, and
+    # the Inspector's own reads are covered by `test_inspector.py` — where the
+    # candidate rows come from a real traced retrieval rather than a fixture, so
+    # a dropped field fails there instead of printing "undefined" here.
+    assert 'out.contexts' not in html, (
+        'a contexts loop is back in the standalone panel — either restore the '
+        'field check above with it, or move it to :9003 where the rest went')
 
 
 # This is an integration test.
@@ -4214,6 +4215,40 @@ def test_each_mode_carries_the_catalogue_of_its_own_backend(client):
     # dropdown of half-unusable choices.
     named = body['capabilities']['llm_model']
     assert (remote & local) <= {'', named}
+
+
+# This is a configuration invariant.
+def test_both_panels_send_you_to_the_inspector():
+    """The lab measures; the Inspector shows why. Both panels have to name the
+    door, or :9003 is a port you have to already know about — and it is the only
+    place a single question can now be traced, since the ask box moved there."""
+    from .raglab.server import STATIC
+    html = (STATIC / 'index.html').read_text(encoding='utf-8')
+    appjs = (config.ROOT / 'app.js').read_text(encoding='utf-8')
+    for source, where in ((html, 'the standalone panel'), (appjs, 'the board panel')):
+        assert 'localhost:9003' in source, f'{where} does not link to the Inspector'
+        assert 'inspector' in source.lower(), f'{where} does not name the Inspector'
+
+
+# This is a configuration invariant.
+def test_neither_panel_still_asks_one_question():
+    """Asking one question lives on :9003 now, where the answer arrives beside
+    its ranks, its gold evidence and its scores. Two boxes that both retrieve one
+    question — one of them showing far less — is a choice nobody should have to
+    make, so the lab's is gone rather than left as the lesser option.
+
+    Asserted by absence, like the repo's other retirements: a control that still
+    exists in one of the two panels is exactly how a removed feature comes back."""
+    from .raglab.server import STATIC
+    html = (STATIC / 'index.html').read_text(encoding='utf-8')
+    appjs = (config.ROOT / 'app.js').read_text(encoding='utf-8')
+    for gone in ('id="question"', 'id="gtPick"', 'id="ask"', 'id="queryOut"'):
+        assert gone not in html, f'the standalone panel still carries {gone}'
+    for gone in ("'raglab-question'", "'raglab-ask'", 'renderRagQuery', 'ragAsk('):
+        assert gone not in appjs, f'the board panel still carries {gone}'
+    # the route itself stays: it is the lab's API, and the Inspector's followed
+    # query view reads whatever runs through it
+    assert 'api/queries' in (STATIC.parent / 'server.py').read_text(encoding='utf-8')
 
 
 # This is a unit test.
