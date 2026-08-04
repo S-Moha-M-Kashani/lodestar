@@ -29,12 +29,37 @@ def mark_gold(candidate_texts: list[str],
     guard applies to a quote: one that normalises to nothing (punctuation-only,
     or a single short token the tokeniser drops) is dropped from the quote list
     rather than matching every candidate for the same reason."""
+    return _gold_flags([_norm(text) for text in candidate_texts], evidence_quotes)
+
+
+def _gold_flags(normalised_texts: list[str],
+                evidence_quotes: list[str]) -> list[bool]:
+    """The marking itself, over text that is already normalised — so a caller
+    counting gold across many questions normalises the corpus once instead of
+    once per question."""
     quotes = [n for n in (_norm(q) for q in evidence_quotes) if n]
-    out = []
-    for text in candidate_texts:
-        norm = _norm(text)
-        out.append(bool(norm) and any(q in norm or norm in q for q in quotes))
-    return out
+    return [bool(text) and any(q in text or text in q for q in quotes)
+            for text in normalised_texts]
+
+
+def normalised_chunks(index) -> list[str]:
+    """Every chunk in the index, normalised once, for `gold_available`."""
+    return [_norm(chunk.text) for chunk in index.chunks]
+
+
+def gold_available(index, evidence_quotes: list[str],
+                   norm_chunks: list[str] | None = None) -> int:
+    """How many chunks in the whole index hold this question's evidence.
+
+    The denominator that turns "1 gold" into a result: 1 of how many there were
+    to find. Counted over chunks rather than over the fixture's list of evidence
+    quotes, because the two are not the same number — one quote can be split
+    across two chunks by a length-based chunker, and one chunk can carry two
+    quotes. What a reader needs to know is what retrieval *could* have found at
+    this chunk size, which changes with the chunker and so cannot be read off
+    the ground truth alone."""
+    norms = norm_chunks if norm_chunks is not None else normalised_chunks(index)
+    return sum(_gold_flags(norms, evidence_quotes))
 
 
 def evidence_spans(text: str, evidence_quotes: list[str]) -> list[list[int]]:

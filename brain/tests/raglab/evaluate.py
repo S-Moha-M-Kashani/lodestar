@@ -17,7 +17,8 @@ from . import corpus, embedding, metrics, models, pipeline, ragas_eval
 from .config import (BALANCES, DIFFICULTIES, RUNS_DIR, LabConfig, LabSettings)
 from .index import IndexRegistry, _lab_llm
 from .llm import lab_chat
-from .present import chunks_by_session, evidence_spans, mark_gold
+from .present import (chunks_by_session, evidence_spans, gold_available,
+                      mark_gold, normalised_chunks)
 
 KEY_FACTS_PROMPT = (
     'You check whether an answer contains specific facts. The answer is in '
@@ -272,12 +273,19 @@ def _reporter(progress):
     return lambda stage, fraction, detail='': progress(stage, fraction)
 
 
-def trace_row(question: dict, trace: dict) -> dict:
+def trace_row(question: dict, trace: dict,
+              gold_available: int | None = None) -> dict:
     """One question's retrieval trace, gold-marked, in the shape the Inspector
     renders a table from. Gold is the *ground truth's* verdict on a candidate,
     never the pipeline's: `kept` already carries what the pipeline decided, and
     keeping the two apart is the whole point of the table — a gold chunk that
-    was dropped is exactly what you are looking for."""
+    was dropped is exactly what you are looking for.
+
+    `gold_available` is how many gold chunks existed to be found, which makes
+    the count a recall statement rather than a bare tally. It is passed in
+    because it is a property of the index, which this function does not hold;
+    a caller without one gets `None`, and the view says "1 gold" rather than
+    inventing a denominator."""
     quotes = [ev['quote'] for ev in question.get('evidence', [])]
     candidates = trace.get('candidates', [])
     for candidate, gold in zip(candidates,
@@ -294,6 +302,7 @@ def trace_row(question: dict, trace: dict) -> dict:
             'question_en': question.get('question_en', ''),
             'type': question['type'], 'difficulty': question['difficulty'],
             'answerable': bool(question.get('answerable')),
+            'gold_available': gold_available,
             'trace': trace}
 
 
@@ -327,13 +336,21 @@ def run_retrieval(registry: IndexRegistry, ground_truth: dict, cfg: LabConfig,
     llm = _lab_llm(settings)
     roles = models.resolve(cfg, settings)
 
+    # Normalised once for the whole run: `gold_available` counts gold over every
+    # chunk in the index, and doing that per question would re-tokenise the
+    # corpus once per question for no new information.
+    norm_chunks = normalised_chunks(index)
+
     rows = []
     for i, question in enumerate(questions):
         check_cancelled()
         _outcome, trace = pipeline.retrieve_traced(
             index, cfg.retrieval, question['question_fa'],
             question.get('query_date', query_date), llm=llm, models=roles)
-        rows.append(trace_row(question, trace))
+        quotes = [ev['quote'] for ev in question.get('evidence', [])]
+        rows.append(trace_row(
+            question, trace,
+            gold_available=gold_available(index, quotes, norm_chunks)))
         report('retrieving', 0.4 + 0.6 * (i + 1) / len(questions),
                _question_note(i + 1, questions, question['difficulty']))
     report('done', 1.0, 'done')
@@ -387,6 +404,10 @@ def run_eval(registry: IndexRegistry, ground_truth: dict, cfg: LabConfig,
     query_date = ground_truth['meta'].get('query_date', '2026-07-28')
     llm = _lab_llm(settings)
     roles = models.resolve(cfg, settings)
+    # Only needed by the traced path, where every question's gold count is taken
+    # over the whole index; normalised once so it is not re-tokenised per
+    # question. Empty when untraced, and then nothing reads it.
+    norm_chunks = normalised_chunks(index) if trace else []
     notes = list(index.stats.notes)
     # Which model ran which stage belongs in the run's own notes: comparing two
     # rows of the leaderboard without it compares two unknowns.
@@ -411,7 +432,10 @@ def run_eval(registry: IndexRegistry, ground_truth: dict, cfg: LabConfig,
             outcome, tr = pipeline.retrieve_traced(
                 index, cfg.retrieval, question['question_fa'],
                 question.get('query_date', query_date), llm=llm, models=roles)
-            recorded = trace_row(question, tr)
+            quotes = [ev['quote'] for ev in question.get('evidence', [])]
+            recorded = trace_row(
+                question, tr,
+                gold_available=gold_available(index, quotes, norm_chunks))
         else:
             outcome = pipeline.retrieve(index, cfg.retrieval,
                                         question['question_fa'],

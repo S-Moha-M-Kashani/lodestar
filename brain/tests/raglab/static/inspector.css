@@ -190,17 +190,32 @@ select { font: inherit; color: inherit; }
 [dir="rtl"] { font-family: var(--farsi); line-height: 1.85; unicode-bidi: plaintext; }
 
 /* --- ground truth: one card per pair -------------------------------------- */
+/* Every field is labelled above its own text and the card is held to a readable
+   measure. The first build let each row run the full width, which put the Farsi
+   question against the right edge, its English against the left, and the labels
+   stranded in the middle with a page of nothing between them and their text. */
 .gt-row {
   background: var(--card);
   border: 1px solid var(--card-line);
   border-left: 3px solid var(--ink);
-  padding: .6rem .8rem;
+  padding: .65rem .85rem;
   margin-bottom: .5rem;
-  font-size: .84rem;
+  max-width: 58rem;
 }
-.gt-row b { font-family: var(--mono); font-size: .78rem; }
-.gt-row i { color: var(--ink-soft); font-style: normal; font-size: .74rem;
-            text-transform: uppercase; letter-spacing: .05em; }
+.gt-head { font-family: var(--mono); font-size: .74rem; margin-bottom: .35rem; }
+.gt-q { font-size: 1rem; }
+.gt-en { font-size: .82rem; color: var(--ink-soft); }
+.gt-field { margin-top: .55rem; }
+.gt-field > div:not(.qh-label) { font-size: .88rem; }
+/* A quote is the exact string the ground truth stands on, so it is set apart
+   from the answer prose that surrounds it. */
+/* Logical, not left: the quote is Farsi, so its rule belongs on the edge the
+   text actually starts from. A `border-left` put the mark at the opposite side
+   of the card from the words it marks. */
+.gt-quote {
+  border-inline-start: 2px solid var(--evidence-rule);
+  padding-inline-start: .55rem; margin-top: .2rem;
+}
 
 /* --- chunks: a session is a page of the diary ----------------------------- */
 .chunk-session {
@@ -213,10 +228,16 @@ select { font: inherit; color: inherit; }
 .chunk-session > summary {
   font-family: var(--mono); font-size: .78rem; cursor: pointer;
 }
-.chunk-session > div {
+.chunk-line {
   border-top: 1px dotted var(--line);
-  padding: .5rem 0 .4rem;
-  font-size: .86rem;
+  padding: .5rem 0 .45rem;
+  max-width: 58rem;
+}
+.chunk-line > div:last-child { font-size: .88rem; }
+.chunk-no {
+  font-family: var(--display); font-size: .68rem; letter-spacing: .09em;
+  text-transform: uppercase; color: var(--ink-amber);
+  margin-bottom: .15rem;
 }
 
 /* --- a question, restated above its own rows ------------------------------ */
@@ -226,7 +247,10 @@ select { font: inherit; color: inherit; }
 .question-head { margin: .5rem 0 .7rem; }
 .question-head .qh-fa { font-size: 1.02rem; margin-bottom: .15rem; }
 .question-head .qh-en { font-size: .82rem; color: var(--ink-soft); }
-.question-head .qh-label {
+/* Unscoped on purpose: the ground-truth cards label their fields with this too,
+   and scoping it to `.question-head` was why those labels rendered as body text
+   instead of eyebrows. */
+.qh-label {
   font-family: var(--display); font-size: .68rem; letter-spacing: .1em;
   text-transform: uppercase; color: var(--ink-soft);
   margin: .55rem 0 .15rem;
@@ -269,28 +293,29 @@ select { font: inherit; color: inherit; }
   width: 100%; border-collapse: collapse;
   font-family: var(--mono); font-size: .74rem;
 }
+/* Every column is centred, header and cells together. The first build left the
+   headers ranged left while the numbers under them ranged right, so each label
+   sat over the wrong end of its own column. */
 .retrieval-table th {
-  text-align: left; font-weight: 400; color: var(--ink-soft);
+  text-align: center; font-weight: 400; color: var(--ink-soft);
   font-size: .66rem; letter-spacing: .07em; text-transform: uppercase;
   padding: .3rem .45rem; border-bottom: 1px solid var(--ink);
   white-space: nowrap;
 }
 .retrieval-table th[data-step="retrieval"] { color: var(--ink-green); }
 .retrieval-table th[data-step="generation"] { color: var(--ink-blue); }
-/* The chunk column holds right-aligned Farsi, so its header sits over its text
-   rather than at the far side of the cell. */
-.retrieval-table th:first-child { text-align: right; }
 .retrieval-table td {
   padding: .32rem .45rem; border-bottom: 1px solid var(--card-line);
   vertical-align: top;
-}
-.retrieval-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
-/* Verdict columns are marks, not quantities — centred under their own headers
-   so a run of ✓ reads as a column instead of drifting against the numbers. */
-.retrieval-table th:nth-last-child(2), .retrieval-table th:last-child,
-.retrieval-table td:nth-last-child(2), .retrieval-table td:last-child {
   text-align: center;
 }
+/* Tabular figures so centred numbers still line up digit under digit — ranks
+   and scores are fixed-width here, which is what makes centring safe. */
+.retrieval-table td.num { font-variant-numeric: tabular-nums; }
+/* The one exception: the chunk column is a paragraph of Farsi, so it keeps the
+   text's own direction and its header sits over that edge. */
+.retrieval-table th:first-child { text-align: right; }
+.retrieval-table td.chunk-cell { text-align: right; }
 .retrieval-row--gold { background: var(--card); }     /* relevant */
 .retrieval-row--plain { background: var(--row-plain); }  /* not relevant */
 /* The verdict again, in the margin, because a shade of background is a weak

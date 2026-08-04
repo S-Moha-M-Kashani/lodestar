@@ -119,12 +119,24 @@ async function loadGroundTruth() {
     GT.set(q.id, q);
     const row = document.createElement('div');
     row.className = 'gt-row';
-    const quotes = (q.evidence || []).map(e => e.quote).join(' · ');
-    row.innerHTML = `<b>${q.id}</b> · ${q.type} · ${q.difficulty}
-      <div dir="rtl">${q.question_fa}</div>
-      <div>${q.question_en || ''}</div>
-      <div><i>answer:</i> <span dir="rtl">${q.answer_fa || ''}</span></div>
-      <div><i>evidence:</i> <span dir="rtl">${quotes}</span></div>`;
+    // Label above its text, never beside it. A label set inline with a
+    // right-aligned Farsi block ends up at the opposite edge of the row from the
+    // thing it labels, with the width of the page in between.
+    const field = (label, text, rtl) => text
+      ? `<div class="gt-field"><div class="qh-label">${label}</div>`
+        + `<div${rtl ? ' dir="rtl"' : ''}>${escapeHtml(text)}</div></div>` : '';
+    const quotes = (q.evidence || []).map(e => e.quote);
+    row.innerHTML = `<div class="gt-head"><span class="q-id">${escapeHtml(q.id)}</span> `
+      + `<span class="q-tally">${escapeHtml(q.type)} · ${escapeHtml(q.difficulty)}`
+      + `${q.answerable ? '' : ' · unanswerable'}</span></div>`
+      + `<div class="gt-q" dir="rtl">${escapeHtml(q.question_fa)}</div>`
+      + `<div class="gt-en">${escapeHtml(q.question_en || '')}</div>`
+      + field('answer', q.answer_fa, true)
+      + (quotes.length
+         ? `<div class="gt-field"><div class="qh-label">evidence quoted from the diary</div>`
+           + quotes.map(quote =>
+               `<div dir="rtl" class="gt-quote">${escapeHtml(quote)}</div>`).join('')
+           + `</div>` : '');
     root.appendChild(row);
     const opt = document.createElement('option');
     opt.value = q.id; opt.textContent = `${q.id} — ${q.question_fa.slice(0, 40)}`;
@@ -146,12 +158,18 @@ function renderChunkGroups(container, groups) {
   for (const g of groups) {
     const det = document.createElement('details');
     det.className = 'chunk-session';
-    det.innerHTML = `<summary>${g.session_id} (${g.chunks.length} chunks)</summary>`;
+    det.innerHTML = `<summary><span class="q-id">${escapeHtml(g.session_id)}</span> `
+      + `<span class="q-tally">${g.chunks.length} chunk`
+      + `${g.chunks.length === 1 ? '' : 's'}${g.date ? ' · ' + escapeHtml(g.date) : ''}`
+      + `</span></summary>`;
     g.chunks.forEach((c, i) => {
-      const p = document.createElement('div');
-      p.dir = 'rtl';
-      p.textContent = `chunk ${i + 1}: ${c.text}`;
-      det.appendChild(p);
+      const line = document.createElement('div');
+      line.className = 'chunk-line';
+      // The number is a Latin marker on its own line rather than a prefix inside
+      // the Farsi string, where bidi puts it at whichever edge the run ends on.
+      line.innerHTML = `<div class="chunk-no">chunk ${i + 1}</div>`
+        + `<div dir="rtl">${escapeHtml(c.text)}</div>`;
+      det.appendChild(line);
     });
     container.appendChild(det);
   }
@@ -316,10 +334,16 @@ function renderQuestionTables(questions) {
     const candidates = (q.trace && q.trace.candidates) || [];
     const gold = candidates.filter(c => c.gold).length;
     const kept = candidates.filter(c => c.kept).length;
+    // "1 of 3 gold found" rather than "1 gold": the count only means something
+    // against how many there were to find. The denominator comes from the
+    // service, and when it does not (an older run) the tally stays a bare count
+    // instead of implying a total nobody measured.
+    const goldTally = q.gold_available === null || q.gold_available === undefined
+      ? `${gold} gold` : `${gold} of ${q.gold_available} gold found`;
     const det = document.createElement('details');
     det.className = 'retrieval-question';
     det.innerHTML = questionSummary(q.question_id, q.type, q.difficulty,
-        `${candidates.length} candidates · ${kept} kept · ${gold} gold`)
+        `${candidates.length} candidates · ${kept} kept · ${goldTally}`)
       + questionHead(q.question_id, q.question_fa);
     det.appendChild(scrollable(retrievalTable(candidates)));
     host.appendChild(det);

@@ -38,6 +38,44 @@ def test_evidence_spans_locate_the_quote_and_never_invent_one():
 
 
 # This is an integration test (real fixture, real chunker).
+def test_a_question_reports_how_many_gold_chunks_existed_to_find():
+    """"1 gold" is not a result until you know it was 1 of how many.
+
+    The denominator is how many chunks in the whole index hold this question's
+    evidence — what was *available* to retrieve — not how many evidence quotes
+    the fixture lists, because one quote can be split across two chunks and one
+    chunk can carry two quotes. That makes the pair a recall statement: found
+    over findable."""
+    gt = corpus.load_ground_truth()
+    index = IndexRegistry(LAB_SETTINGS, corpus.load_diary()).get(
+        IndexConfig(chunker='fixed-overlap', chunk_chars=500, overlap=100,
+                    contextual=True, embedder='ascii-hash'))
+    question = next(q for q in gt['questions'] if q.get('evidence'))
+    quotes = [ev['quote'] for ev in question['evidence']]
+
+    total = present.gold_available(index, quotes)
+    # counted the same way a candidate is marked, over every chunk in the index
+    assert total == sum(present.mark_gold([c.text for c in index.chunks], quotes))
+    assert total >= 1, 'a question whose evidence is in the corpus must be findable'
+
+    # and it travels on the row, beside the candidates it is the denominator for
+    cfg = RetrievalConfig(retriever='hybrid-rrf', reranker='none', grader='none',
+                          k=5, rerank_depth=20, time_filter=False,
+                          multi_query=False)
+    _outcome, trace = pipeline.retrieve_traced(
+        index, cfg, question['question_fa'], gt['meta']['query_date'])
+    row = evaluate.trace_row(question, trace, gold_available=total)
+    assert row['gold_available'] == total
+    found = sum(1 for c in row['trace']['candidates'] if c['gold'])
+    assert found <= row['gold_available'], (
+        'more gold retrieved than exists — the two are counted differently')
+
+    # a caller that does not know the index still gets a row, with the count
+    # absent rather than a wrong number standing in for it
+    assert evaluate.trace_row(question, trace)['gold_available'] is None
+
+
+# This is an integration test (real fixture, real chunker).
 def test_a_traced_candidate_carries_spans_that_slice_back_to_the_quote():
     """End to end over the real corpus: whatever the pipeline retrieved, every
     span on every candidate must slice out of that candidate's own text, and a
