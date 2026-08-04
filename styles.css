@@ -3194,6 +3194,9 @@ button.chat-source-card {
 .rag-checks input[type="checkbox"] { accent-color: var(--rule-red); }
 
 .rag-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+/* The door to the Inspector ends the row, pushed to the far edge: it is not one
+   of the three buttons that run something here, it is where you go afterwards. */
+.rag-actions .rag-inspector-link { margin-left: auto; }
 .rag-progress { display: flex; flex-direction: column; gap: 4px; }
 .rag-bar {
   height: 3px;

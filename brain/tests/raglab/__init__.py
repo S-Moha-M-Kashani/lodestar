@@ -6,11 +6,12 @@ memory**, and exposes a JSON API. Nothing in production imports from here; the
 lab imports production seams (its chat-model factory) so what wins an experiment
 is directly portable.
 
-**An experiment is not a record.** The index, the retrieved contexts and the
-generated answers exist to produce one number and are discarded with the
-process; the only thing written down is one JSON file per run in .runs/. So the
-lab needs no database and no service running — there is nothing to start first,
-and nothing a later run can inherit from an earlier one by accident.
+**An experiment's material is not a record.** The index, the retrieved contexts
+and the generated answers exist to produce one number and are discarded with the
+process. What is written down is the account of the work: one JSON file per run
+in .runs/, and one row per finished experiment in `ledger.py`'s SQLite. So the
+lab needs **no vector database** and no service running — there is nothing to
+start first, and nothing a later run can inherit from an earlier one by accident.
 
 It serves on **:9002** — the 9000 block, alongside the brains (9000 real, 9001
 the paired test brain). It must not take a board port: the lab's own page lives

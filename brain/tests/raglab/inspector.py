@@ -7,8 +7,11 @@ own in-memory index and writes nothing. Composition root: `create_inspector_app`
 It is also a **live follower of the lab itself**: `GET /api/follow` polls the
 lab (:9002, `RAGLAB_INSPECTOR_LAB_URL`) over plain `urllib` for its newest
 finished index and query jobs, so the two panels stay separate OS processes
-sharing nothing but HTTP — the lab keeps no database and the Inspector keeps
-no write path, so this is the only link between them. A lab that is not
+sharing nothing but HTTP — the lab's index is process memory and the Inspector
+keeps no write path, so this is the only link between them. Notably it does
+*not* read `raglab.db`: what the Inspector shows is what the lab is running
+now, and reaching into the other process's file would make a live view of a
+running job look like a record of a finished one. A lab that is not
 running is a normal state, not an error: every failure to reach it comes back
 as `{'lab': 'down', ...}` rather than an exception, the same rule the rest of
 this file follows for a missing service.

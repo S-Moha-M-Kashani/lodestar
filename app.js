@@ -6399,20 +6399,6 @@
     const heading = document.createElement('h2');
     heading.textContent = 'RAG test lab';
     head.appendChild(heading);
-    // The lab measures; the Inspector shows why — the chunks an index produced,
-    // where every candidate ranked at each step, and what the run wrote against
-    // what the diary says. It is a separate service on its own port, so without
-    // a door named here :9003 is something you have to already know about. A
-    // real link rather than a button: it leaves this app, and it opens beside it
-    // because the two are meant to be read side by side.
-    const inspector = document.createElement('a');
-    inspector.id = 'raglab-inspector-link';
-    inspector.className = 'btn ghost';
-    inspector.href = 'http://localhost:9003/';
-    inspector.target = '_blank';
-    inspector.rel = 'noopener';
-    inspector.textContent = 'Inspector (:9003) ↗';
-    head.appendChild(inspector);
     const back = document.createElement('button');
     back.type = 'button';
     back.id = 'raglab-back';
@@ -6590,7 +6576,21 @@
     cancelBtn.textContent = 'Stop experiment';
     cancelBtn.disabled = !ragState.jobId;
     cancelBtn.addEventListener('click', ragCancel);
-    actions.append(buildBtn, runBtn, cancelBtn);
+    // The lab measures; the Inspector shows why — the chunks an index produced,
+    // where every candidate ranked at each step, and what the run wrote against
+    // what the diary says. It is a separate service on its own port, so without a
+    // door named here :9003 is something you have to already know about. It ends
+    // this row because that is when you want it: after you have run something,
+    // not before. A real link rather than a button — it leaves this app — and it
+    // opens beside it, because the two are meant to be read side by side.
+    const inspector = document.createElement('a');
+    inspector.id = 'raglab-inspector-link';
+    inspector.className = 'btn ghost rag-inspector-link';
+    inspector.href = 'http://localhost:9003/';
+    inspector.target = '_blank';
+    inspector.rel = 'noopener';
+    inspector.textContent = 'Inspector (:9003) ↗';
+    actions.append(buildBtn, runBtn, cancelBtn, inspector);
     sheet.appendChild(actions);
 
     if (ragState.indexInfo) {

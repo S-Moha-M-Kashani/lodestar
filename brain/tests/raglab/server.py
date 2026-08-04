@@ -15,6 +15,7 @@ one answers 202 with a job id and a Location, and the panel polls that. One job 
 would fight over the same index and produce numbers neither of them describes.
 """
 import threading
+import time
 import traceback
 import uuid
 import inspect
@@ -23,7 +24,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 
-from . import (embedding, evaluate, explain, metrics, models, pipeline,
+from . import (embedding, evaluate, explain, ledger, metrics, models, pipeline,
                ragas_eval, retrieval)
 from .config import (ANSWERERS, BALANCES, CHUNKERS, DEPENDENCIES,
                      DIFFICULTIES, EMBEDDERS, GRADERS, PRODUCTION_CONFIG,
@@ -38,6 +39,16 @@ STATIC = Path(__file__).resolve().parent / 'static'
 
 class JobCancelled(Exception):
     """A cooperative stop requested from the RAG Lab panel."""
+
+
+def _relative(path: Path) -> str:
+    """A path to show in the panel: repo-relative when it is inside the repo,
+    absolute when it is not. `RAGLAB_DB` can point anywhere — the suite points it
+    at a temp file — and `relative_to` raises rather than shrugging."""
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path)
 
 
 class Jobs:
@@ -89,6 +100,8 @@ class Jobs:
 
         def run() -> None:
             job = self.jobs[job_id]
+            began = time.time()
+            outcome = 'done'
             try:
                 # Targets that make external calls receive a cancellation probe.
                 # Keep one-argument targets working for small callers and tests.
@@ -96,17 +109,36 @@ class Jobs:
                 job['result'] = target(report, cancel.is_set) if wants_cancel else target(report)
                 if cancel.is_set():
                     raise JobCancelled()
-                job['state'] = 'done'
-                job['progress'] = 1.0
-                job['stage'] = 'done'
             except JobCancelled:
-                job['state'] = 'cancelled'
-                job['stage'] = 'cancelled'
+                outcome = 'cancelled'
                 job['detail'] = 'stopped before the next model call'
             except Exception as error:              # surfaced, never swallowed
-                job['state'] = 'error'
+                outcome = 'error'
                 job['error'] = f'{type(error).__name__}: {error}'
                 job['traceback'] = traceback.format_exc()[-2000:]
+            # The only duration a build or a retrieval has: neither produces a
+            # `RunResult` to carry one.
+            job['seconds'] = round(time.time() - began, 2)
+            # Recorded here rather than in each route, so a route added later is
+            # in the ledger by having been run — and recorded *before* the state
+            # goes terminal, because both frontends and the Inspector poll a job
+            # until it stops running: a row written after `state = 'done'` is a
+            # row a follower can look for and miss.
+            try:
+                ledger.record(job, outcome)
+            except Exception as error:
+                # A ledger records the work; it is never a condition of it. A
+                # judged run costs hours, and a database that cannot be opened
+                # must not turn one into an error over a result nobody can read.
+                # Reported on the job rather than swallowed — a bookkeeper that
+                # fails silently is worse than one that fails.
+                job['ledger_error'] = f'{type(error).__name__}: {error}'
+            job['state'] = outcome
+            if outcome == 'done':
+                job['progress'] = 1.0
+                job['stage'] = 'done'
+            elif outcome == 'cancelled':
+                job['stage'] = 'cancelled'
 
         threading.Thread(target=run, daemon=True).start()
         return job_id
@@ -233,16 +265,33 @@ def create_app() -> FastAPI:
                 'llm_model': settings.llm_model,
                 'ollama_base_url': settings.ollama_base_url,
                 'ragas': ragas_eval.availability(settings).as_dict(),
-                # Where an experiment lives and where its one durable artifact
+                # Where an experiment lives, and the two places its account
                 # lands. Stated positively because the panel used to badge a
                 # Chroma database here: a reader needs to know the index is
                 # thrown away with the process, not merely that no service is
                 # named.
                 'storage': {'index': 'memory',
-                            'runs': str(RUNS_DIR.relative_to(ROOT))},
+                            'runs': str(RUNS_DIR.relative_to(ROOT)),
+                            # A third location, and the newest: one row per
+                            # finished experiment. Named for the same reason the
+                            # other two are — a place data is kept that the page
+                            # does not name is a place nobody knows to look in,
+                            # or to clear out.
+                            'experiments': _relative(ledger.db_path())},
             },
             'indexes': registry.known(),
         }
+
+    def _with_backend(cfg: LabConfig, run_settings) -> dict:
+        """A job's config, plus the chat backend it will actually run on.
+
+        The *resolved* provider, not the payload's request: '' means "follow the
+        lab's boot backend", and a ledger row saying '' would leave the one fact
+        that separates a measurement from a rehearsal unrecorded. `fake` answers
+        and judges without ever failing, so a run on it produces a complete set
+        of confident numbers that measured nothing — `sweep.py` refuses to start
+        there; a record cannot refuse, so it names the backend."""
+        return cfg.to_dict() | {'provider': run_settings.provider}
 
     def _accepted(job_id: str) -> JSONResponse:
         """202, not 200: the work was accepted, not done, so the body is a
@@ -308,7 +357,7 @@ def create_app() -> FastAPI:
                 'traces': result.traces,
                 'chunks_by_session': result.chunks_by_session}
 
-        return _accepted(jobs.start('run', work, config=cfg.to_dict()))
+        return _accepted(jobs.start('run', work, config=_with_backend(cfg, run_settings)))
 
     @app.post('/api/retrievals')
     def start_retrieval(payload: dict):
@@ -339,7 +388,8 @@ def create_app() -> FastAPI:
                 balance=payload.get('balance') or 'stride',
                 progress=report, cancelled=check_cancelled)
 
-        return _accepted(jobs.start('retrieve', work, config=cfg.to_dict()))
+        return _accepted(jobs.start('retrieve', work,
+                                    config=_with_backend(cfg, run_settings)))
 
     @app.get('/api/jobs')
     def list_jobs():
@@ -359,6 +409,25 @@ def create_app() -> FastAPI:
     @app.get('/api/evaluations')
     def evaluations(limit: int = 50):
         return {'runs': evaluate.list_runs(limit)}
+
+    @app.get('/api/experiments')
+    def experiments(limit: int = 200):
+        """Everything this lab has ever finished, newest first.
+
+        Beside the leaderboard rather than inside it, deliberately. The
+        leaderboard ranks judged runs on a mean over questions, and an index
+        build has no questions and no score — a numbered table it appeared in
+        would be making a rank claim about work that measured nothing. Same rule
+        `leaderboard.group` already keeps: group first, rank second, and never
+        rank across kinds."""
+        return {'experiments': ledger.experiments(limit)}
+
+    @app.get('/api/experiments/{experiment_id}')
+    def experiment_detail(experiment_id: str):
+        found = ledger.experiment(experiment_id)
+        if found is None:
+            raise HTTPException(404, 'unknown experiment')
+        return found
 
     @app.get('/api/evaluations/{run_id}')
     def evaluation_detail(run_id: str):
@@ -432,7 +501,8 @@ def create_app() -> FastAPI:
                    | {'models': roles.as_dict(), 'trace': trace,
                       'question_id': question_id})
 
-        return _accepted(jobs.start('query', work, config=cfg.to_dict()))
+        return _accepted(jobs.start('query', work,
+                                    config=_with_backend(cfg, run_settings)))
 
     @app.get('/api/questions')
     def questions(limit: int = 200):

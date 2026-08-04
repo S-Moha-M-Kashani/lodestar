@@ -3210,6 +3210,14 @@ try:
         check("raglab: the panel no longer asks one question itself",
               page.locator("#raglab-ask").count() == 0
               and page.locator("#raglab-question").count() == 0)
+        # And it belongs at the end of the buttons you press to run something:
+        # the Inspector is where you go *after* an experiment, so it reads as the
+        # last step in the row rather than as a second heading above it.
+        check("raglab: the Inspector link ends the run-button row",
+              page.locator(".rag-actions #raglab-inspector-link").count() == 1
+              and page.evaluate(
+                  "() => document.querySelector('.rag-actions').lastElementChild.id")
+              == "raglab-inspector-link")
         page.screenshot(path=shot("raglab-inspector-link.png"))
 
         # A chosen strategy is what a developer changes twenty times in a sitting;

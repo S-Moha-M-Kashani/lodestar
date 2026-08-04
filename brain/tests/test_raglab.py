@@ -10,6 +10,7 @@ import json
 import os
 import re
 import socket
+import sqlite3
 import threading
 import time
 from dataclasses import replace
@@ -2284,8 +2285,12 @@ def test_options_advertises_no_vector_database(client):
     experiment's vectors live and where its one durable artifact lands."""
     caps = client.get('/api/options').json()['capabilities']
     assert [key for key in caps if 'chroma' in key] == []
-    assert caps['storage'] == {'index': 'memory',
-                               'runs': 'brain/tests/raglab/.runs'}
+    assert caps['storage']['index'] == 'memory'
+    assert caps['storage']['runs'] == 'brain/tests/raglab/.runs'
+    # A third location, for the same reason the other two are stated: the panel
+    # now writes a row per finished experiment, and a place data is kept that the
+    # page does not name is a place nobody knows to look in or clear out.
+    assert caps['storage']['experiments'].endswith('raglab.db')
 
 
 # This is an integration test.
@@ -3796,6 +3801,13 @@ def test_a_second_job_is_refused_in_readable_english(client):
         detail = second.json()['detail']
         assert 'a index' not in detail
         assert 'an index job is already running' in detail
+    # Drained before returning, because the client is module-scoped: this is the
+    # one test that deliberately starts a job it does not want, and leaving it
+    # running hands the next test a 409 from work nobody there asked for. It read
+    # as a bug in whatever had most recently slowed a job down by a millisecond.
+    for res in (first, second):
+        if res.status_code == 202:
+            _finished(client, res.json()['job_id'])
 
 
 # This is an integration test.
@@ -4426,3 +4438,207 @@ def test_the_panel_offers_retrieve_and_the_production_preset():
     html = (STATIC / 'index.html').read_text(encoding='utf-8')
     assert 'id="retrieve-selected"' in html
     assert 'id="use-production"' in html
+
+
+# --- the experiment ledger (raglab.db) -------------------------------------
+
+# This is an integration test: a real SQLite file on a temp path.
+def test_every_experiment_the_lab_runs_lands_in_the_ledger(client, tmp_path,
+                                                           monkeypatch):
+    """Three experiments, three rows — and until now two of the three left no
+    trace at all.
+
+    Only `/api/evaluations` wrote anything down, so an index build and a
+    retrieval were work that happened and then could not be asked about. The
+    ledger records every job the lab *finishes*, which is what makes "what have
+    I already tried?" a question with an answer after the process that tried it
+    is gone.
+    """
+    monkeypatch.setenv('RAGLAB_DB', str(tmp_path / 'raglab.db'))
+    index = {'chunker': 'session', 'embedder': 'ascii-hash'}
+    retrieval_cfg = {'retriever': 'hybrid-rrf', 'reranker': 'none',
+                     'grader': 'none', 'k': 3, 'rerank_depth': 20,
+                     'time_filter': False, 'multi_query': False}
+
+    built = client.post('/api/indexes', json={'index': index})
+    assert _finished(client, built.json()['job_id'])['state'] == 'done'
+    got = client.post('/api/retrievals', json={
+        'index': index, 'retrieval': retrieval_cfg, 'limit': 2,
+        'balance': 'stride'})
+    assert _finished(client, got.json()['job_id'])['state'] == 'done'
+    ran = client.post('/api/evaluations', json={
+        'index': index, 'retrieval': retrieval_cfg,
+        'generation': {'answerer': 'extractive'}, 'label': 'the ledger',
+        'limit': 2, 'balance': 'stride', 'ragas_mode': 'off'})
+    run_job = _finished(client, ran.json()['job_id'], timeout=120.0)
+    assert run_job['state'] == 'done', run_job.get('error')
+
+    rows = client.get('/api/experiments').json()['experiments']
+    # Newest first, like every other listing the lab serves.
+    assert [row['kind'] for row in rows[:3]] == ['run', 'retrieve', 'index']
+    evaluation, retrieved, build = rows[0], rows[1], rows[2]
+
+    # An evaluation is identified by its run id, never by its job id: the ledger
+    # row and the JSON file the leaderboard reads are then the same measurement,
+    # each checkable against the other.
+    assert evaluation['experiment_id'] == run_job['result']['run_id']
+    assert evaluation['label'] == 'the ledger'
+    assert evaluation['n_questions'] == 2 and evaluation['state'] == 'done'
+    assert evaluation['seconds'] > 0
+    # Recorded before the job goes terminal, so a follower that sees 'done' can
+    # never look for the row and miss it.
+    assert evaluation['started_at']
+    # `ragas_mode='off'` judged nothing, and an unjudged row carries no score
+    # rather than a zero — the rule the leaderboard already keeps, because a
+    # fabricated 0.0 would rank below every real row and read as a measurement.
+    assert evaluation['decision'] is None
+    assert evaluation['decision_stderr'] is None
+
+    # A retrieval scored nothing either, but it did choose a sample, and which
+    # questions it covered is the whole point of having run it.
+    assert retrieved['n_questions'] == 2 and retrieved['decision'] is None
+    # An index build has no sample at all: it is a fact about the corpus.
+    assert build['n_questions'] == 0 and build['decision'] is None
+
+    # Every row says which index it was over, so the panel's table needs no
+    # per-kind branch to render one.
+    for row in rows[:3]:
+        assert row['chunker'] == 'session'
+        assert row['embedder'] == 'ascii-hash'
+        assert row['experiment_id']
+
+    # But a build's row stops there. Its job config carries a whole LabConfig, so
+    # the retrieval group is populated with defaults the panel happened to be
+    # showing and no part of a build reads — recorded, they would put a reranker
+    # on a row that never retrieved anything, and a reader comparing rows would
+    # attribute a chunk count to it. Same reason `provider` is blank: no chat
+    # model is involved in chunking, not even for contextual headers.
+    assert build['retriever'] == '' and build['reranker'] == ''
+    assert build['grader'] == '' and build['answerer'] == ''
+    assert build['provider'] == ''
+    # The two that did retrieve say so, and say where the calls went — the one
+    # field that separates a measurement from a rehearsal.
+    assert retrieved['retriever'] == 'hybrid-rrf'
+    assert evaluation['answerer'] == 'extractive'
+    assert evaluation['provider'] == 'fake', 'the resolved backend, not the ask'
+
+    assert (tmp_path / 'raglab.db').exists(), 'the ledger is one SQLite file'
+
+
+# This is an integration test.
+def test_the_ledger_explains_a_row_without_storing_the_corpus(client, tmp_path,
+                                                              monkeypatch):
+    """"With all the details" means the details of the *experiment*.
+
+    So the full config, the per-question rows and the traced candidate ranks are
+    all kept — that is what makes a row explicable a month later. The chunk text
+    is not: it is a property of the index config, byte-identical across every
+    experiment that shares a fingerprint, and rebuilt exactly by re-running the
+    build. Storing it per row would store the whole corpus once per experiment.
+    """
+    monkeypatch.setenv('RAGLAB_DB', str(tmp_path / 'raglab.db'))
+    index = {'chunker': 'session', 'embedder': 'ascii-hash'}
+    retrieval_cfg = {'retriever': 'hybrid-rrf', 'reranker': 'none',
+                     'grader': 'none', 'k': 3, 'rerank_depth': 20,
+                     'time_filter': False, 'multi_query': False}
+    ran = client.post('/api/evaluations', json={
+        'index': index, 'retrieval': retrieval_cfg,
+        'generation': {'answerer': 'extractive'}, 'limit': 2,
+        'balance': 'stride', 'ragas_mode': 'off'})
+    job = _finished(client, ran.json()['job_id'], timeout=120.0)
+    assert job['state'] == 'done', job.get('error')
+    run_id = job['result']['run_id']
+
+    stored = client.get(f'/api/experiments/{run_id}').json()
+    assert stored['experiment_id'] == run_id
+    detail = stored['detail']
+    assert detail['config']['index']['chunker'] == 'session'
+    assert detail['config']['retrieval']['k'] == 3
+    assert detail['summary'] == job['result']['summary']
+    assert [row['id'] for row in detail['rows']] == \
+        [row['id'] for row in job['result']['rows']]
+    assert detail['selection']['n'] == 2
+    assert 'chunks_by_session' not in detail
+
+    # A retrieval's detail is its traces: the ranks at every step are the only
+    # thing it produced, so dropping them would leave a row that records that
+    # something ran and nothing about what it found.
+    got = client.post('/api/retrievals', json={
+        'index': index, 'retrieval': retrieval_cfg, 'limit': 2,
+        'balance': 'stride'})
+    retrieval_job = _finished(client, got.json()['job_id'])
+    assert retrieval_job['state'] == 'done', retrieval_job.get('error')
+    newest = client.get('/api/experiments').json()['experiments'][0]
+    kept = client.get(f"/api/experiments/{newest['experiment_id']}").json()['detail']
+    assert kept['questions'][0]['trace']['candidates']
+    assert 'chunks_by_session' not in kept
+
+    assert client.get('/api/experiments/no-such-experiment').status_code == 404
+
+
+# This is an integration test.
+def test_a_ledger_that_cannot_be_written_does_not_lose_the_experiment(
+        client, monkeypatch):
+    """The ledger records the work; it is never a condition of it.
+
+    A judged run costs hours, and an unwritable database must not be able to
+    turn one into an error the panel reports over a result nobody can read. This
+    is the same call `ragas_eval.JudgeWatch` makes about its progress counter: a
+    bookkeeper must not be able to break the thing it books.
+    """
+    from .raglab import ledger
+
+    def refuse(*_args, **_kwargs):
+        raise sqlite3.OperationalError('unable to open database file')
+
+    monkeypatch.setattr(ledger, 'connect', refuse)
+    res = client.post('/api/indexes', json={
+        'index': {'chunker': 'session', 'embedder': 'ascii-hash'}})
+    job = _finished(client, res.json()['job_id'])
+    assert job['state'] == 'done', job.get('error')
+    assert job['result']['chunks'] > 0
+
+
+# This is a unit test.
+def test_the_ledger_lives_beside_the_test_data_and_is_never_backed_up():
+    """Where a `.db` goes in this repo is a settled question, and the answer is
+    not "next to the code that writes it".
+
+    `databases/real/` is the only folder `npm run backup` walks and the only one
+    holding a person's own record; `databases/test/` is disposable by
+    definition. Lab experiments are reproducible from the fixtures and specific
+    to one machine, so they belong in the second — and putting them there means
+    the backup script needs no exception, which is a rule that cannot be
+    forgotten rather than one that has to be remembered.
+    """
+    from .raglab import ledger
+
+    default = ledger.db_path(env={})
+    assert default == config.ROOT / 'databases' / 'test' / 'raglab.db'
+    assert 'real' not in default.parts
+    # Overridable, which is what lets the suite guard itself in conftest.
+    assert ledger.db_path(env={'RAGLAB_DB': '/tmp/x.db'}) == Path('/tmp/x.db')
+
+
+# This is an integration test.
+def test_the_panel_lists_every_experiment_beside_the_ranked_runs(client):
+    """The leaderboard ranks judged runs and must keep doing exactly that — an
+    index build has no decision score, and a row that cannot be ranked has no
+    business in a numbered table. So the ledger is a second table beside it,
+    listing everything that ran."""
+    html = client.get('/').text
+    assert 'id="board"' in html, 'the ranked leaderboard stays'
+    assert 'id="experiments"' in html
+    assert '/api/experiments' in html
+
+
+# This is a unit test: the served panel's own markup.
+def test_the_panel_ends_its_run_buttons_with_the_inspector(client):
+    """The door to :9003 belongs at the end of the row you press to run
+    something, not above it: it is where you go *after* an experiment, so it
+    reads as the last step rather than a second heading."""
+    html = client.get('/').text
+    assert html.index('id="use-production"') < html.index('id="open-inspector"')
+    anchor = html[html.index('id="open-inspector"') - 200:
+                  html.index('id="open-inspector"') + 200]
+    assert 'right' in anchor, 'the link sits at the far right of the row'

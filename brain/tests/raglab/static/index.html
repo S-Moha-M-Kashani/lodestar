@@ -63,7 +63,11 @@
     padding: .85rem; box-shadow: var(--shadow);
   }
   .grow { flex: 1 1 300px; min-width: 280px; }
-  .full { flex: 1 1 100%; }
+  /* min-width:0 is what makes the scroll containers below actually contain: a
+     flex item defaults to min-width:auto, so a full-width card grows to its
+     widest child — the eighteen-column leaderboard — and an overflow rule inside
+     it never engages, because there is nothing left to overflow. */
+  .full { flex: 1 1 100%; min-width: 0; }
   label { display: block; margin: .45rem 0 .1rem; color: var(--ink-soft);
           font-size: .74rem; text-transform: uppercase; letter-spacing: .07em; }
   select, input[type=number], input[type=text], textarea {
@@ -130,6 +134,12 @@
   .pill { font-size: .66rem; padding: 0 .3rem; border: 1px solid var(--rule);
           border-radius: 8px; color: var(--ink-soft); }
   .right { margin-left: auto; }
+  /* The two widest tables scroll inside themselves rather than dragging the whole
+     page sideways. The leaderboard is eighteen columns and the ledger fifteen, and
+     neither can honestly be narrowed: every column is a knob you compare rows on.
+     So the overflow is contained where it belongs — at 390px the page still reads
+     top to bottom and the table is swiped across. */
+  #board, #experiments { overflow-x: auto; }
   .hidden { display: none; }
   /* A door to another service, so it looks like a link and not like one of this
      panel's own run buttons. */
@@ -148,16 +158,15 @@
        question you ask before you start changing knobs. -->
   <!-- The lab measures; the Inspector shows why. It is a separate service on its
        own port, so without a door named here :9003 is something you have to
-       already know about. Opens in a tab of its own, because the two are meant
-       to be read side by side. -->
-  <div class="inline" style="margin-top:.5rem">
-    <a class="lab-link" id="open-inspector" href="http://localhost:9003/"
-       target="_blank" rel="noopener">Open the Inspector (:9003) &rarr;</a>
-  </div>
+       already know about. It sits at the far right of the row you press to run
+       something, because it is where you go *after* an experiment — and it opens
+       in a tab of its own, since the two are meant to be read side by side. -->
   <div class="inline" style="margin-top:.5rem">
     <button class="ghost" id="use-production"
       title="Fill every setting with the shipped Assistant's own, then build and retrieve. Downloads the real Persian embedder (~2.2 GB) on first use.">Use the real assistant's settings, then run</button>
     <span class="muted" id="productionNote" style="font-size:.74rem"></span>
+    <a class="lab-link right" id="open-inspector" href="http://localhost:9003/"
+       target="_blank" rel="noopener">Open the Inspector (:9003) &rarr;</a>
   </div>
   <details style="margin-top:.4rem">
     <summary>What the numbers said last time (measured on this fixture, 2026-07-29 — re-run to confirm)</summary>
@@ -330,6 +339,23 @@
   <section class="card full">
     <h2>Leaderboard</h2>
     <div id="board"></div>
+  </section>
+
+  <!-- Everything that ran, beside the ranking rather than inside it. An index
+       build has no questions and no decision score, so a numbered table it
+       appeared in would be making a rank claim about work that measured
+       nothing — the same rule leaderboard.py keeps: group first, rank second.
+       Rows come from raglab.db, so this survives a restart of the lab. -->
+  <section class="card full">
+    <h2>Every experiment <span class="right muted" id="experimentsMeta"></span></h2>
+    <p class="muted" style="font-size:.74rem;margin:.2rem 0 .6rem">
+      One row per finished index build, retrieval and evaluation, newest first.
+      <b>Backend</b> is where the model calls actually went: <code>fake</code>
+      answers and judges without ever failing, so those rows are a rehearsal of
+      the pipeline and not a measurement of it. Click an id for the full stored
+      detail.</p>
+    <div id="experiments"></div>
+    <div id="experimentDetail"></div>
   </section>
 
 </div>
@@ -642,7 +668,10 @@ async function boot() {
     badge(caps.ragas.llm_ready, `ragas LLM metrics ${caps.ragas.llm_ready ? 'ready' : 'off'}`),
     // Not a service badge: the index is process memory and is discarded with
     // the lab, so what a reader needs is where the run JSON lands.
-    `<span class="badge">index in memory · runs → ${caps.storage.runs}</span>`,
+    // …and where the record of every experiment lands, which is the one place
+    // here that survives a restart of the lab.
+    `<span class="badge">index in memory · runs → ${caps.storage.runs}`
+      + ` · experiments → ${escapeHtml(caps.storage.experiments || '')}</span>`,
   ].join('');
   if (caps.ragas.notes.length) {
     $('notes').innerHTML = caps.ragas.notes.map((n) => `<div class="note">${n}</div>`).join('');
@@ -650,6 +679,7 @@ async function boot() {
 
   renderIndexes(o.indexes);
   loadBoard();
+  loadExperiments();
 }
 
 function renderIndexes(indexes) {
@@ -675,6 +705,17 @@ async function poll(jobId, onDone) {
     if (job.state === 'running' || job.state === 'cancelling') { setTimeout(tick, 700); return; }
     $('cancel').disabled = true;
     delete $('cancel').dataset.jobId;
+    // Every job that stops running is a row in the ledger — including the ones
+    // that failed or were cancelled, which are the rows you most want to find
+    // later. Refreshed here, once, rather than per success path.
+    loadExperiments();
+    if (job.ledger_error) {
+      // The experiment survived; only its record failed. Said out loud, because
+      // a table quietly missing the run you just watched is worse than an error.
+      box.insertAdjacentHTML('beforeend',
+        `<div class="note">the experiment ran, but raglab.db could not be `
+        + `written: ${escapeHtml(job.ledger_error)}</div>`);
+    }
     if (job.state === 'cancelled') {
       box.innerHTML = '<div class="muted">experiment stopped; no further model calls were started</div>';
       return;
@@ -894,6 +935,80 @@ async function loadBoard() {
         Math.round(r.seconds)];
     }));
 }
+
+// Every experiment this lab has finished, from raglab.db — the one thing here
+// that outlives the process. Deliberately not ranked: a build and a retrieval
+// measure nothing, so numbering these rows would claim an ordering the work does
+// not support. What it answers instead is "what have I already tried, and did it
+// run on a real model?"
+async function loadExperiments() {
+  let rows = [];
+  try {
+    rows = (await api('/api/experiments')).experiments;
+  } catch (e) {
+    $('experiments').innerHTML = `<div class="note">${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  const kinds = {};
+  for (const r of rows) kinds[r.kind] = (kinds[r.kind] || 0) + 1;
+  $('experimentsMeta').textContent = rows.length
+    ? `${rows.length} recorded · ` + Object.entries(kinds)
+      .map(([kind, n]) => `${n} ${kind}`).join(', ')
+    : '';
+  if (!rows.length) {
+    $('experiments').innerHTML =
+      '<div class="muted">nothing recorded yet — build an index or run '
+      + 'something, and it lands here</div>';
+    return;
+  }
+  $('experiments').innerHTML = table(
+    ['when', 'kind', 'id', 'label', 'backend', 'chunker', 'embedder',
+      'retriever', 'reranker', 'grader', 'answerer', 'n', 'decision', 'state', 's'],
+    rows.map((r) => [
+      r.started_at,
+      `<span class="pill">${escapeHtml(r.kind)}</span>`,
+      `<a href="#" onclick="showExperiment('${escapeHtml(r.experiment_id)}');return false">`
+        + `${escapeHtml(r.experiment_id)}</a>`,
+      escapeHtml(r.label || ''),
+      // The one column that separates a measurement from a rehearsal, so it is
+      // marked rather than merely printed: on `fake` every LLM number on the row
+      // came from a stub that cannot fail.
+      r.provider === 'fake'
+        ? '<b title="a stub answered and judged every call: these numbers measure '
+          + 'nothing">fake</b>'
+        : escapeHtml(r.provider || '—'),
+      escapeHtml(r.chunker || '—'), escapeHtml(r.embedder || '—'),
+      escapeHtml(r.retriever || '—'), escapeHtml(r.reranker || '—'),
+      escapeHtml(r.grader || '—'), escapeHtml(r.answerer || '—'),
+      r.n_questions || '—',
+      // Blank, never 0, when nothing was judged — the leaderboard's own rule.
+      r.decision == null ? '—' : `<b>${fmt(r.decision)}</b>`
+        + (r.decision_stderr != null
+          ? ` <span class="stderr">± ${fmt(r.decision_stderr)}</span>` : ''),
+      r.state === 'done' ? 'done'
+        : `<b title="${escapeHtml(r.error || '')}">${escapeHtml(r.state)}</b>`,
+      Math.round(r.seconds),
+    ]));
+}
+
+// The whole stored payload for one experiment. "All the details" means the
+// experiment's: its config, its per-question rows, its traced ranks. The chunk
+// text is deliberately not in there — it belongs to the index fingerprint and
+// rebuilding reproduces it exactly.
+window.showExperiment = async (id) => {
+  const box = $('experimentDetail');
+  box.innerHTML = '<div class="muted">reading the ledger…</div>';
+  try {
+    const found = await api('/api/experiments/' + encodeURIComponent(id));
+    box.innerHTML = `<details open style="margin-top:.7rem">`
+      + `<summary>${escapeHtml(found.kind)} · ${escapeHtml(found.experiment_id)}`
+      + `${found.label ? ' · ' + escapeHtml(found.label) : ''}</summary>`
+      + `<pre style="white-space:pre-wrap;font-size:.7rem;max-height:30rem;overflow:auto">`
+      + `${escapeHtml(JSON.stringify(found.detail, null, 1))}</pre></details>`;
+  } catch (e) {
+    box.innerHTML = `<div class="note">${escapeHtml(e.message)}</div>`;
+  }
+};
 
 window.showRun = async (runId) => {
   renderResult(await api('/api/evaluations/' + runId));

@@ -5,12 +5,14 @@ cosmetic: only IndexConfig changes what is stored, so its fingerprint names the
 in-memory index. Retrieval and generation can then be swept for free against
 an index that is already built — which is what makes the settings panel usable.
 
-**There are no storage settings here, and that is the design.** An experiment's
-index lives in process memory (`store.MemoryVectors`) and its results in one
-JSON file per run under RUNS_DIR. The lab used to carry a Chroma url and its own
-database name, guarded by a check that refused 'lodestar'; a setting that does
-not exist is the stronger guard, because it cannot be pointed at real chat
-memory by a typo, a stale shell, or a command copied from an old README.
+**There is no *vector* storage setting here, and that is the design.** An
+experiment's index lives in process memory (`store.MemoryVectors`); its results
+go to one JSON file per run under RUNS_DIR and one row per finished experiment in
+`ledger.py`'s SQLite, whose only setting is the `RAGLAB_DB` path it reads for
+itself. The lab used to carry a Chroma url and its own database name, guarded by
+a check that refused 'lodestar'; a setting that does not exist is the stronger
+guard, because it cannot be pointed at real chat memory by a typo, a stale shell,
+or a command copied from an old README.
 """
 import hashlib
 import json
