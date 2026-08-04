@@ -219,10 +219,33 @@ def create_inspector_app() -> FastAPI:
                         'questions': rows}
             return None
 
-        index_view = view('index', ('chunks_by_session',))
+        def newest_chunks() -> dict | None:
+            """The chunks the lab's newest finished job actually used — whatever
+            kind of job it was.
+
+            Not `kind == 'index'`, which is the bug this replaced: a run builds
+            its index *implicitly*, so an experiment creates no index job, and
+            the chunks window kept showing whatever `Build` was last pressed. A
+            10-question semantic-drift experiment after an unrelated turn-pair
+            build displayed turn-pair chunks beside semantic-drift rankings with
+            nothing on screen admitting it. Every route that builds an index now
+            reports the chunks it used, so the rule is simply "the newest job
+            that produced any" and the two windows cannot disagree."""
+            for entry in jobs_index.get('jobs', []):
+                if entry.get('state') != 'done':
+                    continue
+                full = _lab_get(f"/api/jobs/{entry['id']}")
+                groups = ((full or {}).get('result') or {}).get('chunks_by_session')
+                if not groups:
+                    continue        # a query job, or a run from before this
+                return {'kind': entry.get('kind'), 'job_id': entry['id'],
+                        'config': full.get('config'),
+                        'chunks_by_session': groups}
+            return None
+
         query_view = view('query', ('trace', 'question', 'question_id', 'answer'))
         return {'lab': 'up', 'lab_url': lab_base_url(),
-                'index': index_view, 'query': query_view,
+                'index': newest_chunks(), 'query': query_view,
                 'retrieval': question_set()}
 
     return app

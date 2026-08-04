@@ -17,7 +17,7 @@ from . import corpus, embedding, metrics, models, pipeline, ragas_eval
 from .config import (BALANCES, DIFFICULTIES, RUNS_DIR, LabConfig, LabSettings)
 from .index import IndexRegistry, _lab_llm
 from .llm import lab_chat
-from .present import mark_gold
+from .present import chunks_by_session, mark_gold
 
 KEY_FACTS_PROMPT = (
     'You check whether an answer contains specific facts. The answer is in '
@@ -92,6 +92,12 @@ class RunResult:
     # artifact, and 112 questions of full candidate text is megabytes of data no
     # score is computed from. They travel in the job's result and die with it.
     traces: list = field(default_factory=list)
+    # The chunks this run retrieved *from*, for the same reason and with the same
+    # rule: absent from `as_dict`, so no chunk text reaches a run file. A run
+    # builds its index implicitly and creates no index job, so without this the
+    # Inspector's chunks window can only show whatever index job was last
+    # started — a different chunker beside these rankings, silently.
+    chunks_by_session: list = field(default_factory=list)
 
     def as_dict(self) -> dict:
         return {'run_id': self.run_id, 'label': self.label, 'config': self.config,
@@ -332,6 +338,10 @@ def run_retrieval(registry: IndexRegistry, ground_truth: dict, cfg: LabConfig,
                       'reused': index.stats.reused},
             'config': cfg.to_dict(),
             'models': roles.as_dict(),
+            # The chunks these rankings are over, reported by the run itself:
+            # it built the index implicitly, so there is no index job the
+            # Inspector could read them from.
+            'chunks_by_session': chunks_by_session(index),
             'questions': rows}
 
 
@@ -467,7 +477,9 @@ def run_eval(registry: IndexRegistry, ground_truth: dict, cfg: LabConfig,
                        summary=summary, rows=rows, ragas=ragas_report,
                        seconds=round(time.time() - started, 2),
                        started_at=started_at, notes=notes,
-                       selection=selection, traces=traces)
+                       selection=selection, traces=traces,
+                       chunks_by_session=(chunks_by_session(index)
+                                          if trace else []))
     save_run(result)
     return result
 

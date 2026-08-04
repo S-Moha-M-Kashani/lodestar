@@ -213,12 +213,19 @@ function renderFollow(body) {
   if (body.index) {
     if (body.index.job_id !== followed.indexJobId) {
       followed.indexJobId = body.index.job_id;
-      chunksCfg.textContent = formatConfig(body.index.config);
-      renderChunkGroups(document.getElementById('chunks-body'),
-                        body.index.chunks_by_session || []);
+      const groups = body.index.chunks_by_session || [];
+      const total = groups.reduce((n, g) => n + g.chunks.length, 0);
+      // Which run built these, because an experiment builds its own index: "the
+      // chunks the evaluation used" and "the chunks you last pressed Build on"
+      // are different claims and the reader has to be able to tell them apart.
+      const source = { run: 'the last evaluation', retrieve: 'the last retrieval run' }[body.index.kind]
+        || 'the last index build';
+      chunksCfg.textContent = `${total} chunks in ${groups.length} sessions, `
+        + `from ${source} — ${formatConfig(body.index.config)}`;
+      renderChunkGroups(document.getElementById('chunks-body'), groups);
     }
   } else {
-    chunksCfg.textContent = 'lab: up — no finished index job yet';
+    chunksCfg.textContent = 'lab: up — nothing built yet';
   }
 
   if (body.query) {

@@ -300,10 +300,13 @@ def create_app() -> FastAPI:
                 # and the trace is a recording of the same retrieval — the same
                 # Outcome reaches scoring either way, so no number can move.
                 trace=True, cancelled=check_cancelled)
-            # `traces` is added here rather than inside `as_dict`, which is what
+            # Both are added here rather than inside `as_dict`, which is what
             # `save_run` writes: the Inspector gets them over HTTP and the run
-            # file stays the summary the leaderboard reads.
-            return result.as_dict() | {'traces': result.traces}
+            # file stays the summary the leaderboard reads, with no trace and no
+            # chunk text in it.
+            return result.as_dict() | {
+                'traces': result.traces,
+                'chunks_by_session': result.chunks_by_session}
 
         return _accepted(jobs.start('run', work, config=cfg.to_dict()))
 

@@ -215,10 +215,17 @@ FAKE_RETRIEVE_JOB = {
 # key — the eval path scores as well as retrieves, so its rows live elsewhere.
 FAKE_RUN_JOB = {
     'id': 'run-fake-1', 'kind': 'run', 'state': 'done',
-    'config': {'retrieval': {'retriever': 'dense', 'k': 8}},
+    'config': {'index': {'chunker': 'semantic-drift',
+                         'embedder': 'sentence-transformers'},
+               'retrieval': {'retriever': 'dense', 'k': 8}},
     'result': {'run_id': '20260804-000000-abcdef', 'rows': [{'id': 'q-009'}],
                'traces': [{'question_id': 'q-009', 'question_fa': 'سوال نه؟',
-                           'trace': {'candidates': [FAKE_CANDIDATE]}}]}}
+                           'trace': {'candidates': [FAKE_CANDIDATE]}}],
+               # An evaluation builds its index implicitly, so it reports the
+               # chunks it used itself — there is no index job to read them from.
+               'chunks_by_session': [
+                   {'session_id': 'run-s1', 'date': '2026-02-02',
+                    'chunks': [{'id': 'run-s1-0', 'text': 'drifted chunk'}]}]}}
 
 # Newest first, the order the lab's own /api/jobs uses. Tests reassign this to
 # say which run happened last.
@@ -326,3 +333,35 @@ def test_follow_shows_one_table_per_selected_question(monkeypatch, fake_lab,
     monkeypatch.setattr(module, 'FAKE_ORDER', [FAKE_INDEX_JOB])
     body = client.get('/api/follow').json()
     assert body['lab'] == 'up' and body['retrieval'] is None
+
+
+# This is an integration test (FastAPI TestClient; the lab is a canned fake).
+def test_follow_shows_the_chunks_the_last_run_actually_used(monkeypatch,
+                                                           fake_lab, request):
+    """The two windows must describe the same pipeline.
+
+    An evaluation builds its index *implicitly*, so it creates no index job —
+    which meant the chunks window kept showing whatever `Build` was last pressed
+    while the retrieval window showed the experiment. Running a 10-question
+    semantic-drift experiment after an unrelated turn-pair build showed
+    turn-pair chunks beside semantic-drift rankings, with nothing on screen
+    admitting it. So the chunks come from the newest job that produced any,
+    whatever its kind."""
+    module = request.module
+    monkeypatch.setenv('RAGLAB_INSPECTOR_LAB_URL', fake_lab)
+    client = _client(monkeypatch)
+
+    # the exact shape that misled: the run is newer than the index build, and
+    # they name different chunkers
+    monkeypatch.setattr(module, 'FAKE_ORDER', [FAKE_RUN_JOB, FAKE_INDEX_JOB])
+    body = client.get('/api/follow').json()
+    assert body['index']['config']['index']['chunker'] == 'semantic-drift'
+    assert body['index']['chunks_by_session'][0]['session_id'] == 'run-s1'
+    # and both windows now agree about which index produced what is on screen
+    assert (body['index']['config']['index']['chunker']
+            == body['retrieval']['config']['index']['chunker'])
+
+    # an explicit build afterwards is the newest again, and wins
+    monkeypatch.setattr(module, 'FAKE_ORDER', [FAKE_INDEX_JOB, FAKE_RUN_JOB])
+    body = client.get('/api/follow').json()
+    assert body['index']['config']['index']['chunker'] == 'session'

@@ -4303,6 +4303,13 @@ def test_retrieval_only_covers_exactly_the_experiment_questions(client,
         [q['id'] for q in expected]
     assert result['selection']['n'] == 2
 
+    # The chunks it retrieved *from* travel with it. A run builds its index
+    # implicitly, so without this the Inspector's chunks window would keep
+    # showing whatever index job was last pressed — a different chunker than the
+    # one that produced these rows, with nothing on screen saying so.
+    groups = result['chunks_by_session']
+    assert sum(len(g['chunks']) for g in groups) == result['index']['chunks']
+
     first = result['questions'][0]
     assert first['question_fa'] == expected[0]['question_fa']
     # retrieval only: the generation step never ran, so there is no answer to
@@ -4344,9 +4351,17 @@ def test_a_traced_evaluation_scores_identically_and_leaves_traces_off_disk(
     assert [t['question_id'] for t in traces] == [row['id'] for row in result['rows']]
     assert all(t['trace']['candidates'] for t in traces)
 
+    # The chunks this run retrieved from, for the same reason `/api/retrievals`
+    # carries them: an evaluation builds its index implicitly and creates no
+    # index job, so this is the only way the Inspector can show the chunks the
+    # scores were actually computed over instead of an unrelated earlier build.
+    groups = result['chunks_by_session']
+    assert sum(len(g['chunks']) for g in groups) == result['index']['chunks']
+
     saved = json.loads((tmp_path / f"{result['run_id']}.json").read_text(
         encoding='utf-8'))
     assert 'traces' not in saved, 'traces must not reach the run file'
+    assert 'chunks_by_session' not in saved, 'chunk text must not reach the run file'
     assert saved['rows'] == result['rows']
 
     # The load-bearing half: the same config, untraced, produces the same rows
