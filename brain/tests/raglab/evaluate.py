@@ -17,6 +17,8 @@ from . import corpus, embedding, metrics, models, pipeline, ragas_eval
 from .config import (BALANCES, DIFFICULTIES, RUNS_DIR, LabConfig, LabSettings)
 from .index import IndexRegistry, _lab_llm
 from .llm import lab_chat
+from .present import (chunks_by_session, evidence_spans, gold_available,
+                      mark_gold, normalised_chunks)
 
 KEY_FACTS_PROMPT = (
     'You check whether an answer contains specific facts. The answer is in '
@@ -85,6 +87,18 @@ class RunResult:
     started_at: str = ''
     notes: list = field(default_factory=list)
     selection: dict = field(default_factory=dict)
+    # Per-question retrieval traces, for the Inspector (:9003) to show why a
+    # question scored the way it did. Deliberately **absent from `as_dict`**, so
+    # `save_run` cannot write them: a run file is the leaderboard's durable
+    # artifact, and 112 questions of full candidate text is megabytes of data no
+    # score is computed from. They travel in the job's result and die with it.
+    traces: list = field(default_factory=list)
+    # The chunks this run retrieved *from*, for the same reason and with the same
+    # rule: absent from `as_dict`, so no chunk text reaches a run file. A run
+    # builds its index implicitly and creates no index job, so without this the
+    # Inspector's chunks window can only show whatever index job was last
+    # started — a different chunker beside these rankings, silently.
+    chunks_by_session: list = field(default_factory=list)
 
     def as_dict(self) -> dict:
         return {'run_id': self.run_id, 'label': self.label, 'config': self.config,
@@ -259,12 +273,112 @@ def _reporter(progress):
     return lambda stage, fraction, detail='': progress(stage, fraction)
 
 
+def trace_row(question: dict, trace: dict,
+              gold_available: int | None = None) -> dict:
+    """One question's retrieval trace, gold-marked, in the shape the Inspector
+    renders a table from. Gold is the *ground truth's* verdict on a candidate,
+    never the pipeline's: `kept` already carries what the pipeline decided, and
+    keeping the two apart is the whole point of the table — a gold chunk that
+    was dropped is exactly what you are looking for.
+
+    `gold_available` is how many gold chunks existed to be found, which makes
+    the count a recall statement rather than a bare tally. It is passed in
+    because it is a property of the index, which this function does not hold;
+    a caller without one gets `None`, and the view says "1 gold" rather than
+    inventing a denominator."""
+    quotes = [ev['quote'] for ev in question.get('evidence', [])]
+    candidates = trace.get('candidates', [])
+    for candidate, gold in zip(candidates,
+                               mark_gold([c['text'] for c in candidates],
+                                         quotes)):
+        candidate['gold'] = gold
+        # Where to paint the evidence green. Computed for every candidate rather
+        # than only the gold ones, so a verbatim quote can never sit in a row
+        # that was not marked — the two would disagree and the page would show
+        # the disagreement instead of hiding it.
+        candidate['gold_spans'] = evidence_spans(candidate['text'], quotes)
+    return {'question_id': question['id'],
+            'question_fa': question['question_fa'],
+            'question_en': question.get('question_en', ''),
+            'type': question['type'], 'difficulty': question['difficulty'],
+            'answerable': bool(question.get('answerable')),
+            'gold_available': gold_available,
+            'trace': trace}
+
+
+def run_retrieval(registry: IndexRegistry, ground_truth: dict, cfg: LabConfig,
+                  settings: LabSettings, *, types: list[str] | None = None,
+                  limit: int | None = None, difficulty: list[str] | None = None,
+                  balance: str = 'stride', progress=None,
+                  cancelled=None) -> dict:
+    """Retrieval only, over the questions an experiment selected.
+
+    The middle step the panel could not do alone: build (or reuse) the index,
+    retrieve for each selected question with a full per-step trace, mark gold
+    against the ground truth — and stop. Nothing is answered, nothing is scored
+    and nothing is written to `.runs/`, because none of those is what this
+    answers: it exists to show *what came back and where it ranked*, which is
+    the loop you run twenty times while moving one knob.
+
+    The selection is `select_questions` with the same arguments `run_eval`
+    takes, deliberately: retrieval shown for questions the numbers were never
+    about would be worse than showing nothing."""
+    problems = cfg.validate() + models.provider_problems(cfg, settings)
+    if problems:
+        raise ValueError('; '.join(problems))
+    report = _reporter(progress)
+    check_cancelled = cancelled or (lambda: None)
+
+    check_cancelled()
+    index = registry.get(cfg.index, progress=lambda stage, f: report(stage, f * 0.4))
+    questions = select_questions(ground_truth, types, limit, difficulty, balance)
+    query_date = ground_truth['meta'].get('query_date', '2026-07-28')
+    llm = _lab_llm(settings)
+    roles = models.resolve(cfg, settings)
+
+    # Normalised once for the whole run: `gold_available` counts gold over every
+    # chunk in the index, and doing that per question would re-tokenise the
+    # corpus once per question for no new information.
+    norm_chunks = normalised_chunks(index)
+
+    rows = []
+    for i, question in enumerate(questions):
+        check_cancelled()
+        _outcome, trace = pipeline.retrieve_traced(
+            index, cfg.retrieval, question['question_fa'],
+            question.get('query_date', query_date), llm=llm, models=roles)
+        quotes = [ev['quote'] for ev in question.get('evidence', [])]
+        rows.append(trace_row(
+            question, trace,
+            gold_available=gold_available(index, quotes, norm_chunks)))
+        report('retrieving', 0.4 + 0.6 * (i + 1) / len(questions),
+               _question_note(i + 1, questions, question['difficulty']))
+    report('done', 1.0, 'done')
+    return {'selection': selection_note(questions, limit, balance),
+            'index': {'collection': index.stats.collection,
+                      'chunks': index.stats.chunks,
+                      'reused': index.stats.reused},
+            'config': cfg.to_dict(),
+            'models': roles.as_dict(),
+            # The chunks these rankings are over, reported by the run itself:
+            # it built the index implicitly, so there is no index job the
+            # Inspector could read them from.
+            'chunks_by_session': chunks_by_session(index),
+            'questions': rows}
+
+
 def run_eval(registry: IndexRegistry, ground_truth: dict, cfg: LabConfig,
              settings: LabSettings, *, types: list[str] | None = None,
              limit: int | None = None, difficulty: list[str] | None = None,
              balance: str = 'stride',
              ragas_mode: str = 'offline', ragas_limit: int | None = None,
-             workers: int = 1, progress=None, cancelled=None) -> RunResult:
+             workers: int = 1, trace: bool = False,
+             progress=None, cancelled=None) -> RunResult:
+    """`trace=True` records each question's per-step retrieval trace alongside
+    its row, so the Inspector is not blank after an evaluation. It records the
+    *same* retrieval: `retrieve_traced` fills a dict the plain path never looks
+    at and returns the identical `Outcome`, so no score can move because
+    tracing was asked for."""
     problems = cfg.validate() + models.provider_problems(cfg, settings)
     if problems:
         raise ValueError('; '.join(problems))
@@ -290,6 +404,10 @@ def run_eval(registry: IndexRegistry, ground_truth: dict, cfg: LabConfig,
     query_date = ground_truth['meta'].get('query_date', '2026-07-28')
     llm = _lab_llm(settings)
     roles = models.resolve(cfg, settings)
+    # Only needed by the traced path, where every question's gold count is taken
+    # over the whole index; normalised once so it is not re-tokenised per
+    # question. Empty when untraced, and then nothing reads it.
+    norm_chunks = normalised_chunks(index) if trace else []
     notes = list(index.stats.notes)
     # Which model ran which stage belongs in the run's own notes: comparing two
     # rows of the leaderboard without it compares two unknowns.
@@ -309,9 +427,20 @@ def run_eval(registry: IndexRegistry, ground_truth: dict, cfg: LabConfig,
 
     def handle(question: dict):
         check_cancelled()
-        outcome = pipeline.retrieve(index, cfg.retrieval, question['question_fa'],
-                                    question.get('query_date', query_date),
-                                    llm=llm, models=roles)
+        recorded = None
+        if trace:
+            outcome, tr = pipeline.retrieve_traced(
+                index, cfg.retrieval, question['question_fa'],
+                question.get('query_date', query_date), llm=llm, models=roles)
+            quotes = [ev['quote'] for ev in question.get('evidence', [])]
+            recorded = trace_row(
+                question, tr,
+                gold_available=gold_available(index, quotes, norm_chunks))
+        else:
+            outcome = pipeline.retrieve(index, cfg.retrieval,
+                                        question['question_fa'],
+                                        question.get('query_date', query_date),
+                                        llm=llm, models=roles)
         check_cancelled()
         outcome = pipeline.answer(outcome, cfg.generation, llm=llm, models=roles)
         check_cancelled()
@@ -321,9 +450,9 @@ def run_eval(registry: IndexRegistry, ground_truth: dict, cfg: LabConfig,
             check_cancelled()
             row['key_fact_coverage'] = judge_key_facts(llm, roles.judge, question,
                                                        outcome.answer)
-        return question, outcome, row
+        return question, outcome, row, recorded
 
-    pairs, rows = [], []
+    pairs, rows, traces = [], [], []
     results: list = []
     if workers > 1:
         # Reported as each question lands, not after all of them: with LLM
@@ -346,9 +475,11 @@ def run_eval(registry: IndexRegistry, ground_truth: dict, cfg: LabConfig,
             results.append(handle(question))
             report('scoring', 0.4 + 0.5 * (i + 1) / len(questions),
                    _question_note(i + 1, questions, question['difficulty']))
-    for question, outcome, row in results:
+    for question, outcome, row, recorded in results:
         pairs.append((question, outcome))
         rows.append(json_safe(row))
+        if recorded is not None:
+            traces.append(recorded)
     report('ragas', 0.92, 'judging')
 
     check_cancelled()
@@ -375,7 +506,9 @@ def run_eval(registry: IndexRegistry, ground_truth: dict, cfg: LabConfig,
                        summary=summary, rows=rows, ragas=ragas_report,
                        seconds=round(time.time() - started, 2),
                        started_at=started_at, notes=notes,
-                       selection=selection)
+                       selection=selection, traces=traces,
+                       chunks_by_session=(chunks_by_session(index)
+                                          if trace else []))
     save_run(result)
     return result
 
@@ -388,6 +521,19 @@ def save_run(result: RunResult) -> None:
     # leaderboard rather than at the line that produced it.
     path.write_text(json.dumps(json_safe(result.as_dict()), ensure_ascii=False,
                                indent=1, allow_nan=False), encoding='utf-8')
+
+
+def count_runs() -> int:
+    """How many run files exist, whether or not they were listed.
+
+    Served beside a limited listing because the panel asked `/api/evaluations`
+    with no limit and showed the newest 50 of 164, calling that the leaderboard.
+    On 2026-08-04 the same run ranked 2nd on the page and 4th over the whole
+    directory and nothing on screen could explain the disagreement. A bounded
+    view has to say what it left out."""
+    if not RUNS_DIR.exists():
+        return 0
+    return sum(1 for _ in RUNS_DIR.glob('*.json'))
 
 
 def list_runs(limit: int = 50) -> list[dict]:

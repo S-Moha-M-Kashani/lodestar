@@ -1,9 +1,11 @@
 """The lab's vector store: process memory, and nothing else.
 
-An experiment is not a record. Its chunks, vectors, retrieved contexts and
-generated answers exist to produce one number and then stop being interesting,
-so they live for the process and are discarded with it. The only durable output
-of a run is the JSON file `evaluate.save_run` writes.
+An experiment's *material* is not a record. Its chunks, vectors, retrieved
+contexts and generated answers exist to produce one number and then stop being
+interesting, so they live for the process and are discarded with it. What is
+written down is the account of the run — the JSON file `evaluate.save_run`
+writes, and the row `ledger.py` records in `raglab.db` — never the vectors it
+ran over.
 
 That is why this module exists rather than a Chroma client. A database would
 survive a restart, which sounds like a saving and is actually a liability: a

@@ -36,6 +36,32 @@ def _the_lab_suite_does_not_read_the_machine():
 
 
 @pytest.fixture(autouse=True, scope='session')
+def _the_experiment_ledger_is_never_the_real_one(tmp_path_factory):
+    """No test may write into the lab's real `databases/test/raglab.db`.
+
+    Same arithmetic as the `.runs/` guard below, and the same lesson learned the
+    expensive way: every job the lab finishes records itself, so *every*
+    integration test that builds an index or scores anything would deposit a row
+    in the durable ledger. A ledger that is mostly suite leakage answers "what
+    have I tried?" with noise, which is the one question it exists to answer.
+
+    An environment variable rather than a patched module attribute, because
+    `ledger.db_path()` resolves the path per call: nothing here has to import the
+    lab, so this fixture cannot break the whole suite while the module it guards
+    is being written, and a test wanting its own empty database sets the same
+    variable with `monkeypatch.setenv`.
+    """
+    saved = os.environ.get('RAGLAB_DB')
+    os.environ['RAGLAB_DB'] = str(
+        tmp_path_factory.mktemp('raglab-ledger') / 'raglab.db')
+    yield
+    if saved is None:
+        os.environ.pop('RAGLAB_DB', None)
+    else:
+        os.environ['RAGLAB_DB'] = saved
+
+
+@pytest.fixture(autouse=True, scope='session')
 def _runs_dir_is_never_the_real_one(tmp_path_factory):
     """No test may write into the lab's real `.runs/`.
 

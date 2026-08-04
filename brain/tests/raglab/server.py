@@ -15,6 +15,7 @@ one answers 202 with a job id and a Location, and the panel polls that. One job 
 would fight over the same index and produce numbers neither of them describes.
 """
 import threading
+import time
 import traceback
 import uuid
 import inspect
@@ -23,14 +24,15 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 
-from . import (embedding, evaluate, explain, metrics, models, pipeline,
+from . import (embedding, evaluate, explain, ledger, metrics, models, pipeline,
                ragas_eval, retrieval)
 from .config import (ANSWERERS, BALANCES, CHUNKERS, DEPENDENCIES,
-                     DIFFICULTIES, EMBEDDERS, GRADERS, RERANKERS,
-                     RETRIEVERS, ROOT, RUNS_DIR, STEPS, LabConfig,
+                     DIFFICULTIES, EMBEDDERS, GRADERS, PRODUCTION_CONFIG,
+                     RERANKERS, RETRIEVERS, ROOT, RUNS_DIR, STEPS, LabConfig,
                      load_lab_settings, settings_for_provider)
 from .corpus import load_diary, load_ground_truth
 from .index import IndexRegistry, _lab_llm
+from .present import chunks_by_session, mark_gold
 
 STATIC = Path(__file__).resolve().parent / 'static'
 
@@ -39,16 +41,39 @@ class JobCancelled(Exception):
     """A cooperative stop requested from the RAG Lab panel."""
 
 
+def _relative(path: Path) -> str:
+    """A path to show in the panel: repo-relative when it is inside the repo,
+    absolute when it is not. `RAGLAB_DB` can point anywhere — the suite points it
+    at a temp file — and `relative_to` raises rather than shrugging."""
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path)
+
+
 class Jobs:
     """In-process job table. A lab restart loses running jobs; finished runs are
     on disk, which is the part that matters."""
 
-    def __init__(self):
+    def __init__(self, record=None):
+        """`record(job, state)` is called once per finished job, or nothing is.
+
+        A hook rather than a direct call to `ledger.record`, because the
+        **Inspector runs this same class** (`inspector.py` does `from .server
+        import Jobs`) and the Inspector is read-only. With the recording wired in
+        here unconditionally, its manual chunk build silently became a second
+        writer of the lab's experiment ledger from a second OS process — observed
+        2026-08-04, a `kind: chunks` row from :9003 in :9002's raglab.db. A
+        scratch build for looking at chunks is not an experiment anybody ranks,
+        and "writes nothing" is the property that makes it safe to point at a
+        running lab. So the service that owns the ledger passes the recorder, and
+        the one that does not owns nothing to pass."""
         self.lock = threading.Lock()
+        self.record = record
         self.jobs: dict[str, dict] = {}
         self.current: str | None = None
 
-    def start(self, kind: str, target) -> str:
+    def start(self, kind: str, target, config: dict | None = None) -> str:
         with self.lock:
             if self.current and self.jobs[self.current]['state'] in ('running', 'cancelling'):
                 # One message per state, because they ask different things of the
@@ -67,7 +92,7 @@ class Jobs:
             job_id = uuid.uuid4().hex[:10]
             self.jobs[job_id] = {'id': job_id, 'kind': kind, 'state': 'running',
                                  'stage': 'starting', 'progress': 0.0,
-                                 'detail': '',
+                                 'detail': '', 'config': config,
                                  'result': None, 'error': None,
                                  'cancel_requested': False,
                                  '_cancel': threading.Event()}
@@ -88,6 +113,8 @@ class Jobs:
 
         def run() -> None:
             job = self.jobs[job_id]
+            began = time.time()
+            outcome = 'done'
             try:
                 # Targets that make external calls receive a cancellation probe.
                 # Keep one-argument targets working for small callers and tests.
@@ -95,17 +122,37 @@ class Jobs:
                 job['result'] = target(report, cancel.is_set) if wants_cancel else target(report)
                 if cancel.is_set():
                     raise JobCancelled()
-                job['state'] = 'done'
-                job['progress'] = 1.0
-                job['stage'] = 'done'
             except JobCancelled:
-                job['state'] = 'cancelled'
-                job['stage'] = 'cancelled'
+                outcome = 'cancelled'
                 job['detail'] = 'stopped before the next model call'
             except Exception as error:              # surfaced, never swallowed
-                job['state'] = 'error'
+                outcome = 'error'
                 job['error'] = f'{type(error).__name__}: {error}'
                 job['traceback'] = traceback.format_exc()[-2000:]
+            # The only duration a build or a retrieval has: neither produces a
+            # `RunResult` to carry one.
+            job['seconds'] = round(time.time() - began, 2)
+            # Recorded here rather than in each route, so a route added later is
+            # in the ledger by having been run — and recorded *before* the state
+            # goes terminal, because both frontends and the Inspector poll a job
+            # until it stops running: a row written after `state = 'done'` is a
+            # row a follower can look for and miss.
+            try:
+                if self.record is not None:
+                    self.record(job, outcome)
+            except Exception as error:
+                # A ledger records the work; it is never a condition of it. A
+                # judged run costs hours, and a database that cannot be opened
+                # must not turn one into an error over a result nobody can read.
+                # Reported on the job rather than swallowed — a bookkeeper that
+                # fails silently is worse than one that fails.
+                job['ledger_error'] = f'{type(error).__name__}: {error}'
+            job['state'] = outcome
+            if outcome == 'done':
+                job['progress'] = 1.0
+                job['stage'] = 'done'
+            elif outcome == 'cancelled':
+                job['stage'] = 'cancelled'
 
         threading.Thread(target=run, daemon=True).start()
         return job_id
@@ -116,6 +163,14 @@ class Jobs:
             raise HTTPException(404, 'unknown job')
         # The event is an implementation detail, not JSON the browser can read.
         return {key: value for key, value in job.items() if key != '_cancel'}
+
+    def list(self) -> list[dict]:
+        """Newest first, and deliberately thin: an index of what has run
+        (id/kind/state/config) for a follower like the Inspector to scan, not
+        a dump of every job's result or its traceback."""
+        return [{'id': job['id'], 'kind': job['kind'], 'state': job['state'],
+                 'config': job.get('config')}
+                for job in reversed(list(self.jobs.values()))]
 
     def cancel(self, job_id: str) -> dict:
         job = self.jobs.get(job_id)
@@ -135,12 +190,21 @@ def create_app() -> FastAPI:
     diary = load_diary()
     ground_truth = load_ground_truth()
     registry = IndexRegistry(settings, diary)
-    jobs = Jobs()
+    # This service owns the ledger, so this is the one place a recorder is passed.
+    jobs = Jobs(record=ledger.record)
     app = FastAPI(title='Lodestar RAG Lab')
 
     @app.get('/')
     def panel():
         return FileResponse(STATIC / 'index.html')
+
+    @app.get('/sorttable.js')
+    def sorttable():
+        """The column sorter, the one file this panel and the Inspector share —
+        see `static/sorttable.js`. The only static file this service serves
+        separately: everything else about the panel is in the one page."""
+        return FileResponse(STATIC / 'sorttable.js',
+                            media_type='application/javascript')
 
     @app.get('/api/options')
     def options():
@@ -163,6 +227,11 @@ def create_app() -> FastAPI:
             # frontends is a rule that will disagree with itself.
             'dependencies': DEPENDENCIES,
             'defaults': LabConfig().to_dict(),
+            # The shipped Assistant's own settings, for the panel's one-click
+            # preset. Served rather than written into the frontend for the
+            # reason the mode dropdown is: a preset kept in a browser is a
+            # preset that will drift from the brain it claims to mirror.
+            'production': PRODUCTION_CONFIG,
             # The three steps, in pipeline order. The panel groups and colours
             # every control by these, so which step a thing belongs to is served
             # as a fact about the pipeline rather than guessed in the browser.
@@ -219,16 +288,33 @@ def create_app() -> FastAPI:
                 'llm_model': settings.llm_model,
                 'ollama_base_url': settings.ollama_base_url,
                 'ragas': ragas_eval.availability(settings).as_dict(),
-                # Where an experiment lives and where its one durable artifact
+                # Where an experiment lives, and the two places its account
                 # lands. Stated positively because the panel used to badge a
                 # Chroma database here: a reader needs to know the index is
                 # thrown away with the process, not merely that no service is
                 # named.
                 'storage': {'index': 'memory',
-                            'runs': str(RUNS_DIR.relative_to(ROOT))},
+                            'runs': str(RUNS_DIR.relative_to(ROOT)),
+                            # A third location, and the newest: one row per
+                            # finished experiment. Named for the same reason the
+                            # other two are — a place data is kept that the page
+                            # does not name is a place nobody knows to look in,
+                            # or to clear out.
+                            'experiments': _relative(ledger.db_path())},
             },
             'indexes': registry.known(),
         }
+
+    def _with_backend(cfg: LabConfig, run_settings) -> dict:
+        """A job's config, plus the chat backend it will actually run on.
+
+        The *resolved* provider, not the payload's request: '' means "follow the
+        lab's boot backend", and a ledger row saying '' would leave the one fact
+        that separates a measurement from a rehearsal unrecorded. `fake` answers
+        and judges without ever failing, so a run on it produces a complete set
+        of confident numbers that measured nothing — `sweep.py` refuses to start
+        there; a record cannot refuse, so it names the backend."""
+        return cfg.to_dict() | {'provider': run_settings.provider}
 
     def _accepted(job_id: str) -> JSONResponse:
         """202, not 200: the work was accepted, not done, so the body is a
@@ -251,9 +337,12 @@ def create_app() -> FastAPI:
                     'p95_chars': index.stats.p95_chars,
                     'embed_dim': index.stats.embed_dim,
                     'build_seconds': index.stats.build_seconds,
-                    'reused': index.stats.reused, 'notes': index.stats.notes}
+                    'reused': index.stats.reused, 'notes': index.stats.notes,
+                    # So a follower (the Inspector, :9003) can render what an
+                    # index job actually built without holding its own index.
+                    'chunks_by_session': chunks_by_session(index)}
 
-        return _accepted(jobs.start('index', work))
+        return _accepted(jobs.start('index', work, config=cfg.to_dict()))
 
     @app.post('/api/evaluations')
     def start_evaluation(payload: dict):
@@ -279,10 +368,58 @@ def create_app() -> FastAPI:
                 ragas_mode=payload.get('ragas_mode', 'offline'),
                 ragas_limit=payload.get('ragas_limit') or None,
                 workers=int(payload.get('workers', 1)), progress=report,
-                cancelled=check_cancelled)
-            return result.as_dict()
+                # Always traced: the Inspector must never be blank after a run,
+                # and the trace is a recording of the same retrieval — the same
+                # Outcome reaches scoring either way, so no number can move.
+                trace=True, cancelled=check_cancelled)
+            # Both are added here rather than inside `as_dict`, which is what
+            # `save_run` writes: the Inspector gets them over HTTP and the run
+            # file stays the summary the leaderboard reads, with no trace and no
+            # chunk text in it.
+            return result.as_dict() | {
+                'traces': result.traces,
+                'chunks_by_session': result.chunks_by_session}
 
-        return _accepted(jobs.start('run', work))
+        return _accepted(jobs.start('run', work, config=_with_backend(cfg, run_settings)))
+
+    @app.post('/api/retrievals')
+    def start_retrieval(payload: dict):
+        """Retrieval only, over the questions the eval card has selected.
+
+        Its own route rather than a flag on `/api/evaluations`, because it
+        answers a different question and costs a different amount: no model
+        answers anything, nothing is judged, and no run file is written — so it
+        is the step you can afford to repeat while moving one knob. It takes the
+        same selection arguments as an evaluation on purpose; retrieval shown
+        for questions the numbers were never about would mislead."""
+        cfg = LabConfig.from_dict(payload)
+        run_settings = settings_for_provider(settings,
+                                             payload.get('provider') or '')
+        problems = cfg.validate() + models.provider_problems(cfg, run_settings)
+        if problems:
+            raise HTTPException(400, '; '.join(problems))
+
+        def work(report, cancelled):
+            def check_cancelled():
+                if cancelled():
+                    raise JobCancelled()
+            return evaluate.run_retrieval(
+                registry, ground_truth, cfg, run_settings,
+                types=payload.get('types') or None,
+                difficulty=payload.get('difficulty') or None,
+                limit=payload.get('limit') or None,
+                balance=payload.get('balance') or 'stride',
+                progress=report, cancelled=check_cancelled)
+
+        return _accepted(jobs.start('retrieve', work,
+                                    config=_with_backend(cfg, run_settings)))
+
+    @app.get('/api/jobs')
+    def list_jobs():
+        """An index of every job this process has run — newest first, id/kind/
+        state/config only — so a follower (the Inspector) can find the newest
+        finished one of a kind without fetching every job's full result."""
+        return {'jobs': jobs.list()}
 
     @app.get('/api/jobs/{job_id}')
     def job_status(job_id: str):
@@ -294,7 +431,29 @@ def create_app() -> FastAPI:
 
     @app.get('/api/evaluations')
     def evaluations(limit: int = 50):
-        return {'runs': evaluate.list_runs(limit)}
+        # `total` beside the rows, because this listing is bounded and the browser
+        # cannot know how many runs it was not sent.
+        return {'runs': evaluate.list_runs(limit),
+                'total': evaluate.count_runs()}
+
+    @app.get('/api/experiments')
+    def experiments(limit: int = 200):
+        """Everything this lab has ever finished, newest first.
+
+        Beside the leaderboard rather than inside it, deliberately. The
+        leaderboard ranks judged runs on a mean over questions, and an index
+        build has no questions and no score — a numbered table it appeared in
+        would be making a rank claim about work that measured nothing. Same rule
+        `leaderboard.group` already keeps: group first, rank second, and never
+        rank across kinds."""
+        return {'experiments': ledger.experiments(limit)}
+
+    @app.get('/api/experiments/{experiment_id}')
+    def experiment_detail(experiment_id: str):
+        found = ledger.experiment(experiment_id)
+        if found is None:
+            raise HTTPException(404, 'unknown experiment')
+        return found
 
     @app.get('/api/evaluations/{run_id}')
     def evaluation_detail(run_id: str):
@@ -338,14 +497,38 @@ def create_app() -> FastAPI:
             llm = _lab_llm(run_settings)
             roles = models.resolve(cfg, run_settings)
             report('retrieving', 0.75, question[:80])
-            outcome = pipeline.retrieve(index, cfg.retrieval, question,
-                                        query_date, llm=llm, models=roles)
+            # Traced rather than plain `retrieve`: the per-step ranks are what
+            # the Inspector's followed retrieval table needs, and this is the
+            # one place a followed run and a manual /api/trace one share ranks
+            # at all.
+            outcome, trace = pipeline.retrieve_traced(
+                index, cfg.retrieval, question, query_date,
+                llm=llm, models=roles)
             report('answering', 0.9)
             outcome = pipeline.answer(outcome, cfg.generation, llm=llm,
                                       models=roles)
-            return outcome.as_dict() | {'models': roles.as_dict()}
+            # Exact match only, never fuzzy: a question that happens to equal
+            # a ground-truth one gets its gold marks, everything else is
+            # plainly ungraded rather than guessed at.
+            gt_question = next((q for q in ground_truth['questions']
+                                if q['question_fa'] == question), None)
+            if gt_question is not None:
+                quotes = [ev['quote'] for ev in gt_question.get('evidence', [])]
+                gold_flags = mark_gold(
+                    [c['text'] for c in trace['candidates']], quotes)
+                question_id = gt_question['id']
+            else:
+                gold_flags = [False] * len(trace['candidates'])
+                question_id = None
+            for candidate, gold in zip(trace['candidates'], gold_flags):
+                candidate['gold'] = gold
+                candidate['question_id'] = question_id
+            return (outcome.as_dict()
+                   | {'models': roles.as_dict(), 'trace': trace,
+                      'question_id': question_id})
 
-        return _accepted(jobs.start('query', work))
+        return _accepted(jobs.start('query', work,
+                                    config=_with_backend(cfg, run_settings)))
 
     @app.get('/api/questions')
     def questions(limit: int = 200):
