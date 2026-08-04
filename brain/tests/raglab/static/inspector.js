@@ -107,21 +107,52 @@ document.getElementById('build-chunks').addEventListener('click', async () => {
 });
 
 // --- Retrieval: shared render ---
-function renderRetrievalRows(candidates) {
-  const table = document.querySelector('.retrieval-table');
-  const rows = document.getElementById('retrieval-rows');
-  table.hidden = false;
-  rows.innerHTML = '';
-  for (const c of candidates) {
+// One candidate per row, cloned from the page's own template so the columns are
+// written once and every table — the single-question one and the per-question
+// ones — carries the same header. Row background is the *ground truth's*
+// verdict (white = gold, gray = not); `kept` is the pipeline's, in its own
+// column, because a gold chunk the pipeline dropped is the thing worth seeing.
+function retrievalTable(candidates) {
+  const table = document.getElementById('retrieval-table-template')
+    .content.firstElementChild.cloneNode(true);
+  const body = table.querySelector('tbody');
+  const cell = v => (v === null || v === undefined) ? '·' : v;
+  for (const c of candidates || []) {
     const tr = document.createElement('tr');
     tr.className = 'retrieval-row ' + (c.gold ? 'retrieval-row--gold' : 'retrieval-row--plain');
-    const cell = v => (v === null || v === undefined) ? '·' : v;
     tr.innerHTML = `<td dir="rtl">${(c.text || '').slice(0, 60)}</td>
       <td>${cell(c.dense_rank)}</td><td>${cell(c.bm25_rank)}</td>
       <td>${cell(c.fused_rank)}</td><td>${cell(c.rerank_score)}</td>
       <td>${cell(c.grade_score)}</td><td>${c.kept ? '✓' : '✗'}</td>
       <td>${c.gold ? '●' : ''}</td>`;
-    rows.appendChild(tr);
+    body.appendChild(tr);
+  }
+  return table;
+}
+
+function renderRetrievalRows(candidates) {
+  const host = document.getElementById('retrieval-body');
+  host.innerHTML = '';
+  host.appendChild(retrievalTable(candidates));
+}
+
+// The followed experiment: one collapsible table per selected question, with
+// that question's own counts on the summary line. Collapsed by default — a set
+// of thirty questions is a page you scan, then open the one that looks wrong.
+function renderQuestionTables(questions) {
+  const host = document.getElementById('retrieval-questions');
+  host.innerHTML = '';
+  for (const q of questions) {
+    const candidates = (q.trace && q.trace.candidates) || [];
+    const gold = candidates.filter(c => c.gold).length;
+    const kept = candidates.filter(c => c.kept).length;
+    const det = document.createElement('details');
+    det.className = 'retrieval-question';
+    det.innerHTML = `<summary><b>${q.question_id}</b> · ${q.type || ''} · `
+      + `${q.difficulty || ''} — ${candidates.length} candidates, ${kept} kept, `
+      + `${gold} gold</summary><div dir="rtl">${q.question_fa || ''}</div>`;
+    det.appendChild(retrievalTable(candidates));
+    host.appendChild(det);
   }
 }
 
@@ -147,7 +178,7 @@ document.getElementById('run-trace').addEventListener('click', async () => {
 // --- Auto-follow: poll the lab (:9002) through our own /api/follow every ~2s,
 // and only touch the DOM when the followed job actually changed — a tab
 // re-rendering on every tick would collapse the user's expanded <details>. ---
-const followed = { indexJobId: null, queryJobId: null };
+const followed = { indexJobId: null, queryJobId: null, retrievalJobId: null };
 
 function showLabDown(el) {
   el.textContent = 'lab: down — start it with `npm run raglab`';
@@ -156,11 +187,27 @@ function showLabDown(el) {
 function renderFollow(body) {
   const chunksCfg = document.getElementById('chunks-active-config');
   const retrievalCfg = document.getElementById('retrieval-active-config');
+  const setCfg = document.getElementById('retrieval-set-config');
 
   if (body.lab === 'down') {
     showLabDown(chunksCfg);
     showLabDown(retrievalCfg);
+    showLabDown(setCfg);
     return;
+  }
+
+  if (body.retrieval) {
+    if (body.retrieval.job_id !== followed.retrievalJobId) {
+      followed.retrievalJobId = body.retrieval.job_id;
+      const n = body.retrieval.questions.length;
+      const source = body.retrieval.kind === 'run'
+        ? 'evaluation' : 'retrieval run';
+      setCfg.textContent = `${n} selected question${n === 1 ? '' : 's'} from the `
+        + `last ${source} — ${formatConfig(body.retrieval.config)}`;
+      renderQuestionTables(body.retrieval.questions);
+    }
+  } else {
+    setCfg.textContent = 'lab: up — no retrieval run or evaluation yet';
   }
 
   if (body.index) {

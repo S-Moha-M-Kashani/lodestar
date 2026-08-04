@@ -26,8 +26,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from . import (embedding, evaluate, explain, metrics, models, pipeline,
                ragas_eval, retrieval)
 from .config import (ANSWERERS, BALANCES, CHUNKERS, DEPENDENCIES,
-                     DIFFICULTIES, EMBEDDERS, GRADERS, RERANKERS,
-                     RETRIEVERS, ROOT, RUNS_DIR, STEPS, LabConfig,
+                     DIFFICULTIES, EMBEDDERS, GRADERS, PRODUCTION_CONFIG,
+                     RERANKERS, RETRIEVERS, ROOT, RUNS_DIR, STEPS, LabConfig,
                      load_lab_settings, settings_for_provider)
 from .corpus import load_diary, load_ground_truth
 from .index import IndexRegistry, _lab_llm
@@ -172,6 +172,11 @@ def create_app() -> FastAPI:
             # frontends is a rule that will disagree with itself.
             'dependencies': DEPENDENCIES,
             'defaults': LabConfig().to_dict(),
+            # The shipped Assistant's own settings, for the panel's one-click
+            # preset. Served rather than written into the frontend for the
+            # reason the mode dropdown is: a preset kept in a browser is a
+            # preset that will drift from the brain it claims to mirror.
+            'production': PRODUCTION_CONFIG,
             # The three steps, in pipeline order. The panel groups and colours
             # every control by these, so which step a thing belongs to is served
             # as a fact about the pipeline rather than guessed in the browser.
@@ -291,10 +296,47 @@ def create_app() -> FastAPI:
                 ragas_mode=payload.get('ragas_mode', 'offline'),
                 ragas_limit=payload.get('ragas_limit') or None,
                 workers=int(payload.get('workers', 1)), progress=report,
-                cancelled=check_cancelled)
-            return result.as_dict()
+                # Always traced: the Inspector must never be blank after a run,
+                # and the trace is a recording of the same retrieval — the same
+                # Outcome reaches scoring either way, so no number can move.
+                trace=True, cancelled=check_cancelled)
+            # `traces` is added here rather than inside `as_dict`, which is what
+            # `save_run` writes: the Inspector gets them over HTTP and the run
+            # file stays the summary the leaderboard reads.
+            return result.as_dict() | {'traces': result.traces}
 
         return _accepted(jobs.start('run', work, config=cfg.to_dict()))
+
+    @app.post('/api/retrievals')
+    def start_retrieval(payload: dict):
+        """Retrieval only, over the questions the eval card has selected.
+
+        Its own route rather than a flag on `/api/evaluations`, because it
+        answers a different question and costs a different amount: no model
+        answers anything, nothing is judged, and no run file is written — so it
+        is the step you can afford to repeat while moving one knob. It takes the
+        same selection arguments as an evaluation on purpose; retrieval shown
+        for questions the numbers were never about would mislead."""
+        cfg = LabConfig.from_dict(payload)
+        run_settings = settings_for_provider(settings,
+                                             payload.get('provider') or '')
+        problems = cfg.validate() + models.provider_problems(cfg, run_settings)
+        if problems:
+            raise HTTPException(400, '; '.join(problems))
+
+        def work(report, cancelled):
+            def check_cancelled():
+                if cancelled():
+                    raise JobCancelled()
+            return evaluate.run_retrieval(
+                registry, ground_truth, cfg, run_settings,
+                types=payload.get('types') or None,
+                difficulty=payload.get('difficulty') or None,
+                limit=payload.get('limit') or None,
+                balance=payload.get('balance') or 'stride',
+                progress=report, cancelled=check_cancelled)
+
+        return _accepted(jobs.start('retrieve', work, config=cfg.to_dict()))
 
     @app.get('/api/jobs')
     def list_jobs():

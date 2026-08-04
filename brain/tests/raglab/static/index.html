@@ -137,6 +137,15 @@
 <header>
   <h1>Lodestar RAG Lab <span class="pill" id="corpus"></span></h1>
   <div class="badges" id="caps"></div>
+  <!-- One click to see the system that actually ships. It fills every control
+       from /api/options -> production (derived from the brain's own constants),
+       then builds and retrieves, because "what does the real thing do" is a
+       question you ask before you start changing knobs. -->
+  <div class="inline" style="margin-top:.5rem">
+    <button class="ghost" id="use-production"
+      title="Fill every setting with the shipped Assistant's own, then build and retrieve. Downloads the real Persian embedder (~2.2 GB) on first use.">Use the real assistant's settings, then run</button>
+    <span class="muted" id="productionNote" style="font-size:.74rem"></span>
+  </div>
   <details style="margin-top:.4rem">
     <summary>What the numbers said last time (measured on this fixture, 2026-07-29 — re-run to confirm)</summary>
     <ul style="margin:.3rem 0 0 1rem;font-size:.76rem;line-height:1.45">
@@ -211,6 +220,15 @@
       <label><input type="checkbox" id="multi_query"> multi-query expansion</label>
       <label><input type="checkbox" id="hyde"> HyDE (LLM)</label>
     </div>
+    <!-- Retrieval on its own, over the questions the experiment below has
+         selected. No answering and no judging, so it is the step you can afford
+         to repeat while moving one knob — and it is what fills the Inspector's
+         retrieval window on :9003. -->
+    <div style="margin-top:.7rem" class="inline">
+      <button id="retrieve-selected"
+        title="Retrieve for the questions selected in 3 · Generation &amp; scoring. No answers, no judging, no run file.">Retrieve (selected questions)</button>
+    </div>
+    <div id="retrieveInfo" class="muted" style="margin-top:.5rem;font-size:.74rem"></div>
   </section>
 
   <section class="card grow" data-step="generation">
@@ -694,6 +712,60 @@ $('run').onclick = async () => {
   try {
     const { job_id } = await api('/api/evaluations', body);
     poll(job_id, (result) => { renderResult(result); loadBoard(); });
+  } catch (e) { $('jobBox').innerHTML = `<div class="note">${e.message}</div>`; }
+};
+
+// Exactly the questions "Run evaluation" would score — the same limit and the
+// same type filter, read from the same controls. A different selection here
+// would put questions in the Inspector's retrieval window that no score was
+// ever about, which is the one thing this view must not do.
+function selectionBody() {
+  return { limit: +$('limit').value || null, types: selected($('types')) };
+}
+
+// The same job `poll` already drives, awaited, so one click can chain a build
+// into a retrieval. A failed or cancelled job never resolves — deliberately:
+// `poll` has put the error on screen, and the step after it must not run.
+function runJob(path, body) {
+  return new Promise((resolve, reject) => {
+    api(path, body).then(({ job_id }) => poll(job_id, resolve), reject);
+  });
+}
+
+async function doRetrieve() {
+  const body = Object.assign(readConfig(), pickedProvider(), selectionBody());
+  const result = await runJob('/api/retrievals', body);
+  const questions = result.questions || [];
+  const gold = questions.reduce((sum, q) =>
+    sum + (q.trace.candidates || []).filter((c) => c.gold).length, 0);
+  $('retrieveInfo').innerHTML =
+    `retrieved for <b>${questions.length}</b> question` +
+    `${questions.length === 1 ? '' : 's'} · ${gold} gold chunk` +
+    `${gold === 1 ? '' : 's'} among the candidates — open the Inspector ` +
+    '(:9003) to read the per-question tables';
+}
+
+$('retrieve-selected').onclick = async () => {
+  try { await doRetrieve(); }
+  catch (e) { $('jobBox').innerHTML = `<div class="note">${e.message}</div>`; }
+};
+
+$('use-production').onclick = async () => {
+  const preset = OPTIONS.production;
+  if (!preset) return;
+  applyDefaults(preset);
+  $('label').value = preset.label || '';
+  applyDependencies();
+  // Stated on screen rather than left implicit: the button claims to be the
+  // real system, so it has to say what it just filled in.
+  const { index: idx, retrieval: ret } = preset;
+  $('productionNote').textContent =
+    `${idx.chunker} ${idx.chunk_chars}/${idx.overlap} · ${idx.embedder} · ` +
+    `${ret.retriever} k=${ret.k} · ${ret.reranker} rerank · ` +
+    `${ret.grader} gate @ ${ret.grade_threshold}`;
+  try {
+    await runJob('/api/indexes', Object.assign(readConfig(), { force: false }));
+    await doRetrieve();
   } catch (e) { $('jobBox').innerHTML = `<div class="note">${e.message}</div>`; }
 };
 

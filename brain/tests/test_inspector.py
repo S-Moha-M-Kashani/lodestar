@@ -165,7 +165,9 @@ def test_inspector_page_exposes_the_three_views(monkeypatch):
                  'inspector-tab', 'retrieval-table',
                  # the followed view's config statement and the answer text
                  # from the generation half of a followed query
-                 'inspector-active-config', 'inspector-answer'):
+                 'inspector-active-config', 'inspector-answer',
+                 # one table per question of the followed experiment
+                 'retrieval-questions'):
         assert hook in html, f'missing {hook}'
 
 
@@ -194,21 +196,48 @@ FAKE_QUERY_JOB = {
                                   'fused_rank': 1, 'kept': True}]}}}
 
 
+FAKE_CANDIDATE = {'chunk_id': 's1-0', 'text': 'chunk one', 'gold': True,
+                  'dense_rank': 2, 'bm25_rank': 1, 'fused_rank': 1,
+                  'rerank_score': 0.71, 'grade_score': None, 'kept': True}
+
+# A retrieval-only run over the two questions an experiment selected.
+FAKE_RETRIEVE_JOB = {
+    'id': 'ret-fake-1', 'kind': 'retrieve', 'state': 'done',
+    'config': {'retrieval': {'retriever': 'hybrid-rrf', 'k': 3}},
+    'result': {'selection': {'n': 2},
+               'questions': [
+                   {'question_id': 'q-001', 'question_fa': 'سوال یک؟',
+                    'trace': {'candidates': [FAKE_CANDIDATE]}},
+                   {'question_id': 'q-002', 'question_fa': 'سوال دو؟',
+                    'trace': {'candidates': [FAKE_CANDIDATE]}}]}}
+
+# A judged evaluation, which carries the same per-question traces under its own
+# key — the eval path scores as well as retrieves, so its rows live elsewhere.
+FAKE_RUN_JOB = {
+    'id': 'run-fake-1', 'kind': 'run', 'state': 'done',
+    'config': {'retrieval': {'retriever': 'dense', 'k': 8}},
+    'result': {'run_id': '20260804-000000-abcdef', 'rows': [{'id': 'q-009'}],
+               'traces': [{'question_id': 'q-009', 'question_fa': 'سوال نه؟',
+                           'trace': {'candidates': [FAKE_CANDIDATE]}}]}}
+
+# Newest first, the order the lab's own /api/jobs uses. Tests reassign this to
+# say which run happened last.
+FAKE_ORDER = [FAKE_QUERY_JOB, FAKE_INDEX_JOB]
+
+
 class _FakeLabHandler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass  # a canned test server has nothing worth logging
 
     def do_GET(self):
+        by_id = {job['id']: job for job in FAKE_ORDER}
         if self.path == '/api/jobs':
-            body = {'jobs': [
-                {'id': FAKE_INDEX_JOB['id'], 'kind': 'index', 'state': 'done',
-                 'config': FAKE_INDEX_JOB['config']},
-                {'id': FAKE_QUERY_JOB['id'], 'kind': 'query', 'state': 'done',
-                 'config': FAKE_QUERY_JOB['config']}]}
-        elif self.path == f"/api/jobs/{FAKE_INDEX_JOB['id']}":
-            body = FAKE_INDEX_JOB
-        elif self.path == f"/api/jobs/{FAKE_QUERY_JOB['id']}":
-            body = FAKE_QUERY_JOB
+            body = {'jobs': [{'id': job['id'], 'kind': job['kind'],
+                              'state': job['state'], 'config': job['config']}
+                             for job in FAKE_ORDER]}
+        elif self.path.startswith('/api/jobs/') and \
+                self.path.split('/')[-1] in by_id:
+            body = by_id[self.path.split('/')[-1]]
         else:
             self.send_response(404)
             self.end_headers()
@@ -262,3 +291,38 @@ def test_follow_reads_a_finished_index_and_query_job(monkeypatch, fake_lab):
     assert body['query']['answer'] == 'یک جواب.'
     assert body['query']['question_id'] == 'q-001'
     assert body['query']['trace']['candidates'][0]['gold'] is True
+
+
+# This is an integration test (FastAPI TestClient; the lab is a canned fake).
+def test_follow_shows_one_table_per_selected_question(monkeypatch, fake_lab,
+                                                      request):
+    """The retrieval window is per-question, and it must show *only* the
+    questions the experiment picked. Both routes that retrieve over a set feed
+    it — the retrieval-only run and a judged evaluation — so `/api/follow`
+    normalises them to one shape and the page keeps one renderer. Whichever ran
+    last wins, because that is what "follow the lab" means."""
+    module = request.module
+    monkeypatch.setenv('RAGLAB_INSPECTOR_LAB_URL', fake_lab)
+    client = _client(monkeypatch)
+
+    monkeypatch.setattr(module, 'FAKE_ORDER',
+                        [FAKE_RETRIEVE_JOB, FAKE_RUN_JOB, FAKE_INDEX_JOB])
+    view = client.get('/api/follow').json()['retrieval']
+    assert view['kind'] == 'retrieve'
+    assert view['config']['retrieval']['k'] == 3
+    assert [q['question_id'] for q in view['questions']] == ['q-001', 'q-002']
+    candidate = view['questions'][0]['trace']['candidates'][0]
+    assert candidate['gold'] is True and candidate['fused_rank'] == 1
+
+    # an evaluation that finished later is what the window follows instead, and
+    # its traces arrive under a different key on the lab's side
+    monkeypatch.setattr(module, 'FAKE_ORDER',
+                        [FAKE_RUN_JOB, FAKE_RETRIEVE_JOB, FAKE_INDEX_JOB])
+    view = client.get('/api/follow').json()['retrieval']
+    assert view['kind'] == 'run'
+    assert [q['question_id'] for q in view['questions']] == ['q-009']
+
+    # no set-wide run at all is a normal state, not an error
+    monkeypatch.setattr(module, 'FAKE_ORDER', [FAKE_INDEX_JOB])
+    body = client.get('/api/follow').json()
+    assert body['lab'] == 'up' and body['retrieval'] is None

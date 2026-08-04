@@ -169,7 +169,7 @@ def create_inspector_app() -> FastAPI:
         jobs_index = _lab_get('/api/jobs')
         if jobs_index is None:
             return {'lab': 'down', 'lab_url': lab_base_url(),
-                    'index': None, 'query': None}
+                    'index': None, 'query': None, 'retrieval': None}
 
         def newest_done(kind: str) -> dict | None:
             for entry in jobs_index.get('jobs', []):
@@ -189,10 +189,41 @@ def create_inspector_app() -> FastAPI:
             out.update({field: result.get(field) for field in fields})
             return out
 
+        def question_set() -> dict | None:
+            """The newest finished run that retrieved over a *set* of questions,
+            normalised to one shape so the page keeps one renderer.
+
+            Two lab routes produce one: a retrieval-only run, which returns its
+            rows under `questions`, and a judged evaluation, which carries the
+            same rows under `traces` beside its scores. Whichever finished last
+            is what the window shows — that is what following the lab means."""
+            for entry in jobs_index.get('jobs', []):
+                kind, key = entry.get('kind'), None
+                if kind == 'retrieve':
+                    key = 'questions'
+                elif kind == 'run':
+                    key = 'traces'
+                if key is None or entry.get('state') != 'done':
+                    continue
+                full = _lab_get(f"/api/jobs/{entry['id']}")
+                result = (full or {}).get('result') or {}
+                rows = result.get(key)
+                if not rows:
+                    # A run from before tracing existed, or one whose selection
+                    # came out empty: keep looking rather than showing a table
+                    # with no rows and no explanation.
+                    continue
+                return {'kind': kind, 'job_id': entry['id'],
+                        'config': full.get('config'),
+                        'selection': result.get('selection'),
+                        'questions': rows}
+            return None
+
         index_view = view('index', ('chunks_by_session',))
         query_view = view('query', ('trace', 'question', 'question_id', 'answer'))
         return {'lab': 'up', 'lab_url': lab_base_url(),
-                'index': index_view, 'query': query_view}
+                'index': index_view, 'query': query_view,
+                'retrieval': question_set()}
 
     return app
 

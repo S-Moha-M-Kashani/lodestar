@@ -4226,3 +4226,153 @@ def test_both_panels_offer_the_mode_dropdown():
     appjs = (config.ROOT / 'app.js').read_text(encoding='utf-8')
     assert 'raglab-mode' in appjs and 'options.modes' in appjs
     assert 'modes' in html
+
+
+# --- retrieval on its own, and the shipped assistant's own settings ---------
+# The panel could build an index and score a full judged run, but it had no way
+# to do the middle step alone: retrieve for the questions an experiment is
+# about, look at what came back, change one knob, look again. That is the loop
+# the Inspector (:9003) exists to serve, and it needs the lab to offer both a
+# retrieval-only run over the *selected* questions and a one-click preset that
+# is the shipped assistant rather than a taste.
+
+# This is a configuration invariant.
+def test_the_production_preset_mirrors_the_shipped_brain():
+    """The preset button claims to be "the real RAG system". It has to be
+    derived from the brain's own constants, not copied beside them: a preset
+    that drifts is worse than no preset, because it invites a comparison
+    against a config nothing ships."""
+    from lodestar_brain import config as brain_config
+    from lodestar_brain import retrieval as brain_retrieval
+
+    preset = config.PRODUCTION_CONFIG
+    index, ret = preset['index'], preset['retrieval']
+    # chunking: the brain splits at 500 with 100 of overlap, so the lab's
+    # honest mirror is fixed-overlap at those exact sizes.
+    assert index['chunker'] == 'fixed-overlap'
+    assert index['chunk_chars'] == brain_retrieval.CHUNK_SIZE
+    assert index['overlap'] == brain_retrieval.CHUNK_OVERLAP
+    brain_defaults = brain_config.Settings()
+    assert index['embedder'] == brain_defaults.embedder
+    # retrieval: every depth the shipped pipeline uses, read off its constants
+    assert ret['k'] == brain_retrieval.TOP_K
+    assert ret['candidates'] == brain_retrieval.CANDIDATES
+    assert ret['rerank_depth'] == brain_retrieval.RERANK_DEPTH
+    assert ret['grade_threshold'] == brain_retrieval.GRADE_THRESHOLD
+    assert ret['grader'] == brain_defaults.grader
+    # and the shape of the pipeline itself: hybrid + RRF, lexical rerank,
+    # the Farsi time filter and query expansion on, HyDE and MMR off.
+    assert ret['retriever'] == 'hybrid-rrf' and ret['reranker'] == 'lexical'
+    assert ret['time_filter'] is True and ret['multi_query'] is True
+    assert ret['hyde'] is False and ret['mmr_lambda'] == 1.0
+    # a preset the lab would refuse to run is not a preset
+    assert LabConfig.from_dict(preset).validate() == []
+
+
+# This is an integration test.
+def test_the_panel_serves_the_production_preset_for_its_button(client):
+    """Served rather than written into the frontend, for the reason the mode
+    dropdown is: a preset kept in a browser is a preset that will drift from
+    the brain it claims to mirror."""
+    assert client.get('/api/options').json()['production'] == config.PRODUCTION_CONFIG
+
+
+# This is an integration test.
+def test_retrieval_only_covers_exactly_the_experiment_questions(client,
+                                                                ground_truth):
+    """Retrieve, for the questions the eval card has selected, and nothing
+    more: no answering, no judging, no run file. The selection has to be the
+    *same* selection `/api/evaluations` would score, or the Inspector shows
+    retrieval for questions the numbers were never about."""
+    picked_type = ground_truth['questions'][0]['type']
+    payload = {'index': {'chunker': 'session', 'embedder': 'ascii-hash'},
+               'retrieval': {'retriever': 'hybrid-rrf', 'reranker': 'none',
+                             'grader': 'none', 'k': 3, 'rerank_depth': 20,
+                             'time_filter': False, 'multi_query': False},
+               'types': [picked_type], 'limit': 2, 'balance': 'stride'}
+    res = client.post('/api/retrievals', json=payload)
+    assert res.status_code == 202, res.text
+    job = _finished(client, res.json()['job_id'])
+    assert job['state'] == 'done', job.get('error')
+    assert job['kind'] == 'retrieve'
+
+    result = job['result']
+    expected = evaluate.select_questions(ground_truth, [picked_type], 2,
+                                        None, 'stride')
+    assert [q['question_id'] for q in result['questions']] == \
+        [q['id'] for q in expected]
+    assert result['selection']['n'] == 2
+
+    first = result['questions'][0]
+    assert first['question_fa'] == expected[0]['question_fa']
+    # retrieval only: the generation step never ran, so there is no answer to
+    # show and no run file to leave behind.
+    assert 'answer' not in first
+    candidates = first['trace']['candidates']
+    assert candidates
+    for key in ('dense_rank', 'bm25_rank', 'fused_rank', 'rerank_score',
+                'grade_score', 'kept'):
+        assert key in candidates[0], f'missing {key}'
+    # gold is marked per question, against that question's own evidence
+    assert all(isinstance(c['gold'], bool) for c in candidates)
+
+
+# This is an integration test.
+def test_a_traced_evaluation_scores_identically_and_leaves_traces_off_disk(
+        client, monkeypatch, tmp_path, registry, ground_truth):
+    """A judged run now carries its per-question traces so the Inspector is
+    never blank after an evaluation. Two things must stay true. The scores may
+    not move — tracing is a recording of the same retrieval, not a different
+    one. And the traces may not reach `.runs/`: a run file is the durable
+    artifact the leaderboard reads, and 112 questions of full candidate text
+    would bloat every one of them with data no score is computed from."""
+    monkeypatch.setattr(evaluate, 'RUNS_DIR', tmp_path)
+    payload = {'index': {'chunker': 'session', 'embedder': 'ascii-hash'},
+               'retrieval': {'retriever': 'hybrid-rrf', 'reranker': 'none',
+                             'grader': 'none', 'k': 3, 'rerank_depth': 20,
+                             'time_filter': False, 'multi_query': False},
+               'generation': {'answerer': 'extractive'},
+               'limit': 2, 'balance': 'stride', 'ragas_mode': 'off'}
+    res = client.post('/api/evaluations', json=payload)
+    assert res.status_code == 202, res.text
+    job = _finished(client, res.json()['job_id'], timeout=120.0)
+    assert job['state'] == 'done', job.get('error')
+
+    result = job['result']
+    assert len(result['rows']) == 2
+    traces = result['traces']
+    assert [t['question_id'] for t in traces] == [row['id'] for row in result['rows']]
+    assert all(t['trace']['candidates'] for t in traces)
+
+    saved = json.loads((tmp_path / f"{result['run_id']}.json").read_text(
+        encoding='utf-8'))
+    assert 'traces' not in saved, 'traces must not reach the run file'
+    assert saved['rows'] == result['rows']
+
+    # The load-bearing half: the same config, untraced, produces the same rows
+    # and the same summary. Latency is dropped at every depth — it measures the
+    # machine, not the pipeline, so two runs of identical code never agree on it
+    # and comparing it would make this test flaky rather than strict.
+    def scores(value):
+        if isinstance(value, dict):
+            return {k: scores(v) for k, v in value.items() if 'latency' not in k}
+        if isinstance(value, list):
+            return [scores(v) for v in value]
+        return value
+
+    cfg = LabConfig.from_dict(payload)
+    untraced = evaluate.run_eval(registry, ground_truth, cfg, LAB_SETTINGS,
+                                 limit=2, balance='stride', ragas_mode='off')
+    assert not untraced.traces, 'trace=False must record nothing'
+    assert scores(untraced.rows) == scores(result['rows'])
+    assert scores(untraced.summary) == scores(result['summary'])
+
+
+# This is an integration test.
+def test_the_panel_offers_retrieve_and_the_production_preset():
+    """Both buttons the loop needs: run retrieval for the selected questions,
+    and load the shipped assistant's settings in one click."""
+    from .raglab.server import STATIC
+    html = (STATIC / 'index.html').read_text(encoding='utf-8')
+    assert 'id="retrieve-selected"' in html
+    assert 'id="use-production"' in html

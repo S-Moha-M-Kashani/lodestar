@@ -35,8 +35,19 @@
         <button id="run-trace">Run retrieval</button>
         <span id="retrieval-status"></span>
       </div>
-      <div id="retrieval-body">
-        <table class="retrieval-table" hidden>
+      <!-- One table per question of the experiment the lab last ran, and only
+           those questions. Every table is a clone of the template below, so the
+           columns are written once. It carries its own config line: the set and
+           the single ad-hoc question below can come from different runs, and one
+           line describing two pipelines would be a lie. -->
+      <div class="inspector-active-config" id="retrieval-set-config"></div>
+      <div id="retrieval-questions"></div>
+      <!-- The single-question table, for the manual "Run retrieval" above. -->
+      <div id="retrieval-body"></div>
+      <div class="inspector-answer" id="retrieval-answer" data-step="generation" dir="rtl"></div>
+
+      <template id="retrieval-table-template">
+        <table class="retrieval-table">
           <thead>
             <tr>
               <th>chunk</th>
@@ -49,10 +60,9 @@
               <th>gold</th>
             </tr>
           </thead>
-          <tbody id="retrieval-rows"></tbody>
+          <tbody></tbody>
         </table>
-        <div class="inspector-answer" id="retrieval-answer" data-step="generation" dir="rtl"></div>
-      </div>
+      </template>
     </section>
   </main>
   <script src="/inspector.js"></script>
