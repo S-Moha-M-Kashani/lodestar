@@ -17,7 +17,7 @@ from . import corpus, embedding, metrics, models, pipeline, ragas_eval
 from .config import (BALANCES, DIFFICULTIES, RUNS_DIR, LabConfig, LabSettings)
 from .index import IndexRegistry, _lab_llm
 from .llm import lab_chat
-from .present import chunks_by_session, mark_gold
+from .present import chunks_by_session, evidence_spans, mark_gold
 
 KEY_FACTS_PROMPT = (
     'You check whether an answer contains specific facts. The answer is in '
@@ -284,6 +284,11 @@ def trace_row(question: dict, trace: dict) -> dict:
                                mark_gold([c['text'] for c in candidates],
                                          quotes)):
         candidate['gold'] = gold
+        # Where to paint the evidence green. Computed for every candidate rather
+        # than only the gold ones, so a verbatim quote can never sit in a row
+        # that was not marked — the two would disagree and the page would show
+        # the disagreement instead of hiding it.
+        candidate['gold_spans'] = evidence_spans(candidate['text'], quotes)
     return {'question_id': question['id'],
             'question_fa': question['question_fa'],
             'question_en': question.get('question_en', ''),

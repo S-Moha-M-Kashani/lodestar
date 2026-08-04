@@ -1,8 +1,72 @@
-from .raglab import pipeline, corpus, inspector
+from .raglab import evaluate, pipeline, corpus, inspector, present
 from .raglab.config import IndexConfig, RetrievalConfig, LabSettings
 from .raglab.index import IndexRegistry
 
 LAB_SETTINGS = LabSettings(openrouter_api_key='', llm_provider='fake')
+
+
+# This is a unit test.
+def test_evidence_spans_locate_the_quote_and_never_invent_one():
+    """The green highlight is drawn from these ranges, so a range that is not
+    really the quote is a lie on screen. Computed here rather than in the
+    browser because `mark_gold` also calls a chunk *contained by* a quote gold —
+    that candidate has no verbatim quote inside it and must highlight nothing."""
+    quote = 'قسط‌بندی جریمه اوکی شد شیش قسط'
+    text = f'خبر خوب: {quote}، از اول ماه دیگه'
+    spans = present.evidence_spans(text, [quote])
+    assert len(spans) == 1
+    start, end = spans[0]
+    assert text[start:end] == quote
+
+    # gold by the *reverse* direction — the chunk sits inside the quote — so
+    # there is nothing verbatim to mark, and no span may be guessed
+    assert present.evidence_spans('شیش قسط', [quote]) == []
+    # a quote that is simply absent
+    assert present.evidence_spans('یک متن بی ربط', [quote]) == []
+    # no quotes at all, and empty text
+    assert present.evidence_spans(text, []) == []
+    assert present.evidence_spans('', [quote]) == []
+
+    # two quotes in one chunk come back in reading order, and touching or
+    # overlapping ranges merge — two <mark>s over the same characters would
+    # nest and render as a darker stripe nobody asked for
+    a, b = 'اول ماه', 'ماه دیگه'
+    merged = present.evidence_spans('قبل از اول ماه دیگه بود', [a, b])
+    assert len(merged) == 1
+    s, e = merged[0]
+    assert 'قبل از اول ماه دیگه بود'[s:e] == 'اول ماه دیگه'
+
+
+# This is an integration test (real fixture, real chunker).
+def test_a_traced_candidate_carries_spans_that_slice_back_to_the_quote():
+    """End to end over the real corpus: whatever the pipeline retrieved, every
+    span on every candidate must slice out of that candidate's own text, and a
+    candidate marked gold with a verbatim quote must carry at least one."""
+    gt = corpus.load_ground_truth()
+    index = IndexRegistry(LAB_SETTINGS, corpus.load_diary()).get(
+        IndexConfig(chunker='fixed-overlap', chunk_chars=500, overlap=100,
+                    contextual=True, embedder='ascii-hash'))
+    cfg = RetrievalConfig(retriever='hybrid-rrf', reranker='none', grader='none',
+                          k=5, rerank_depth=20, time_filter=False,
+                          multi_query=False)
+    question = next(q for q in gt['questions'] if q.get('evidence'))
+    _outcome, trace = pipeline.retrieve_traced(
+        index, cfg, question['question_fa'], gt['meta']['query_date'])
+    row = evaluate.trace_row(question, trace)
+
+    quotes = [ev['quote'] for ev in question['evidence']]
+    verbatim_seen = 0
+    for candidate in row['trace']['candidates']:
+        spans = candidate['gold_spans']
+        assert isinstance(spans, list)
+        for start, end in spans:
+            assert candidate['text'][start:end] in quotes
+        if spans:
+            verbatim_seen += 1
+            assert candidate['gold'], 'a highlighted candidate must be gold'
+        elif any(q in candidate['text'] for q in quotes):
+            raise AssertionError('a verbatim quote was left unhighlighted')
+    assert verbatim_seen, 'expected at least one candidate to highlight'
 
 
 # This is an integration test (real in-memory index, offline ascii-hash embedder).
@@ -171,6 +235,25 @@ def test_inspector_page_exposes_the_three_views(monkeypatch):
         assert hook in html, f'missing {hook}'
 
 
+# This is an integration test (the served shell exposes the new views' hooks).
+def test_page_exposes_the_generation_tab_and_the_evidence_reveal(monkeypatch):
+    """Four things the two new features are rendered by, so a rename cannot
+    quietly remove one: a fourth tab and its view, the per-question header that
+    restates the question and its expected facts, the full-text reveal a hover
+    opens, and the green evidence mark inside it."""
+    client = _client(monkeypatch)
+    html = client.get('/').text
+    css = client.get('/inspector.css').text
+    for hook in ('tab-generation', 'view-generation', 'generation-questions',
+                 'generation-active-config'):
+        assert hook in html, f'missing {hook}'
+    # the reveal and the highlight are CSS-driven, so the classes must exist
+    for rule in ('.chunk-reveal', '.evidence-mark'):
+        assert rule in css, f'missing style {rule}'
+    # hover opens the reveal without a click
+    assert ':hover .chunk-reveal' in css or '.retrieval-row:hover' in css
+
+
 # --- following the lab (:9002) ----------------------------------------------
 
 import json as _json
@@ -218,7 +301,15 @@ FAKE_RUN_JOB = {
     'config': {'index': {'chunker': 'semantic-drift',
                          'embedder': 'sentence-transformers'},
                'retrieval': {'retriever': 'dense', 'k': 8}},
-    'result': {'run_id': '20260804-000000-abcdef', 'rows': [{'id': 'q-009'}],
+    'result': {'run_id': '20260804-000000-abcdef',
+               # a row as `metrics.score_question` builds it: the generated
+               # answer plus the deterministic generation scores
+               'rows': [{'id': 'q-009', 'type': 'single-hop', 'answerable': True,
+                         'answer': 'یک جواب که مدل نوشت.',
+                         'answer_similarity': 0.42, 'key_fact_coverage': 0.5,
+                         'abstained': False, 'recall': 1.0}],
+               'summary': {'n_questions': 1, 'overall': {'answer_similarity': 0.42}},
+               'ragas': {'metrics': {'faithfulness': 0.75}, 'decision': 0.7},
                'traces': [{'question_id': 'q-009', 'question_fa': 'سوال نه؟',
                            'trace': {'candidates': [FAKE_CANDIDATE]}}],
                # An evaluation builds its index implicitly, so it reports the
@@ -365,3 +456,55 @@ def test_follow_shows_the_chunks_the_last_run_actually_used(monkeypatch,
     monkeypatch.setattr(module, 'FAKE_ORDER', [FAKE_INDEX_JOB, FAKE_RUN_JOB])
     body = client.get('/api/follow').json()
     assert body['index']['config']['index']['chunker'] == 'session'
+
+
+# This is an integration test (FastAPI TestClient over the read-only app).
+def test_explain_serves_the_same_metric_help_the_lab_does(monkeypatch):
+    """The Generation tab's '!' marks read this. Served from `explain` — the
+    lab's own source for /api/options — rather than copied into the Inspector's
+    page, so the two panels cannot end up explaining the same metric
+    differently."""
+    from .raglab import explain
+    client = _client(monkeypatch)
+    body = client.get('/api/explain').json()
+
+    assert body['metrics'] == explain.measures()
+    assert body['help'] == explain.topics()
+    # the generation half specifically, since that is what the new tab grades
+    generation = {m['key'] for m in body['metrics'] if m['step'] == 'generation'}
+    assert {'answer_similarity', 'key_fact_coverage', 'faithfulness',
+            'abstained_correctly'} <= generation
+    # every measure carries the text the '!' opens, or the mark has nothing to say
+    assert all(m.get('formula') or m.get('note') or body['help'].get(f"metric.{m['key']}")
+               for m in body['metrics'])
+
+
+# This is an integration test (FastAPI TestClient; the lab is a canned fake).
+def test_follow_exposes_what_the_evaluation_generated(monkeypatch, fake_lab,
+                                                     request):
+    """The Generation tab needs three things per question that retrieval alone
+    cannot give: what the model wrote, how it scored, and — from the fixture,
+    not the run — the answer it should have written. The first two come from the
+    evaluation's own rows; only an evaluation has them, so a retrieval-only run
+    leaves this `None` rather than showing a stale answer beside fresh ranks."""
+    module = request.module
+    monkeypatch.setenv('RAGLAB_INSPECTOR_LAB_URL', fake_lab)
+    client = _client(monkeypatch)
+
+    monkeypatch.setattr(module, 'FAKE_ORDER', [FAKE_RUN_JOB, FAKE_INDEX_JOB])
+    view = client.get('/api/follow').json()['generation']
+    assert view['job_id'] == FAKE_RUN_JOB['id']
+    assert view['config']['retrieval']['retriever'] == 'dense'
+    row = view['rows'][0]
+    assert row['id'] == 'q-009'
+    assert row['answer'] == 'یک جواب که مدل نوشت.'
+    assert row['answer_similarity'] == 0.42
+    # the run-level judged scores, which are per run and not per question
+    assert view['ragas']['metrics']['faithfulness'] == 0.75
+    assert view['summary']['n_questions'] == 1
+
+    # a retrieval-only run generates nothing, and says so rather than lying
+    monkeypatch.setattr(module, 'FAKE_ORDER', [FAKE_RETRIEVE_JOB, FAKE_INDEX_JOB])
+    body = client.get('/api/follow').json()
+    assert body['generation'] is None
+    assert body['retrieval']['kind'] == 'retrieve'   # retrieval still follows

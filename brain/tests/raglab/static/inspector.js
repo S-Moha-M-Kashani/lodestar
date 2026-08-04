@@ -6,7 +6,7 @@ const CHOSEN = {
                time_filter: true, grader: 'llm', grade_threshold: 0.4 },
 };
 
-const views = ['groundtruth', 'chunks', 'retrieval'];
+const views = ['groundtruth', 'chunks', 'retrieval', 'generation'];
 function show(view) {
   for (const v of views) {
     document.getElementById(`view-${v}`).hidden = v !== view;
@@ -50,13 +50,72 @@ function formatConfig(cfg) {
   return `showing: ${parts.join(' · ')}`;
 }
 
+function escapeHtml(text) {
+  return String(text === null || text === undefined ? '' : text)
+    .replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+// --- What every score means: the '!' marks, reading the lab's own text -------
+// Fetched from /api/explain rather than written here, so this page and the
+// panel on :9002 cannot end up explaining the same metric differently.
+let EXPLAIN = { metrics: [], help: {} };
+
+// Which followed job each view is currently drawing. Declared up here because
+// `loadGroundTruth` clears two of these when the fixture lands, and it runs
+// before the follow loop is set up further down.
+const followed = { indexJobId: null, queryJobId: null, retrievalJobId: null,
+                   generationJobId: null };
+
+function measureOf(key) {
+  return EXPLAIN.metrics.find(m => m.key === key) || { key, label: key };
+}
+
+// The sentence the '!' opens: a metric's own note and formula when it has them,
+// falling back to the help topic the lab writes for the same key.
+function whyText(key) {
+  const m = measureOf(key);
+  return [m.note, m.formula && `formula: ${m.formula}`, m.source && `computed by ${m.source}`,
+          EXPLAIN.help[`metric.${key}`]].filter(Boolean).join(' — ');
+}
+
+function whyMark(key) {
+  const label = escapeHtml(measureOf(key).label || key);
+  return `<button type="button" class="inspector-why" data-why="${escapeHtml(key)}"`
+    + ` aria-label="What is ${label}?">!</button>`;
+}
+
+// One listener for the page: the marks are re-rendered on every poll tick, and
+// a listener per button would leak one per render.
+document.addEventListener('click', event => {
+  const button = event.target.closest('.inspector-why');
+  if (!button) return;
+  const open = button.nextElementSibling;
+  if (open && open.classList.contains('inspector-why-text')) { open.remove(); return; }
+  const note = document.createElement('span');
+  note.className = 'inspector-why-text';
+  note.textContent = whyText(button.dataset.why) || 'no description for this one yet';
+  button.after(note);
+});
+
+async function loadExplain() {
+  try { EXPLAIN = await (await fetch('/api/explain')).json(); }
+  catch (error) { /* the marks fall back to the bare key; not worth failing on */ }
+}
+loadExplain();
+
 // --- Ground truth ---
+// Kept by id as well as rendered, because the retrieval and generation views
+// restate a question's own facts and ideal answer beside its rows, and those
+// belong to the fixture rather than to any run.
+const GT = new Map();
+
 async function loadGroundTruth() {
   const body = await (await fetch('/api/groundtruth')).json();
   const root = document.getElementById('view-groundtruth');
   root.innerHTML = '';
   const qsel = document.getElementById('retrieval-question');
   for (const q of body.questions) {
+    GT.set(q.id, q);
     const row = document.createElement('div');
     row.className = 'gt-row';
     const quotes = (q.evidence || []).map(e => e.quote).join(' · ');
@@ -70,6 +129,13 @@ async function loadGroundTruth() {
     opt.value = q.id; opt.textContent = `${q.id} — ${q.question_fa.slice(0, 40)}`;
     qsel.appendChild(opt);
   }
+  // The retrieval and generation views restate each question's facts and ideal
+  // answer from this map, and the first poll can easily beat this fetch. Forget
+  // which jobs were rendered so the next tick redraws them with the fixture
+  // available — otherwise a race leaves every ideal answer showing '—' until
+  // the next run.
+  followed.retrievalJobId = null;
+  followed.generationJobId = null;
 }
 loadGroundTruth();
 
@@ -112,6 +178,48 @@ document.getElementById('build-chunks').addEventListener('click', async () => {
 // ones — carries the same header. Row background is the *ground truth's*
 // verdict (white = gold, gray = not); `kept` is the pipeline's, in its own
 // column, because a gold chunk the pipeline dropped is the thing worth seeing.
+// The full chunk text with its gold evidence painted green. The ranges come
+// from the service (`gold_spans`), never from a search in the browser: a
+// candidate can be gold because the quote *contains* it, and that one has
+// nothing verbatim to mark — a range invented here would draw a green stripe
+// over text the ground truth never quoted.
+function highlighted(text, spans) {
+  const source = text || '';
+  if (!spans || !spans.length) return escapeHtml(source);
+  let out = '', at = 0;
+  for (const [start, end] of spans) {
+    out += escapeHtml(source.slice(at, start))
+      + `<mark class="evidence-mark">${escapeHtml(source.slice(start, end))}</mark>`;
+    at = end;
+  }
+  return out + escapeHtml(source.slice(at));
+}
+
+// With contextual headers on, the first 60 characters of every chunk are the
+// same shape of metadata — date, mood, topics, storyline — so a preview taken
+// from character 0 shows the header and nothing that tells one chunk from the
+// next. The preview starts after a leading [ … ] header; the reveal still shows
+// the whole text, header included, because that header is part of what was
+// embedded and therefore part of why the chunk ranked where it did.
+function previewOf(text) {
+  const close = text.startsWith('[') ? text.indexOf(']') : -1;
+  return (close === -1 ? text : text.slice(close + 1)).trim() || text;
+}
+
+function chunkCell(candidate) {
+  const text = candidate.text || '';
+  const spans = candidate.gold_spans || [];
+  const preview = previewOf(text);
+  // Gold with no span is a real state, not an error, and saying so is the whole
+  // reason the spans are computed where the marking is.
+  const footnote = (candidate.gold && !spans.length)
+    ? '<span class="no-evidence">gold: this chunk sits inside the evidence quote, '
+      + 'so there is no verbatim span to highlight</span>' : '';
+  return `<td class="chunk-cell"><span class="chunk-preview" dir="rtl" tabindex="0">`
+    + `${escapeHtml(preview.slice(0, 60))}${preview.length > 60 ? '…' : ''}</span>`
+    + `<div class="chunk-reveal" dir="rtl">${highlighted(text, spans)}${footnote}</div></td>`;
+}
+
 function retrievalTable(candidates) {
   const table = document.getElementById('retrieval-table-template')
     .content.firstElementChild.cloneNode(true);
@@ -120,14 +228,26 @@ function retrievalTable(candidates) {
   for (const c of candidates || []) {
     const tr = document.createElement('tr');
     tr.className = 'retrieval-row ' + (c.gold ? 'retrieval-row--gold' : 'retrieval-row--plain');
-    tr.innerHTML = `<td dir="rtl">${(c.text || '').slice(0, 60)}</td>
-      <td>${cell(c.dense_rank)}</td><td>${cell(c.bm25_rank)}</td>
+    tr.innerHTML = chunkCell(c)
+      + `<td>${cell(c.dense_rank)}</td><td>${cell(c.bm25_rank)}</td>
       <td>${cell(c.fused_rank)}</td><td>${cell(c.rerank_score)}</td>
       <td>${cell(c.grade_score)}</td><td>${c.kept ? '✓' : '✗'}</td>
       <td>${c.gold ? '●' : ''}</td>`;
     body.appendChild(tr);
   }
   return table;
+}
+
+// The question restated above its own rows, with the facts a right answer would
+// have contained. `id` is enough to find both in the fixture.
+function questionHead(questionId, fallbackFa) {
+  const q = GT.get(questionId) || {};
+  const facts = (q.key_facts || []).map(f => `<li>${escapeHtml(f)}</li>`).join('');
+  return `<div class="question-head">`
+    + `<div class="qh-fa" dir="rtl">${escapeHtml(q.question_fa || fallbackFa || '')}</div>`
+    + `<div class="qh-en">${escapeHtml(q.question_en || '')}</div>`
+    + (facts ? `<div class="qh-en">expected facts:</div><ol class="qh-facts">${facts}</ol>` : '')
+    + `</div>`;
 }
 
 function renderRetrievalRows(candidates) {
@@ -148,9 +268,10 @@ function renderQuestionTables(questions) {
     const kept = candidates.filter(c => c.kept).length;
     const det = document.createElement('details');
     det.className = 'retrieval-question';
-    det.innerHTML = `<summary><b>${q.question_id}</b> · ${q.type || ''} · `
-      + `${q.difficulty || ''} — ${candidates.length} candidates, ${kept} kept, `
-      + `${gold} gold</summary><div dir="rtl">${q.question_fa || ''}</div>`;
+    det.innerHTML = `<summary><b>${escapeHtml(q.question_id)}</b> · ${escapeHtml(q.type || '')} · `
+      + `${escapeHtml(q.difficulty || '')} — ${candidates.length} candidates, ${kept} kept, `
+      + `${gold} gold</summary>`
+      + questionHead(q.question_id, q.question_fa);
     det.appendChild(retrievalTable(candidates));
     host.appendChild(det);
   }
@@ -175,10 +296,69 @@ document.getElementById('run-trace').addEventListener('click', async () => {
   }
 });
 
+// --- Generation: the ideal answer, the written one, and the scores ----------
+// Per-question deterministic scores, in pipeline order. RAGAS's judged metrics
+// are per *run*, not per question, so they are rendered once above instead.
+const GEN_METRICS = ['answer_similarity', 'answer_token_f1', 'key_fact_coverage',
+                     'abstained_correctly', 'false_abstention'];
+
+const fmt = v => (v === null || v === undefined) ? '·'
+  : (typeof v === 'number' ? (Math.round(v * 1000) / 1000).toString() : String(v));
+
+function metricLine(row, keys) {
+  const present = keys.filter(k => row[k] !== undefined && row[k] !== null);
+  if (!present.length) return '<div class="gen-metrics">no scores for this one</div>';
+  return '<div class="gen-metrics">' + present.map(k =>
+    `<span class="gen-metric">${escapeHtml(measureOf(k).label || k)}: `
+    + `<b>${fmt(row[k])}</b>${whyMark(k)}</span>`).join('') + '</div>';
+}
+
+// `traces` is keyed by question id and only passed when the retrieval on screen
+// came from this same evaluation — showing another run's ranks under this run's
+// answer would invent a pipeline that never existed.
+function renderGeneration(view, traces) {
+  const ragasHost = document.getElementById('generation-ragas');
+  const host = document.getElementById('generation-questions');
+  const ragas = (view.ragas && view.ragas.metrics) || {};
+  const keys = Object.keys(ragas);
+  ragasHost.innerHTML = keys.length
+    ? '<div class="gen-answer" data-step="generation"><h4>judged over the whole run</h4>'
+      + metricLine(ragas, keys)
+      + (view.ragas.decision !== null && view.ragas.decision !== undefined
+         ? `<div class="gen-metrics"><span class="gen-metric">decision score: `
+           + `<b>${fmt(view.ragas.decision)}</b>${whyMark('ragas_decision')}</span></div>` : '')
+      + '</div>'
+    : '<div class="inspector-active-config">this run was not judged by RAGAS '
+      + '(ragas_mode=off), so only the deterministic scores below exist</div>';
+
+  host.innerHTML = '';
+  for (const row of view.rows || []) {
+    const gt = GT.get(row.id) || {};
+    const section = document.createElement('section');
+    section.className = 'gen-question';
+    section.innerHTML = questionHead(row.id, '')
+      + '<div class="gen-answers">'
+      + '<div class="gen-answer gen-answer--ideal"><h4>ideal answer (ground truth)</h4>'
+      + `<div dir="rtl">${escapeHtml(gt.answer_fa || '—')}</div></div>`
+      + '<div class="gen-answer gen-answer--actual" data-step="generation">'
+      + `<h4>what the experiment wrote${row.abstained ? ' — it abstained' : ''}</h4>`
+      + `<div dir="rtl">${escapeHtml(row.answer || '—')}</div></div>`
+      + '</div>'
+      + metricLine(row, GEN_METRICS);
+    const trace = traces && traces.get(row.id);
+    if (trace) {
+      const det = document.createElement('details');
+      det.innerHTML = '<summary>the retrieval this answer was written from</summary>';
+      det.appendChild(retrievalTable(trace.candidates || []));
+      section.appendChild(det);
+    }
+    host.appendChild(section);
+  }
+}
+
 // --- Auto-follow: poll the lab (:9002) through our own /api/follow every ~2s,
 // and only touch the DOM when the followed job actually changed — a tab
 // re-rendering on every tick would collapse the user's expanded <details>. ---
-const followed = { indexJobId: null, queryJobId: null, retrievalJobId: null };
 
 function showLabDown(el) {
   el.textContent = 'lab: down — start it with `npm run raglab`';
@@ -188,12 +368,37 @@ function renderFollow(body) {
   const chunksCfg = document.getElementById('chunks-active-config');
   const retrievalCfg = document.getElementById('retrieval-active-config');
   const setCfg = document.getElementById('retrieval-set-config');
+  const genCfg = document.getElementById('generation-active-config');
 
   if (body.lab === 'down') {
     showLabDown(chunksCfg);
     showLabDown(retrievalCfg);
     showLabDown(setCfg);
+    showLabDown(genCfg);
     return;
+  }
+
+  if (body.generation) {
+    if (body.generation.job_id !== followed.generationJobId) {
+      followed.generationJobId = body.generation.job_id;
+      const n = (body.generation.rows || []).length;
+      // Only an evaluation generates, and the last one may be older than the
+      // retrieval tables next door. Say which run this is, and hand the tables
+      // over only when they belong to this same run.
+      const sameRun = body.retrieval && body.retrieval.job_id === body.generation.job_id;
+      const traces = sameRun
+        ? new Map(body.retrieval.questions.map(q => [q.question_id, q.trace]))
+        : null;
+      genCfg.textContent = `${n} question${n === 1 ? '' : 's'} answered by the last `
+        + `evaluation — ${formatConfig(body.generation.config)}`
+        + (sameRun ? '' : ' (the Retrieval tab is showing a different, newer run)');
+      renderGeneration(body.generation, traces);
+    }
+  } else {
+    genCfg.textContent = 'lab: up — no evaluation yet. The Retrieve button does '
+      + 'not generate, so run one from "3 · Generation & scoring" on :9002';
+    document.getElementById('generation-questions').innerHTML = '';
+    document.getElementById('generation-ragas').innerHTML = '';
   }
 
   if (body.retrieval) {

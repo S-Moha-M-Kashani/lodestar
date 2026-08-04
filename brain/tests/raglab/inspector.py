@@ -22,7 +22,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 
-from . import evaluate, models, pipeline
+from . import evaluate, explain, models, pipeline
 from .config import LabConfig, load_lab_settings, settings_for_provider
 from .corpus import load_diary, load_ground_truth
 from .index import IndexRegistry, _lab_llm
@@ -96,6 +96,15 @@ def create_inspector_app() -> FastAPI:
     def health():
         return {'ok': True, 'storage': 'memory'}
 
+    @app.get('/api/explain')
+    def explain_metrics():
+        """What every score on the Generation tab means, behind its '!' mark.
+
+        Straight from `explain`, which is where `/api/options` on :9002 gets the
+        same text: a metric's definition written twice is a metric whose two
+        panels will eventually disagree about what it measures."""
+        return {'metrics': explain.measures(), 'help': explain.topics()}
+
     @app.get('/api/groundtruth')
     def groundtruth():
         return {'meta': ground_truth['meta'],
@@ -168,8 +177,8 @@ def create_inspector_app() -> FastAPI:
         else in this file."""
         jobs_index = _lab_get('/api/jobs')
         if jobs_index is None:
-            return {'lab': 'down', 'lab_url': lab_base_url(),
-                    'index': None, 'query': None, 'retrieval': None}
+            return {'lab': 'down', 'lab_url': lab_base_url(), 'index': None,
+                    'query': None, 'retrieval': None, 'generation': None}
 
         def newest_done(kind: str) -> dict | None:
             for entry in jobs_index.get('jobs', []):
@@ -243,10 +252,22 @@ def create_inspector_app() -> FastAPI:
                         'chunks_by_session': groups}
             return None
 
+        def generation() -> dict | None:
+            """What the newest *evaluation* wrote and how it scored.
+
+            Only an evaluation generates: the retrieval-only route stops before
+            the answerer by design, so after one of those this stays the last
+            evaluation rather than becoming empty — and it carries its own config
+            so a reader can see when that is an older run than the retrieval
+            tables beside it. The ideal answer is not here: it belongs to the
+            fixture, not to a run, and the page already holds the ground truth."""
+            out = view('run', ('rows', 'summary', 'ragas'))
+            return out if out and out.get('rows') else None
+
         query_view = view('query', ('trace', 'question', 'question_id', 'answer'))
         return {'lab': 'up', 'lab_url': lab_base_url(),
                 'index': newest_chunks(), 'query': query_view,
-                'retrieval': question_set()}
+                'retrieval': question_set(), 'generation': generation()}
 
     return app
 

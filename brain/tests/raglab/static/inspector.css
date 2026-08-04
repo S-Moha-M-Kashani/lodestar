@@ -38,3 +38,66 @@ body { margin: 0; background: var(--paper); color: var(--ink);
 .inspector-answer { margin-top: .75rem; padding: .6rem .8rem;
                      border: 1px solid var(--rule); background: var(--gray-row);
                      min-height: 1.2em; }
+
+/* --- the question restated above its own table ---------------------------- */
+/* The table answers "where did each chunk rank"; it cannot answer "ranked for
+   what, and what would a right answer have contained". So the question and its
+   expected facts sit directly above the rows they explain, rather than a tab
+   away in the ground truth. */
+.question-head { margin: .8rem 0 .4rem; }
+.question-head .qh-fa { font-size: 1rem; }
+.question-head .qh-en { opacity: .75; font-size: .82rem; }
+.question-head .qh-facts { margin: .4rem 0 0 1.1rem; padding: 0;
+                            font-size: .8rem; opacity: .9; }
+
+/* --- the chunk cell: 60 chars, and the whole thing on hover -------------- */
+/* The cell has to stay narrow or eight columns of ranks become unreadable, but
+   a 60-character preview is not enough to judge whether the retrieval was
+   right. So the full text is always in the DOM and revealed on hover — and on
+   keyboard focus, because a reveal only a mouse can open is a reveal half the
+   readers of this page never get. */
+.chunk-cell { position: relative; max-width: 22rem; }
+.chunk-cell .chunk-preview { cursor: help; }
+.chunk-reveal { display: none; position: absolute; z-index: 20; top: 1.4em;
+                 left: 0; width: 34rem; max-width: 60vw; max-height: 40vh;
+                 overflow-y: auto; padding: .6rem .7rem;
+                 border: 1px solid var(--ink); background: var(--paper);
+                 box-shadow: 0 .3rem .9rem rgb(0 0 0 / .28); white-space: pre-wrap;
+                 font-size: .82rem; line-height: 1.5; }
+.retrieval-row:hover .chunk-reveal,
+.chunk-cell:focus-within .chunk-reveal { display: block; }
+
+/* The gold evidence inside that full text. Green because this axis is the
+   ground truth's verdict, kept clear of the row's white/gray (also ground
+   truth, at chunk granularity) and of the step inks on the column headers. */
+.evidence-mark { background: hsl(125 55% 72%); color: #10240f;
+                  padding: 0 .1em; border-radius: .15em; }
+@media (prefers-color-scheme: dark) {
+  .evidence-mark { background: hsl(125 40% 34%); color: #eafbe8; }
+}
+.chunk-cell .no-evidence { opacity: .6; font-size: .74rem; display: block;
+                            margin-top: .4rem; }
+
+/* --- generation: the ideal answer, what was written, and the scores ------ */
+.gen-question { border-bottom: 1px solid var(--rule); padding-bottom: .9rem;
+                 margin-bottom: .9rem; }
+.gen-answers { display: flex; gap: .8rem; flex-wrap: wrap; margin: .5rem 0; }
+.gen-answer { flex: 1 1 20rem; padding: .55rem .7rem; border: 1px solid var(--rule); }
+.gen-answer h4 { margin: 0 0 .35rem; font-size: .78rem; opacity: .8;
+                  text-transform: uppercase; letter-spacing: .04em; }
+.gen-answer--ideal { background: var(--paper); }
+.gen-answer--actual { background: var(--gray-row); }
+.gen-metrics { display: flex; gap: .5rem 1.2rem; flex-wrap: wrap;
+                font-size: .82rem; margin-top: .4rem; }
+.gen-metric b { font-weight: 700; }
+
+/* The '!' beside a score, and the sentence it opens — the same affordance the
+   lab's panel carries, reading the same served text. */
+.inspector-why { border: 1px solid var(--rule); background: transparent;
+                  color: inherit; cursor: pointer; font: inherit;
+                  font-size: .7rem; line-height: 1; padding: 0 .28em;
+                  margin-left: .3em; }
+.inspector-why:hover { border-color: hsl(0 60% 45%); color: hsl(0 60% 45%); }
+.inspector-why-text { display: block; font-size: .78rem; opacity: .9;
+                       margin: .3rem 0 .5rem; padding-left: .6rem;
+                       border-left: 2px solid var(--rule); max-width: 46rem; }

@@ -37,6 +37,40 @@ def mark_gold(candidate_texts: list[str],
     return out
 
 
+def evidence_spans(text: str, evidence_quotes: list[str]) -> list[list[int]]:
+    """Where a question's gold evidence sits inside one candidate's text, as
+    `[start, end]` character ranges in reading order.
+
+    This is what the Inspector paints green, which is why it is computed here
+    and not in the browser. `mark_gold` calls a candidate gold when the quote
+    contains it **as well as** when it contains the quote — a chunk smaller than
+    its quote is real evidence and must still be marked — but that candidate
+    holds no verbatim quote to highlight. Guessing a range for it would draw a
+    green stripe over text the ground truth never quoted, so those return
+    nothing and the row is gold with no highlight, which is the truth.
+
+    Overlapping and touching ranges are merged: two `<mark>` elements over the
+    same characters nest, and nested marks render as a darker stripe that reads
+    as a third kind of evidence. Verbatim `str.find` rather than the normaliser
+    the matching uses, because a range only means something against the exact
+    characters the page will render."""
+    found: list[list[int]] = []
+    for quote in evidence_quotes:
+        if not quote:
+            continue
+        start = text.find(quote)
+        while start != -1:
+            found.append([start, start + len(quote)])
+            start = text.find(quote, start + 1)
+    merged: list[list[int]] = []
+    for start, end in sorted(found):
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return merged
+
+
 def chunks_by_session(index) -> list[dict]:
     """Every chunk the index holds, grouped by session in index order — the
     'chunks after indexing' view. `by_session` is built in chunk order, which

@@ -13,6 +13,7 @@
       <button class="inspector-tab" id="tab-groundtruth" data-view="groundtruth">Ground truth</button>
       <button class="inspector-tab" id="tab-chunks" data-view="chunks" data-step="index">Chunks</button>
       <button class="inspector-tab" id="tab-retrieval" data-view="retrieval" data-step="retrieval">Retrieval</button>
+      <button class="inspector-tab" id="tab-generation" data-view="generation" data-step="generation">Generation</button>
     </nav>
   </header>
 
@@ -63,6 +64,16 @@
           <tbody></tbody>
         </table>
       </template>
+    </section>
+
+    <!-- Generation: everything the retrieval tab shows, plus the answer the
+         fixture says is right, the answer the experiment actually wrote, and
+         the scores for it — each score with the '!' that explains it. Only an
+         evaluation generates, so this view follows the last one of those. -->
+    <section id="view-generation" class="inspector-view" hidden>
+      <div class="inspector-active-config" id="generation-active-config"></div>
+      <div id="generation-ragas"></div>
+      <div id="generation-questions"></div>
     </section>
   </main>
   <script src="/inspector.js"></script>
