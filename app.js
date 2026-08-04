@@ -652,6 +652,26 @@
     });
   }
 
+  /** ask() with a text field. Resolves to the trimmed text, or null when
+   *  cancelled — which is why an empty string and a cancel are distinguishable
+   *  rather than both falsy-and-identical. */
+  function prompt({ title, label, value = '', okLabel = 'Save' }) {
+    return new Promise((resolve) => {
+      const dialog = $('#prompt-dialog');
+      $('#prompt-title').textContent = title;
+      $('#prompt-label').textContent = label;
+      const input = $('#prompt-input');
+      input.value = value;
+      $('#prompt-ok').textContent = okLabel;
+      dialog.returnValue = '';
+      dialog.addEventListener('close', () => resolve(
+        dialog.returnValue === 'ok' ? input.value.trim() : null), { once: true });
+      dialog.showModal();
+      input.focus();
+      input.select();
+    });
+  }
+
   /**
    * Move a card to a column, placed before the card with id `beforeId`
    * (or at the end of the column when beforeId is null).
@@ -2831,23 +2851,47 @@
 
   // `draft` holds the composer text across re-renders — render() rebuilds the
   // textarea, so anything typed (or dictated) has to live in state, not the DOM.
-  const assistantState = { messages: [], busy: false, draft: '', proposals: [], edits: [] };
+  //
+  // `sessionId` is the chat being read and written. Everything else about the
+  // Assistant is per-chat: the transcript, the window one turn carries, and what
+  // the drift nudge compares against. `drift` holds a verdict awaiting the user's
+  // answer, with the message it is about — the turn is NOT sent while it sits
+  // there. `driftDismissed` is per-chat and deliberately sticky: told once that
+  // this conversation is broad, the nudge must not ask again in it.
+  const assistantState = {
+    messages: [], busy: false, draft: '', proposals: [], edits: [],
+    sessionId: '', sessions: [], drift: null, driftDismissed: false,
+    historyOpen: false,
+  };
 
-  // The transcript outlives the tab. Only `messages` is stored: `busy` must
-  // never come back true — a reload landing mid-stream would restore a disabled
-  // composer with nothing running to re-enable it, and the view would look hung
-  // with no way out. Same write-behind-try/catch as the model picks: a private
-  // window that refuses storage loses its history, never its session.
-  const CHAT_KEY = KEY_PREFIX + 'chat';
+  // The chat list and every message live in assistant.db. localStorage keeps two
+  // things only: which chat was open, and a per-chat cache of the transcript.
+  //
+  // The cache is not the record — it is the crash net for what the record cannot
+  // hold. The brain writes a turn once the model has answered, so a turn that
+  // died before that (a 500, a dropped connection) exists nowhere else, and
+  // "never lose a thought" is the pillar this project is built on. On open the
+  // longer of the two wins, which is safe because the browser only ever appends:
+  // the cache can be ahead of the record by un-recorded turns, never different.
+  const CHAT_SESSION_KEY = KEY_PREFIX + 'chat-session';
+  const chatCacheKey = (id) => KEY_PREFIX + 'chat:' + id;
   const CHAT_KEEP = 200;
 
-  // What one request carries. CHAT_KEEP above is the READER's transcript —
-  // bigger is better and costs nothing. This is the MODEL's window: the first
-  // user message (where a conversation says what it is about) plus the newest
-  // CONTEXT_MESSAGES, trimmed again if they overrun CONTEXT_CHARS. Everything
-  // older stays on screen and in assistant.db, reachable through recall_chat —
-  // it just stops riding along on every turn, so turn fifty costs what turn
-  // five does. tests/context.test.js pins these against the brain's caps.
+  // Opening the Assistant resumes the chat you were in — unless you have been
+  // away long enough that yesterday's thread is plainly over, when a fresh one
+  // is the better guess. A judgement call, not a measurement: short enough that
+  // a new day starts a new chat, long enough to survive lunch. Written as one
+  // literal (four hours) rather than as arithmetic, because tests/context.test.js
+  // reads the number out of this source and can only read a literal.
+  const RESUME_WITHIN_MS = 14_400_000;
+
+  // What one request carries. CHAT_KEEP above is the READER's cache — bigger is
+  // better and costs nothing. This is the MODEL's window: the newest
+  // CONTEXT_MESSAGES of THIS chat, trimmed again if they overrun CONTEXT_CHARS.
+  // Everything older stays on screen and in assistant.db, reachable through
+  // recall_chat — it just stops riding along on every turn, so turn fifty costs
+  // what turn five does. tests/context.test.js pins these against the brain's
+  // caps.
   const CONTEXT_MESSAGES = 16;
   const CONTEXT_CHARS = 24_000;
 
@@ -2859,10 +2903,18 @@
   const replayable = (m) => !m.error && !m.partial
     && (m.role === 'user' || m.role === 'assistant');
 
-  /** The slice of a replayable history one request carries. Returns the
-   *  original message objects plus `from`, the index where the recent window
-   *  begins — 0 when nothing was left out — so the transcript can mark the
-   *  boundary with the same arithmetic the request used. */
+  /** The slice of a replayable history one request carries — a contiguous tail
+   *  of THIS chat, and nothing else. Returns the original message objects plus
+   *  `from`, the index where the window begins (0 when nothing was left out), so
+   *  the transcript can mark the boundary with the same arithmetic the request
+   *  used.
+   *
+   *  Nothing is pinned outside the budget. It used to be: the transcript's first
+   *  user message rode along on every turn to say what the conversation was
+   *  about, which with one endless transcript meant the subject of the FIRST
+   *  conversation this board ever had was stapled to the top of every request
+   *  forever — so a new question got an answer about an old one. The session
+   *  boundary does that job now, and does it correctly. */
   function contextWindow(history) {
     let from = Math.max(0, history.length - CONTEXT_MESSAGES);
     let size = 0;
@@ -2874,23 +2926,15 @@
       size -= history[from].content.length;
       from += 1;
     }
-    if (from === 0) return { messages: history, from };
-    // The framing message rides outside the budget on purpose: two lines that
-    // keep the model from answering the last question having forgotten the
-    // task. The cheap alternative to a summary, which this project has twice
-    // decided against.
-    const framing = history.find((m) => m.role === 'user');
-    const recent = history.slice(from);
-    return {
-      messages: framing && !recent.includes(framing) ? [framing, ...recent] : recent,
-      from,
-    };
+    return { messages: history.slice(from), from };
   }
 
   const persistChat = () => {
+    if (!assistantState.sessionId) return;
     try {
-      localStorage.setItem(CHAT_KEY,
+      localStorage.setItem(chatCacheKey(assistantState.sessionId),
         JSON.stringify(assistantState.messages.slice(-CHAT_KEEP)));
+      localStorage.setItem(CHAT_SESSION_KEY, assistantState.sessionId);
     } catch { /* private mode or quota — the transcript still holds this session */ }
   };
 
@@ -2921,12 +2965,101 @@
     return out;
   }
 
-  try {
-    const saved = JSON.parse(localStorage.getItem(CHAT_KEY) || '[]');
-    if (Array.isArray(saved)) {
-      assistantState.messages = saved.map(restoredMessage).filter(Boolean);
+  /** The cached transcript for one chat, or [] when there is none. */
+  function cachedChat(id) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(chatCacheKey(id)) || '[]');
+      return Array.isArray(saved) ? saved.map(restoredMessage).filter(Boolean) : [];
+    } catch { return []; }   // unreadable cache — the record is the truth anyway
+  }
+
+  const newSessionId = () => 'chat-' + uid();
+
+  /** Start a fresh chat. Nothing is written: an empty chat is not persisted
+   *  until its first message, so pressing New chat twice — or glancing at the
+   *  Board and coming back — cannot litter the history panel. */
+  function startNewChat({ focus = true } = {}) {
+    assistantState.sessionId = newSessionId();
+    assistantState.messages = [];
+    assistantState.drift = null;
+    assistantState.driftDismissed = false;
+    assistantState.historyOpen = false;
+    chatScroll = { top: 0, pinned: true };
+    try { localStorage.setItem(CHAT_SESSION_KEY, assistantState.sessionId); }
+    catch { /* private mode */ }
+    if (view === 'assistant') {
+      render();
+      if (focus) document.getElementById('chat-input')?.focus();
     }
-  } catch { /* unreadable transcript — start empty rather than fail the boot */ }
+  }
+
+  /** Open an existing chat: its transcript from the record, or the local cache
+   *  if that is ahead (a turn that died before the brain could record it). */
+  async function openChatSession(id) {
+    assistantState.sessionId = id;
+    assistantState.drift = null;
+    assistantState.driftDismissed = false;
+    assistantState.historyOpen = false;
+    const cached = cachedChat(id);
+    assistantState.messages = cached;
+    chatScroll = { top: 0, pinned: true };
+    if (view === 'assistant') render();
+    try {
+      const res = await fetch('/api/chat/sessions/' + encodeURIComponent(id),
+        { headers: { Accept: 'application/json' } });
+      if (res.ok) {
+        const data = await res.json();
+        const recorded = (data.messages || []).map(restoredMessage).filter(Boolean);
+        // The record wins unless the cache is ahead of it. The browser only
+        // appends, so a longer cache is the record plus turns it never saw.
+        if (recorded.length >= cached.length) assistantState.messages = recorded;
+      }
+    } catch { /* offline — the cache is what we have, and it is enough to read */ }
+    try { localStorage.setItem(CHAT_SESSION_KEY, id); } catch { /* private mode */ }
+    persistChat();
+    if (view === 'assistant') render();
+  }
+
+  /** Refresh the history list. */
+  async function refreshChatSessions() {
+    try {
+      const res = await fetch('/api/chat/sessions', { headers: { Accept: 'application/json' } });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data.sessions)) {
+        assistantState.sessions = data.sessions;
+        if (view === 'assistant') render();
+      }
+    } catch { /* offline — leave the list as it was */ }
+  }
+
+  /** Decide which chat the Assistant opens with. Resume the most recent one if
+   *  it was live recently; otherwise start a new one, because a thread you left
+   *  yesterday is over and continuing it is how a fresh question gets an answer
+   *  about an old subject. Runs once. */
+  let chatOpened = false;
+  async function ensureChatSession() {
+    if (chatOpened) return;
+    chatOpened = true;
+    // The pre-sessions transcript key. Dropped rather than migrated: assistant.db
+    // already holds every turn it held, and the boot migration has filed them
+    // under "Earlier conversations". All this key has that the record does not is
+    // error bubbles and abandoned partials — decoration, not the user's thoughts.
+    try { localStorage.removeItem(KEY_PREFIX + 'chat'); } catch { /* private mode */ }
+    await refreshChatSessions();
+    const remembered = (() => {
+      try { return localStorage.getItem(CHAT_SESSION_KEY) || ''; } catch { return ''; }
+    })();
+    // The remembered chat first — it is where the reader was — and only then the
+    // newest, for a browser that has never had one.
+    const resumable = assistantState.sessions.find((s) => s.id === remembered)
+      || assistantState.sessions[0];
+    if (resumable && Date.now() - resumable.updatedAt <= RESUME_WITHIN_MS) {
+      await openChatSession(resumable.id);
+      return;
+    }
+    startNewChat({ focus: false });
+  }
 
   // Model choices for the brain, one per capability. Only the text pick has
   // an effect today — it rides along on every /api/agent/chat request (the
@@ -3504,6 +3637,11 @@
     const toolbar = document.createElement('div');
     toolbar.className = 'assistant-toolbar';
     toolbar.appendChild(renderRecallPanel());
+    // Which chat you are in, and the two things you do about it. In the toolbar
+    // rather than behind the ⚙: a setting is chosen once and left alone, whereas
+    // starting a chat and finding an old one are things you reach for while
+    // reading. Still a panel and not a rail — see the width check in the e2e.
+    toolbar.appendChild(renderChatSwitcher());
     const cost = renderSessionCost();
     if (cost) toolbar.appendChild(cost);
     const extrasBtn = document.createElement('button');
@@ -3526,6 +3664,8 @@
     extras.appendChild(renderChatActions());
     extras.appendChild(renderChatSettings());
     sheet.appendChild(extras);
+
+    if (assistantState.historyOpen) sheet.appendChild(renderChatHistory());
 
     // Anything waiting on the user shares one pinned strip directly under the
     // row above. Pinned because it used to scroll away: it is above the
@@ -3592,6 +3732,11 @@
 
     if (voiceState.phase === 'recording') sheet.appendChild(renderRecordingBar());
 
+    // Directly above the composer, because that is where the message it is about
+    // still sits — and because it is asking about what you are on the point of
+    // sending, not about what you have read.
+    if (assistantState.drift) sheet.appendChild(renderChatDrift());
+
     const form = document.createElement('form');
     form.className = 'chat-composer';
     const input = document.createElement('textarea');
@@ -3615,10 +3760,9 @@
     form.addEventListener('submit', (event) => {
       event.preventDefault();
       const text = input.value.trim();
-      if (text && !assistantState.busy) {
-        assistantState.draft = '';
-        sendChat(text);
-      }
+      // The draft is NOT cleared here: submitChat may hold the turn back to ask
+      // whether it belongs in this chat, and the words have to still be there.
+      if (text && !assistantState.busy) submitChat(text);
     });
     input.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' && !event.shiftKey) {
@@ -3635,6 +3779,223 @@
       log.scrollTop = chatScroll.pinned ? log.scrollHeight : chatScroll.top;
     });
     return sheet;
+  }
+
+  /** The current chat's title, as the button that opens the history — so the
+   *  control that moves you between chats is also the label saying where you
+   *  are — plus New chat beside it. */
+  function renderChatSwitcher() {
+    const wrap = document.createElement('div');
+    wrap.className = 'chat-switcher';
+
+    const current = assistantState.sessions.find((s) => s.id === assistantState.sessionId);
+    const history = document.createElement('button');
+    history.type = 'button';
+    history.id = 'chat-history-btn';
+    history.className = 'btn ghost chat-history-btn';
+    // An unsaved new chat has no row in the list yet, and saying so is more
+    // honest than borrowing the title of the chat you just left.
+    history.textContent = (current ? current.title : 'New chat') + ' ▾';
+    history.title = 'Your chats';
+    history.setAttribute('aria-haspopup', 'true');
+    history.setAttribute('aria-expanded', String(assistantState.historyOpen));
+    history.setAttribute('aria-controls', 'chat-history');
+    history.addEventListener('click', () => {
+      assistantState.historyOpen = !assistantState.historyOpen;
+      // Asked for on opening, so a chat added in another tab is there.
+      if (assistantState.historyOpen) refreshChatSessions();
+      render();
+    });
+
+    const fresh = document.createElement('button');
+    fresh.type = 'button';
+    fresh.id = 'chat-new';
+    fresh.className = 'btn ghost chat-new';
+    fresh.textContent = '+';
+    fresh.title = 'New chat — a clean context, nothing carried over';
+    fresh.setAttribute('aria-label', 'New chat');
+    fresh.addEventListener('click', () => {
+      // No confirmation: nothing is destroyed. The chat you were in is in the
+      // record and one click away in the panel above.
+      startNewChat();
+      announce('New chat');
+    });
+
+    wrap.append(history, fresh);
+    return wrap;
+  }
+
+  /** The chats, grouped by day, newest first. A panel across the sheet rather
+   *  than a rail beside it: a rail was measured costing the transcript 300px and
+   *  was removed, and this list is read occasionally, not watched. */
+  function renderChatHistory() {
+    const panel = document.createElement('div');
+    panel.id = 'chat-history';
+    panel.className = 'chat-history';
+
+    if (!assistantState.sessions.length) {
+      const empty = document.createElement('p');
+      empty.className = 'chat-status';
+      empty.textContent = 'No earlier chats yet — this is the first one.';
+      panel.appendChild(empty);
+      return panel;
+    }
+
+    let lastGroup = '';
+    for (const session of assistantState.sessions) {
+      const group = dayGroupLabel(session.updatedAt);
+      if (group !== lastGroup) {
+        lastGroup = group;
+        const heading = document.createElement('div');
+        heading.className = 'chat-history-day';
+        heading.textContent = group;
+        panel.appendChild(heading);
+      }
+      panel.appendChild(renderChatHistoryRow(session));
+    }
+    return panel;
+  }
+
+  /** Today / Yesterday / the date — the way a reader actually looks for a
+   *  conversation they half-remember. */
+  function dayGroupLabel(ms) {
+    const then = new Date(ms);
+    const today = new Date();
+    const midnight = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    const days = Math.round((midnight(today) - midnight(then)) / 86_400_000);
+    if (days <= 0) return 'Today';
+    if (days === 1) return 'Yesterday';
+    if (days < 7) return `${days} days ago`;
+    return then.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  }
+
+  function renderChatHistoryRow(session) {
+    const row = document.createElement('div');
+    row.className = 'chat-history-item';
+    if (session.id === assistantState.sessionId) row.classList.add('current');
+
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'chat-history-open';
+    const title = document.createElement('span');
+    title.className = 'chat-history-title';
+    title.textContent = session.title;
+    const count = document.createElement('span');
+    count.className = 'chat-history-count';
+    count.textContent = session.messageCount === 1 ? '1 message' : `${session.messageCount} messages`;
+    open.append(title, count);
+    open.addEventListener('click', () => {
+      if (session.id === assistantState.sessionId) {
+        assistantState.historyOpen = false;
+        render();
+        return;
+      }
+      openChatSession(session.id);
+      announce(`Opened ${session.title}`);
+    });
+
+    const rename = document.createElement('button');
+    rename.type = 'button';
+    rename.className = 'btn ghost chat-history-rename';
+    rename.textContent = 'Rename';
+    rename.addEventListener('click', () => renameChat(session));
+
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'btn ghost chat-history-delete';
+    remove.textContent = 'Delete';
+    remove.addEventListener('click', () => deleteChat(session));
+
+    row.append(open, rename, remove);
+    return row;
+  }
+
+  async function renameChat(session) {
+    const title = await prompt({
+      title: 'Rename chat', label: 'Title', value: session.title, okLabel: 'Rename',
+    });
+    if (title === null) return;
+    try {
+      const res = await fetch('/api/chat/sessions/' + encodeURIComponent(session.id), {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title }),
+      });
+      if (!res.ok) throw new Error('the server refused that title');
+      await refreshChatSessions();
+      announce('Chat renamed');
+    } catch (err) {
+      announce(`Rename failed — ${err.message}`);
+    }
+  }
+
+  async function deleteChat(session) {
+    const go = await ask({
+      title: 'Delete chat',
+      message: `Delete “${session.title}”? Its messages stay in the record, but the `
+        + 'chat leaves this list and the assistant stops recalling from it.',
+      okLabel: 'Delete',
+    });
+    if (!go) return;
+    try {
+      const res = await fetch('/api/chat/sessions/' + encodeURIComponent(session.id),
+        { method: 'DELETE' });
+      if (!res.ok) throw new Error(`the server refused (${res.status})`);
+    } catch (err) {
+      announce(`Delete failed — ${err.message}`);
+      return;
+    }
+    try { localStorage.removeItem(chatCacheKey(session.id)); } catch { /* private mode */ }
+    // The record no longer returns those rows; this is what takes them out of
+    // the recall index too, rather than leaving a deleted chat answering
+    // questions until the brain next boots.
+    fetch('/api/rag/chat/reindex', { method: 'POST' }).catch(() => {});
+    await refreshChatSessions();
+    if (session.id === assistantState.sessionId) startNewChat({ focus: false });
+    else render();
+    announce('Chat deleted');
+  }
+
+  /** The nudge. Shown instead of sending, with the message still in the
+   *  composer: a suggestion you cannot refuse is a decision, so both answers are
+   *  one click and the turn goes either way. */
+  function renderChatDrift() {
+    const strip = document.createElement('div');
+    strip.className = 'chat-drift';
+
+    const said = document.createElement('p');
+    said.className = 'chat-drift-text';
+    said.textContent = assistantState.drift.reason === 'opener'
+      ? 'That looks like the start of something new rather than part of this chat.'
+      : 'That looks like a new subject rather than part of this chat.';
+    strip.appendChild(said);
+
+    const actions = document.createElement('div');
+    actions.className = 'chat-drift-actions';
+
+    const fresh = document.createElement('button');
+    fresh.type = 'button';
+    fresh.className = 'btn primary';
+    fresh.textContent = 'Start a new chat';
+    fresh.addEventListener('click', () => {
+      const { text } = assistantState.drift;
+      startNewChat({ focus: false });
+      sendChat(text);
+    });
+
+    const stay = document.createElement('button');
+    stay.type = 'button';
+    stay.className = 'btn';
+    stay.textContent = 'Keep this one';
+    stay.addEventListener('click', () => {
+      const { text } = assistantState.drift;
+      // Told once that this conversation is broad, it must not ask again in it.
+      assistantState.driftDismissed = true;
+      sendChat(text);
+    });
+
+    actions.append(fresh, stay);
+    strip.appendChild(actions);
+    return strip;
   }
 
   // The rail's controls: one button out to the lab, and one menu holding what
@@ -4291,7 +4652,53 @@
     413: 'This conversation is too long for one turn — start a new chat.',
   };
 
+  /** Ask the brain whether this message belongs to this chat. Returns the
+   *  verdict when it does not, or null — which is also what every failure
+   *  returns. Fail open, deliberately: a detector that can block a turn is
+   *  worse than no detector, and this one runs in front of every message.
+   *
+   *  Skipped on the first message of a chat, where there is nothing to drift
+   *  from — which is also the one case a request could only answer "no". */
+  async function checkTopicDrift(text) {
+    if (assistantState.driftDismissed) return null;
+    const recent = assistantState.messages
+      .filter((m) => m.role === 'user' && replayable(m))
+      .slice(-CONTEXT_MESSAGES).map((m) => m.content);
+    if (!recent.length) return null;
+    try {
+      const res = await fetch('/api/agent/topic-check', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recent, text }),
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data && data.changed ? data : null;
+    } catch { return null; }
+  }
+
+  /** What Send does. Either the turn goes, or it is held back and the reader is
+   *  offered a new chat — holding it back is what makes the offer free: nothing
+   *  has been spent, and there is no answer sitting in the wrong chat. */
+  async function submitChat(text) {
+    if (assistantState.busy) return;
+    const verdict = await checkTopicDrift(text);
+    if (verdict) {
+      assistantState.drift = { text, reason: verdict.reason };
+      render();
+      return;
+    }
+    sendChat(text);
+  }
+
   async function sendChat(text) {
+    // Cleared here rather than by the submit handler: while a drift nudge is on
+    // screen the message has not been sent, and a composer emptied of a question
+    // nobody answered is the loss this project does not do.
+    assistantState.draft = '';
+    assistantState.drift = null;
+    // A chat exists the moment it is talked into. Nothing was written while it
+    // was empty, so this is where a brand-new chat gets its id.
+    if (!assistantState.sessionId) assistantState.sessionId = newSessionId();
     assistantState.messages.push({ role: 'user', content: text });
     // Sending is joining the bottom of the conversation: whatever the reader was
     // scrolled to, they want to see what they just said and what answers it.
@@ -4314,6 +4721,10 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: carried,
+          // Which chat this turn belongs to. The brain records the turn under it
+          // and scopes recall_chat away from it — the only reason the brain needs
+          // to know, since the browser does its own windowing.
+          session_id: assistantState.sessionId,
           model: assistantModels.text,
           // Always sent, including against a brain configured as 'fake'. The
           // offline contract is the server's to keep (make_chat_model checks
@@ -4399,6 +4810,10 @@
     render();
     const nextInput = document.getElementById('chat-input');
     if (nextInput) nextInput.focus();
+    // The brain has just recorded the turn, so the chat's title, its position in
+    // the list, and its message count have all changed. A first turn is also
+    // what created the chat row at all.
+    refreshChatSessions();
   }
 
   async function adoptServerBoard() {
@@ -5231,16 +5646,21 @@
       okLabel: 'Import',
     });
     if (!go) return;
+    // Its own chat, never the reserved 'adhoc' one an unnamed batch lands in: an
+    // imported transcript should arrive as a conversation you can open, not as
+    // loose rows at the bottom of somebody else's.
+    const importedInto = newSessionId();
     try {
       const res = await fetch('/api/chat/messages', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ messages: clean }),
+        body: JSON.stringify({ sessionId: importedInto, messages: clean }),
       });
       if (!res.ok) throw new Error(`the server refused the import (${res.status})`);
     } catch (err) {
       announce(`Import failed — ${err.message}`);
       return;
     }
+    await refreshChatSessions();
     // The record is the truth; the recall index catches up here — or at the
     // brain's next start, which runs the same sync, if it is off or away.
     let indexed = ' (recall index catches up at the next brain start)';
@@ -6807,8 +7227,13 @@
     view = next;
     try { localStorage.setItem(VIEW_KEY, view); } catch (_) { /* private mode */ }
     syncViewButtons();
-    // Entering the Assistant: make sure the list is current, not stale.
-    if (view === 'assistant') { refreshProposals(); refreshEdits(); }
+    // Entering the Assistant: make sure the lists are current, not stale, and
+    // that a chat is open at all — the first visit of a session is where the
+    // resume-or-start-fresh decision gets made.
+    if (view === 'assistant') {
+      refreshProposals(); refreshEdits();
+      ensureChatSession().then(refreshChatSessions);
+    }
     // Entering the lab: probe again unless it already answered. The usual reason
     // for coming back is that the service was just started in a terminal, and
     // making the developer find a retry button for that is silly.
@@ -6829,4 +7254,8 @@
   initServerSync();    // then reconcile with the SQLite backend if one is running
   refreshProposals();  // and surface anything the Assistant left awaiting approval
   refreshEdits();
+  // Which chat is open. Unconditional rather than only when the Assistant is the
+  // view being restored: the transcript now comes from the record, so a reload
+  // straight into the Assistant must not paint an empty sheet while it waits.
+  ensureChatSession();
 })();
