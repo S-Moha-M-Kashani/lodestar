@@ -8,7 +8,11 @@
 </head>
 <body>
   <header class="inspector-header">
-    <h1>RAG Lab Inspector</h1>
+    <h1>RAG Lab &middot; Inspector</h1>
+    <!-- The lab is another process and may not be running; say which, and stop
+         the reader wondering whether an empty view means "nothing ran" or
+         "nothing is listening". -->
+    <span class="follow-state" id="follow-state">looking for the lab&hellip;</span>
     <nav class="inspector-tabs">
       <button class="inspector-tab" id="tab-groundtruth" data-view="groundtruth">Ground truth</button>
       <button class="inspector-tab" id="tab-chunks" data-view="chunks" data-step="index">Chunks</button>
@@ -52,9 +56,12 @@
           <thead>
             <tr>
               <th>chunk</th>
-              <th data-step="retrieval">dense rank</th>
-              <th data-step="retrieval">bm25 rank</th>
-              <th data-step="retrieval">RRF rank</th>
+              <!-- The path column is the three ranks drawn as a shape; the same
+                   three numbers follow it, so nothing lives only in the picture. -->
+              <th data-step="retrieval">path</th>
+              <th data-step="retrieval">dense</th>
+              <th data-step="retrieval">bm25</th>
+              <th data-step="retrieval">RRF</th>
               <th data-step="retrieval">rerank</th>
               <th data-step="generation">grade</th>
               <th>kept</th>

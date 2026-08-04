@@ -1,5 +1,6 @@
-// The Inspector's whole frontend: three views over the read-only :9003 API,
-// two of which now auto-follow whatever the lab (:9002) actually ran.
+// The Inspector's whole frontend: four views over the read-only :9003 API —
+// ground truth, chunks, retrieval, generation — three of which auto-follow
+// whatever the lab (:9002) actually ran.
 const CHOSEN = {
   index: { chunker: 'semantic-drift', embedder: 'sentence-transformers' },
   retrieval: { retriever: 'hybrid-rrf', k: 8, reranker: 'lexical',
@@ -220,18 +221,58 @@ function chunkCell(candidate) {
     + `<div class="chunk-reveal" dir="rtl">${highlighted(text, spans)}${footnote}</div></td>`;
 }
 
+// A candidate's path through the ranking, as a shape. One cell per step that
+// produces a rank — dense, BM25, then the RRF fusion of the two — with bar
+// height standing for how high the chunk was at that step. Reading three
+// numbers and subtracting them is what this replaces: a chunk that BM25 loved
+// and dense missed has a silhouette you recognise across twenty rows.
+//
+// `cap` is the number of candidates in this table, so the scale is the run's own
+// depth rather than an arbitrary constant. aria-hidden, because the same three
+// ranks follow in their own columns.
+function ladder(candidate, cap) {
+  const steps = [['dense', candidate.dense_rank], ['bm25', candidate.bm25_rank],
+                 ['RRF', candidate.fused_rank]];
+  if (steps.every(([, rank]) => !rank)) {
+    return '<td><span class="ladder-none">·</span></td>';
+  }
+  const cells = steps.map(([, rank]) => {
+    // Rank 1 is full height; anything past the table's depth keeps a stub, so a
+    // bar is never absent in a way that could read as "no data".
+    const height = rank ? Math.max(8, Math.round(100 * (1 - (rank - 1) / Math.max(1, cap)))) : 0;
+    return `<i class="ladder-step" style="--h:${height}%"></i>`;
+  }).join('');
+  const label = steps.map(([name, rank]) => `${name} ${rank || '—'}`).join(' · ');
+  return `<td><span class="ladder" title="${escapeHtml(label)}" aria-hidden="true">`
+    + `${cells}</span></td>`;
+}
+
+// A table inside its own scroller, so nine columns on a phone move the table
+// and never the page. The wrapper only scrolls at narrow widths (see the media
+// query) — on a wide screen it would clip the reveal hanging below a row.
+function scrollable(table) {
+  const box = document.createElement('div');
+  box.className = 'table-scroll';
+  box.appendChild(table);
+  return box;
+}
+
 function retrievalTable(candidates) {
   const table = document.getElementById('retrieval-table-template')
     .content.firstElementChild.cloneNode(true);
   const body = table.querySelector('tbody');
+  const rows = candidates || [];
   const cell = v => (v === null || v === undefined) ? '·' : v;
-  for (const c of candidates || []) {
+  for (const c of rows) {
     const tr = document.createElement('tr');
     tr.className = 'retrieval-row ' + (c.gold ? 'retrieval-row--gold' : 'retrieval-row--plain');
-    tr.innerHTML = chunkCell(c)
-      + `<td>${cell(c.dense_rank)}</td><td>${cell(c.bm25_rank)}</td>
-      <td>${cell(c.fused_rank)}</td><td>${cell(c.rerank_score)}</td>
-      <td>${cell(c.grade_score)}</td><td>${c.kept ? '✓' : '✗'}</td>
+    tr.innerHTML = chunkCell(c) + ladder(c, rows.length)
+      + `<td class="num">${cell(c.dense_rank)}</td>
+      <td class="num">${cell(c.bm25_rank)}</td>
+      <td class="num">${cell(c.fused_rank)}</td>
+      <td class="num">${cell(c.rerank_score)}</td>
+      <td class="num">${cell(c.grade_score)}</td>
+      <td>${c.kept ? '✓' : '✗'}</td>
       <td>${c.gold ? '●' : ''}</td>`;
     body.appendChild(tr);
   }
@@ -246,14 +287,23 @@ function questionHead(questionId, fallbackFa) {
   return `<div class="question-head">`
     + `<div class="qh-fa" dir="rtl">${escapeHtml(q.question_fa || fallbackFa || '')}</div>`
     + `<div class="qh-en">${escapeHtml(q.question_en || '')}</div>`
-    + (facts ? `<div class="qh-en">expected facts:</div><ol class="qh-facts">${facts}</ol>` : '')
+    + (facts ? `<div class="qh-label">what a right answer contains</div>`
+             + `<ol class="qh-facts">${facts}</ol>` : '')
     + `</div>`;
+}
+
+// The one-line summary a collapsed question shows. Same shape in both views, so
+// a reader scanning either list is reading the same sentence.
+function questionSummary(id, type, difficulty, tally) {
+  return `<summary><span class="q-id">${escapeHtml(id)}</span> `
+    + `<span class="q-tally">${escapeHtml(type || '')} · ${escapeHtml(difficulty || '')}`
+    + `${tally ? ' — ' + escapeHtml(tally) : ''}</span></summary>`;
 }
 
 function renderRetrievalRows(candidates) {
   const host = document.getElementById('retrieval-body');
   host.innerHTML = '';
-  host.appendChild(retrievalTable(candidates));
+  host.appendChild(scrollable(retrievalTable(candidates)));
 }
 
 // The followed experiment: one collapsible table per selected question, with
@@ -268,11 +318,10 @@ function renderQuestionTables(questions) {
     const kept = candidates.filter(c => c.kept).length;
     const det = document.createElement('details');
     det.className = 'retrieval-question';
-    det.innerHTML = `<summary><b>${escapeHtml(q.question_id)}</b> · ${escapeHtml(q.type || '')} · `
-      + `${escapeHtml(q.difficulty || '')} — ${candidates.length} candidates, ${kept} kept, `
-      + `${gold} gold</summary>`
+    det.innerHTML = questionSummary(q.question_id, q.type, q.difficulty,
+        `${candidates.length} candidates · ${kept} kept · ${gold} gold`)
       + questionHead(q.question_id, q.question_fa);
-    det.appendChild(retrievalTable(candidates));
+    det.appendChild(scrollable(retrievalTable(candidates)));
     host.appendChild(det);
   }
 }
@@ -322,37 +371,44 @@ function renderGeneration(view, traces) {
   const ragas = (view.ragas && view.ragas.metrics) || {};
   const keys = Object.keys(ragas);
   ragasHost.innerHTML = keys.length
-    ? '<div class="gen-answer" data-step="generation"><h4>judged over the whole run</h4>'
+    ? '<div class="gen-ragas"><h4>judged over the whole run</h4>'
       + metricLine(ragas, keys)
       + (view.ragas.decision !== null && view.ragas.decision !== undefined
-         ? `<div class="gen-metrics"><span class="gen-metric">decision score: `
+         ? `<div class="gen-metrics"><span class="gen-metric">decision score `
            + `<b>${fmt(view.ragas.decision)}</b>${whyMark('ragas_decision')}</span></div>` : '')
       + '</div>'
-    : '<div class="inspector-active-config">this run was not judged by RAGAS '
-      + '(ragas_mode=off), so only the deterministic scores below exist</div>';
+    : '<div class="inspector-active-config">no RAGAS judging on this run '
+      + '(ragas_mode=off) — the deterministic scores below are what exists</div>';
 
   host.innerHTML = '';
   for (const row of view.rows || []) {
     const gt = GT.get(row.id) || {};
-    const section = document.createElement('section');
-    section.className = 'gen-question';
-    section.innerHTML = questionHead(row.id, '')
+    // A collapsible block per question, exactly as the retrieval view lists
+    // them: the unit you reason about is one question, in both views.
+    const det = document.createElement('details');
+    det.className = 'gen-question';
+    const scored = GEN_METRICS.filter(k => row[k] !== undefined && row[k] !== null);
+    const tally = row.abstained ? 'abstained'
+      : `${scored.length} score${scored.length === 1 ? '' : 's'}`;
+    det.innerHTML = questionSummary(row.id, row.type, row.difficulty, tally)
+      + questionHead(row.id, '')
       + '<div class="gen-answers">'
-      + '<div class="gen-answer gen-answer--ideal"><h4>ideal answer (ground truth)</h4>'
+      + '<div class="gen-answer gen-answer--ideal"><h4>what the diary says</h4>'
       + `<div dir="rtl">${escapeHtml(gt.answer_fa || '—')}</div></div>`
-      + '<div class="gen-answer gen-answer--actual" data-step="generation">'
-      + `<h4>what the experiment wrote${row.abstained ? ' — it abstained' : ''}</h4>`
+      + '<div class="gen-answer gen-answer--actual">'
+      + `<h4>what this run wrote${row.abstained ? ' — it refused' : ''}</h4>`
       + `<div dir="rtl">${escapeHtml(row.answer || '—')}</div></div>`
       + '</div>'
       + metricLine(row, GEN_METRICS);
     const trace = traces && traces.get(row.id);
     if (trace) {
-      const det = document.createElement('details');
-      det.innerHTML = '<summary>the retrieval this answer was written from</summary>';
-      det.appendChild(retrievalTable(trace.candidates || []));
-      section.appendChild(det);
+      const inner = document.createElement('details');
+      inner.className = 'gen-trace';
+      inner.innerHTML = '<summary>the retrieval this answer was written from</summary>';
+      inner.appendChild(scrollable(retrievalTable(trace.candidates || [])));
+      det.appendChild(inner);
     }
-    host.appendChild(section);
+    host.appendChild(det);
   }
 }
 
@@ -361,7 +417,18 @@ function renderGeneration(view, traces) {
 // re-rendering on every tick would collapse the user's expanded <details>. ---
 
 function showLabDown(el) {
-  el.textContent = 'lab: down — start it with `npm run raglab`';
+  el.textContent = 'Nothing to show until the lab is running. Start it with '
+    + '`npm run raglab`.';
+}
+
+// One line in the header, so an empty view never leaves the reader guessing
+// whether nothing ran or nothing is listening.
+function setFollowState(body) {
+  const el = document.getElementById('follow-state');
+  el.dataset.lab = body.lab;
+  el.textContent = body.lab === 'up'
+    ? `following the lab at ${body.lab_url}`
+    : `cannot reach the lab at ${body.lab_url}`;
 }
 
 function renderFollow(body) {
@@ -369,6 +436,7 @@ function renderFollow(body) {
   const retrievalCfg = document.getElementById('retrieval-active-config');
   const setCfg = document.getElementById('retrieval-set-config');
   const genCfg = document.getElementById('generation-active-config');
+  setFollowState(body);
 
   if (body.lab === 'down') {
     showLabDown(chunksCfg);
@@ -395,8 +463,10 @@ function renderFollow(body) {
       renderGeneration(body.generation, traces);
     }
   } else {
-    genCfg.textContent = 'lab: up — no evaluation yet. The Retrieve button does '
-      + 'not generate, so run one from "3 · Generation & scoring" on :9002';
+    // An empty view is a place to say what to do next, not to report a state
+    // the header already reports.
+    genCfg.textContent = 'Run an evaluation from "3 · Generation & scoring" on '
+      + 'the lab to see answers here. Retrieve on its own does not write any.';
     document.getElementById('generation-questions').innerHTML = '';
     document.getElementById('generation-ragas').innerHTML = '';
   }
@@ -412,7 +482,8 @@ function renderFollow(body) {
       renderQuestionTables(body.retrieval.questions);
     }
   } else {
-    setCfg.textContent = 'lab: up — no retrieval run or evaluation yet';
+    setCfg.textContent = 'Press Retrieve on the lab, or run an evaluation, to '
+      + 'get one table per selected question.';
   }
 
   if (body.index) {
@@ -430,7 +501,7 @@ function renderFollow(body) {
       renderChunkGroups(document.getElementById('chunks-body'), groups);
     }
   } else {
-    chunksCfg.textContent = 'lab: up — nothing built yet';
+    chunksCfg.textContent = 'Build an index on the lab to read its chunks here.';
   }
 
   if (body.query) {
@@ -441,7 +512,8 @@ function renderFollow(body) {
       document.getElementById('retrieval-answer').textContent = body.query.answer || '';
     }
   } else {
-    retrievalCfg.textContent = 'lab: up — no finished query job yet';
+    retrievalCfg.textContent = 'Ask one question from the query box on the lab '
+      + 'to trace it here.';
   }
 }
 

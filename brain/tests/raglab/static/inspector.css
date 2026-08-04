@@ -1,103 +1,445 @@
+/* The RAG Lab Inspector, in the board's own hand.
+ *
+ * This page used to carry a palette of its own (#faf8f2 paper, #23201a ink) that
+ * resembled the board without matching it, which reads as a different product
+ * rather than the same one's instrument panel. Every token below is the board's
+ * (styles.css), including the pen inks: the lab's rule that colour means a
+ * pipeline step is served by *which pen* wrote a thing — amber for index, green
+ * for retrieval, blue for generation — rather than by hues invented here.
+ *
+ * Farsi gets a stack of its own. It was being set in SF Mono, which has no
+ * Persian glyphs to speak of, so the corpus this page exists to display arrived
+ * letter-spaced and broken. A page about a Farsi diary has to be able to render
+ * Farsi.
+ */
 :root {
-  --paper: #faf8f2; --ink: #23201a; --rule: #d9cdb8;
-  --step-index-h: 32; --step-retrieval-h: 145; --step-generation-h: 245;
-  --gray-row: #ece7dd;
+  --display: "American Typewriter", "Courier New", "Courier", serif;
+  --body: "Avenir Next", "Avenir", "Segoe UI", system-ui, sans-serif;
+  --mono: "SF Mono", "Menlo", "Consolas", monospace;
+  /* Persian first, then the faces macOS and Windows actually ship. */
+  --farsi: "Vazirmatn", "IRANSansX", "IRANSans", "Geeza Pro", "Tahoma",
+           "Segoe UI", sans-serif;
+
+  --paper: #f5f7f2;
+  --grid: rgba(47, 90, 143, 0.08);
+  --card: #ffffff;
+  --card-line: #dfe4dc;
+  --line: #d3dad1;
+  --ink: #22303a;
+  --ink-soft: #64707a;
+  --rule-red: #c8574a;
+
+  --ink-amber: #a8752c;     /* index */
+  --ink-green: #4a7a54;     /* retrieval */
+  --ink-blue: #2f5a8f;      /* generation */
+
+  /* The row shading is the ground truth's verdict at chunk granularity: paper
+     for relevant, a shade back for not. It used to be a 4% difference nobody
+     could see; a table's most important distinction has to survive a glance. */
+  --row-plain: #e7ebe4;
+  /* Evidence: a highlighter wash, plus an underline so the mark never depends
+     on hue alone. Kept apart from the retrieval pen by treatment — a wash is
+     never a rule, and a rule is never a wash. */
+  --evidence: #a9e6b0;
+  --evidence-rule: #3f8a4c;
+  --evidence-ink: #10240f;
 }
+
 @media (prefers-color-scheme: dark) {
-  :root { --paper: #1a1813; --ink: #ece7dd; --rule: #3a352b; --gray-row: #26221b; }
+  :root {
+    --paper: #20241f;
+    --grid: rgba(170, 195, 220, 0.055);
+    --card: #2a2f29;
+    --card-line: #3d453d;
+    --line: #39413a;
+    --ink: #e6e4d8;
+    --ink-soft: #9aa69b;
+    --rule-red: #d07a6c;
+    --ink-amber: #d2a35c;
+    --ink-green: #86b08c;
+    --ink-blue: #7fa7d9;
+    /* Well below --card, not a shade beside it. In light mode paper-versus-shade
+       is obvious; the first dark build had #23281f against a #2a2f29 card, which
+       is seven units apart and left the table's most important distinction
+       invisible on exactly the theme this page is read in at night. */
+    --row-plain: #191d18;
+    --evidence: #2f6a3a;
+    --evidence-rule: #86b08c;
+    --evidence-ink: #eafbe8;
+  }
 }
-body { margin: 0; background: var(--paper); color: var(--ink);
-       font-family: "IBM Plex Mono", ui-monospace, monospace; }
-.inspector-header { padding: .75rem 1rem; border-bottom: 2px solid var(--rule); }
-.inspector-tabs { display: flex; gap: .5rem; margin-top: .5rem; }
-.inspector-tab { padding: .35rem .8rem; border: 1px solid var(--rule);
-                 background: transparent; color: inherit; cursor: pointer; }
-.inspector-tab[aria-selected="true"] { border-bottom-color: var(--paper);
-                 font-weight: 700; }
-[data-step="index"] { border-left: 4px solid hsl(var(--step-index-h) 55% 50%); }
-[data-step="retrieval"] { border-left: 4px solid hsl(var(--step-retrieval-h) 45% 42%); }
-[data-step="generation"] { border-left: 4px solid hsl(var(--step-generation-h) 55% 55%); }
-.inspector-view { padding: 1rem; }
-.inspector-controls { display: flex; gap: .75rem; align-items: center;
-                      margin-bottom: 1rem; }
-.gt-row, .chunk-session { border-bottom: 1px solid var(--rule); padding: .5rem 0; }
-.retrieval-table { width: 100%; border-collapse: collapse; }
-.retrieval-table th, .retrieval-table td { padding: .3rem .5rem; text-align: left;
-                      border-bottom: 1px solid var(--rule); vertical-align: top; }
-.retrieval-row--gold { background: var(--paper); }     /* relevant */
-.retrieval-row--plain { background: var(--gray-row); }  /* not relevant */
 
-/* The config that produced whatever is currently on screen — followed from
-   the lab (:9002) or from the manual fallback controls, either way stated
-   above the results rather than left for the reader to guess. */
-.inspector-active-config { font-size: .85rem; opacity: .8; margin-bottom: .6rem;
-                            min-height: 1.1em; }
+* { box-sizing: border-box; }
 
-/* The generation half of a followed query: the answer text beside its
-   retrieval table, inked like every other generation-step element. */
-.inspector-answer { margin-top: .75rem; padding: .6rem .8rem;
-                     border: 1px solid var(--rule); background: var(--gray-row);
-                     min-height: 1.2em; }
+body {
+  margin: 0;
+  font-family: var(--body);
+  color: var(--ink);
+  background-color: var(--paper);
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 24px 24px;
+  line-height: 1.5;
+}
 
-/* --- the question restated above its own table ---------------------------- */
-/* The table answers "where did each chunk rank"; it cannot answer "ranked for
-   what, and what would a right answer have contained". So the question and its
-   expected facts sit directly above the rows they explain, rather than a tab
-   away in the ground truth. */
-.question-head { margin: .8rem 0 .4rem; }
-.question-head .qh-fa { font-size: 1rem; }
-.question-head .qh-en { opacity: .75; font-size: .82rem; }
-.question-head .qh-facts { margin: .4rem 0 0 1.1rem; padding: 0;
-                            font-size: .8rem; opacity: .9; }
+button { font: inherit; cursor: pointer; color: inherit; }
+select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--rule-red); outline-offset: 2px; }
 
-/* --- the chunk cell: 60 chars, and the whole thing on hover -------------- */
-/* The cell has to stay narrow or eight columns of ranks become unreadable, but
-   a 60-character preview is not enough to judge whether the retrieval was
-   right. So the full text is always in the DOM and revealed on hover — and on
-   keyboard focus, because a reveal only a mouse can open is a reveal half the
-   readers of this page never get. */
-.chunk-cell { position: relative; max-width: 22rem; }
-.chunk-cell .chunk-preview { cursor: help; }
-.chunk-reveal { display: none; position: absolute; z-index: 20; top: 1.4em;
-                 left: 0; width: 34rem; max-width: 60vw; max-height: 40vh;
-                 overflow-y: auto; padding: .6rem .7rem;
-                 border: 1px solid var(--ink); background: var(--paper);
-                 box-shadow: 0 .3rem .9rem rgb(0 0 0 / .28); white-space: pre-wrap;
-                 font-size: .82rem; line-height: 1.5; }
+/* --- the instrument header ------------------------------------------------- */
+/* Not a hero: a readout. The first thing worth knowing here is which run you
+   are looking at, so the title stays small and the run's identity is what the
+   eye lands on. */
+.inspector-header {
+  padding: .9rem 1.25rem .5rem;
+  background: var(--card);
+  border-bottom: 1px solid var(--card-line);
+  box-shadow: 0 1px 0 var(--line);
+}
+.inspector-header h1 {
+  font-family: var(--display);
+  font-size: 1.05rem;
+  font-weight: 400;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  margin: 0 0 .1rem;
+}
+.follow-state {
+  font-family: var(--mono);
+  font-size: .72rem;
+  color: var(--ink-soft);
+  display: block;
+  margin-bottom: .7rem;
+}
+.follow-state::before {
+  content: "";
+  display: inline-block;
+  width: .45rem; height: .45rem;
+  margin-right: .4rem;
+  border-radius: 50%;
+  background: var(--ink-soft);
+  vertical-align: .05rem;
+}
+.follow-state[data-lab="up"]::before { background: var(--ink-green); }
+.follow-state[data-lab="down"]::before { background: var(--rule-red); }
+
+/* --- tabs: the pipeline, left to right ------------------------------------ */
+/* Each tab is inked by the step it belongs to, and the selected one is the only
+   one that carries its pen at full weight — the bar doubles as a diagram of
+   where in the pipeline you are standing. */
+.inspector-tabs { display: flex; gap: 1.4rem; }
+.inspector-tab {
+  font-family: var(--display);
+  font-size: .82rem;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  background: transparent;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  padding: .3rem 0 .55rem;
+  color: var(--ink-soft);
+}
+.inspector-tab:hover { color: var(--ink); }
+.inspector-tab[aria-selected="true"] { color: var(--ink); }
+.inspector-tab[data-step="index"][aria-selected="true"] { border-bottom-color: var(--ink-amber); }
+.inspector-tab[data-step="retrieval"][aria-selected="true"] { border-bottom-color: var(--ink-green); }
+.inspector-tab[data-step="generation"][aria-selected="true"] { border-bottom-color: var(--ink-blue); }
+.inspector-tab#tab-groundtruth[aria-selected="true"] { border-bottom-color: var(--ink); }
+
+/* --- views ---------------------------------------------------------------- */
+.inspector-view { padding: 1.1rem 1.25rem 4rem; max-width: 92rem; }
+
+/* The config that produced what is on screen. A readout, so it is set in the
+   data face and sits directly above the rows it describes. */
+.inspector-active-config {
+  font-family: var(--mono);
+  font-size: .74rem;
+  color: var(--ink-soft);
+  background: var(--card);
+  border-left: 3px solid var(--line);
+  padding: .45rem .7rem;
+  margin-bottom: .9rem;
+  min-height: 1.1em;
+}
+#chunks-active-config { border-left-color: var(--ink-amber); }
+#retrieval-active-config, #retrieval-set-config { border-left-color: var(--ink-green); }
+#generation-active-config { border-left-color: var(--ink-blue); }
+
+.inspector-controls {
+  display: flex; gap: .75rem; align-items: center; flex-wrap: wrap;
+  margin-bottom: 1rem;
+  font-family: var(--mono); font-size: .78rem;
+}
+.inspector-controls button {
+  font-family: var(--display); font-size: .76rem; letter-spacing: .05em;
+  text-transform: uppercase;
+  background: var(--card); color: var(--ink);
+  border: 1px solid var(--ink); padding: .35rem .8rem;
+}
+.inspector-controls button:hover { background: var(--ink); color: var(--card); }
+.inspector-controls select { border: 1px solid var(--line); background: var(--card);
+                             padding: .25rem .35rem; max-width: 22rem; }
+
+/* --- Farsi, wherever it appears ------------------------------------------- */
+/* `plaintext` lets each line take the direction of its own first strong
+   character. The corpus is Farsi carrying Latin fragments — session ids, topic
+   slugs, the contextual header — and under a blanket rtl those arrive reversed:
+   `[2025-11-08-a]` renders as `[a-08-11-2025]`. This is a diary about a life
+   lived in two scripts, so mixed lines are the normal case, not the exception. */
+[dir="rtl"] { font-family: var(--farsi); line-height: 1.85; unicode-bidi: plaintext; }
+
+/* --- ground truth: one card per pair -------------------------------------- */
+.gt-row {
+  background: var(--card);
+  border: 1px solid var(--card-line);
+  border-left: 3px solid var(--ink);
+  padding: .6rem .8rem;
+  margin-bottom: .5rem;
+  font-size: .84rem;
+}
+.gt-row b { font-family: var(--mono); font-size: .78rem; }
+.gt-row i { color: var(--ink-soft); font-style: normal; font-size: .74rem;
+            text-transform: uppercase; letter-spacing: .05em; }
+
+/* --- chunks: a session is a page of the diary ----------------------------- */
+.chunk-session {
+  background: var(--card);
+  border: 1px solid var(--card-line);
+  border-left: 3px solid var(--ink-amber);
+  margin-bottom: .4rem;
+  padding: .45rem .7rem;
+}
+.chunk-session > summary {
+  font-family: var(--mono); font-size: .78rem; cursor: pointer;
+}
+.chunk-session > div {
+  border-top: 1px dotted var(--line);
+  padding: .5rem 0 .4rem;
+  font-size: .86rem;
+}
+
+/* --- a question, restated above its own rows ------------------------------ */
+/* The table answers "where did each chunk rank". It cannot answer "ranked for
+   what, and what would a right answer have contained" — so both sit here,
+   directly above the rows, rather than a tab away in the ground truth. */
+.question-head { margin: .5rem 0 .7rem; }
+.question-head .qh-fa { font-size: 1.02rem; margin-bottom: .15rem; }
+.question-head .qh-en { font-size: .82rem; color: var(--ink-soft); }
+.question-head .qh-label {
+  font-family: var(--display); font-size: .68rem; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--ink-soft);
+  margin: .55rem 0 .15rem;
+}
+.question-head .qh-facts {
+  margin: 0; padding-left: 1.4rem; font-size: .82rem;
+}
+.question-head .qh-facts li { margin: .1rem 0; }
+
+/* --- one collapsible block per question ---------------------------------- */
+/* Both the retrieval and the generation views are lists of these: an experiment
+   is a set of questions, and the unit you reason about is one question. */
+.retrieval-question, .gen-question {
+  background: var(--card);
+  border: 1px solid var(--card-line);
+  margin-bottom: .5rem;
+  padding: .5rem .8rem .7rem;
+}
+.retrieval-question { border-left: 3px solid var(--ink-green); }
+.gen-question { border-left: 3px solid var(--ink-blue); }
+.retrieval-question > summary, .gen-question > summary {
+  font-family: var(--mono);
+  font-size: .78rem;
+  cursor: pointer;
+  padding: .15rem 0;
+  list-style: none;
+}
+.retrieval-question > summary::-webkit-details-marker,
+.gen-question > summary::-webkit-details-marker { display: none; }
+.retrieval-question > summary::before, .gen-question > summary::before {
+  content: "▸ "; color: var(--ink-soft);
+}
+.retrieval-question[open] > summary::before,
+.gen-question[open] > summary::before { content: "▾ "; }
+.q-id { font-weight: 700; }
+.q-tally { color: var(--ink-soft); }
+
+/* --- the table ------------------------------------------------------------ */
+.retrieval-table {
+  width: 100%; border-collapse: collapse;
+  font-family: var(--mono); font-size: .74rem;
+}
+.retrieval-table th {
+  text-align: left; font-weight: 400; color: var(--ink-soft);
+  font-size: .66rem; letter-spacing: .07em; text-transform: uppercase;
+  padding: .3rem .45rem; border-bottom: 1px solid var(--ink);
+  white-space: nowrap;
+}
+.retrieval-table th[data-step="retrieval"] { color: var(--ink-green); }
+.retrieval-table th[data-step="generation"] { color: var(--ink-blue); }
+/* The chunk column holds right-aligned Farsi, so its header sits over its text
+   rather than at the far side of the cell. */
+.retrieval-table th:first-child { text-align: right; }
+.retrieval-table td {
+  padding: .32rem .45rem; border-bottom: 1px solid var(--card-line);
+  vertical-align: top;
+}
+.retrieval-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+/* Verdict columns are marks, not quantities — centred under their own headers
+   so a run of ✓ reads as a column instead of drifting against the numbers. */
+.retrieval-table th:nth-last-child(2), .retrieval-table th:last-child,
+.retrieval-table td:nth-last-child(2), .retrieval-table td:last-child {
+  text-align: center;
+}
+.retrieval-row--gold { background: var(--card); }     /* relevant */
+.retrieval-row--plain { background: var(--row-plain); }  /* not relevant */
+/* The verdict again, in the margin, because a shade of background is a weak
+   signal on a long table and this one decides whether a row matters. */
+.retrieval-row--gold td:first-child { box-shadow: inset 3px 0 0 var(--evidence-rule); }
+.retrieval-row:hover { outline: 1px solid var(--ink-soft); }
+
+/* --- the signature: a candidate's path through the ranking --------------- */
+/* Three cells, one per step that produces a rank — dense, BM25, and the RRF
+   fusion of the two. Bar height is how high the chunk stood at that step, so
+   "19th in dense, 1st in BM25, fused to 7th" arrives as a shape instead of
+   three numbers to subtract. The numbers are still in their own columns; this
+   is aria-hidden, so nothing is only available as a picture. */
+.ladder {
+  display: inline-flex; align-items: flex-end; gap: 2px;
+  height: 1.35rem; width: 2.4rem;
+  border-bottom: 1px solid var(--line);   /* the floor, so a short bar reads as short */
+}
+.ladder-step {
+  flex: 1; height: var(--h, 4%); min-height: 2px;
+  background: var(--ink-green); opacity: .55;
+}
+.ladder-step:nth-child(3) { opacity: 1; }   /* the rank that survives the step */
+.ladder-none { color: var(--ink-soft); }
+
+/* --- the chunk cell: a preview, and the whole thing on hover ------------- */
+/* The column has to stay narrow or seven columns of ranks become unreadable,
+   but 60 characters cannot say whether the retrieval was right. So the full
+   text is always in the DOM and revealed on hover — and on keyboard focus,
+   because a reveal only a mouse can open is one half the readers never get. */
+.chunk-cell { position: relative; width: 40%; }
+.chunk-preview {
+  display: block; cursor: help;
+  font-family: var(--farsi); font-size: .82rem; line-height: 1.7;
+}
+.chunk-reveal {
+  display: none; position: absolute; z-index: 20;
+  top: calc(100% + .2rem); inset-inline-start: 0;
+  width: 34rem; max-width: 78vw; max-height: 42vh; overflow-y: auto;
+  padding: .7rem .85rem;
+  background: var(--card);
+  border: 1px solid var(--ink);
+  border-left: 3px solid var(--ink-green);
+  box-shadow: 0 .35rem 1.1rem rgb(0 0 0 / .22);
+  white-space: pre-wrap;
+  font-family: var(--farsi); font-size: .88rem; line-height: 1.9;
+}
 .retrieval-row:hover .chunk-reveal,
 .chunk-cell:focus-within .chunk-reveal { display: block; }
 
-/* The gold evidence inside that full text. Green because this axis is the
-   ground truth's verdict, kept clear of the row's white/gray (also ground
-   truth, at chunk granularity) and of the step inks on the column headers. */
-.evidence-mark { background: hsl(125 55% 72%); color: #10240f;
-                  padding: 0 .1em; border-radius: .15em; }
-@media (prefers-color-scheme: dark) {
-  .evidence-mark { background: hsl(125 40% 34%); color: #eafbe8; }
+/* The gold evidence inside that full text. */
+.evidence-mark {
+  background: var(--evidence); color: var(--evidence-ink);
+  box-shadow: 0 2px 0 var(--evidence-rule);
+  padding: 0 .12em;
 }
-.chunk-cell .no-evidence { opacity: .6; font-size: .74rem; display: block;
-                            margin-top: .4rem; }
+.no-evidence {
+  display: block; margin-top: .55rem; padding-top: .45rem;
+  border-top: 1px dotted var(--line);
+  font-family: var(--body); font-size: .74rem; color: var(--ink-soft);
+}
 
-/* --- generation: the ideal answer, what was written, and the scores ------ */
-.gen-question { border-bottom: 1px solid var(--rule); padding-bottom: .9rem;
-                 margin-bottom: .9rem; }
-.gen-answers { display: flex; gap: .8rem; flex-wrap: wrap; margin: .5rem 0; }
-.gen-answer { flex: 1 1 20rem; padding: .55rem .7rem; border: 1px solid var(--rule); }
-.gen-answer h4 { margin: 0 0 .35rem; font-size: .78rem; opacity: .8;
-                  text-transform: uppercase; letter-spacing: .04em; }
-.gen-answer--ideal { background: var(--paper); }
-.gen-answer--actual { background: var(--gray-row); }
-.gen-metrics { display: flex; gap: .5rem 1.2rem; flex-wrap: wrap;
-                font-size: .82rem; margin-top: .4rem; }
-.gen-metric b { font-weight: 700; }
+/* --- generation: the ideal answer beside the written one ----------------- */
+.gen-answers {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr));
+  gap: .7rem; margin: .6rem 0 .5rem;
+}
+.gen-answer { padding: .6rem .75rem; border: 1px solid var(--card-line); }
+.gen-answer h4 {
+  font-family: var(--display); font-size: .68rem; font-weight: 400;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--ink-soft);
+  margin: 0 0 .35rem;
+}
+/* The fixture's answer is the reference, so it is written on clean paper; what
+   the run produced is the sample, so it sits on the shaded stock. */
+.gen-answer--ideal { background: var(--card); border-left: 3px solid var(--ink); }
+.gen-answer--actual { background: var(--row-plain); border-left: 3px solid var(--ink-blue); }
+.gen-answer > div { font-size: .9rem; }
 
-/* The '!' beside a score, and the sentence it opens — the same affordance the
-   lab's panel carries, reading the same served text. */
-.inspector-why { border: 1px solid var(--rule); background: transparent;
-                  color: inherit; cursor: pointer; font: inherit;
-                  font-size: .7rem; line-height: 1; padding: 0 .28em;
-                  margin-left: .3em; }
-.inspector-why:hover { border-color: hsl(0 60% 45%); color: hsl(0 60% 45%); }
-.inspector-why-text { display: block; font-size: .78rem; opacity: .9;
-                       margin: .3rem 0 .5rem; padding-left: .6rem;
-                       border-left: 2px solid var(--rule); max-width: 46rem; }
+.gen-metrics {
+  display: flex; flex-wrap: wrap; gap: .35rem 1.3rem;
+  font-family: var(--mono); font-size: .76rem;
+  padding-top: .45rem; border-top: 1px dotted var(--line);
+}
+.gen-metric { color: var(--ink-soft); }
+.gen-metric b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.gen-ragas {
+  background: var(--card); border: 1px solid var(--card-line);
+  border-left: 3px solid var(--ink-blue);
+  padding: .6rem .8rem; margin-bottom: .8rem;
+}
+.gen-ragas h4 {
+  font-family: var(--display); font-size: .68rem; font-weight: 400;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--ink-soft);
+  margin: 0 0 .3rem;
+}
+.gen-trace { margin-top: .6rem; }
+.gen-trace > summary {
+  font-family: var(--mono); font-size: .74rem; color: var(--ink-soft);
+  cursor: pointer;
+}
+
+/* --- the '!' beside a score, and the sentence it opens ------------------- */
+/* The same affordance the lab's panel carries, reading the same served text. */
+.inspector-why {
+  font-family: var(--display); font-size: .66rem; line-height: 1;
+  background: transparent; color: var(--ink-soft);
+  border: 1px solid var(--line); padding: .1em .3em;
+  margin-left: .35em;
+}
+.inspector-why:hover { border-color: var(--rule-red); color: var(--rule-red); }
+.inspector-why-text {
+  /* Inside the metrics row this is a flex item; `order` sends it to the end so
+     opening one explainer cannot push the scores beside it out of line. */
+  display: block; flex-basis: 100%; order: 99;
+  font-family: var(--body); font-size: .78rem; color: var(--ink-soft);
+  margin: .35rem 0 .1rem; padding-left: .7rem;
+  border-left: 2px solid var(--rule-red);
+  max-width: 52rem;
+}
+
+/* --- the query panel's own answer box ----------------------------------- */
+.inspector-answer {
+  margin-top: .8rem; padding: .6rem .8rem;
+  background: var(--card); border: 1px solid var(--card-line);
+  border-left: 3px solid var(--ink-blue);
+  font-family: var(--farsi); min-height: 1.2em;
+}
+
+/* --- quality floor ------------------------------------------------------- */
+@media (max-width: 46rem) {
+  .inspector-tabs { gap: .9rem; }
+  .inspector-tab { font-size: .72rem; }
+  .inspector-view { padding: .8rem .7rem 3rem; }
+  .chunk-cell { width: auto; min-width: 11rem; }
+  .retrieval-table { font-size: .68rem; }
+  /* Nine columns do not fit a phone, so the table scrolls inside its own box
+     rather than dragging the page sideways. The wrapper is only a scroller here:
+     on a wide screen `overflow-x` would also clip the reveal, which hangs below
+     its row. */
+  .table-scroll { overflow-x: auto; }
+  /* And the reveal stops being a popover, because there is nothing to hover
+     with. Tapping the preview focuses it and the full text opens in place. */
+  .chunk-reveal {
+    position: static; width: auto; max-width: none; max-height: none;
+    margin-top: .4rem; box-shadow: none;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .chunk-reveal { animation: reveal .12s ease-out; }
+  @keyframes reveal { from { opacity: 0; transform: translateY(-2px); } }
+}
