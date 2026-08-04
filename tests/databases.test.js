@@ -251,10 +251,19 @@ test('server boot migrates a legacy board.db and still serves its cards', async 
 });
 
 // This is a configuration invariant.
-test('.gitignore covers the databases/ folder', () => {
-  // *.db already ignores the SQLite files; this line is what keeps the Chroma
-  // stores (whose files are not *.db) out of the repository — both
-  // databases/real/chroma-data and databases/test/chroma-data-3001.
+test('.gitignore keeps every Chroma store out of the repository', () => {
+  // *.db already ignores the SQLite files; these lines are what keep the Chroma
+  // stores out, whose files are not *.db and would otherwise be committed.
+  //
+  // It used to be one bare `databases/` line. It is two now because the folder
+  // stopped being uniformly private: the :3001 sandbox's boards ship with the
+  // repo so a checkout gets a working test board, while real/ never leaves this
+  // machine and the test store is 94 MB of derived files a re-index rebuilds.
+  // Asserting each store by name rather than the folder is the point — the risk
+  // was never "the folder is unignored", it was "a store gets committed".
   const lines = readFileSync(join(ROOT, '.gitignore'), 'utf8').split('\n').map((l) => l.trim());
-  assert.ok(lines.includes('databases/'), '.gitignore must ignore databases/');
+  assert.ok(lines.includes('databases/real/'),
+    '.gitignore must ignore databases/real/ — real board, assistant and Chroma data');
+  assert.ok(lines.includes('databases/test/chroma-data-3001/'),
+    '.gitignore must ignore the test Chroma store: derived, and 94 MB of it');
 });
