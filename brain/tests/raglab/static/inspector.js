@@ -114,7 +114,6 @@ async function loadGroundTruth() {
   const body = await (await fetch('/api/groundtruth')).json();
   const root = document.getElementById('view-groundtruth');
   root.innerHTML = '';
-  const qsel = document.getElementById('retrieval-question');
   for (const q of body.questions) {
     GT.set(q.id, q);
     const row = document.createElement('div');
@@ -138,9 +137,6 @@ async function loadGroundTruth() {
                `<div dir="rtl" class="gt-quote">${escapeHtml(quote)}</div>`).join('')
            + `</div>` : '');
     root.appendChild(row);
-    const opt = document.createElement('option');
-    opt.value = q.id; opt.textContent = `${q.id} — ${q.question_fa.slice(0, 40)}`;
-    qsel.appendChild(opt);
   }
   // The retrieval and generation views restate each question's facts and ideal
   // answer from this map, and the first poll can easily beat this fetch. Forget
@@ -149,6 +145,7 @@ async function loadGroundTruth() {
   // the next run.
   followed.retrievalJobId = null;
   followed.generationJobId = null;
+  if (!picker.hidden) renderPicker(pickerFilter.value);
 }
 loadGroundTruth();
 
@@ -327,47 +324,158 @@ function renderRetrievalRows(candidates) {
 // The followed experiment: one collapsible table per selected question, with
 // that question's own counts on the summary line. Collapsed by default — a set
 // of thirty questions is a page you scan, then open the one that looks wrong.
+// One question's collapsible block. Shared by the followed list and by the
+// questions you add, because "identical to the other ones" has to mean the same
+// code produced them, not that two renderers were kept in step by hand.
+function questionBlock(q) {
+  const candidates = (q.trace && q.trace.candidates) || [];
+  const gold = candidates.filter(c => c.gold).length;
+  const kept = candidates.filter(c => c.kept).length;
+  // "1 of 3 gold found" rather than "1 gold": the count only means something
+  // against how many there were to find. The denominator comes from the
+  // service, and when it does not (an older run) the tally stays a bare count
+  // instead of implying a total nobody measured.
+  const goldTally = q.gold_available === null || q.gold_available === undefined
+    ? `${gold} gold` : `${gold} of ${q.gold_available} gold found`;
+  const det = document.createElement('details');
+  det.className = 'retrieval-question';
+  det.innerHTML = questionSummary(q.question_id, q.type, q.difficulty,
+      `${candidates.length} candidates · ${kept} kept · ${goldTally}`)
+    + questionHead(q.question_id, q.question_fa);
+  det.appendChild(scrollable(retrievalTable(candidates)));
+  return det;
+}
+
 function renderQuestionTables(questions) {
   const host = document.getElementById('retrieval-questions');
   host.innerHTML = '';
-  for (const q of questions) {
-    const candidates = (q.trace && q.trace.candidates) || [];
-    const gold = candidates.filter(c => c.gold).length;
-    const kept = candidates.filter(c => c.kept).length;
-    // "1 of 3 gold found" rather than "1 gold": the count only means something
-    // against how many there were to find. The denominator comes from the
-    // service, and when it does not (an older run) the tally stays a bare count
-    // instead of implying a total nobody measured.
-    const goldTally = q.gold_available === null || q.gold_available === undefined
-      ? `${gold} gold` : `${gold} of ${q.gold_available} gold found`;
-    const det = document.createElement('details');
-    det.className = 'retrieval-question';
-    det.innerHTML = questionSummary(q.question_id, q.type, q.difficulty,
-        `${candidates.length} candidates · ${kept} kept · ${goldTally}`)
-      + questionHead(q.question_id, q.question_fa);
-    det.appendChild(scrollable(retrievalTable(candidates)));
-    host.appendChild(det);
+  for (const q of questions) host.appendChild(questionBlock(q));
+}
+
+// --- Adding a question ------------------------------------------------------
+// The config a question is run under is the one the page is following, so an
+// added row is measured the same way as the rows beside it. With the lab down
+// there is nothing to follow, and the chosen architecture stands in.
+function activeConfig() {
+  return FOLLOWED_CONFIG || CHOSEN;
+}
+let FOLLOWED_CONFIG = null;
+
+// Every question you have added, in the order you added them. Kept here rather
+// than read back off the DOM, because the followed views re-render whenever the
+// lab finishes a new job and would otherwise wipe them.
+const ADDED = new Map();
+
+const picker = document.getElementById('question-picker');
+const pickerButton = document.getElementById('add-question');
+const pickerList = document.getElementById('question-picker-list');
+const pickerFilter = document.getElementById('question-picker-filter');
+
+function openPicker(open) {
+  picker.hidden = !open;
+  pickerButton.setAttribute('aria-expanded', String(open));
+  if (open) { pickerFilter.value = ''; renderPicker(''); pickerFilter.focus(); }
+  else pickerButton.focus();
+}
+
+// Difficulty is the one thing worth seeing before you read a word of the
+// question: it is what makes a miss interesting or expected. Carried as colour
+// here and nowhere else — in the tables colour already means a pipeline step.
+function renderPicker(filter) {
+  const needle = filter.trim().toLowerCase();
+  const matches = [...GT.values()].filter(q => !needle
+    || q.id.toLowerCase().includes(needle)
+    || (q.question_fa || '').toLowerCase().includes(needle)
+    || (q.question_en || '').toLowerCase().includes(needle));
+  pickerList.innerHTML = matches.length ? '' : '<div class="q-empty">'
+    + 'No question matches that. Clear the filter to see all of them.</div>';
+  for (const q of matches) {
+    const option = document.createElement('div');
+    option.className = `q-option q-option--${q.difficulty || 'easy'}`;
+    option.setAttribute('role', 'option');
+    option.setAttribute('aria-selected', String(ADDED.has(q.id)));
+    option.tabIndex = -1;
+    option.dataset.id = q.id;
+    const quotes = (q.evidence || []).map(ev =>
+      `<div class="gt-quote" dir="rtl">${escapeHtml(ev.quote)}</div>`).join('');
+    option.innerHTML =
+      `<span class="q-option-id">${escapeHtml(q.id)}</span>`
+      + `<span class="q-chip q-chip--${escapeHtml(q.difficulty || 'easy')}">`
+      + `${escapeHtml(q.difficulty || '')}</span>`
+      + `<span class="q-option-en">${escapeHtml(q.question_en || q.question_fa)}</span>`
+      + (ADDED.has(q.id) ? '<span class="q-option-added">added</span>' : '')
+      // The detail is in the DOM from the start rather than built on hover, so
+      // it opens with no delay and reads the same to a screen reader.
+      + `<div class="q-option-detail">`
+      + `<div dir="rtl" class="q-option-fa">${escapeHtml(q.question_fa)}</div>`
+      + `<div class="qh-label">expected answer</div>`
+      + `<div dir="rtl">${escapeHtml(q.answer_fa || '—')}</div>`
+      + (quotes ? `<div class="qh-label">evidence quoted from the diary</div>${quotes}` : '')
+      + `</div>`;
+    pickerList.appendChild(option);
   }
 }
 
-document.getElementById('run-trace').addEventListener('click', async () => {
-  const status = document.getElementById('retrieval-status');
-  try {
-    const qid = document.getElementById('retrieval-question').value;
-    status.textContent = 'retrieving…';
-    const response = await fetch('/api/trace',
-      { method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ ...CHOSEN, question_id: qid }) });
-    const result = await pollJob(await startedJob(response));
-    status.textContent = qid;
-    document.getElementById('retrieval-active-config').textContent = formatConfig(CHOSEN);
-    renderRetrievalRows(result.trace.candidates);
-    // /api/trace is retrieval only — no generation ran, so no answer to show.
-    document.getElementById('retrieval-answer').textContent = '';
-  } catch (error) {
-    status.textContent = error.message;
-  }
+pickerButton.addEventListener('click', () => openPicker(picker.hidden));
+pickerFilter.addEventListener('input', () => renderPicker(pickerFilter.value));
+pickerList.addEventListener('click', event => {
+  const option = event.target.closest('.q-option');
+  if (option) addQuestion(option.dataset.id);
 });
+
+// A listbox has to be usable from the keyboard, or the difficulty colours and
+// the hover detail are both only available to a mouse.
+picker.addEventListener('keydown', event => {
+  const options = [...pickerList.querySelectorAll('.q-option')];
+  const at = options.indexOf(document.activeElement);
+  if (event.key === 'Escape') { openPicker(false); return; }
+  if (event.key === 'Enter' && at >= 0) {
+    event.preventDefault(); addQuestion(options[at].dataset.id); return;
+  }
+  if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+  event.preventDefault();
+  const next = event.key === 'ArrowDown'
+    ? Math.min(options.length - 1, at + 1) : Math.max(0, at - 1);
+  if (options[next]) options[next].focus();
+});
+
+async function addQuestion(questionId) {
+  const status = document.getElementById('retrieval-status');
+  openPicker(false);
+  try {
+    status.textContent = `running ${questionId}…`;
+    const response = await fetch('/api/questions',
+      { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...activeConfig(), question_id: questionId }) });
+    const result = await pollJob(await startedJob(response));
+    ADDED.set(questionId, result);
+    renderAdded();
+    status.textContent = `${questionId} added — it is in both tabs`;
+  } catch (error) {
+    status.textContent = `${questionId}: ${error.message}`;
+  }
+}
+
+function renderAdded() {
+  const retrievalHost = document.getElementById('retrieval-added');
+  const generationHost = document.getElementById('generation-added');
+  retrievalHost.innerHTML = '';
+  generationHost.innerHTML = '';
+  if (!ADDED.size) return;
+  const heading = () => {
+    const label = document.createElement('div');
+    label.className = 'qh-label added-label';
+    label.textContent = `added by you — scored the same way, but not part of `
+      + `the run's own sample`;
+    return label;
+  };
+  retrievalHost.appendChild(heading());
+  generationHost.appendChild(heading());
+  for (const [, result] of ADDED) {
+    retrievalHost.appendChild(questionBlock(result.retrieval));
+    generationHost.appendChild(generationBlock(result.generation, result.retrieval.trace));
+  }
+}
 
 // --- Generation: the ideal answer, the written one, and the scores ----------
 // Per-question deterministic scores, in pipeline order. RAGAS's judged metrics
@@ -406,34 +514,38 @@ function renderGeneration(view, traces) {
 
   host.innerHTML = '';
   for (const row of view.rows || []) {
-    const gt = GT.get(row.id) || {};
-    // A collapsible block per question, exactly as the retrieval view lists
-    // them: the unit you reason about is one question, in both views.
-    const det = document.createElement('details');
-    det.className = 'gen-question';
-    const scored = GEN_METRICS.filter(k => row[k] !== undefined && row[k] !== null);
-    const tally = row.abstained ? 'abstained'
-      : `${scored.length} score${scored.length === 1 ? '' : 's'}`;
-    det.innerHTML = questionSummary(row.id, row.type, row.difficulty, tally)
-      + questionHead(row.id, '')
-      + '<div class="gen-answers">'
-      + '<div class="gen-answer gen-answer--ideal"><h4>what the diary says</h4>'
-      + `<div dir="rtl">${escapeHtml(gt.answer_fa || '—')}</div></div>`
-      + '<div class="gen-answer gen-answer--actual">'
-      + `<h4>what this run wrote${row.abstained ? ' — it refused' : ''}</h4>`
-      + `<div dir="rtl">${escapeHtml(row.answer || '—')}</div></div>`
-      + '</div>'
-      + metricLine(row, GEN_METRICS);
-    const trace = traces && traces.get(row.id);
-    if (trace) {
-      const inner = document.createElement('details');
-      inner.className = 'gen-trace';
-      inner.innerHTML = '<summary>the retrieval this answer was written from</summary>';
-      inner.appendChild(scrollable(retrievalTable(trace.candidates || [])));
-      det.appendChild(inner);
-    }
-    host.appendChild(det);
+    host.appendChild(generationBlock(row, traces && traces.get(row.id)));
   }
+}
+
+// One question's generation block. Shared with the added questions for the same
+// reason `questionBlock` is: the comparison is only honest if both went through
+// the same renderer.
+function generationBlock(row, trace) {
+  const gt = GT.get(row.id) || {};
+  const det = document.createElement('details');
+  det.className = 'gen-question';
+  const scored = GEN_METRICS.filter(k => row[k] !== undefined && row[k] !== null);
+  const tally = row.abstained ? 'abstained'
+    : `${scored.length} score${scored.length === 1 ? '' : 's'}`;
+  det.innerHTML = questionSummary(row.id, row.type, row.difficulty, tally)
+    + questionHead(row.id, '')
+    + '<div class="gen-answers">'
+    + '<div class="gen-answer gen-answer--ideal"><h4>what the diary says</h4>'
+    + `<div dir="rtl">${escapeHtml(gt.answer_fa || '—')}</div></div>`
+    + '<div class="gen-answer gen-answer--actual">'
+    + `<h4>what this run wrote${row.abstained ? ' — it refused' : ''}</h4>`
+    + `<div dir="rtl">${escapeHtml(row.answer || '—')}</div></div>`
+    + '</div>'
+    + metricLine(row, GEN_METRICS);
+  if (trace) {
+    const inner = document.createElement('details');
+    inner.className = 'gen-trace';
+    inner.innerHTML = '<summary>the retrieval this answer was written from</summary>';
+    inner.appendChild(scrollable(retrievalTable(trace.candidates || [])));
+    det.appendChild(inner);
+  }
+  return det;
 }
 
 // --- Auto-follow: poll the lab (:9002) through our own /api/follow every ~2s,
@@ -503,6 +615,7 @@ function renderFollow(body) {
         ? 'evaluation' : 'retrieval run';
       setCfg.textContent = `${n} selected question${n === 1 ? '' : 's'} from the `
         + `last ${source} — ${formatConfig(body.retrieval.config)}`;
+      FOLLOWED_CONFIG = body.retrieval.config || FOLLOWED_CONFIG;
       renderQuestionTables(body.retrieval.questions);
     }
   } else {

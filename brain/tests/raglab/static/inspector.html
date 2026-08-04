@@ -35,10 +35,29 @@
 
     <section id="view-retrieval" class="inspector-view" hidden>
       <div class="inspector-active-config" id="retrieval-active-config"></div>
+      <!-- Add a question the experiment did not select, and it is retrieved,
+           answered and scored under the same config as the ones on screen. The
+           old control here was a bare <select> labelled "Question" beside a
+           "Run retrieval" button, which said nothing about what picking one
+           would do or where the result would appear. -->
       <div class="inspector-controls">
-        <label>Question <select id="retrieval-question"></select></label>
-        <button id="run-trace">Run retrieval</button>
+        <button id="add-question" aria-expanded="false"
+                aria-controls="question-picker">Add a question</button>
         <span id="retrieval-status"></span>
+      </div>
+      <div class="question-picker" id="question-picker" hidden>
+        <input type="search" id="question-picker-filter" class="q-filter"
+               placeholder="filter by id, or by words in the question"
+               aria-label="Filter questions">
+        <div class="q-legend">
+          <span class="q-chip q-chip--hard">hard</span>
+          <span class="q-chip q-chip--medium">medium</span>
+          <span class="q-chip q-chip--easy">easy</span>
+          <span class="q-legend-note">hover a question to read it with its
+            evidence and expected answer</span>
+        </div>
+        <div id="question-picker-list" role="listbox"
+             aria-label="Ground-truth questions" tabindex="-1"></div>
       </div>
       <!-- One table per question of the experiment the lab last ran, and only
            those questions. Every table is a clone of the template below, so the
@@ -47,6 +66,11 @@
            line describing two pipelines would be a lie. -->
       <div class="inspector-active-config" id="retrieval-set-config"></div>
       <div id="retrieval-questions"></div>
+      <!-- Questions you added, kept in their own list. Identical rows and
+           identical metrics, but not folded in among the selected ones: their
+           scores were never part of the run's averages, and a view that hid
+           that would be claiming a sample the experiment did not measure. -->
+      <div id="retrieval-added" class="added-block"></div>
       <!-- The single-question table, for the manual "Run retrieval" above. -->
       <div id="retrieval-body"></div>
       <div class="inspector-answer" id="retrieval-answer" data-step="generation" dir="rtl"></div>
@@ -81,6 +105,7 @@
       <div class="inspector-active-config" id="generation-active-config"></div>
       <div id="generation-ragas"></div>
       <div id="generation-questions"></div>
+      <div id="generation-added" class="added-block"></div>
     </section>
   </main>
   <script src="/inspector.js"></script>

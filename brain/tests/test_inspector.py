@@ -496,6 +496,105 @@ def test_follow_shows_the_chunks_the_last_run_actually_used(monkeypatch,
     assert body['index']['config']['index']['chunker'] == 'session'
 
 
+# This is an integration test (FastAPI TestClient over the read-only app; a real
+# in-memory index, the offline embedder and the extractive answerer).
+def test_adding_a_question_produces_rows_identical_to_the_run_s_own(monkeypatch):
+    """A question you add by hand has to arrive scored exactly like the ones the
+    experiment selected — same retrieval row, same generation row, same metric
+    keys — or the two cannot be read side by side, which is the only reason to
+    add it.
+
+    So it runs the whole pipeline for that one question under the config the
+    page is following, and the row it returns is asserted against what
+    `metrics.score_question` produces for the same outcome. Anything the eval
+    path computes and this one does not would show up as a missing key."""
+    from .raglab import metrics
+    client = _client(monkeypatch)
+    gt_q = client.get('/api/groundtruth').json()['questions'][0]
+    config = {'index': {'chunker': 'fixed-overlap', 'chunk_chars': 500,
+                        'overlap': 100, 'contextual': True,
+                        'embedder': 'ascii-hash'},
+              'retrieval': {'retriever': 'hybrid-rrf', 'reranker': 'lexical',
+                            'grader': 'none', 'k': 5, 'rerank_depth': 20,
+                            'time_filter': False, 'multi_query': False},
+              'generation': {'answerer': 'extractive'}}
+
+    acc = client.post('/api/questions', json={**config, 'question_id': gt_q['id']})
+    assert acc.status_code == 202, acc.text
+    job = _wait(client, acc.json()['job_id'])
+    assert job['state'] == 'done', job.get('error')
+    result = job['result']
+
+    # the retrieval half, shaped like a followed question
+    retrieval = result['retrieval']
+    assert retrieval['question_id'] == gt_q['id']
+    assert isinstance(retrieval['gold_available'], int)
+    candidate = retrieval['trace']['candidates'][0]
+    for key in ('dense_rank', 'bm25_rank', 'fused_rank', 'rerank_score',
+                'grade_score', 'kept', 'gold', 'gold_spans'):
+        assert key in candidate, f'missing {key}'
+
+    # the generation half, shaped like an evaluation's row: same keys, so the
+    # added question shows the same metrics and no others
+    row = result['generation']
+    reference = metrics.score_question(
+        gt_q, _outcome_for(config, gt_q), config['retrieval']['k'])
+    assert set(row) == set(reference), (
+        f"added row differs: only here {set(row) - set(reference)}, "
+        f"only in the eval row {set(reference) - set(row)}")
+    assert row['id'] == gt_q['id'] and row['answer']
+
+    # and it says which config produced it, because a row measured under other
+    # settings than its neighbours is worse than no row
+    assert result['config']['index']['chunker'] == 'fixed-overlap'
+
+    # an unknown id refuses synchronously rather than dying inside a job
+    assert client.post('/api/questions',
+                       json={**config, 'question_id': 'q-nope'}).status_code == 404
+
+
+def _wait(client, job_id: str, tries: int = 400) -> dict:
+    for _ in range(tries):
+        job = client.get(f'/api/jobs/{job_id}').json()
+        if job['state'] in ('done', 'error'):
+            return job
+        time.sleep(0.02)
+    raise AssertionError(f'job {job_id} never finished')
+
+
+def _outcome_for(config: dict, question: dict):
+    """The same retrieval and answer the endpoint runs, computed here so the
+    metric keys are compared against a real outcome rather than a guess."""
+    from .raglab.config import GenerationConfig, LabConfig
+    cfg = LabConfig.from_dict(config)
+    index = IndexRegistry(LAB_SETTINGS, corpus.load_diary()).get(cfg.index)
+    gt = corpus.load_ground_truth()
+    outcome = pipeline.retrieve(index, cfg.retrieval, question['question_fa'],
+                                gt['meta']['query_date'])
+    return pipeline.answer(outcome, GenerationConfig(answerer='extractive'))
+
+
+# This is an integration test (the served page carries the picker's hooks).
+def test_page_offers_a_question_picker_coded_by_difficulty(monkeypatch):
+    """The old control was a bare `<select>` labelled "Question", which said
+    nothing about what picking one would do. It becomes a button that opens a
+    listbox where each row carries its difficulty as colour and reveals the
+    question, its evidence and its expected answer on hover."""
+    client = _client(monkeypatch)
+    html = client.get('/').text
+    css = client.get('/inspector.css').text
+    for hook in ('add-question', 'question-picker', 'question-picker-list'):
+        assert hook in html, f'missing {hook}'
+    # difficulty is colour in the picker only — never in the tables, where colour
+    # already means a pipeline step
+    for rule in ('.q-option--hard', '.q-option--medium', '.q-option--easy',
+                 '.q-option-detail'):
+        assert rule in css, f'missing style {rule}'
+    assert ':hover .q-option-detail' in css or '.q-option:hover' in css
+    # a listbox has to be reachable without a mouse
+    assert 'role="listbox"' in html and 'aria-expanded' in html
+
+
 # This is an integration test (FastAPI TestClient over the read-only app).
 def test_explain_serves_the_same_metric_help_the_lab_does(monkeypatch):
     """The Generation tab's '!' marks read this. Served from `explain` — the

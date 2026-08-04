@@ -240,6 +240,84 @@ select { font: inherit; color: inherit; }
   margin-bottom: .15rem;
 }
 
+/* --- the question picker -------------------------------------------------- */
+/* A listbox rather than a <select>, because a <select> can carry neither the
+   difficulty colour nor the hover detail: styling <option> is unreliable outside
+   Chrome and an <option> cannot be hovered for more.
+ *
+ * Difficulty is colour **here and nowhere else**. In the tables colour already
+ * means a pipeline step and row shading already means the ground truth's
+ * verdict; a third meaning loose on the page would make all three unreadable.
+ * The hues are the board's own pens — red rule, amber, and plain ink for easy —
+ * so even this local axis stays inside the family. Each option also carries the
+ * word, so the colour is reinforcement and never the only carrier. */
+.question-picker {
+  background: var(--card);
+  border: 1px solid var(--ink);
+  padding: .6rem .7rem;
+  margin-bottom: 1rem;
+  max-width: 62rem;
+}
+.q-filter {
+  font: inherit; font-family: var(--mono); font-size: .78rem;
+  width: 100%; max-width: 26rem;
+  padding: .3rem .45rem;
+  border: 1px solid var(--line); background: var(--paper); color: var(--ink);
+}
+.q-legend {
+  display: flex; align-items: center; gap: .45rem; flex-wrap: wrap;
+  margin: .5rem 0 .35rem;
+}
+.q-legend-note { font-size: .74rem; color: var(--ink-soft); }
+.q-chip {
+  font-family: var(--display); font-size: .62rem; letter-spacing: .08em;
+  text-transform: uppercase; padding: .1rem .4rem;
+  border: 1px solid currentColor;
+}
+.q-chip--hard { color: var(--rule-red); }
+.q-chip--medium { color: var(--ink-amber); }
+.q-chip--easy { color: var(--ink-soft); }
+
+#question-picker-list { max-height: 26rem; overflow-y: auto; }
+.q-option {
+  display: flex; align-items: baseline; gap: .5rem;
+  position: relative;
+  padding: .3rem .45rem;
+  border-inline-start: 4px solid var(--ink-soft);
+  border-bottom: 1px solid var(--card-line);
+  cursor: pointer;
+  font-size: .82rem;
+}
+.q-option--hard { border-inline-start-color: var(--rule-red); }
+.q-option--medium { border-inline-start-color: var(--ink-amber); }
+.q-option--easy { border-inline-start-color: var(--ink-soft); }
+.q-option:hover, .q-option:focus { background: var(--row-plain); outline: none; }
+.q-option:focus { box-shadow: inset 0 0 0 2px var(--rule-red); }
+.q-option-id { font-family: var(--mono); font-size: .74rem; }
+.q-option-en { color: var(--ink); flex: 1; }
+.q-option-added {
+  font-family: var(--display); font-size: .62rem; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--ink-green);
+}
+/* Everything you need to decide whether this question is worth adding, without
+   leaving the picker: the question itself, what a right answer says, and the
+   evidence the ground truth stands on. */
+.q-option-detail {
+  display: none; position: absolute; z-index: 30;
+  top: 100%; inset-inline-start: 2rem;
+  width: 36rem; max-width: 80vw;
+  padding: .65rem .8rem;
+  background: var(--card); border: 1px solid var(--ink);
+  box-shadow: 0 .35rem 1.1rem rgb(0 0 0 / .24);
+}
+.q-option:hover .q-option-detail, .q-option:focus .q-option-detail { display: block; }
+.q-option-fa { font-size: .95rem; }
+.q-empty { padding: .6rem .45rem; color: var(--ink-soft); font-size: .82rem; }
+
+/* Questions you added, kept in their own list under a stated label. */
+.added-block { margin-top: 1.1rem; }
+.added-label { border-top: 1px dotted var(--line); padding-top: .6rem; }
+
 /* --- a question, restated above its own rows ------------------------------ */
 /* The table answers "where did each chunk rank". It cannot answer "ranked for
    what, and what would a right answer have contained" — so both sit here,

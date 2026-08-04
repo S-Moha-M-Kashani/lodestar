@@ -22,11 +22,11 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 
-from . import evaluate, explain, models, pipeline
+from . import evaluate, explain, metrics, models, pipeline
 from .config import LabConfig, load_lab_settings, settings_for_provider
 from .corpus import load_diary, load_ground_truth
 from .index import IndexRegistry, _lab_llm
-from .present import chunks_by_session, mark_gold
+from .present import chunks_by_session, gold_available, mark_gold
 from .server import Jobs
 
 STATIC = Path(__file__).resolve().parent / 'static'
@@ -152,6 +152,63 @@ def create_inspector_app() -> FastAPI:
             return {'question': question, 'trace': tr, 'query_date': query_date}
 
         return _accepted(jobs.start('trace', work))
+
+    @app.post('/api/questions')
+    def run_question(payload: dict):
+        """Run one ground-truth question end to end, under the config the page is
+        following, and return it shaped exactly like the ones the experiment
+        selected — a retrieval row and a generation row.
+
+        This is how a question you were curious about joins a run you have
+        already looked at. Both halves matter: retrieval alone cannot say whether
+        the answer would have been right, and a row scored under different
+        settings than its neighbours is worse than no row, which is why the
+        config travels in the request rather than being decided here.
+
+        The index is built in *this* process. That is the price of the Inspector
+        being a follower rather than a driver of the lab: with a real encoder the
+        first question pays for embedding the corpus again, then the registry
+        keeps it for the rest of the session."""
+        cfg = LabConfig.from_dict(payload)
+        qid = payload.get('question_id')
+        question = next((q for q in ground_truth['questions']
+                         if q['id'] == qid), None)
+        if question is None:
+            raise HTTPException(404, f'unknown question id: {qid!r}')
+        run_settings = settings_for_provider(settings,
+                                             payload.get('provider') or '')
+        problems = cfg.validate() + models.provider_problems(cfg, run_settings)
+        if problems:
+            raise HTTPException(400, '; '.join(problems))
+        query_date = payload.get('query_date') or ground_truth['meta']['query_date']
+
+        def work(report):
+            index = registry.get(
+                cfg.index,
+                progress=lambda stage, fraction, detail='':
+                    report(stage, 0.6 * fraction, detail))
+            llm = _lab_llm(run_settings)
+            roles = models.resolve(cfg, run_settings)
+            report('retrieving', 0.65, question['question_fa'][:80])
+            outcome, trace = pipeline.retrieve_traced(
+                index, cfg.retrieval, question['question_fa'], query_date,
+                llm=llm, models=roles)
+            quotes = [ev['quote'] for ev in question.get('evidence', [])]
+            retrieval = evaluate.trace_row(
+                question, trace,
+                gold_available=gold_available(index, quotes))
+            report('answering', 0.85)
+            outcome = pipeline.answer(outcome, cfg.generation, llm=llm,
+                                      models=roles)
+            # Scored by the same function the evaluation scores with, so the row
+            # carries the same metrics under the same names — the whole point of
+            # adding a question beside the ones already on screen.
+            row = evaluate.json_safe(
+                metrics.score_question(question, outcome, cfg.retrieval.k))
+            return {'config': cfg.to_dict(), 'models': roles.as_dict(),
+                    'retrieval': retrieval, 'generation': row}
+
+        return _accepted(jobs.start('question', work, config=cfg.to_dict()))
 
     @app.get('/api/jobs/{job_id}')
     def job_status(job_id: str):
