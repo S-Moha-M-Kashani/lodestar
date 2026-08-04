@@ -251,10 +251,41 @@ test('server boot migrates a legacy board.db and still serves its cards', async 
 });
 
 // This is a configuration invariant.
-test('.gitignore covers the databases/ folder', () => {
-  // *.db already ignores the SQLite files; this line is what keeps the Chroma
-  // stores (whose files are not *.db) out of the repository — both
-  // databases/real/chroma-data and databases/test/chroma-data-3001.
+test('.gitignore keeps every Chroma store out of the repository', () => {
+  // *.db already ignores the SQLite files; these lines are what keep the Chroma
+  // stores out, whose files are not *.db and would otherwise be committed.
+  //
+  // It used to be one bare `databases/` line. It is two now because the folder
+  // stopped being uniformly private: the :3001 sandbox's boards ship with the
+  // repo so a checkout gets a working test board, while real/ never leaves this
+  // machine and the test store is 94 MB of derived files a re-index rebuilds.
+  // Asserting each store by name rather than the folder is the point — the risk
+  // was never "the folder is unignored", it was "a store gets committed".
   const lines = readFileSync(join(ROOT, '.gitignore'), 'utf8').split('\n').map((l) => l.trim());
-  assert.ok(lines.includes('databases/'), '.gitignore must ignore databases/');
+  assert.ok(lines.includes('databases/real/'),
+    '.gitignore must ignore databases/real/ — real board, assistant and Chroma data');
+  assert.ok(lines.includes('databases/test/chroma-data-3001/'),
+    '.gitignore must ignore the test Chroma store: derived, and 94 MB of it');
+});
+
+// This is a configuration invariant.
+test("the RAG lab's experiment ledger lives in databases/test/", () => {
+  // The lab now writes a row per finished experiment into raglab.db. Where a
+  // .db goes in this repo is a settled question and the answer matters here:
+  // databases/real/ is the only folder `npm run backup` walks, so a lab ledger
+  // placed there would push a person's own board out of the newest-100 window
+  // with runs that are reproducible from the fixtures. databases/test/ is
+  // disposable by definition, which is exactly what an experiment log is —
+  // and being there means the backup script needs no exception, a rule that
+  // cannot be forgotten rather than one that has to be remembered.
+  const ledger = readFileSync(join(ROOT, 'brain/tests/raglab/ledger.py'), 'utf8');
+  assert.match(ledger, /'databases'\s*\/\s*'test'\s*\/\s*'raglab\.db'/,
+    "the ledger's default path must be databases/test/raglab.db");
+  assert.ok(!/databases['"\s/]*\/?\s*['"]real/.test(ledger),
+    'the lab must never write into databases/real/');
+  // *.db is already ignored globally, so nothing here can be committed by
+  // accident — and unlike the two :3001 boards, this one gets no `!` exception.
+  const lines = readFileSync(join(ROOT, '.gitignore'), 'utf8').split('\n').map((l) => l.trim());
+  assert.ok(lines.includes('*.db') && !lines.some((l) => l.includes('!databases/test/raglab.db')),
+    'the experiment ledger is derived and machine-specific: it must stay ignored');
 });

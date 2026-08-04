@@ -5645,11 +5645,7 @@
     jobId: null,          // server job currently running or stopping
     result: null,
     runs: [],
-    questions: [],        // ground truth without its answers, for the picker
     indexInfo: null,      // stats from the last build
-    question: '',
-    queryOut: null,
-    queryProblem: '',
     busy: false,
   };
 
@@ -5835,10 +5831,9 @@
       ragConfig();
       ragState.phase = 'ready';
       ragState.problem = '';
-      // Both are conveniences: a lab with no run history and no question picker
-      // is still fully usable, so neither failure blocks the page.
+      // A convenience: a lab with no run history is still fully usable, so the
+      // failure does not block the page.
       try { ragState.runs = (await ragApi('/evaluations?limit=30')).runs; } catch (_) { ragState.runs = []; }
-      try { ragState.questions = (await ragApi('/questions?limit=200')).questions; } catch (_) { ragState.questions = []; }
     } catch (error) {
       ragState.phase = 'absent';
       ragState.problem = error.message;
@@ -5877,6 +5872,8 @@
   // map rather than '/' + kind: the two names stopped matching when the routes
   // became resource collections, and a concatenated path would have gone on
   // looking correct while 404ing.
+  // 'query' is kept though this panel no longer asks: the lab still serves the
+  // route, and the Inspector (:9003) is what drives it now.
   const RAG_COLLECTIONS = { index: '/indexes', run: '/evaluations', query: '/queries' };
 
   // The backend the picked mode runs on, or '' when no mode is picked and the
@@ -5943,33 +5940,6 @@
     } catch (error) {
       ragState.problem = error.message;
       if (view === 'raglab') render();
-    }
-  }
-
-  // A question is a job like a build or a run — the index it builds implicitly
-  // can take minutes — so it goes through the same poll and progress bar. Only
-  // the synchronous refusals (empty question, bad config) land beside the ask
-  // box; a job that dies reports through the shared problem note like any run.
-  async function ragAsk() {
-    const question = ragState.question.trim();
-    if (!question || ragState.busy) return;
-    ragState.busy = true;
-    ragState.queryProblem = '';
-    render();
-    try {
-      const provider = ragProvider();
-      const { job_id: jobId } = await ragApi(RAG_COLLECTIONS.query,
-                                             { ...ragConfig(),
-                                               ...(provider ? { provider } : {}),
-                                               question });
-      ragState.jobId = jobId;
-      render();
-      ragPoll(jobId, (result) => { ragState.queryOut = result; });
-    } catch (error) {
-      ragState.busy = false;
-      ragState.queryOut = null;
-      ragState.queryProblem = error.message;
-      render();
     }
   }
 
@@ -6245,6 +6215,84 @@
     return cell;
   }
 
+  // What one cell sorts as, and how two of them compare. These are the rules in
+  // brain/tests/raglab/static/sorttable.js, which the two lab pages share and
+  // `tests/sorttable.test.js` unit tests — this page cannot load that file (it is
+  // served by :9002, and only /api/raglab/* is proxied), so the rules live twice
+  // and the e2e suite checks the ones that matter here: a number read out of a
+  // rendered cell, and a value that was never measured sorting last both ways.
+  function ragSortKey(text) {
+    const shown = String(text === null || text === undefined ? '' : text).trim();
+    if (['', '—', '–', '·', 'n/a'].includes(shown.toLowerCase())) {
+      return { missing: true, number: null, text: '' };
+    }
+    const probe = shown.replace(/,/g, '');
+    const found = probe.match(/^([+-]?\d+(?:\.\d+)?)([\s\S]*)$/);
+    let number = null;
+    // A trailing unit is still a number ('40s'); a date is not ('2026-07-30',
+    // which sorts chronologically as its own zero-padded text).
+    if (found && !/^[-/:.]\d/.test(found[2])) number = parseFloat(found[1]);
+    return { missing: false, number, text: shown };
+  }
+
+  function ragSortCompare(a, b, dir) {
+    if (a.missing || b.missing) {
+      if (a.missing && b.missing) return 0;
+      return a.missing ? 1 : -1;   // last whichever way the column points
+    }
+    if (a.number !== null && b.number !== null) return (a.number - b.number) * dir;
+    return a.text.localeCompare(b.text, undefined,
+      { sensitivity: 'base', numeric: true }) * dir;
+  }
+
+  // Click a header to sort by that column, again to reverse, a third time to come
+  // back to the order the service sent — which for the leaderboard is the ranking,
+  // and is the reason this is three states and not a toggle.
+  function ragSortable(table) {
+    const head = table.tHead && table.tHead.rows[0];
+    const body = table.tBodies[0];
+    if (!head || !body || !body.rows.length) return;
+    const served = Array.from(body.rows);
+    const heads = Array.from(head.cells);
+    let column = -1;
+    let dir = 0;
+    const keyOf = (row, at) => ragSortKey(row.cells[at] ? row.cells[at].innerText : '');
+    // Scores lead with the best on the first click; names read A to Z.
+    const opening = (at) => (served.some((r) => keyOf(r, at).number !== null) ? -1 : 1);
+    const apply = () => {
+      for (const th of heads) th.removeAttribute('aria-sort');
+      let rows = served;
+      if (column >= 0) {
+        rows = served.map((row, at) => ({ row, at }))
+          .sort((x, y) => ragSortCompare(keyOf(x.row, column), keyOf(y.row, column), dir)
+            || x.at - y.at)     // a tie provably keeps served order
+          .map((held) => held.row);
+        heads[column].setAttribute('aria-sort', dir === 1 ? 'ascending' : 'descending');
+      }
+      for (const row of rows) body.appendChild(row);
+    };
+    heads.forEach((th, at) => {
+      th.classList.add('sort-col');
+      th.tabIndex = 0;
+      th.setAttribute('role', 'button');
+      th.title = 'sort by this column · again to reverse · a third time for the '
+        + 'order it was served in';
+      const cycle = () => {
+        if (column !== at) { column = at; dir = opening(at); }
+        else if (dir === opening(at)) { dir = -dir; }
+        else { column = -1; dir = 0; }
+        apply();
+      };
+      th.addEventListener('click', cycle);
+      th.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          cycle();
+        }
+      });
+    });
+  }
+
   function ragTable(head, rows, className) {
     const table = document.createElement('table');
     table.className = 'rag-table' + (className ? ' ' + className : '');
@@ -6268,6 +6316,9 @@
       body.appendChild(tr);
     }
     table.appendChild(body);
+    // Every table on this page goes through here, so one added later sorts by
+    // having been rendered rather than by someone remembering to wire it.
+    ragSortable(table);
     const scroll = document.createElement('div');
     scroll.className = 'rag-scroll';
     scroll.appendChild(table);
@@ -6418,95 +6469,6 @@
       wrap.appendChild(line);
     }
     return wrap;
-  }
-
-  function renderRagQuery() {
-    const box = document.createElement('section');
-    box.className = 'rag-panel rag-query';
-    const legend = document.createElement('h3');
-    legend.textContent = 'Ask one question';
-    box.appendChild(legend);
-
-    const form = document.createElement('form');
-    form.className = 'rag-ask';
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.id = 'raglab-question';
-    input.className = 'rag-question';
-    input.dir = 'rtl';
-    input.placeholder = 'الان وضعیت کارم چیه؟';
-    input.value = ragState.question;
-    input.addEventListener('input', () => { ragState.question = input.value; });
-    const pick = document.createElement('select');
-    pick.className = 'rag-pick';
-    const blank = document.createElement('option');
-    blank.value = '';
-    blank.textContent = 'from the ground truth…';
-    pick.appendChild(blank);
-    for (const q of ragState.questions || []) {
-      const opt = document.createElement('option');
-      opt.value = q.question_fa;
-      opt.textContent = `${q.id} · ${q.type} · ${q.question_en.slice(0, 54)}`;
-      pick.appendChild(opt);
-    }
-    pick.addEventListener('change', () => {
-      if (!pick.value) return;
-      ragState.question = pick.value;
-      input.value = pick.value;
-    });
-    const ask = document.createElement('button');
-    ask.type = 'submit';
-    ask.className = 'btn primary';
-    ask.id = 'raglab-ask';
-    ask.textContent = 'Retrieve';
-    ask.disabled = ragState.busy;
-    form.append(input, pick, ask);
-    form.addEventListener('submit', (event) => { event.preventDefault(); ragAsk(); });
-    box.appendChild(form);
-
-    if (ragState.queryProblem) {
-      const problem = document.createElement('p');
-      problem.className = 'rag-note';
-      problem.textContent = ragState.queryProblem;
-      box.appendChild(problem);
-    }
-
-    const out = ragState.queryOut;
-    if (out) {
-      const diag = document.createElement('p');
-      diag.className = 'rag-meta';
-      const scope = out.time_scope
-        ? `time scope ${out.time_scope.label} (${out.time_scope.from} → ${out.time_scope.to})`
-        : 'no time scope detected';
-      diag.textContent = `${scope} · ${out.diagnostics.candidates_in_scope} chunks in scope`
-        + ` · dense ${out.diagnostics.dense_hits} · lexical ${out.diagnostics.bm25_hits}`
-        + ` · graded out ${out.diagnostics.graded_out || 0}`;
-      box.appendChild(diag);
-      if (out.answer) {
-        const answer = document.createElement('p');
-        answer.className = 'rag-answer';
-        answer.dir = 'rtl';
-        answer.textContent = (out.abstained ? '(abstained) ' : '') + out.answer;
-        box.appendChild(answer);
-      }
-      for (const context of out.contexts) {
-        const item = document.createElement('div');
-        item.className = 'rag-context';
-        const meta = document.createElement('div');
-        meta.className = 'rag-meta';
-        // There is one kind of row in the index, so the chunk id and its date
-        // are the whole of what identifies a hit.
-        meta.textContent = `${context.chunk_id} · ${context.date}`
-          + ` · score ${ragNum(context.score)}`;
-        const text = document.createElement('div');
-        text.className = 'rag-context-text';
-        text.dir = 'rtl';
-        text.textContent = context.text;
-        item.append(meta, text);
-        box.appendChild(item);
-      }
-    }
-    return box;
   }
 
   function renderRagLab() {
@@ -6695,7 +6657,21 @@
     cancelBtn.textContent = 'Stop experiment';
     cancelBtn.disabled = !ragState.jobId;
     cancelBtn.addEventListener('click', ragCancel);
-    actions.append(buildBtn, runBtn, cancelBtn);
+    // The lab measures; the Inspector shows why — the chunks an index produced,
+    // where every candidate ranked at each step, and what the run wrote against
+    // what the diary says. It is a separate service on its own port, so without a
+    // door named here :9003 is something you have to already know about. It ends
+    // this row because that is when you want it: after you have run something,
+    // not before. A real link rather than a button — it leaves this app — and it
+    // opens beside it, because the two are meant to be read side by side.
+    const inspector = document.createElement('a');
+    inspector.id = 'raglab-inspector-link';
+    inspector.className = 'btn ghost rag-inspector-link';
+    inspector.href = 'http://localhost:9003/';
+    inspector.target = '_blank';
+    inspector.rel = 'noopener';
+    inspector.textContent = 'Inspector (:9003) ↗';
+    actions.append(buildBtn, runBtn, cancelBtn, inspector);
     sheet.appendChild(actions);
 
     if (ragState.indexInfo) {
@@ -6743,8 +6719,6 @@
     }
 
     if (ragState.result) sheet.appendChild(renderRagResult());
-
-    sheet.appendChild(renderRagQuery());
 
     if (ragState.runs.length) {
       const boardTitle = document.createElement('h3');
@@ -6818,7 +6792,10 @@
           ragNum(overall.quote_recall), r.started_at];
       });
       sheet.appendChild(ragTable(['Run', 'Chunker', 'Embedder', 'Retriever',
-        'Reranker', 'n', 'Decision ▼', 'Faith', 'Ans rel', 'Ctx prec',
+        // No arrow baked into the header: an indicator that cannot move becomes a
+        // lie the moment you sort by another column, and the paragraph above the
+        // table already says which column the ranking is on.
+        'Reranker', 'n', 'Decision', 'Faith', 'Ans rel', 'Ctx prec',
         'Ctx recall', 'Composite', 'Recall', 'Quote', 'When'], rows, 'rag-board'));
     }
 

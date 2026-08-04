@@ -5,12 +5,14 @@ cosmetic: only IndexConfig changes what is stored, so its fingerprint names the
 in-memory index. Retrieval and generation can then be swept for free against
 an index that is already built — which is what makes the settings panel usable.
 
-**There are no storage settings here, and that is the design.** An experiment's
-index lives in process memory (`store.MemoryVectors`) and its results in one
-JSON file per run under RUNS_DIR. The lab used to carry a Chroma url and its own
-database name, guarded by a check that refused 'lodestar'; a setting that does
-not exist is the stronger guard, because it cannot be pointed at real chat
-memory by a typo, a stale shell, or a command copied from an old README.
+**There is no *vector* storage setting here, and that is the design.** An
+experiment's index lives in process memory (`store.MemoryVectors`); its results
+go to one JSON file per run under RUNS_DIR and one row per finished experiment in
+`ledger.py`'s SQLite, whose only setting is the `RAGLAB_DB` path it reads for
+itself. The lab used to carry a Chroma url and its own database name, guarded by
+a check that refused 'lodestar'; a setting that does not exist is the stronger
+guard, because it cannot be pointed at real chat memory by a typo, a stale shell,
+or a command copied from an old README.
 """
 import hashlib
 import json
@@ -402,6 +404,64 @@ class LabConfig:
                            f'{self.index.embedder}: set the embedder to '
                            f'{backend} or pick one of its models')
         return bad
+
+
+def _production_config() -> dict:
+    """The settings the *shipped* Assistant retrieves with, in lab terms.
+
+    Derived from the brain's own constants rather than copied beside them. The
+    panel offers this as a one-click preset, and a preset that drifts is worse
+    than none: it invites a measurement against a configuration nothing runs.
+
+    Two honest differences from the lab's measured winner are worth naming,
+    because the button says "the real system" and not "the best one we found".
+    The brain splits with a recursive 500/100 splitter, so its mirror here is
+    `fixed-overlap` at those sizes — not `semantic-drift`, which the sweep
+    preferred but the brain does not ship. And it prepends no situating header,
+    so `contextual` is off. Everything else is the pipeline in
+    `retrieval.CardIndex.search`: hybrid dense+BM25 fused with RRF, expanded
+    queries, the Farsi time filter, a lexical rerank, then the LLM gate.
+
+    Built over `LabConfig().to_dict()` so every field is present: the panel
+    fills its whole form from this, and a knob the shipped brain has no opinion
+    on (the recency half-life, which its lexical reranker never reads) should
+    read as the lab default rather than blank."""
+    from lodestar_brain import config as brain
+    from lodestar_brain import retrieval as shipped
+    defaults = brain.Settings()
+    preset = LabConfig().to_dict()
+    preset['label'] = 'the shipped assistant'
+    preset['index'] |= {
+        'chunker': 'fixed-overlap', 'chunk_chars': shipped.CHUNK_SIZE,
+        'overlap': shipped.CHUNK_OVERLAP, 'contextual': False,
+        'embedder': defaults.embedder, 'embed_model': ''}
+    preset['retrieval'] |= {
+        'retriever': 'hybrid-rrf', 'k': shipped.TOP_K,
+        'candidates': shipped.CANDIDATES, 'rrf_k': shipped.RRF_K,
+        'time_filter': True, 'multi_query': True, 'hyde': False,
+        'mmr_lambda': 1.0, 'reranker': 'lexical',
+        'rerank_depth': shipped.RERANK_DEPTH, 'grader': defaults.grader,
+        'grade_threshold': shipped.GRADE_THRESHOLD,
+        # A list, not the dataclass's tuple: this dict is served as JSON, where a
+        # tuple arrives as a list anyway, and "what the panel receives" should
+        # equal what this module holds rather than merely resemble it.
+        'agentic_weights': list(preset['retrieval']['agentic_weights'])}
+    preset['generation'] |= {'answerer': 'llm'}
+    return preset
+
+
+def __getattr__(name: str):
+    """`PRODUCTION_CONFIG`, built on first access (PEP 562).
+
+    Deriving it imports `lodestar_brain.retrieval` for its constants, which
+    costs ~4s of LangChain import — and this module is imported by every fast
+    unit test in the lab, none of which needs the preset. Building it lazily
+    keeps one source of truth without making every import pay for it."""
+    if name == 'PRODUCTION_CONFIG':
+        value = _production_config()
+        globals()[name] = value        # built once per process
+        return value
+    raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
 
 
 # Every knob explains itself, in the panel, next to the control. This lives here

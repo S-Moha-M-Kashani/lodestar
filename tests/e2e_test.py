@@ -3195,28 +3195,85 @@ try:
               "composite" in header and "quote" in header)
         page.screenshot(path=shot("raglab-leaderboard.png"))
 
-        # ---- a retrieved context ----------------------------------------------
-        # There is one kind of row in the index now, so the meta line's whole job
-        # is saying which chunk this is and when it was written. It reads straight
-        # off the payload, so a field the lab has stopped sending renders as the
-        # word "undefined" — visible, unfailing, and easy to ship.
-        page.fill("#raglab-question", "باشگاه هفته‌ای چند بار بود؟")
-        page.click("#raglab-ask")
-        # An ask is a job like a run, so it reports through the same watched
-        # box before its contexts land. Read atomically in one evaluate: the
-        # running state lasts only until the next poll, and a locator that
-        # resolves and then reads would race the box detaching.
-        ask_progress = lambda: page.evaluate(
-            "() => { const el = document.querySelector('.rag-progress .rag-meta');"
-            " return el ? el.textContent : ''; }")
-        check("raglab: an ask reports its stage through the watched-job box",
-              wait_until(lambda: "query: retrieving" in ask_progress()))
-        page.wait_for_selector(".rag-context")
-        context_meta = page.locator(".rag-context .rag-meta").first.inner_text()
-        check("raglab: a retrieved context says which chunk it is and when",
-              "2026-05-16-a#3" in context_meta and "2026-05-16" in context_meta
-              and "undefined" not in context_meta)
-        page.screenshot(path=shot("raglab-context.png"))
+        # ---- sorting by a column ----------------------------------------------
+        # Every column is a question you might be asking of the table, and the
+        # served order answers only one of them. Three states, because the served
+        # order is itself information — it is the ranking — and a two-state
+        # toggle would make it unreachable after the first click.
+        def board_labels():
+            return [c.strip() for c in
+                    board.locator("tbody tr td:first-child").all_inner_texts()]
+
+        # The label column, whose cell holds a button rather than text: the
+        # sorter has to read what a row *shows*, not the markup that shows it.
+        run_col = board.locator("thead th").nth(0)
+        run_col.click()
+        check("raglab: clicking a text header sorts by it, A to Z",
+              board_labels() == ["middle", "old", "unranked", "winner"])
+        check("raglab: the header it sorted by says so, and only that one",
+              run_col.get_attribute("aria-sort") == "ascending"
+              and board.locator("thead th[aria-sort]").count() == 1)
+        run_col.click()
+        check("raglab: clicking again reverses it",
+              board_labels() == ["winner", "unranked", "old", "middle"]
+              and run_col.get_attribute("aria-sort") == "descending")
+        run_col.click()
+        check("raglab: a third click restores the ranking it was served in",
+              board_labels() == ["winner", "old", "middle", "unranked"]
+              and board.locator("thead th[aria-sort]").count() == 0)
+
+        # A numeric column: 0.4 / 0.5 / 0.9 / 0.99 on the composite, which a text
+        # sort would order 0.4, 0.5, 0.9, 0.99 ascending and get right by luck —
+        # so the descending pass is the one that matters, where text puts 0.9
+        # above 0.99.
+        composite = board.locator("thead th").nth(11)
+        composite.click()
+        check("raglab: a score column leads with the best on the first click",
+              board_labels() == ["unranked", "middle", "old", "winner"])
+        composite.click()
+        check("raglab: reversed, the lowest score leads",
+              board_labels() == ["winner", "old", "middle", "unranked"])
+
+        # The load-bearing case. One of these four runs could not measure the
+        # deciding score, so its cell is a dash — and a dash means "never
+        # measured", not zero and not the string '—'. It has to sort last in
+        # *both* directions: ascending, a zero would beat every real score, and a
+        # table led by the row that measured least is the one mistake a
+        # leaderboard exists to prevent.
+        decision = board.locator("thead th").nth(6)
+        decision.click()
+        check("raglab: sorting by the deciding score leads with the winner",
+              board_labels() == ["winner", "old", "middle", "unranked"])
+        decision.click()
+        check("raglab: reversed, the lowest *measured* score leads and the "
+              "unmeasured row is still last",
+              board_labels() == ["middle", "old", "winner", "unranked"])
+        decision.click()
+
+        # ---- the door to the Inspector ----------------------------------------
+        # The ask box that stood here retired on 2026-08-04. Asking one question
+        # moved to the Inspector on :9003, where the answer arrives beside that
+        # question's rank at every retrieval step, its gold evidence and its
+        # scores — so this panel now names the door instead of offering the
+        # lesser of two boxes that do the same thing.
+        link = page.locator("#raglab-inspector-link")
+        check("raglab: the panel sends you to the Inspector",
+              link.count() == 1
+              and link.get_attribute("href") == "http://localhost:9003/"
+              # a new tab, because the two panels are meant to be read together
+              and link.get_attribute("target") == "_blank")
+        check("raglab: the panel no longer asks one question itself",
+              page.locator("#raglab-ask").count() == 0
+              and page.locator("#raglab-question").count() == 0)
+        # And it belongs at the end of the buttons you press to run something:
+        # the Inspector is where you go *after* an experiment, so it reads as the
+        # last step in the row rather than as a second heading above it.
+        check("raglab: the Inspector link ends the run-button row",
+              page.locator(".rag-actions #raglab-inspector-link").count() == 1
+              and page.evaluate(
+                  "() => document.querySelector('.rag-actions').lastElementChild.id")
+              == "raglab-inspector-link")
+        page.screenshot(path=shot("raglab-inspector-link.png"))
 
         # A chosen strategy is what a developer changes twenty times in a sitting;
         # losing it on every reload would make the page useless.

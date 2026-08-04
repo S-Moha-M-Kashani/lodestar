@@ -3194,6 +3194,9 @@ button.chat-source-card {
 .rag-checks input[type="checkbox"] { accent-color: var(--rule-red); }
 
 .rag-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+/* The door to the Inspector ends the row, pushed to the far edge: it is not one
+   of the three buttons that run something here, it is where you go afterwards. */
+.rag-actions .rag-inspector-link { margin-left: auto; }
 .rag-progress { display: flex; flex-direction: column; gap: 4px; }
 .rag-bar {
   height: 3px;
@@ -3324,6 +3327,17 @@ button.chat-source-card {
   letter-spacing: 0.06em;
   border-bottom: 1px solid var(--ink-soft);
 }
+/* A sortable header looks pressable and says which way it points. The glyph is a
+   pseudo-element so the header stays the string it was — the e2e suite reads
+   these as text. */
+.rag-table th.sort-col { cursor: pointer; user-select: none; }
+.rag-table th.sort-col:hover { color: var(--rule-red); }
+.rag-table th.sort-col:focus-visible {
+  outline: 2px solid var(--rule-red);
+  outline-offset: 1px;
+}
+.rag-table th[aria-sort='ascending']::after { content: ' ▲'; color: var(--rule-red); }
+.rag-table th[aria-sort='descending']::after { content: ' ▼'; color: var(--rule-red); }
 .rag-open-run { padding: 0 4px; font-size: 10.5px; }
 
 .rag-query { gap: 8px; }
