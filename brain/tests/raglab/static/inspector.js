@@ -231,7 +231,12 @@ function chunkCell(candidate) {
   const footnote = (candidate.gold && !spans.length)
     ? '<span class="no-evidence">gold: this chunk sits inside the evidence quote, '
       + 'so there is no verbatim span to highlight</span>' : '';
-  return `<td class="chunk-cell"><span class="chunk-preview" dir="rtl" tabindex="0">`
+  // `data-sort` on the cell, because its text is the preview *and* the full
+  // reveal: sorting on what this cell contains would sort every row by its own
+  // chunk twice over. The preview is what the reader sees, so it is what the
+  // column sorts by.
+  return `<td class="chunk-cell" data-sort="${escapeHtml(preview.slice(0, 60))}">`
+    + `<span class="chunk-preview" dir="rtl" tabindex="0">`
     + `${escapeHtml(preview.slice(0, 60))}${preview.length > 60 ? '…' : ''}</span>`
     + `<div class="chunk-reveal" dir="rtl">${highlighted(text, spans)}${footnote}</div></td>`;
 }
@@ -287,10 +292,17 @@ function retrievalTable(candidates) {
       <td class="num">${cell(c.fused_rank)}</td>
       <td class="num">${cell(c.rerank_score)}</td>
       <td class="num">${cell(c.grade_score)}</td>
-      <td>${c.kept ? '✓' : '✗'}</td>
-      <td>${c.gold ? '●' : ''}</td>`;
+      <!-- The two mark columns sort on 1/0 rather than on their glyph: an empty
+           cell would read as "never measured" and pin itself to the bottom in
+           both directions, so clicking twice would not flip them. -->
+      <td data-sort="${c.kept ? 1 : 0}">${c.kept ? '✓' : '✗'}</td>
+      <td data-sort="${c.gold ? 1 : 0}">${c.gold ? '●' : ''}</td>`;
     body.appendChild(tr);
   }
+  // Sortable once the rows are in it: nine columns is nine questions you might be
+  // asking of one question's candidates — what dense alone would have returned,
+  // what the reranker promoted, which gold chunk the gate dropped.
+  SortTable.make(table);
   return table;
 }
 

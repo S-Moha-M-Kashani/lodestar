@@ -82,10 +82,15 @@
               <th>chunk</th>
               <!-- The path column is the three ranks drawn as a shape; the same
                    three numbers follow it, so nothing lives only in the picture. -->
-              <th data-step="retrieval">path</th>
-              <th data-step="retrieval">dense</th>
-              <th data-step="retrieval">bm25</th>
-              <th data-step="retrieval">RRF</th>
+              <!-- Not sortable: it is the same three ranks as a shape, and the
+                   three columns after it hold the numbers to sort on. -->
+              <th data-step="retrieval" data-nosort>path</th>
+              <!-- A rank is best at 1, so these three open ascending. Left to
+                   the generic "highest first" rule, clicking dense led with the
+                   candidate dense liked least. -->
+              <th data-step="retrieval" data-order="ascending">dense</th>
+              <th data-step="retrieval" data-order="ascending">bm25</th>
+              <th data-step="retrieval" data-order="ascending">RRF</th>
               <th data-step="retrieval">rerank</th>
               <th data-step="generation">grade</th>
               <th>kept</th>
@@ -108,6 +113,10 @@
       <div id="generation-added" class="added-block"></div>
     </section>
   </main>
+  <!-- The column sorter, the one file this page shares with the panel on :9002:
+       clicking a header has to mean the same thing on both. Before inspector.js,
+       which calls into it as it builds each table. -->
+  <script src="/sorttable.js"></script>
   <script src="/inspector.js"></script>
 </body>
 </html>

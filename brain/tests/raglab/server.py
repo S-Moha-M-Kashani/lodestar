@@ -55,8 +55,21 @@ class Jobs:
     """In-process job table. A lab restart loses running jobs; finished runs are
     on disk, which is the part that matters."""
 
-    def __init__(self):
+    def __init__(self, record=None):
+        """`record(job, state)` is called once per finished job, or nothing is.
+
+        A hook rather than a direct call to `ledger.record`, because the
+        **Inspector runs this same class** (`inspector.py` does `from .server
+        import Jobs`) and the Inspector is read-only. With the recording wired in
+        here unconditionally, its manual chunk build silently became a second
+        writer of the lab's experiment ledger from a second OS process — observed
+        2026-08-04, a `kind: chunks` row from :9003 in :9002's raglab.db. A
+        scratch build for looking at chunks is not an experiment anybody ranks,
+        and "writes nothing" is the property that makes it safe to point at a
+        running lab. So the service that owns the ledger passes the recorder, and
+        the one that does not owns nothing to pass."""
         self.lock = threading.Lock()
+        self.record = record
         self.jobs: dict[str, dict] = {}
         self.current: str | None = None
 
@@ -125,7 +138,8 @@ class Jobs:
             # until it stops running: a row written after `state = 'done'` is a
             # row a follower can look for and miss.
             try:
-                ledger.record(job, outcome)
+                if self.record is not None:
+                    self.record(job, outcome)
             except Exception as error:
                 # A ledger records the work; it is never a condition of it. A
                 # judged run costs hours, and a database that cannot be opened
@@ -176,12 +190,21 @@ def create_app() -> FastAPI:
     diary = load_diary()
     ground_truth = load_ground_truth()
     registry = IndexRegistry(settings, diary)
-    jobs = Jobs()
+    # This service owns the ledger, so this is the one place a recorder is passed.
+    jobs = Jobs(record=ledger.record)
     app = FastAPI(title='Lodestar RAG Lab')
 
     @app.get('/')
     def panel():
         return FileResponse(STATIC / 'index.html')
+
+    @app.get('/sorttable.js')
+    def sorttable():
+        """The column sorter, the one file this panel and the Inspector share —
+        see `static/sorttable.js`. The only static file this service serves
+        separately: everything else about the panel is in the one page."""
+        return FileResponse(STATIC / 'sorttable.js',
+                            media_type='application/javascript')
 
     @app.get('/api/options')
     def options():
@@ -408,7 +431,10 @@ def create_app() -> FastAPI:
 
     @app.get('/api/evaluations')
     def evaluations(limit: int = 50):
-        return {'runs': evaluate.list_runs(limit)}
+        # `total` beside the rows, because this listing is bounded and the browser
+        # cannot know how many runs it was not sent.
+        return {'runs': evaluate.list_runs(limit),
+                'total': evaluate.count_runs()}
 
     @app.get('/api/experiments')
     def experiments(limit: int = 200):

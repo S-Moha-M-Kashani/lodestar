@@ -6215,6 +6215,84 @@
     return cell;
   }
 
+  // What one cell sorts as, and how two of them compare. These are the rules in
+  // brain/tests/raglab/static/sorttable.js, which the two lab pages share and
+  // `tests/sorttable.test.js` unit tests — this page cannot load that file (it is
+  // served by :9002, and only /api/raglab/* is proxied), so the rules live twice
+  // and the e2e suite checks the ones that matter here: a number read out of a
+  // rendered cell, and a value that was never measured sorting last both ways.
+  function ragSortKey(text) {
+    const shown = String(text === null || text === undefined ? '' : text).trim();
+    if (['', '—', '–', '·', 'n/a'].includes(shown.toLowerCase())) {
+      return { missing: true, number: null, text: '' };
+    }
+    const probe = shown.replace(/,/g, '');
+    const found = probe.match(/^([+-]?\d+(?:\.\d+)?)([\s\S]*)$/);
+    let number = null;
+    // A trailing unit is still a number ('40s'); a date is not ('2026-07-30',
+    // which sorts chronologically as its own zero-padded text).
+    if (found && !/^[-/:.]\d/.test(found[2])) number = parseFloat(found[1]);
+    return { missing: false, number, text: shown };
+  }
+
+  function ragSortCompare(a, b, dir) {
+    if (a.missing || b.missing) {
+      if (a.missing && b.missing) return 0;
+      return a.missing ? 1 : -1;   // last whichever way the column points
+    }
+    if (a.number !== null && b.number !== null) return (a.number - b.number) * dir;
+    return a.text.localeCompare(b.text, undefined,
+      { sensitivity: 'base', numeric: true }) * dir;
+  }
+
+  // Click a header to sort by that column, again to reverse, a third time to come
+  // back to the order the service sent — which for the leaderboard is the ranking,
+  // and is the reason this is three states and not a toggle.
+  function ragSortable(table) {
+    const head = table.tHead && table.tHead.rows[0];
+    const body = table.tBodies[0];
+    if (!head || !body || !body.rows.length) return;
+    const served = Array.from(body.rows);
+    const heads = Array.from(head.cells);
+    let column = -1;
+    let dir = 0;
+    const keyOf = (row, at) => ragSortKey(row.cells[at] ? row.cells[at].innerText : '');
+    // Scores lead with the best on the first click; names read A to Z.
+    const opening = (at) => (served.some((r) => keyOf(r, at).number !== null) ? -1 : 1);
+    const apply = () => {
+      for (const th of heads) th.removeAttribute('aria-sort');
+      let rows = served;
+      if (column >= 0) {
+        rows = served.map((row, at) => ({ row, at }))
+          .sort((x, y) => ragSortCompare(keyOf(x.row, column), keyOf(y.row, column), dir)
+            || x.at - y.at)     // a tie provably keeps served order
+          .map((held) => held.row);
+        heads[column].setAttribute('aria-sort', dir === 1 ? 'ascending' : 'descending');
+      }
+      for (const row of rows) body.appendChild(row);
+    };
+    heads.forEach((th, at) => {
+      th.classList.add('sort-col');
+      th.tabIndex = 0;
+      th.setAttribute('role', 'button');
+      th.title = 'sort by this column · again to reverse · a third time for the '
+        + 'order it was served in';
+      const cycle = () => {
+        if (column !== at) { column = at; dir = opening(at); }
+        else if (dir === opening(at)) { dir = -dir; }
+        else { column = -1; dir = 0; }
+        apply();
+      };
+      th.addEventListener('click', cycle);
+      th.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          cycle();
+        }
+      });
+    });
+  }
+
   function ragTable(head, rows, className) {
     const table = document.createElement('table');
     table.className = 'rag-table' + (className ? ' ' + className : '');
@@ -6238,6 +6316,9 @@
       body.appendChild(tr);
     }
     table.appendChild(body);
+    // Every table on this page goes through here, so one added later sorts by
+    // having been rendered rather than by someone remembering to wire it.
+    ragSortable(table);
     const scroll = document.createElement('div');
     scroll.className = 'rag-scroll';
     scroll.appendChild(table);
@@ -6711,7 +6792,10 @@
           ragNum(overall.quote_recall), r.started_at];
       });
       sheet.appendChild(ragTable(['Run', 'Chunker', 'Embedder', 'Retriever',
-        'Reranker', 'n', 'Decision ▼', 'Faith', 'Ans rel', 'Ctx prec',
+        // No arrow baked into the header: an indicator that cannot move becomes a
+        // lie the moment you sort by another column, and the paragraph above the
+        // table already says which column the ranking is on.
+        'Reranker', 'n', 'Decision', 'Faith', 'Ans rel', 'Ctx prec',
         'Ctx recall', 'Composite', 'Recall', 'Quote', 'When'], rows, 'rag-board'));
     }
 

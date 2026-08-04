@@ -382,6 +382,15 @@ select { font: inherit; color: inherit; }
 }
 .retrieval-table th[data-step="retrieval"] { color: var(--ink-green); }
 .retrieval-table th[data-step="generation"] { color: var(--ink-blue); }
+/* A sortable header looks pressable and says which way it points. The step inks
+   above still say which stage the column belongs to — the arrow is about your
+   click, the colour about the pipeline, and they never contend for the same mark.
+   A pseudo-element rather than text, so a header stays the string it was. */
+th.sort-col { cursor: pointer; user-select: none; }
+th.sort-col:hover { color: var(--rule-red); }
+th.sort-col:focus-visible { outline: 2px solid var(--rule-red); outline-offset: 1px; }
+th[aria-sort="ascending"]::after { content: " ▲"; color: var(--rule-red); }
+th[aria-sort="descending"]::after { content: " ▼"; color: var(--rule-red); }
 .retrieval-table td {
   padding: .32rem .45rem; border-bottom: 1px solid var(--card-line);
   vertical-align: top;

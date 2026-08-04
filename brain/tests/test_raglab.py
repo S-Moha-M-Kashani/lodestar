@@ -4642,3 +4642,78 @@ def test_the_panel_ends_its_run_buttons_with_the_inspector(client):
     anchor = html[html.index('id="open-inspector"') - 200:
                   html.index('id="open-inspector"') + 200]
     assert 'right' in anchor, 'the link sits at the far right of the row'
+
+
+# --- sortable columns ------------------------------------------------------
+
+# This is a unit test: the served pages' own markup.
+def test_both_lab_pages_share_one_column_sorter(client):
+    """Clicking a column header sorts by it — on the leaderboard, on the
+    experiment ledger, and on every per-question retrieval table.
+
+    One file for both pages rather than a copy each: the panel and the Inspector
+    are served out of the same directory, so "what does clicking a header do" can
+    have one answer instead of two that drift. The order it produces is unit
+    tested in `tests/sorttable.test.js`; what this pins is that both pages
+    actually load it and mark their tables up for it."""
+    from .raglab.server import STATIC
+
+    assert (STATIC / 'sorttable.js').exists()
+    panel = client.get('/').text
+    assert 'sorttable.js' in panel
+    # The two tables worth sorting, both marked at the point they are rendered.
+    assert panel.count('sortable') >= 2
+    # The hardcoded arrow is gone from the leaderboard's header: an indicator
+    # that cannot move is a lie the moment you sort by anything else, and the
+    # column's role is stated in prose beside the table instead.
+    assert 'ragas_decision ▼' not in panel
+
+    inspector = (STATIC / 'inspector.html').read_text(encoding='utf-8')
+    assert 'sorttable.js' in inspector
+    # `path` draws the three ranks as a shape and the same three numbers follow
+    # it, so sorting on the picture would sort on nothing.
+    assert 'data-nosort' in inspector
+
+
+# --- the panel does not forget across a reload -----------------------------
+
+# This is a unit test: the served panel's own markup.
+def test_the_panel_keeps_its_experiment_and_its_settings_across_a_reload(client):
+    """Refreshing the page used to throw away everything you had on screen.
+
+    The grades card is filled by `renderResult`, which only ever ran from a
+    finishing job or from a leaderboard click — so a reload left the card
+    standing there empty and the run you had just watched unreachable unless you
+    could pick its id out of a 49-row table. The settings went with it: every
+    control was re-filled from the served defaults, so a strategy you had spent
+    ten minutes arriving at was gone.
+
+    Both are remembered in localStorage under the board's own `lodestar:` prefix
+    and restored on boot — the last experiment by id, re-read from the service so
+    the page never renders a stale copy of a run that has since been deleted."""
+    html = client.get('/').text
+    assert 'localStorage' in html
+    assert 'lodestar:raglab-last-run' in html
+    assert 'lodestar:raglab-config' in html
+    # Re-read by id rather than stored whole: a run file can be deleted between
+    # two visits, and a page rendering a copy of something that is gone is worse
+    # than a page that has forgotten it.
+    assert 'restoreLastRun' in html
+
+
+# This is an integration test.
+def test_the_leaderboard_says_how_much_of_the_disk_it_shows(client):
+    """The panel asked `/api/evaluations` with no limit, so it silently showed
+    the newest 50 of 164 run files and called that the leaderboard.
+
+    That is not a cosmetic omission: on 2026-08-04 the same run ranked 2nd on the
+    page and 4th over the whole directory, and nothing on screen could explain
+    the disagreement. A bounded view has to say what it left out — the same rule
+    the sweep and the leaderboard's own grouping already follow."""
+    body = client.get('/api/evaluations?limit=3').json()
+    assert len(body['runs']) <= 3
+    # Served, not counted in the browser: the page cannot know how many files it
+    # was not sent.
+    assert body['total'] >= len(body['runs'])
+    html = client.get('/').text
+    assert '/api/evaluations?limit=' in html, 'the panel must ask for a stated limit'

@@ -75,6 +75,10 @@ def create_inspector_app() -> FastAPI:
     diary = load_diary()
     ground_truth = load_ground_truth()
     registry = IndexRegistry(settings, diary)
+    # No recorder, deliberately: the lab's job runner writes a row per finished
+    # job into raglab.db, and this service must not. Its chunk build is a scratch
+    # look, not an experiment anybody ranks, and "the Inspector writes nothing" is
+    # what makes it safe to aim at a lab that is running.
     jobs = Jobs()
     app = FastAPI(title='Lodestar RAG Lab Inspector')
 
@@ -93,6 +97,15 @@ def create_inspector_app() -> FastAPI:
     @app.get('/inspector.js')
     def js():
         return FileResponse(STATIC / 'inspector.js',
+                            media_type='application/javascript')
+
+    @app.get('/sorttable.js')
+    def sorttable():
+        """The column sorter, the one file this service and the panel share.
+
+        Both are served out of the same directory, so clicking a header can mean
+        one thing on both pages instead of two that drift apart."""
+        return FileResponse(STATIC / 'sorttable.js',
                             media_type='application/javascript')
 
     @app.get('/api/health')

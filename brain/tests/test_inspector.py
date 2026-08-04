@@ -645,3 +645,46 @@ def test_follow_exposes_what_the_evaluation_generated(monkeypatch, fake_lab,
     body = client.get('/api/follow').json()
     assert body['generation'] is None
     assert body['retrieval']['kind'] == 'retrieve'   # retrieval still follows
+
+
+# This is an integration test (FastAPI TestClient over the read-only app; a real
+# chunk build and a real SQLite file on a temp path).
+def test_the_inspector_writes_nothing_to_the_labs_ledger(monkeypatch, tmp_path):
+    """The Inspector is read-only, and that has to survive the lab growing a
+    place to write.
+
+    It builds its own in-memory index for a manual look, and it does that through
+    the *lab's* job runner (`from .server import Jobs`) — so when recording every
+    finished job moved into `Jobs.run`, the Inspector silently became a second
+    writer of the lab's experiment ledger, from a second OS process. Observed on
+    2026-08-04: a `kind: chunks` row from :9003 sitting in :9002's raglab.db.
+
+    A scratch build for looking at chunks is not an experiment anybody ranks, and
+    "the Inspector writes nothing" is the property that makes it safe to point at
+    a running lab. Recording belongs to the service that owns the ledger."""
+    from .raglab import ledger
+
+    db = tmp_path / 'raglab.db'
+    monkeypatch.setenv('RAGLAB_DB', str(db))
+    client = _client(monkeypatch)
+    acc = client.post('/api/chunks', json={
+        'index': {'chunker': 'session', 'embedder': 'ascii-hash'}})
+    assert acc.status_code == 202
+    job_id = acc.json()['job_id']
+    for _ in range(400):
+        job = client.get(f'/api/jobs/{job_id}').json()
+        if job['state'] in ('done', 'error'):
+            break
+        time.sleep(0.02)
+    assert job['state'] == 'done', job.get('error')
+
+    # The build worked; it simply left no trace in the lab's record.
+    assert job['result']['total'] > 0
+    # Existence first, and only then a read: `ledger.connect` creates the schema,
+    # so asking the ledger what is in it would bring the file into being and the
+    # stronger assertion would pass for the wrong reason.
+    assert not db.exists(), 'the Inspector must not even create the file'
+    assert ledger.experiments(path=db) == []
+    # And it did not quietly fail to record either — that would be the same bug
+    # wearing an error message.
+    assert 'ledger_error' not in job

@@ -523,6 +523,19 @@ def save_run(result: RunResult) -> None:
                                indent=1, allow_nan=False), encoding='utf-8')
 
 
+def count_runs() -> int:
+    """How many run files exist, whether or not they were listed.
+
+    Served beside a limited listing because the panel asked `/api/evaluations`
+    with no limit and showed the newest 50 of 164, calling that the leaderboard.
+    On 2026-08-04 the same run ranked 2nd on the page and 4th over the whole
+    directory and nothing on screen could explain the disagreement. A bounded
+    view has to say what it left out."""
+    if not RUNS_DIR.exists():
+        return 0
+    return sum(1 for _ in RUNS_DIR.glob('*.json'))
+
+
 def list_runs(limit: int = 50) -> list[dict]:
     if not RUNS_DIR.exists():
         return []

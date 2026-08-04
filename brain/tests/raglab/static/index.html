@@ -140,6 +140,14 @@
      So the overflow is contained where it belongs — at 390px the page still reads
      top to bottom and the table is swiped across. */
   #board, #experiments { overflow-x: auto; }
+  /* A sortable header looks pressable and says which way it is pointing. The
+     glyph is a pseudo-element so it never lands in the cell's text — the e2e
+     suite reads these headers as strings. */
+  th.sort-col { cursor: pointer; user-select: none; }
+  th.sort-col:hover { color: var(--rule-red); }
+  th.sort-col:focus-visible { outline: 2px solid var(--rule-red); outline-offset: 1px; }
+  th[aria-sort="ascending"]::after { content: " ▲"; color: var(--rule-red); }
+  th[aria-sort="descending"]::after { content: " ▼"; color: var(--rule-red); }
   .hidden { display: none; }
   /* A door to another service, so it looks like a link and not like one of this
      panel's own run buttons. */
@@ -147,6 +155,9 @@
               border-bottom: 1px solid var(--rule-red); padding-bottom: 1px; }
   .lab-link:hover { color: var(--ink); border-bottom-color: var(--ink); }
 </style>
+<!-- The column sorter, shared with the Inspector: one file, so clicking a
+     header means the same thing on both pages. -->
+<script src="/sorttable.js"></script>
 </head>
 <body>
 <header>
@@ -337,7 +348,13 @@
        less, is a choice nobody should have to make. -->
 
   <section class="card full">
-    <h2>Leaderboard</h2>
+    <h2>Leaderboard <span class="right muted" id="boardMeta"></span></h2>
+    <p class="muted" style="font-size:.74rem;margin:.2rem 0 .6rem">
+      Ordered by <b>ragas_decision</b> — the unweighted mean of faithfulness,
+      answer relevancy, context precision and context recall. Every other column
+      is reported and none of them votes; runs that could not measure all four
+      are unranked and sort last. Click any header to sort by it instead, again
+      to reverse, a third time to come back to this order.</p>
     <div id="board"></div>
   </section>
 
@@ -631,6 +648,60 @@ function applyDefaults(d) {
   }
 }
 
+// --- what survives a reload -------------------------------------------------
+// Refreshing used to empty the page: the grades card is only ever filled by a
+// finishing job or a leaderboard click, so a reload left it standing there blank
+// with the run you had just watched reachable only by picking its id out of a
+// long table — and every control went back to the served defaults, losing a
+// strategy you may have spent ten minutes arriving at. Both are remembered under
+// the board's own `lodestar:` prefix.
+const SAVED_CONFIG = 'lodestar:raglab-config';
+const SAVED_RUN = 'lodestar:raglab-last-run';
+
+function saved(key) {
+  try {
+    return JSON.parse(localStorage.getItem(key) || 'null');
+  } catch (e) {
+    // A key someone hand-edited, or written by an older shape of this page.
+    // Forgetting it is right; refusing to boot over it is not.
+    return null;
+  }
+}
+
+function remember(key, value) {
+  try {
+    if (value === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, JSON.stringify(value));
+  } catch (e) { /* private browsing, a full quota: not worth a broken panel */ }
+}
+
+// The settings you picked, merged over the served defaults per group — so a
+// config saved before a knob existed still boots, with the new knob at its
+// default rather than undefined.
+function startingConfig(defaults) {
+  const kept = saved(SAVED_CONFIG);
+  if (!kept) return defaults;
+  const merged = { label: kept.label || defaults.label || '' };
+  for (const group of ['index', 'retrieval', 'generation']) {
+    merged[group] = Object.assign({}, defaults[group], kept[group] || {});
+  }
+  return merged;
+}
+
+// Re-read by id rather than stored whole: a run file can be deleted between two
+// visits, and a page rendering a copy of something that is gone is worse than one
+// that has forgotten it. A 404 clears the memory instead of showing an error —
+// the run is missing, which is not a fault of this page.
+async function restoreLastRun() {
+  const runId = saved(SAVED_RUN);
+  if (!runId) return;
+  try {
+    renderResult(await api('/api/evaluations/' + encodeURIComponent(runId)));
+  } catch (e) {
+    remember(SAVED_RUN, null);
+  }
+}
+
 async function boot() {
   OPTIONS = await api('/api/options');
   const o = OPTIONS;
@@ -644,9 +715,20 @@ async function boot() {
   document.addEventListener('change', applyDependencies);
   fillModels();
   fillModes();
-  applyDefaults(o.defaults);
+  applyDefaults(startingConfig(o.defaults));
   applyDependencies();
   decorateExplainers();
+  // One listener for the whole panel rather than one per control: a knob added to
+  // the markup is remembered by being a control, not by being registered here.
+  //
+  // Both events, because `change` alone loses work. A typed number fires `change`
+  // only on blur, so typing k=11 and pressing Run evaluation without clicking away
+  // remembered k=8 — the run itself was right, since it reads the controls, but the
+  // reload afterwards restored a number you had already replaced. `input` is per
+  // keystroke, which is free at this size and is when the value actually changed.
+  for (const event of ['change', 'input']) {
+    document.addEventListener(event, () => remember(SAVED_CONFIG, readConfig()));
+  }
 
   const c = o.corpus;
   $('corpus').textContent =
@@ -680,6 +762,7 @@ async function boot() {
   renderIndexes(o.indexes);
   loadBoard();
   loadExperiments();
+  restoreLastRun();
 }
 
 function renderIndexes(indexes) {
@@ -835,6 +918,10 @@ const measureWhy = (key) =>
   + `aria-label="What is ${escapeHtml(measureOf(key).label)}?">!</button>`;
 
 function renderResult(result) {
+  // Remembered here rather than at each caller: a run that finished, a
+  // leaderboard click and a ledger click are three ways to be looking at the same
+  // experiment, and all three should still be there after a refresh.
+  if (result.run_id) remember(SAVED_RUN, result.run_id);
   const s = result.summary.overall;
   $('resultMeta').textContent =
     `${result.label} · ${result.summary.n_questions} questions · ${result.seconds}s · ` +
@@ -854,7 +941,7 @@ function renderResult(result) {
     }).join('');
 
   const t = result.summary.by_type;
-  $('byType').innerHTML = table(
+  renderTable('byType', 
     ['type', 'n', 'recall', 'quote', 'nDCG', 'hit', 'abstain ok', 'false ref'],
     Object.entries(t).map(([name, row]) => [name, row.n, fmt(row.recall),
       fmt(row.quote_recall), fmt(row.ndcg), fmt(row.hit),
@@ -877,7 +964,7 @@ function renderResult(result) {
     table(['difficulty', 'n', 'recall'], Object.entries(result.summary.by_difficulty)
       .map(([k, v]) => [k, v.n, fmt(v.recall)]));
 
-  $('rows').innerHTML = table(
+  renderTable('rows', 
     ['id', 'type', 'diff', 'recall', 'quote', 'ndcg', 'ctx', 'abst', 'ms'],
     result.rows.map((row) => [row.id, row.type, row.difficulty,
       fmt(row.recall, 2), fmt(row.quote_recall, 2), fmt(row.ndcg, 2),
@@ -891,12 +978,39 @@ function table(head, rows) {
     '</tbody></table>';
 }
 
+// Write a table into an element and make its columns sortable. Every table on
+// this page goes through here, so a table added later is sortable by having been
+// rendered rather than by someone remembering to wire it — and the wiring
+// happens after insertion, because it needs the real rows.
+function renderTable(id, head, rows) {
+  const host = typeof id === 'string' ? $(id) : id;
+  host.innerHTML = table(head, rows);
+  SortTable.make(host.querySelector('table'));
+  return host;
+}
+
 function escapeHtml(s) {
   return s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 }
 
+// How many runs the leaderboard asks for. Stated rather than left to the
+// service's default, and reported beside the table: the page used to request no
+// limit and render the newest 50 of 164 files as though that were every run, so
+// the same experiment sat 2nd here and 4th over the directory with nothing on
+// screen to explain it.
+const BOARD_LIMIT = 200;
+
 async function loadBoard() {
-  const { runs } = await api('/api/evaluations');
+  const { runs, total } = await api('/api/evaluations?limit=' + BOARD_LIMIT);
+  // Two different reasons the table can be shorter than the directory, and they
+  // mean opposite things to a reader: a limit hides runs that exist, while a file
+  // that will not parse as a run is not a run. Saying "newest 164 of 165" for the
+  // second sends you looking for a run that was never there.
+  $('boardMeta').textContent = total > runs.length
+    ? (runs.length >= BOARD_LIMIT
+      ? `newest ${runs.length} of ${total} run files`
+      : `${runs.length} of ${total} files in .runs/ are readable runs`)
+    : `${runs.length} run${runs.length === 1 ? '' : 's'}`;
   if (!runs.length) { $('board').innerHTML = '<div class="muted">no runs yet</div>'; return; }
   // Ranked by the RAGAS decision score, because that is the number the
   // architecture is chosen by. Rows it could not be measured on — offline runs,
@@ -909,9 +1023,12 @@ async function loadBoard() {
     if (y == null) return -1;
     return y - x;
   });
-  $('board').innerHTML = table(
+  renderTable('board', 
     ['run', 'label', 'chunker', 'embedder', 'retriever', 'reranker',
-      'n', 'ragas_decision ▼', 'faith', 'ans rel', 'ctx prec', 'ctx recall',
+      // No arrow on the header: an indicator that cannot move becomes a lie the
+      // moment you sort by another column. Which column the ranking is on is
+      // stated in prose under the heading, where it stays true.
+      'n', 'ragas_decision', 'faith', 'ans rel', 'ctx prec', 'ctx recall',
       'headline', 'recall', 'quote', 'nDCG', 'abstain', 's'],
     ranked.map((r) => {
       const i = r.config.index, q = r.config.retrieval, s = r.summary.overall || {};
@@ -961,7 +1078,7 @@ async function loadExperiments() {
       + 'something, and it lands here</div>';
     return;
   }
-  $('experiments').innerHTML = table(
+  renderTable('experiments', 
     ['when', 'kind', 'id', 'label', 'backend', 'chunker', 'embedder',
       'retriever', 'reranker', 'grader', 'answerer', 'n', 'decision', 'state', 's'],
     rows.map((r) => [
@@ -1000,11 +1117,20 @@ window.showExperiment = async (id) => {
   box.innerHTML = '<div class="muted">reading the ledger…</div>';
   try {
     const found = await api('/api/experiments/' + encodeURIComponent(id));
-    box.innerHTML = `<details open style="margin-top:.7rem">`
-      + `<summary>${escapeHtml(found.kind)} · ${escapeHtml(found.experiment_id)}`
+    box.innerHTML = `<details style="margin-top:.7rem">`
+      + `<summary>the stored detail · ${escapeHtml(found.kind)} · `
+      + `${escapeHtml(found.experiment_id)}`
       + `${found.label ? ' · ' + escapeHtml(found.label) : ''}</summary>`
       + `<pre style="white-space:pre-wrap;font-size:.7rem;max-height:30rem;overflow:auto">`
       + `${escapeHtml(JSON.stringify(found.detail, null, 1))}</pre></details>`;
+    // An evaluation's stored detail is exactly what the grades card renders, so
+    // it renders there too — the same screen you got when the run finished,
+    // rather than the same information as JSON you have to read. Closed above,
+    // because for a run the raw text is now the second-best view of it.
+    if (found.kind === 'run' && found.detail && found.detail.summary) {
+      renderResult(found.detail);
+      $('resultCard').scrollIntoView({ behavior: 'smooth' });
+    }
   } catch (e) {
     box.innerHTML = `<div class="note">${escapeHtml(e.message)}</div>`;
   }

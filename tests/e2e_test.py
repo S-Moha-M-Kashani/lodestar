@@ -3195,6 +3195,61 @@ try:
               "composite" in header and "quote" in header)
         page.screenshot(path=shot("raglab-leaderboard.png"))
 
+        # ---- sorting by a column ----------------------------------------------
+        # Every column is a question you might be asking of the table, and the
+        # served order answers only one of them. Three states, because the served
+        # order is itself information — it is the ranking — and a two-state
+        # toggle would make it unreachable after the first click.
+        def board_labels():
+            return [c.strip() for c in
+                    board.locator("tbody tr td:first-child").all_inner_texts()]
+
+        # The label column, whose cell holds a button rather than text: the
+        # sorter has to read what a row *shows*, not the markup that shows it.
+        run_col = board.locator("thead th").nth(0)
+        run_col.click()
+        check("raglab: clicking a text header sorts by it, A to Z",
+              board_labels() == ["middle", "old", "unranked", "winner"])
+        check("raglab: the header it sorted by says so, and only that one",
+              run_col.get_attribute("aria-sort") == "ascending"
+              and board.locator("thead th[aria-sort]").count() == 1)
+        run_col.click()
+        check("raglab: clicking again reverses it",
+              board_labels() == ["winner", "unranked", "old", "middle"]
+              and run_col.get_attribute("aria-sort") == "descending")
+        run_col.click()
+        check("raglab: a third click restores the ranking it was served in",
+              board_labels() == ["winner", "old", "middle", "unranked"]
+              and board.locator("thead th[aria-sort]").count() == 0)
+
+        # A numeric column: 0.4 / 0.5 / 0.9 / 0.99 on the composite, which a text
+        # sort would order 0.4, 0.5, 0.9, 0.99 ascending and get right by luck —
+        # so the descending pass is the one that matters, where text puts 0.9
+        # above 0.99.
+        composite = board.locator("thead th").nth(11)
+        composite.click()
+        check("raglab: a score column leads with the best on the first click",
+              board_labels() == ["unranked", "middle", "old", "winner"])
+        composite.click()
+        check("raglab: reversed, the lowest score leads",
+              board_labels() == ["winner", "old", "middle", "unranked"])
+
+        # The load-bearing case. One of these four runs could not measure the
+        # deciding score, so its cell is a dash — and a dash means "never
+        # measured", not zero and not the string '—'. It has to sort last in
+        # *both* directions: ascending, a zero would beat every real score, and a
+        # table led by the row that measured least is the one mistake a
+        # leaderboard exists to prevent.
+        decision = board.locator("thead th").nth(6)
+        decision.click()
+        check("raglab: sorting by the deciding score leads with the winner",
+              board_labels() == ["winner", "old", "middle", "unranked"])
+        decision.click()
+        check("raglab: reversed, the lowest *measured* score leads and the "
+              "unmeasured row is still last",
+              board_labels() == ["middle", "old", "winner", "unranked"])
+        decision.click()
+
         # ---- the door to the Inspector ----------------------------------------
         # The ask box that stood here retired on 2026-08-04. Asking one question
         # moved to the Inspector on :9003, where the answer arrives beside that
