@@ -3306,6 +3306,20 @@ button.chat-source-card {
 .rag-panel input[type="checkbox"],
 .rag-checks input[type="checkbox"] { accent-color: var(--rule-red); }
 
+/* The project's-settings preset sits above the knobs it fills, not among the run
+   buttons: it changes what the panel says, it does not start anything. */
+.rag-preset {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 10px 0 2px;
+}
+.rag-production-note {
+  color: var(--ink-soft);
+  font-size: 10.5px;
+  font-family: var(--mono);
+}
 .rag-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 /* The door to the Inspector ends the row, pushed to the far edge: it is not one
    of the three buttons that run something here, it is where you go afterwards. */

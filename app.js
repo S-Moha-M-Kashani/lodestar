@@ -6066,6 +6066,11 @@
     result: null,
     runs: [],
     indexInfo: null,      // stats from the last build
+    // What the project's-settings button last filled in, so the line describing
+    // it survives the re-render that applying it triggers. Not persisted: it
+    // describes an action you took, not a setting, and after a reload the
+    // controls speak for themselves.
+    presetNote: '',
     busy: false,
   };
 
@@ -6376,7 +6381,19 @@
     return { enabled, reason: rule.reason };
   }
 
+  // Every control carries `raglab-<field key>`. The panel used to build them
+  // anonymously, so the only way to address one was by position — `.rag-panel
+  // select` first — which is unusable for a preset that fills nine fields at
+  // once, and id names are test-stable API in this repo. The 19 field keys are
+  // unique across the three groups, which is what makes the short form
+  // unambiguous.
   function ragFieldControl(field, cfg) {
+    const control = ragBuildControl(field, cfg);
+    control.id = 'raglab-' + field.key;
+    return control;
+  }
+
+  function ragBuildControl(field, cfg) {
     const options = ragState.options;
     const bag = cfg[field.group];
     if (field.kind === 'check') {
@@ -6984,6 +7001,60 @@
     // lab run leaves a store behind for the next one to find.
     capability(true, `index in memory · runs → ${c.storage.runs}`);
     sheet.appendChild(caps);
+
+    // One click to the architecture this project actually ships. "What does the
+    // real thing do" is the question you ask before you start moving knobs, and
+    // answering it by hand means copying nine values out of the brain's source.
+    //
+    // The preset is *served* (`/api/options` → `production`, derived from the
+    // brain's own TOP_K, CHUNK_SIZE, GRADE_THRESHOLD, Settings.embedder/grader),
+    // never written here: a preset kept in a browser is a preset that will drift
+    // from the system it claims to be, and there are two panels that would drift
+    // apart as well.
+    //
+    // Settings only. The run buttons are a few inches below, and a preset that
+    // also started a build would download a 2.2 GB encoder for someone who only
+    // wanted to read what the real system uses.
+    if (options.production) {
+      const presetRow = document.createElement('div');
+      presetRow.className = 'rag-preset';
+      const useProduction = document.createElement('button');
+      useProduction.type = 'button';
+      useProduction.id = 'raglab-use-production';
+      useProduction.className = 'btn ghost';
+      useProduction.textContent = "Use this project's RAG settings";
+      useProduction.title = 'Fill every setting with the architecture the '
+        + 'Assistant ships: chunking, embedder, retrieval, reranking, the '
+        + 'relevance gate and the answerer. Nothing runs until you press a run '
+        + 'button.';
+      const note = document.createElement('span');
+      note.className = 'rag-production-note';
+      // Only after it has been pressed: a line describing settings that are not
+      // in the controls would be a claim about the panel that is not true.
+      if (ragState.presetNote) note.textContent = ragState.presetNote;
+      useProduction.addEventListener('click', () => {
+        const preset = ragState.options.production;
+        const cfg = ragConfig();
+        for (const group of ['index', 'retrieval', 'generation']) {
+          Object.assign(cfg[group], preset[group] || {});
+        }
+        cfg.label = preset.label || cfg.label;
+        // The mode dropdown presets these same fields, so leaving a mode selected
+        // would leave the panel claiming a preset that is no longer in the
+        // controls. The project's settings are their own answer to that question.
+        cfg.mode = '';
+        // Stated on screen rather than left implicit: the button claims to be the
+        // real system, so it has to say what it just filled in.
+        const idx = preset.index, ret = preset.retrieval;
+        ragState.presetNote = `${idx.chunker} ${idx.chunk_chars}/${idx.overlap}`
+          + ` · ${idx.embedder} · ${ret.retriever} k=${ret.k}`
+          + ` · ${ret.reranker} rerank · ${ret.grader} gate @ ${ret.grade_threshold}`;
+        ragPersist();
+        render();
+      });
+      presetRow.append(useProduction, note);
+      sheet.appendChild(presetRow);
+    }
 
     // Steps on the left in pipeline order, every model on the right. The step
     // panels carry the ink; the model column repeats it per group, so a glance
