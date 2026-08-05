@@ -1,3 +1,6 @@
+import re
+from pathlib import Path
+
 from lodestar_brain.config import Settings, load_settings
 
 
@@ -33,10 +36,7 @@ def test_defaults():
     # The remote dictation default has to be a model OpenRouter actually serves
     # *and* one verified to receive the audio. nvidia/nemotron-3-nano-omni:free
     # advertises audio input but its provider discards the input_audio part, so
-    # every dictation came back a hallucinated apology. openai/whisper-* is a
-    # different failure and was reverted for it: measured 2026-07-31, OpenRouter's
-    # published catalogue is 337 models and contains no whisper, embedding or
-    # rerank entry at all, so a whisper default cannot transcribe anything.
+    # every dictation came back a hallucinated apology.
     assert s.omni_model == 'google/gemini-2.5-flash-lite'
     assert s.parakeet_model == 'mlx-community/parakeet-tdt-0.6b-v3'
 
@@ -202,3 +202,81 @@ def test_the_on_disk_persist_dir_setting_is_gone():
     # The dir-per-board store was replaced by the server; a stale attribute
     # would silently keep writing chroma/ dirs.
     assert not hasattr(Settings(), 'chat_memory_dir')
+
+
+# This is a configuration invariant.
+def test_no_whisper_model_is_named_anywhere_in_the_code():
+    """A model that cannot transcribe is not worth a mention.
+
+    OpenRouter serves no whisper entry at all, so the slug was never a setting
+    anyone could use — only a name lying around in defaults, comments and one
+    test payload, where the next reader has to re-learn that it is dead. The
+    default is asserted in `test_defaults`; this is the other half of the same
+    claim, and a scan rather than an assertion because the cost of the slug was
+    always that it kept reappearing.
+
+    Code and config only: `docs/` is the historical record and may say whatever
+    was true when it was written. The pattern is the model slug, not the English
+    word — app.js's "seeded whisper of noise" is about noise, and a future local
+    faster-whisper backend would be a real option, not this dead one. This file
+    is skipped because it has to hold the pattern it looks for.
+    """
+    root = Path(__file__).resolve().parents[2]
+    assert (root / '.env.example').exists(), 'scan is anchored at the repo root'
+    slug = re.compile(r'openai/whisper|whisper-large', re.IGNORECASE)
+    scanned = [root / '.env.example', root / 'docker-compose.yml',
+               root / 'server.js', root / 'app.js',
+               *sorted((root / 'brain' / 'src').rglob('*.py')),
+               *sorted((root / 'brain' / 'tests').rglob('*.py'))]
+    named = [f'{path.relative_to(root)}:{n}'
+             for path in scanned if path != Path(__file__).resolve()
+             for n, line in enumerate(path.read_text().splitlines(), 1)
+             if slug.search(line)]
+    assert named == []
+
+
+# How this repo reads the environment: three shapes in Python, three in
+# JavaScript. `envKey:` is the odd one — scripts/db-location.mjs takes the name
+# as data, so a pattern that only matched `process.env.X` would miss BOARD_DB.
+_ENV_READS = re.compile(r"""
+    (?:os\.environ|environ|env)\.get\(\s*['"]([A-Z][A-Z0-9_]{2,})['"]
+  | (?:os\.environ|environ|env)\[\s*['"]([A-Z][A-Z0-9_]{2,})['"]\s*\]
+  | getenv\(\s*['"]([A-Z][A-Z0-9_]{2,})['"]
+  | process\.env\.([A-Z][A-Z0-9_]{2,})
+  | process\.env\[\s*['"]([A-Z][A-Z0-9_]{2,})['"]\s*\]
+  | envKey:\s*['"]([A-Z][A-Z0-9_]{2,})['"]
+""", re.VERBOSE)
+
+# `#VAR=` or `VAR=` at the start of a line — the template comments every
+# variable out, so both spellings count as documented.
+_ENV_DOCUMENTED = re.compile(r'^#?\s*([A-Z][A-Z0-9_]{2,})=')
+
+
+# This is a configuration invariant.
+def test_env_example_documents_every_variable_the_code_reads():
+    """`.env.example` is the only list of what this project can be configured
+    with, so a variable missing from it is undiscoverable and one lingering in it
+    after the code stopped reading it is a lie. Both directions are asserted for
+    that reason.
+
+    Scanned: the shipped code and the two hand-run surfaces that read the
+    environment on their own — the Node server, its scripts, the brain, the RAG
+    lab and the live evals. Not the unit tests: those set variables to exercise
+    the readers above, and a value invented for one assertion is not
+    configuration anyone should be told about.
+    """
+    root = Path(__file__).resolve().parents[2]
+    sources = [root / 'server.js', *sorted((root / 'scripts').glob('*.mjs')),
+               *sorted((root / 'brain' / 'src').rglob('*.py')),
+               *sorted((root / 'brain' / 'tests' / 'raglab').rglob('*.py')),
+               *sorted((root / 'brain' / 'tests' / 'evals').rglob('*.py'))]
+    read = {name for path in sources
+            for match in _ENV_READS.finditer(path.read_text())
+            for name in match.groups() if name}
+    documented = {match.group(1) for line in
+                  (root / '.env.example').read_text().splitlines()
+                  if (match := _ENV_DOCUMENTED.match(line))}
+    # NODE_ENV and friends belong to the runtime, not to this project.
+    read -= {'NODE_ENV', 'PATH', 'HOME'}
+    assert read - documented == set(), 'read by the code, absent from .env.example'
+    assert documented - read == set(), 'in .env.example, read by nothing'

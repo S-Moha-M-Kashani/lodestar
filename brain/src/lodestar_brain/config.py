@@ -80,8 +80,7 @@ class Settings:
     # its own checkpoint and ignores this. Must be a model OpenRouter serves and
     # one that genuinely *receives* audio: nemotron-3-nano-omni:free advertises
     # audio input but its provider discards the input_audio part, so every
-    # dictation came back an invented apology. openai/whisper-* fails earlier
-    # still — measured 2026-07-31, OpenRouter's catalogue holds no whisper entry.
+    # dictation came back an invented apology.
     omni_model: str = 'google/gemini-2.5-flash-lite'
     # Local checkpoint for the Parakeet backend (Apple Silicon, MLX).
     parakeet_model: str = 'mlx-community/parakeet-tdt-0.6b-v3'

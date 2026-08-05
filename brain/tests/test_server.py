@@ -258,13 +258,11 @@ def test_transcribe_forwards_the_picked_omni_model():
 @respx.mock
 def test_every_transcription_uses_the_one_chat_completions_wire_format():
     """One wire format, as the module's own docstring states: audio rides in as an
-    `input_audio` content part on a normal chat completion. A second branch that
-    sniffed `openai/whisper-` out of the model name and posted JSON to
-    /audio/transcriptions was reverted — that slug is absent from OpenRouter's
-    published catalogue (measured 2026-07-31: 337 models, no whisper entry), the
-    OpenAI-compatible transcription endpoint takes multipart form-data rather than
-    this JSON body, and no test ever exercised it. respx fails an unmocked call,
-    so mocking only /chat/completions is what enforces the single route."""
+    `input_audio` content part on a normal chat completion — whatever model the
+    request names. A second branch that picked /audio/transcriptions for some
+    models was reverted: that endpoint takes multipart form-data rather than this
+    JSON body, and no test ever exercised it. respx fails an unmocked call, so
+    mocking only /chat/completions is what enforces the single route."""
     route = respx.post('https://openrouter.ai/api/v1/chat/completions').mock(
         return_value=httpx.Response(200, json={
             'choices': [{'message': {'content': 'spoken words'}}]}))
@@ -272,7 +270,7 @@ def test_every_transcription_uses_the_one_chat_completions_wire_format():
         llm_provider='fake', embedder='fake', transcriber='openrouter',
         openrouter_api_key='sk-test', board_api_url='http://board.test')))
     res = client.post('/agent/transcribe', json={
-        'audio': b64(WAV), 'model': 'openai/whisper-large-v3-turbo'})
+        'audio': b64(WAV), 'model': 'some/other-omni-model'})
     assert res.status_code == 200
     assert res.json() == {'text': 'spoken words'}
     assert route.called
