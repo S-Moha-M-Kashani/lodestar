@@ -987,6 +987,18 @@ def ensure_database(url: str, database: str,
         pass   # already exists
 
 
+def _in_session(metadata: dict | None, session_id: str | None) -> bool:
+    """Whether a chunk belongs to the session being excluded.
+
+    False whenever `session_id` is None, so a caller that names no session — an
+    eval, a curl, the recall box — sees everything, exactly as before sessions
+    existed.
+    """
+    if not session_id:
+        return False
+    return (metadata or {}).get('session_id') == session_id
+
+
 class ChatStore:
     """Per-board chat memory in Chroma, through langchain-chroma.
 
@@ -1036,7 +1048,10 @@ class ChatStore:
         texts, ids, metadatas = [], [], []
         for row in rows:
             payload = {'message_id': int(row['id']), 'role': row.get('role', ''),
-                       'created_day': day_int(row.get('createdAt'))}
+                       'created_day': day_int(row.get('createdAt')),
+                       # Which conversation this came from, so recall can skip
+                       # the one the model is already reading.
+                       'session_id': row.get('sessionId') or ''}
             for n, chunk in enumerate(split_text(row.get('content', ''))):
                 texts.append(chunk)
                 ids.append(f"{row['id']}:{n}")
@@ -1057,6 +1072,34 @@ class ChatStore:
         self.index_messages(missing)
         return len(missing)
 
+    def prune(self, rows: list[dict]) -> int:
+        """Drop chunks whose message is no longer in the live record; returns how
+        many messages were dropped.
+
+        The missing half of a derived index. `sync` only ever adds, so deleting a
+        chat left its chunks answering `recall_chat` forever — a conversation the
+        user deleted resurfacing in an answer, which is the worst possible
+        version of a history feature. Called wherever `sync` is (boot, and
+        /rag/chat/reindex, which the browser fires right after a delete).
+
+        Chunks with a uuid id are left alone. Those predate the record and carry
+        no message_id, so "not in the live record" is not a claim that can be
+        made about them — treating them as orphans would silently wipe the
+        chat memory of any board that has been running since before Stage 2.
+        """
+        live = {int(row['id']) for row in rows}
+        doomed, dropped = [], set()
+        for chunk_id in self.store.get()['ids']:
+            head, sep, _ = chunk_id.partition(':')
+            if not (sep and head.isdigit()):
+                continue
+            if int(head) not in live:
+                doomed.append(chunk_id)
+                dropped.add(int(head))
+        if doomed:
+            self.store.delete(ids=doomed)
+        return len(dropped)
+
     def chunks_on(self, day: int) -> list[dict]:
         """Every chunk stamped with that created_day, as its metadata dict.
         Not a search: the recap tool reports what a day holds, and a query
@@ -1066,7 +1109,7 @@ class ChatStore:
 
     def search(self, text: str, k: int = 5,
                scope: TimeScope | None = None, *,
-               evidence: bool = True) -> list[dict]:
+               evidence: bool = True, exclude_session: str | None = None) -> list[dict]:
         """Hybrid, BM25-heavy: dense from Chroma, BM25 over the same chunks,
         each fused across the expanded queries (synonyms, cross-script), then
         combined by weighted RRF (RECALL_WEIGHTS). Fused inline rather than
@@ -1078,14 +1121,23 @@ class ChatStore:
         list cannot tell an unexplained hit from a broken search; the agent's
         find_related turns it off, because a model judges relevance itself and
         the floor would silently drop exactly the semantic matches — «دعوا»
-        reaching «دعوامون» — that are the point of having a dense index."""
+        reaching «دعوامون» — that are the point of having a dense index.
+
+        `exclude_session` drops one conversation from the results: the one the
+        caller is already reading. It is filtered here rather than in a Chroma
+        `where` clause so that the lexical half is filtered by the same rule —
+        two halves of one search disagreeing about what is eligible is a bug
+        nobody would find."""
         total = self.count()
         if total == 0:
             return []   # an empty store is a normal state, not a failed query
         raw = self.store.get()
         corpus = [Document(id=id_, page_content=content, metadata=meta or {})
                   for id_, content, meta in zip(raw['ids'], raw['documents'],
-                                                raw['metadatas'])]
+                                                raw['metadatas'])
+                  if not _in_session(meta, exclude_session)]
+        if not corpus:
+            return []
         depth = min(total, max(k, CANDIDATES))
         chroma_filter = where_clause(scope, fields=('created_day',))
         bm25 = RankBM25Retriever.from_documents(corpus, k=depth, scope=scope)
@@ -1103,6 +1155,10 @@ class ChatStore:
                                     (dense_rankings, lexical_rankings)):
             for ranking in rankings:
                 for rank, doc in enumerate(ranking, start=1):
+                    # The dense half comes straight from Chroma, so it has not
+                    # been through the corpus filter above.
+                    if _in_session(doc.metadata, exclude_session):
+                        continue
                     seen.setdefault(doc.page_content, doc)
                     scores[doc.page_content] = (
                         scores.get(doc.page_content, 0.0)

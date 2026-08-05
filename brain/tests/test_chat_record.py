@@ -22,6 +22,12 @@ Contract under test:
 - `create_app` records through the board API even when Chroma is off, never
   lets a recording failure destroy a turn, and syncs the index from the
   record at boot.
+- A recorded turn names the session it belongs to and carries the assistant
+  row's `steps`, `usage` and `cost` — the brain is the only writer of a turn
+  and the only place all three are known at once.
+- `ChatStore.prune(rows)` removes chunks for messages the live record no longer
+  returns, which is what makes deleting a chat reach the index instead of
+  leaving it answering `recall_chat` forever.
 """
 from datetime import datetime, timezone
 
@@ -171,13 +177,26 @@ def test_reindex_route_rebuilds_the_index_from_the_record():
         row(1, 'the wifi password is hunter2')]}))
     res = client.post('/rag/chat/reindex')
     assert res.status_code == 200
-    assert res.json() == {'indexed': 1, 'memory': True}
+    # `pruned` rides along because the route now syncs in both directions: the
+    # browser fires it after deleting a chat, and a delete is rows LEAVING the
+    # record. Nothing has been deleted here, so it is 0.
+    assert res.json() == {'indexed': 1, 'pruned': 0, 'memory': True}
     matches = client.post('/rag/recall',
                           json={'text': 'wifi password'}).json()['matches']
     assert any('hunter2' in m['text'] for m in matches), (
         'an imported message must be recallable after the reindex')
-    assert client.post('/rag/chat/reindex').json() == {'indexed': 0, 'memory': True}, (
+    assert client.post('/rag/chat/reindex').json() == {
+        'indexed': 0, 'pruned': 0, 'memory': True}, (
         'a second reindex must find nothing new')
+
+    # A chat deleted while the brain was running: the record stops returning its
+    # rows, and this route is what takes them out of the index.
+    record.mock(return_value=httpx.Response(200, json={'messages': []}))
+    assert client.post('/rag/chat/reindex').json() == {
+        'indexed': 0, 'pruned': 1, 'memory': True}
+    assert not client.post('/rag/recall',
+                           json={'text': 'wifi password'}).json()['matches'], (
+        'a deleted chat must stop answering recall')
 
     # Memory off: the truthful answer, not a 500 — the import itself already
     # succeeded into assistant.db and the next boot's sync will index it.
@@ -185,6 +204,83 @@ def test_reindex_route_rebuilds_the_index_from_the_record():
         llm_provider='fake', embedder='fake', board_api_url=BOARD,
         chroma_url='')))
     assert off.post('/rag/chat/reindex').json() == {'indexed': 0, 'memory': False}
+
+
+# This is an integration test.
+@respx.mock
+def test_the_recorded_turn_names_its_session_and_what_it_spent():
+    """A turn is recorded into the chat it belongs to, with its receipt.
+
+    `session_id` rides on ChatBody and is forwarded to the record, because the
+    brain is the only writer of a turn and a row without a session would be a
+    turn absent from every list. `steps`, `usage` and `cost` go with it: the
+    Assistant re-renders tool evidence and the price when a historic chat is
+    reopened, and the brain is the only place all three are known at once.
+    """
+    record = respx.post(f'{BOARD}/api/chat/messages').mock(
+        return_value=httpx.Response(200, json={'messages': []}))
+    client = TestClient(create_app(Settings(
+        llm_provider='fake', embedder='fake', board_api_url=BOARD,
+        chroma_url='')))
+
+    res = client.post('/agent/chat', json={
+        'session_id': 's-berlin',
+        'messages': [{'role': 'user', 'content': 'plan the berlin trip'}]})
+    assert res.status_code == 200
+    body = json.loads(record.calls.last.request.content)
+    assert body['sessionId'] == 's-berlin'
+    user, assistant = body['messages']
+    assert [user['role'], assistant['role']] == ['user', 'assistant']
+    assert isinstance(assistant['steps'], list), (
+        'the assistant row carries its tool steps, so reopening the chat shows '
+        'the evidence and not only the prose')
+    assert assistant['usage']['total_tokens'] > 0
+    # 0.0 because a local model genuinely costs nothing — see
+    # test_a_turn_reports_what_it_cost_and_says_nothing_when_it_cannot. The
+    # unknown-price direction (None, never a fabricated zero) is pricing.py's.
+    assert assistant['cost'] == 0.0
+    assert 'steps' not in user and 'cost' not in user, (
+        'a user row has no receipt of its own — the fields belong to the turn '
+        'the model took')
+
+    # No session named: the record still takes it, and Node files it under the
+    # reserved 'adhoc' chat. Sixteen tests and every eval post without a
+    # session, and none of them should be a lost turn.
+    client.post('/agent/chat', json={
+        'messages': [{'role': 'user', 'content': 'no session named'}]})
+    assert 'sessionId' not in json.loads(record.calls.last.request.content), (
+        'an unnamed session is omitted, not sent as an empty string — the '
+        'server decides the fallback, and it must be able to tell them apart')
+
+
+# This is an integration test (in-process Chroma, no server, no disk).
+def test_prune_drops_chunks_the_record_no_longer_returns():
+    """The missing half of a derived index.
+
+    `sync` only ever adds, so deleting a chat used to leave its chunks
+    answering `recall_chat` forever — a conversation you deleted resurfacing in
+    an answer, which is the worst possible version of a history feature. `prune`
+    is what makes the soft delete reach Chroma; the browser fires
+    /rag/chat/reindex after a delete so it happens at once rather than at the
+    next boot.
+    """
+    store = memory_store('chat-prune')
+    kept = row(1, 'the wifi password is hunter2')
+    deleted = row(2, 'dentist appointment moved to friday')
+    store.index_messages([kept, deleted])
+    assert any('dentist' in h['text'] for h in store.search('dentist'))
+
+    # The live record no longer returns row 2 — its session was soft-deleted.
+    assert store.prune([kept]) == 1, 'only the vanished row is pruned'
+    assert not store.search('dentist'), (
+        'a deleted chat must stop answering recall')
+    assert any('hunter2' in h['text'] for h in store.search('wifi password')), (
+        'and pruning must not take the surviving chat with it')
+    assert store.prune([kept]) == 0, 'a second prune finds nothing to do'
+    # An empty record prunes everything rather than reading it as "no news".
+    # The opposite reading would make a wiped record un-prunable, which is the
+    # one case where leaving chunks behind is most obviously wrong.
+    assert store.prune([]) == 1
 
 
 # This is an integration test.

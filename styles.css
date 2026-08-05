@@ -2706,6 +2706,119 @@ body[data-view="assistant"] .app-footer { display: none; }
   margin: 4px 24px 0;
 }
 
+/* Which chat you are in, and the two things you do about it. The title is the
+   button that opens the list, so the label and the control are one thing; New
+   chat is the tab-like `+` beside it. Quiet, because you are here to read the
+   conversation, not to administer it. */
+.chat-switcher {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  align-self: center;
+}
+.chat-history-btn {
+  max-width: 22ch;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 0.78rem;
+}
+.chat-new { font-size: 1rem; line-height: 1; padding-inline: 9px; }
+
+/* The chats. A panel across the sheet, never a rail beside the transcript — a
+   rail was measured costing the conversation 300px and stood mostly empty. Its
+   own scroll, so a year of chats cannot push the composer off the screen. */
+.chat-history {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 40vh;
+  overflow-y: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.chat-history-day {
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  padding: 8px 4px 2px;
+}
+.chat-history-day:first-child { padding-top: 0; }
+.chat-history-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  border-radius: var(--radius);
+  padding: 2px 4px;
+}
+.chat-history-item:hover { background: var(--rule-wash, rgba(0, 0, 0, 0.04)); }
+/* The chat you are in, marked the way the ledger marks a current line. */
+.chat-history-item.current { border-inline-start: 2px solid var(--rule-red); }
+.chat-history-open {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  background: none;
+  border: 0;
+  padding: 4px 2px;
+  font: inherit;
+  color: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.chat-history-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.chat-history-count {
+  flex: 0 0 auto;
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-soft);
+}
+/* The per-row controls stay out of the way until the row is under the pointer:
+   a list of chats should read as a list, not as a row of buttons. */
+.chat-history-rename,
+.chat-history-delete {
+  flex: 0 0 auto;
+  font-size: 0.68rem;
+  opacity: 0;
+}
+.chat-history-item:hover .chat-history-rename,
+.chat-history-item:hover .chat-history-delete,
+.chat-history-rename:focus-visible,
+.chat-history-delete:focus-visible { opacity: 1; }
+
+/* The nudge, directly above the composer where the message it is about still
+   sits. Ruled in the margin red because it is asking something, and it holds the
+   turn until answered — but it is a question, so neither button is louder than
+   the sheet. */
+.chat-drift {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 6px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-inline-start: 3px solid var(--rule-red);
+  border-radius: var(--radius);
+}
+.chat-drift-text { margin: 0; flex: 1 1 22ch; font-size: 0.8rem; }
+.chat-drift-actions { display: flex; gap: 8px; flex: 0 0 auto; }
+
+/* ask() with a text field — the rename dialog. */
+#prompt-dialog label { display: block; font-size: 0.72rem; color: var(--ink-soft); }
+#prompt-dialog input { width: min(48ch, 100%); }
+
 /* The annotation strip under an answer: what it cited, what it cost, which
    tools ran. Folded to a single quiet line — a receipt pasted face-down under a
    ledger entry — and opened only when the evidence is what you came for. Once

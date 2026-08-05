@@ -51,10 +51,11 @@ test('the window the browser sends fits inside what the brain accepts', () => {
   const maxMessages = constant(brain, 'MAX_MESSAGES');
   const maxChars = constant(brain, 'MAX_CHARS');
 
-  // Strictly under, not equal. The client sends the window plus the framing
-  // message, and a budget sitting exactly on the limit refuses on the turn that
-  // reaches it — the failure would arrive as one dead conversation rather than
-  // as a test.
+  // Strictly under, not equal. A budget sitting exactly on the limit refuses on
+  // the turn that reaches it — the failure would arrive as one dead conversation
+  // rather than as a test. (It used to also have to leave room for the framing
+  // message the client prepended outside the budget; that message is gone —
+  // see the pinning test below.)
   assert.ok(messages < maxMessages,
     `the browser sends up to ${messages} messages but the brain refuses past ${maxMessages}`);
   assert.ok(chars < maxChars,
@@ -69,6 +70,43 @@ test('the reader keeps more of the conversation than the model is sent', () => {
   assert.ok(constant(app, 'CHAT_KEEP') > constant(app, 'CONTEXT_MESSAGES'),
     'CHAT_KEEP is the transcript, CONTEXT_MESSAGES is the request — the '
     + 'transcript must be the larger of the two or there is nothing to recall');
+});
+
+// This is a configuration invariant.
+test('no message is pinned outside the context budget', () => {
+  // The bug this test exists to prevent, and it shipped: contextWindow ended
+  // with `const framing = history.find((m) => m.role === 'user')` and prepended
+  // that message to every request, deliberately outside the char budget, as
+  // "framing". With one endless transcript the framing message is not the
+  // subject of this conversation — it is the subject of the FIRST conversation
+  // this board ever had, stapled to the top of every request for the life of
+  // the install. Saying "hi" got an answer about last month.
+  //
+  // Sessions replace it: the window is one conversation, so the framing is the
+  // conversation. Asserted on the source because app.js is one IIFE with
+  // nothing exported — the same reason the brain's refusal is matched by regex
+  // above.
+  // The mechanism, not the word for it: what must not come back is the lookup
+  // that found the message to pin. Asserting on the prose would only forbid
+  // *describing* the bug, which is the opposite of useful.
+  assert.doesNotMatch(app, /history\.find\(/,
+    'contextWindow must not reach into the history for a message to prepend — '
+    + 'a pinned first message is the original bug');
+  assert.match(app, /history\.slice\(from\)/,
+    'the carried window must be a contiguous tail of this session, so what the '
+    + 'transcript marks as "no longer travelling" is exactly what is left out');
+});
+
+// This is a configuration invariant.
+test('the resume gap is a named constant with a plausible value', () => {
+  // Opening the Assistant resumes the last chat unless the gap was long. The
+  // number is a judgement call, not a measurement, so what is pinned here is
+  // only that it exists and is in the range where it could be one: a gap of
+  // seconds would start a new chat between two sentences, and a gap of days
+  // would never fire and quietly make the feature a lie.
+  const gap = constant(app, 'RESUME_WITHIN_MS');
+  assert.ok(gap >= 60_000 && gap <= 24 * 60 * 60 * 1000,
+    `RESUME_WITHIN_MS is ${gap}ms — expected between a minute and a day`);
 });
 
 // This is a configuration invariant.

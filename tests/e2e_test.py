@@ -67,6 +67,29 @@ def wait_until(cond, timeout=5.0):
         time.sleep(0.05)
     return cond()
 
+def wait_for_capture(page, box, n=1, timeout=20.0):
+    """Wait until a route handler has captured `n` requests.
+
+    Why this is not `wait_until(lambda: len(box) == n)`: with Playwright's SYNC
+    api, route handlers are dispatched only while the client is inside a
+    Playwright call, and `wait_until` polls with `time.sleep`, which never
+    yields. So a bare list-length condition can spin to its deadline while the
+    handler sits waiting its turn — and then run the instant the next
+    `page.*` call happens, which is usually the assertion's own locator, making
+    the failure look like a race.
+
+    It worked by accident for years: the request used to be issued *during*
+    `page.click`, so the handler ran inside that call. The moment a send became
+    two round trips — the topic check, then the turn — the second one was issued
+    after `click` had returned, and nothing was pumping the loop.
+
+    Touching the page in the condition is what pumps it. `.chat-log` is used
+    because it exists on every screen this helper is called from.
+    """
+    return wait_until(
+        lambda: page.locator(".chat-log").count() >= 0 and len(box) >= n, timeout)
+
+
 def open_meta(page):
     """Unfold the evidence strip under the newest reply.
 
@@ -111,6 +134,30 @@ def open_chat_menu(page):
     btn = page.locator("#chat-menu-btn")
     if btn.count() == 1 and btn.get_attribute("aria-expanded") != "true":
         btn.click()
+
+
+def open_chat_history(page):
+    """Open the history panel — the list of past chats.
+
+    Deliberately NOT inside the extras: history is a control you reach for while
+    reading, not a setting you touch once, so it sits in the toolbar row beside
+    New chat. It is still a panel rather than a rail, because a rail beside the
+    transcript was measured costing it 300px and was removed."""
+    btn = page.locator("#chat-history-btn")
+    if btn.count() == 1 and btn.get_attribute("aria-expanded") != "true":
+        btn.click()
+    page.wait_for_selector(".chat-history")
+
+
+def carried_run(carried, seeded, asked):
+    """The positions of the seeded messages a request carried, in order.
+
+    Returned so a check can assert the window is one *consecutive* run of the
+    transcript. A pinned opening message — the bug — shows up here as a gap
+    between position 0 and the rest, which an ordering assertion alone would
+    happily accept."""
+    contents = [m["content"] for m in seeded]
+    return [contents.index(c) for c in carried if c != asked and c in contents]
 
 
 ARTIFACTS = os.path.join(os.path.dirname(__file__), "artifacts")
@@ -247,6 +294,34 @@ def api_put(cards):
     )
     with urllib.request.urlopen(req, timeout=3) as r:
         return json.loads(r.read())
+
+
+def api_chat_append(session_id, messages):
+    """Seed a chat straight into the record.
+
+    The transcript lives in assistant.db now, not in localStorage, so seeding a
+    long conversation means writing it where the browser reads it from. Which is
+    also the cheaper path it always was: the fake model would need minutes to
+    produce sixty turns, and what these checks are about is the request body and
+    the history list, not the model.
+    """
+    body = json.dumps({"sessionId": session_id, "messages": messages}).encode()
+    req = urllib.request.Request(
+        URL + "/api/chat/messages", data=body, method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=5) as r:
+        return json.loads(r.read())
+
+
+def api_chat_sessions():
+    with urllib.request.urlopen(URL + "/api/chat/sessions", timeout=3) as r:
+        return json.loads(r.read())["sessions"]
+
+
+def api_chat_messages():
+    with urllib.request.urlopen(URL + "/api/chat/messages", timeout=5) as r:
+        return json.loads(r.read())["messages"]
 
 
 # Synthetic microphone: getUserMedia returns a generated tone instead of asking
@@ -1581,21 +1656,22 @@ try:
         #
         # Now it sends a window. The transcript is untouched on screen and in
         # assistant.db; what changes is how much of it rides along, so the cost
-        # of turn fifty is the cost of turn five. Seeded through localStorage
+        # of turn fifty is the cost of turn five. Seeded through the record
         # rather than by holding fifty conversations: the fake model would take
         # minutes to produce them and the assertion is about the request body.
-        # Put back afterwards: every later block in this suite reads the
-        # transcript this one is about to replace.
-        real_chat = page.evaluate("() => localStorage.getItem('lodestar:chat')")
+        long_chat = "e2e-long-chat"
         seeded = []
         for i in range(30):
             seeded.append({"role": "user", "content": f"seeded question {i}"})
             seeded.append({"role": "assistant", "content": f"seeded answer {i}"})
-        page.evaluate("(msgs) => localStorage.setItem('lodestar:chat', JSON.stringify(msgs))",
-                      seeded)
+        api_chat_append(long_chat, seeded)
         page.reload()
         page.locator('.view-switch button[data-view="assistant"]').click()
         page.wait_for_selector("#chat-input")
+        open_chat_history(page)
+        page.locator(".chat-history-item", has_text="seeded question 0").first.click()
+        page.wait_for_selector("#chat-input")
+        wait_until(lambda: page.locator(".chat-msg").count() >= 60)
 
         sent = []
         page.route("**/api/agent/chat/stream", lambda route: (
@@ -1605,7 +1681,13 @@ try:
                                ' "proposed": false, "steps": []}\n\n')))
         page.fill("#chat-input", "the newest question")
         page.click("#chat-send")
-        wait_until(lambda: len(sent) == 1)
+        # Longer than the default 5s, and for a reason worth writing down: a send
+        # is now TWO round trips (the topic check, then the turn) against a
+        # single-threaded Node server that is at the same time reading a
+        # 61-message transcript out of SQLite. At 5s this raced and the handler
+        # arrived just after the check gave up — a green suite that failed once in
+        # a while for nothing to do with what it asserts.
+        wait_for_capture(page, sent)
         body = sent[0] if sent else {"messages": []}
         carried = [m["content"] for m in body["messages"]]
 
@@ -1616,15 +1698,20 @@ try:
               # The turn being asked is always the last thing the model reads.
               and carried[-1] == "the newest question")
         # This is an end-to-end test.
-        # The first message is kept deliberately, at the cost of two lines of
-        # window: it is where a conversation says what it is *about*, and a model
-        # given only the tail of a long thread answers the last question while
-        # having forgotten the task. Cheap framing beats a summary — which this
-        # project has decided twice not to reintroduce.
-        check("context: the opening message is kept as the conversation's framing",
-              "seeded question 0" in carried
-              # And it is the recent end that is kept, not an arbitrary slice.
+        # The window used to prepend the transcript's first user message on every
+        # turn, outside the char budget, as "framing". With one endless
+        # transcript that message was the subject of the FIRST conversation this
+        # board ever had, pinned to the top of every request forever — so a new
+        # question got an answer about last month. The session boundary is the
+        # framing now, and the carried window is a plain contiguous tail.
+        run = carried_run(carried, seeded, "the newest question")
+        # No gap between the oldest carried message and the newest. A pinned
+        # opener is exactly what a gap would look like here.
+        contiguous = bool(run) and run == list(range(run[0], run[0] + len(run)))
+        check("context: the window is a contiguous tail with nothing pinned",
+              contiguous
               and "seeded question 29" in carried
+              and "seeded question 0" not in carried
               and "seeded question 5" not in carried)
         # This is an end-to-end test.
         # Trimming that nobody can see is the quiet loss this project refuses. The
@@ -1635,12 +1722,208 @@ try:
               page.locator(".chat-trimmed").count() == 1
               and page.locator(".chat-msg").count() >= 61)
         page.unroute("**/api/agent/chat/stream")
-        page.evaluate(
-            "(saved) => saved === null ? localStorage.removeItem('lodestar:chat')"
-            " : localStorage.setItem('lodestar:chat', saved)", real_chat)
-        page.reload()
-        page.locator('.view-switch button[data-view="assistant"]').click()
+
+        # ---- Sessions: a new chat, and the ones before it ---------------------
+        # The whole point of the block above: a conversation has a boundary, so
+        # "hi" cannot be read as the next line of last month's thread.
+        #
+        # This is an end-to-end test.
+        page.click("#chat-new")
         page.wait_for_selector("#chat-input")
+        check("sessions: New chat empties the transcript",
+              wait_until(lambda: page.locator(".chat-msg").count() == 0)
+              and page.locator(".chat-trimmed").count() == 0)
+
+        sent2 = []
+        page.route("**/api/agent/chat/stream", lambda route: (
+            sent2.append(json.loads(route.request.post_data)),
+            route.fulfill(status=200, content_type="text/event-stream",
+                          body='event: done\ndata: {"reply": "a clean answer",'
+                               ' "mutated": false, "proposed": false, "steps": []}\n\n')))
+        page.fill("#chat-input", "a brand new subject entirely")
+        page.click("#chat-send")
+        wait_for_capture(page, sent2)
+        fresh = sent2[0] if sent2 else {"messages": []}
+        # This is an end-to-end test.
+        # The bug the user reported, as one assertion: the first turn of a new
+        # chat carries exactly that turn. Nothing from before can reach it, so
+        # there is nothing for the model to answer instead.
+        check("sessions: the first turn of a new chat carries only itself",
+              [m["content"] for m in fresh["messages"]] == ["a brand new subject entirely"]
+              and fresh.get("session_id"))
+        # This is an end-to-end test.
+        # And it is a different chat from the one we left, not a cleared view of
+        # the same one — otherwise New chat would be destroying history.
+        check("sessions: a new chat is a new session, and the old one survives",
+              fresh.get("session_id") != long_chat
+              and any(s["id"] == long_chat for s in api_chat_sessions()))
+        page.unroute("**/api/agent/chat/stream")
+
+        # This is an end-to-end test.
+        # One REAL turn, through the brain rather than a mocked stream, because
+        # this is the check that the recording path carries the session all the
+        # way: browser → /agent/chat/stream → remember() → /api/chat/messages →
+        # the sessions table → back into the history panel. Every mocked block
+        # above deliberately stops the brain ever hearing about the chat, so a
+        # mocked chat has no row to list — which is exactly how this check first
+        # failed, and why it is the one turn here that is not mocked.
+        recorded_title = "a chat that is really recorded"
+        page.click("#chat-new")
+        page.wait_for_selector("#chat-input")
+        page.fill("#chat-input", recorded_title)
+        page.click("#chat-send")
+        page.wait_for_selector(".chat-msg.assistant", timeout=20000)
+        open_chat_history(page)
+        titles = wait_until(
+            lambda: page.locator(".chat-history-item").count() >= 3
+            and recorded_title in page.locator(".chat-history-item").first.inner_text(),
+            timeout=20)
+        check("sessions: the history panel lists the chats, newest first",
+              titles)
+
+        # This is an end-to-end test.
+        # Reopening is the other half of never losing a thought: a chat you left
+        # is still there, with its messages, and you can keep talking in it.
+        page.locator(".chat-history-item", has_text="seeded question 0").first.click()
+        page.wait_for_selector("#chat-input")
+        check("sessions: a historic chat reopens with its messages",
+              wait_until(lambda: page.locator(".chat-msg").count() >= 60)
+              and "seeded answer 29" in page.inner_text(".chat-log"))
+
+        sent3 = []
+        page.route("**/api/agent/chat/stream", lambda route: (
+            sent3.append(json.loads(route.request.post_data)),
+            route.fulfill(status=200, content_type="text/event-stream",
+                          body='event: done\ndata: {"reply": "still talking",'
+                               ' "mutated": false, "proposed": false, "steps": []}\n\n')))
+        page.fill("#chat-input", "picking this back up")
+        page.click("#chat-send")
+        wait_for_capture(page, sent3)
+        # This is an end-to-end test.
+        check("sessions: a reopened chat is live, not read-only",
+              sent3 and sent3[0].get("session_id") == long_chat
+              and sent3[0]["messages"][-1]["content"] == "picking this back up")
+        page.unroute("**/api/agent/chat/stream")
+
+        # ---- The topic-change nudge -------------------------------------------
+        # Signal one is pure pattern matching, so it fires with BRAIN_EMBEDDER
+        # =fake and needs no test-only override: typing a bare greeting into a
+        # chat that already has messages is the case the user reported.
+        #
+        # This is an end-to-end test.
+        nudged = []
+        page.route("**/api/agent/chat/stream", lambda route: (
+            nudged.append(json.loads(route.request.post_data)),
+            route.fulfill(status=200, content_type="text/event-stream",
+                          body='event: done\ndata: {"reply": "unexpected",'
+                               ' "mutated": false, "proposed": false, "steps": []}\n\n')))
+        page.fill("#chat-input", "hi")
+        page.click("#chat-send")
+        drifted = wait_until(lambda: page.locator(".chat-drift").count() == 1)
+        check("nudge: a bare greeting in a long chat offers a new chat instead",
+              drifted
+              # Not sent. The turn is held back, so nothing is spent and there
+              # is no answer to move afterwards.
+              and not nudged
+              # And the words are still in the composer, not swallowed by the
+              # offer — a nudge that eats your message is worse than the bug.
+              and page.input_value("#chat-input") == "hi")
+
+        # This is an end-to-end test.
+        # Dismissing sends the turn as asked. The user's judgement wins: this is
+        # a suggestion, and a suggestion you cannot refuse is a decision.
+        page.locator(".chat-drift button", has_text="Keep this one").click()
+        wait_for_capture(page, nudged, 1)
+        check("nudge: Keep this one sends the turn into the chat you were in",
+              nudged and nudged[0].get("session_id") == long_chat
+              and page.locator(".chat-drift").count() == 0)
+
+        # This is an end-to-end test.
+        # And once refused it stops asking for the rest of the chat — a broad
+        # conversation must not be interrupted on every greeting.
+        page.fill("#chat-input", "hello again")
+        page.click("#chat-send")
+        wait_for_capture(page, nudged, 2)
+        check("nudge: a dismissed nudge does not ask again in the same chat",
+              len(nudged) == 2 and page.locator(".chat-drift").count() == 0)
+
+        # This is an end-to-end test.
+        # Accepting is the whole feature: the message you typed opens its own
+        # chat and is answered there, with nothing behind it.
+        page.click("#chat-new")
+        page.wait_for_selector("#chat-input")
+        page.fill("#chat-input", "the weekend plan")
+        page.click("#chat-send")
+        wait_for_capture(page, nudged, 3)
+        page.fill("#chat-input", "hi")
+        page.click("#chat-send")
+        wait_until(lambda: page.locator(".chat-drift").count() == 1)
+        page.locator(".chat-drift button", has_text="Start a new chat").click()
+        wait_for_capture(page, nudged, 4)
+        started = nudged[3] if len(nudged) > 3 else {"messages": []}
+        check("nudge: Start a new chat sends the message into a fresh session",
+              [m["content"] for m in started["messages"]] == ["hi"]
+              and started.get("session_id") != nudged[2].get("session_id"))
+        page.unroute("**/api/agent/chat/stream")
+
+        # ---- Renaming and deleting a chat -------------------------------------
+        # Its own chat, seeded through the record, so neither control is exercised
+        # against a conversation a later block still needs.
+        api_chat_append("e2e-doomed", [
+            {"role": "user", "content": "a chat that exists to be deleted"},
+            {"role": "assistant", "content": "understood"},
+        ])
+        open_chat_history(page)
+        # The panel asks the server on opening, so the new chat is there.
+        wait_until(lambda: page.locator(
+            ".chat-history-item", has_text="a chat that exists to be deleted").count() == 1)
+        doomed = page.locator(".chat-history-item",
+                              has_text="a chat that exists to be deleted").first
+
+        # This is an end-to-end test.
+        # A derived title is a starting point, not a name. Renaming goes through
+        # the in-app prompt dialog — never a native one, which the run-wide
+        # no-native-dialogs check also covers.
+        doomed.locator(".chat-history-rename").click()
+        page.wait_for_selector("#prompt-dialog[open]")
+        page.fill("#prompt-input", "Doomed chat, renamed")
+        page.click("#prompt-ok")
+        renamed = wait_until(lambda: page.locator(
+            ".chat-history-item", has_text="Doomed chat, renamed").count() == 1)
+        check("sessions: a chat can be renamed off its derived title",
+              renamed
+              and any(s["title"] == "Doomed chat, renamed" for s in api_chat_sessions()))
+
+        # This is an end-to-end test.
+        # Deleting has to reach the recall index, not just the list: ChatStore.sync
+        # only ever adds, so without the reindex a deleted chat would go on
+        # answering recall_chat — the worst version of this feature. The request is
+        # the observable half of that; ChatStore.prune's own test owns the rest.
+        page.locator(".chat-history-item", has_text="Doomed chat, renamed") \
+            .first.locator(".chat-history-delete").click()
+        page.wait_for_selector("#confirm-dialog[open]")
+        with page.expect_request("**/api/rag/chat/reindex"):
+            page.click("#confirm-ok")
+        gone = wait_until(lambda: page.locator(
+            ".chat-history-item", has_text="Doomed chat, renamed").count() == 0)
+        check("sessions: deleting a chat drops it from the list and the index",
+              gone
+              and all(s["title"] != "Doomed chat, renamed" for s in api_chat_sessions())
+              # Soft, not destroyed: the messages leave every live read, and the
+              # rows are still in assistant.db — which is why no route can show
+              # them, and why this asserts absence rather than presence.
+              and all("a chat that exists to be deleted" != m["content"]
+                      for m in api_chat_messages()))
+
+        # Leave a chat that holds a REAL, recorded, priced turn open. Every chat
+        # this block made with a mocked stream has no receipt — the brain never
+        # saw the turn — and the session-cost check further down reads the open
+        # transcript. Ending on an empty new chat starved it, which is a fair
+        # description of what a mocked send is: not a turn.
+        open_chat_history(page)
+        page.locator(".chat-history-item", has_text=recorded_title).first.click()
+        page.wait_for_selector("#chat-input")
+        wait_until(lambda: page.locator(".chat-msg").count() >= 2)
 
         # This is an end-to-end test.
         # The sheet was pinned at 720px while the replies it holds are card

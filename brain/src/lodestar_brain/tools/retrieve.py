@@ -5,6 +5,7 @@ what the model is told. Each rebuilds from `/api/state` before answering, so a
 card created a second ago is findable — the index fingerprint is what makes that
 free on an unchanged board.
 """
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
@@ -73,10 +74,23 @@ def make_retrieve_tool(index: CardIndex, client: BoardClient, llm=None,
 
 def make_recall_tool(store: ChatStore) -> BaseTool:
     @tool('recall_chat', args_schema=RecallChatArgs)
-    def recall_chat(text: str, k: int = 5) -> list[dict]:
-        """Recall relevant snippets from past assistant conversations on this
-        board. Use it to answer questions about things discussed before."""
-        return store.search(text, k=k)
+    def recall_chat(text: str, k: int = 5,
+                    config: RunnableConfig = None) -> list[dict]:
+        """Recall relevant snippets from OTHER conversations on this board — the
+        chat you are in now is already in front of you. Use it when the user
+        refers to something discussed outside this conversation."""
+        # Which chat we are in arrives through the run config, never as an
+        # argument: the model must not be able to name — or spoof — it, and
+        # `config` is excluded from the schema the model sees because
+        # `args_schema` above declares the schema explicitly.
+        current = (config or {}).get('configurable', {}).get('session_id')
+        hits = store.search(text, k=k, exclude_session=current or None)
+        # Dated, so a recalled line can be attributed instead of quoted as
+        # though it were said now. The date is already in the chunk metadata;
+        # the chat's title deliberately is not — a copy of it here would go
+        # stale the moment the chat is renamed.
+        return [hit | {'day': (hit.get('metadata') or {}).get('created_day')}
+                for hit in hits]
 
     return recall_chat
 

@@ -48,12 +48,21 @@ class BoardClient:
         res.raise_for_status()
         return res.json()['messages']
 
-    def record_chat(self, messages: list[dict]) -> list[dict]:
+    def record_chat(self, messages: list[dict],
+                    session_id: str = '') -> list[dict]:
         """Append to the durable chat record (assistant.db) — through the Node
         API like every write, never SQLite directly. Returns the inserted rows
-        with their ids, which is what the Chroma index chunks are keyed on."""
+        with their ids, which is what the Chroma index chunks are keyed on.
+
+        An empty `session_id` is omitted rather than sent as '': the server files
+        an unnamed batch under its reserved 'adhoc' chat, and it can only do that
+        if it can tell "no session named" from "a session named the empty
+        string"."""
+        payload: dict = {'messages': messages}
+        if session_id:
+            payload['sessionId'] = session_id
         res = httpx.post(f'{self.base_url}/api/chat/messages',
-                         json={'messages': messages}, timeout=self.timeout)
+                         json=payload, timeout=self.timeout)
         res.raise_for_status()
         return res.json()['messages']
 
