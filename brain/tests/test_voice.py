@@ -531,4 +531,4 @@ def test_make_transcriber_openrouter_is_explicit_and_ignores_local_availability(
 # This is a unit test.
 def test_make_transcriber_rejects_unknown_choice():
     with pytest.raises(ValueError):
-        make_transcriber(Settings(transcriber='whisper-on-a-toaster'))
+        make_transcriber(Settings(transcriber='dictation-on-a-toaster'))

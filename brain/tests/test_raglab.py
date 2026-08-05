@@ -1780,7 +1780,7 @@ def test_the_catalogue_offers_every_requested_model_with_its_backend():
 def test_no_knob_offers_an_openrouter_embedding_or_rerank_model():
     """Availability is verified here, never guessed — the rule the embedder list
     already follows. Measured against OpenRouter's published catalogue on
-    2026-07-31: 337 models, and not one embedding, rerank or whisper entry;
+    2026-07-31: 337 models, and not one embedding or rerank entry;
     `qwen/qwen3-embedding-8b` and `cohere/rerank-4-fast` are both absent. The
     gateway does answer 401 rather than 404 on /embeddings and /rerank, so the
     routes exist — but a route with no servable model is not a backend, and a key
