@@ -477,6 +477,62 @@ function deleteChatSession(id) {
   return changes > 0;
 }
 
+// One turn, deleted on its own. The board's two-step, applied to chat: hiding a
+// message and destroying it are different calls, so a misclick costs nothing.
+// A message id is an INTEGER key — a path param arrives as text, and SQLite
+// would compare '5' against 5 and match nothing, silently 404ing every delete.
+const chatMessageId = (raw) => (/^\d+$/.test(String(raw)) ? Number(raw) : null);
+
+/** Soft-delete one message. The row survives; it leaves every live read, which
+ *  is also what takes it out of the recall index once /rag/chat/reindex runs. */
+function deleteChatMessage(id) {
+  const key = chatMessageId(id);
+  if (key === null) return false;
+  const { changes } = chatDb.prepare(
+    'UPDATE messages SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL').run(Date.now(), key);
+  return changes > 0;
+}
+
+/** The assistant's trash: turns deleted one at a time, newest first, each
+ *  saying which chat it came from — a sentence out of its conversation is
+ *  otherwise unplaceable.
+ *
+ *  Messages of a soft-deleted CHAT are deliberately absent. There the chat is
+ *  the unit: listing its turns loose would bury real deletions under a whole
+ *  transcript, and restoring one into a chat that cannot be opened would be a
+ *  restore with nothing to show for it. */
+function readChatTrash() {
+  return chatDb.prepare(`
+    SELECT m.*, s.title AS session_title
+      FROM messages m JOIN sessions s ON s.id = m.session_id
+     WHERE m.deleted_at IS NOT NULL AND s.deleted_at IS NULL
+     ORDER BY m.deleted_at DESC, m.id DESC`)
+    .all()
+    .map((r) => ({ ...rowToChatMessage(r), deletedAt: r.deleted_at,
+                   sessionTitle: r.session_title }));
+}
+
+/** Put one turn back. Order is by createdAt, so it returns to its own place in
+ *  the transcript rather than to the end. */
+function restoreChatMessage(id) {
+  const key = chatMessageId(id);
+  if (key === null) return false;
+  const { changes } = chatDb.prepare(
+    'UPDATE messages SET deleted_at = NULL WHERE id = ? AND deleted_at IS NOT NULL').run(key);
+  return changes > 0;
+}
+
+/** The one hard delete chat has. `deleted_at IS NOT NULL` is load-bearing: only
+ *  what is already in the trash can be erased, so no single call both hides a
+ *  turn and destroys it. The chat holding it is left alone — a chat is not its
+ *  messages, and one erased turn must not take a conversation with it. */
+function purgeChatMessage(id) {
+  const key = chatMessageId(id);
+  if (key === null) return false;
+  return chatDb.prepare(
+    'DELETE FROM messages WHERE id = ? AND deleted_at IS NOT NULL').run(key).changes > 0;
+}
+
 /** Append a batch of messages to one chat. All-or-nothing: one invalid row
  *  refuses the whole batch, so an import can never half-apply. createdAt is
  *  optional — imports keep their own timestamps, live turns are stamped here.
@@ -914,9 +970,10 @@ const server = createServer(async (req, res) => {
     return sendJson(res, 405, { error: 'Method not allowed' });
   }
 
-  // The chat record — a message row is never removed by any route, so the
-  // durability promise extends to chat. What a chat's DELETE stamps is its
-  // session; the messages stay in the file and simply stop being live.
+  // The chat record. Deleting is soft everywhere here: a chat's DELETE stamps
+  // its session, a message's DELETE stamps the row, and both stay in the file.
+  // The single exception is DELETE /api/chat/trash/:id below — chat's own
+  // "Delete permanently", reachable only for something already in the trash.
   if (path === '/api/chat/messages') {
     if (req.method === 'GET') return sendJson(res, 200, { messages: readChatMessages() });
     if (req.method === 'POST') {
@@ -932,6 +989,43 @@ const server = createServer(async (req, res) => {
       } catch (err) {
         return sendJson(res, 400, { error: 'Invalid JSON: ' + err.message });
       }
+    }
+    return sendJson(res, 405, { error: 'Method not allowed' });
+  }
+
+  // One turn, hidden on its own.
+  if (path.startsWith('/api/chat/messages/')) {
+    const id = decodeURIComponent(path.slice('/api/chat/messages/'.length));
+    if (req.method === 'DELETE') {
+      return deleteChatMessage(id)
+        ? sendJson(res, 200, { ok: true })
+        : sendJson(res, 404, { error: 'No such message' });
+    }
+    return sendJson(res, 405, { error: 'Method not allowed' });
+  }
+
+  // The assistant's trash — turns deleted one at a time, recoverable until the
+  // deliberate second step.
+  if (path === '/api/chat/trash') {
+    if (req.method === 'GET') return sendJson(res, 200, { messages: readChatTrash() });
+    return sendJson(res, 405, { error: 'Method not allowed' });
+  }
+
+  if (path.startsWith('/api/chat/trash/')) {
+    const rest = decodeURIComponent(path.slice('/api/chat/trash/'.length));
+    if (rest.endsWith('/restore')) {
+      const id = rest.slice(0, -'/restore'.length);
+      if (req.method === 'POST') {
+        return restoreChatMessage(id)
+          ? sendJson(res, 200, { ok: true })
+          : sendJson(res, 404, { error: 'No such deleted message' });
+      }
+      return sendJson(res, 405, { error: 'Method not allowed' });
+    }
+    if (req.method === 'DELETE') {
+      return purgeChatMessage(rest)
+        ? sendJson(res, 200, { ok: true })
+        : sendJson(res, 404, { error: 'No such deleted message' });
     }
     return sendJson(res, 405, { error: 'Method not allowed' });
   }
