@@ -343,6 +343,18 @@ def api_chat_trash():
         return json.loads(r.read())["messages"]
 
 
+def api_chat_reindex():
+    """Sync the chat index with the record, and report what moved.
+
+    Seeding writes straight to assistant.db, so the brain has not indexed those
+    rows — and a delete cannot be shown to reach Chroma if the chunk was never
+    there. This is the call that puts them in, and its {indexed, pruned} is the
+    only view a browser-level test gets of the index."""
+    req = urllib.request.Request(URL + "/api/rag/chat/reindex", data=b"", method="POST")
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return json.loads(r.read())
+
+
 # Synthetic microphone: getUserMedia returns a generated tone instead of asking
 # for real hardware, so the voice-input flow runs unattended and headless.
 MEDIA_ARGS = [
@@ -2047,6 +2059,10 @@ try:
             {"role": "user", "content": blurted},
             {"role": "assistant", "content": "please do not paste that here"},
         ])
+        # Indexed first, or the delete below could not be shown to reach Chroma:
+        # a chunk that was never there cannot be pruned, and the check would
+        # pass on an index that had simply never heard of the message.
+        indexed_seed = api_chat_reindex()["indexed"] >= 3
         # Opened fresh, not inherited: the panel left over from the block above
         # was already counting down its idle timer — the pointer left the dock
         # when the confirm dialog took it — and it would close mid-wait here.
@@ -2067,11 +2083,14 @@ try:
         # things to remove — so hovering is how it is really reached.
         doomed_msg = page.locator(".chat-msg", has_text=blurted).first
         doomed_msg.hover()
-        with page.expect_request("**/api/rag/chat/reindex"):
+        with page.expect_response("**/api/rag/chat/reindex") as reindexed:
             doomed_msg.locator(".chat-msg-delete").click()
+        # The response, not merely the request: what has to be true is that the
+        # chunk left Chroma, and `pruned` is that fact rather than a proxy for it.
+        pruned = reindexed.value.json().get("pruned", 0) >= 1
         left = wait_until(lambda: page.locator(".chat-msg").count() == 2)
         check("messages: deleting one turn drops it from the transcript and the index",
-              left
+              left and indexed_seed and pruned
               and page.locator(".chat-msg", has_text=blurted).count() == 0
               # Gone from every live read, so recall_chat stops answering from
               # it — the reindex above is what carries that into Chroma.
@@ -2087,10 +2106,15 @@ try:
         listed = wait_until(lambda: page.locator(".chat-trash-item").count() == 1)
         trashed_row = page.locator(".chat-trash-item").first
         says_where = "what should I pack for berlin" in trashed_row.inner_text()
-        trashed_row.locator(".chat-trash-restore").click()
+        with page.expect_response("**/api/rag/chat/reindex") as resynced:
+            trashed_row.locator(".chat-trash-restore").click()
+        # The index has to follow the record in both directions: sync only ever
+        # adds, which is exactly what a restore needs, and without this the turn
+        # would come back visible and permanently unrecallable.
+        reindexed_back = resynced.value.json().get("indexed", 0) >= 1
         back = wait_until(lambda: page.locator(".chat-msg").count() == 3)
         check("messages: the trash lists a deleted turn and restores it in place",
-              listed and says_where and back
+              listed and says_where and back and reindexed_back
               # Order is by createdAt, so it returns to the middle of the chat
               # it was taken out of rather than to the end.
               and [m.strip() for m in page.locator(".chat-text").all_inner_texts()]
