@@ -319,6 +319,11 @@ def api_chat_sessions():
         return json.loads(r.read())["sessions"]
 
 
+def api_chat_messages():
+    with urllib.request.urlopen(URL + "/api/chat/messages", timeout=5) as r:
+        return json.loads(r.read())["messages"]
+
+
 # Synthetic microphone: getUserMedia returns a generated tone instead of asking
 # for real hardware, so the voice-input flow runs unattended and headless.
 MEDIA_ARGS = [
@@ -1860,6 +1865,55 @@ try:
               [m["content"] for m in started["messages"]] == ["hi"]
               and started.get("session_id") != nudged[2].get("session_id"))
         page.unroute("**/api/agent/chat/stream")
+
+        # ---- Renaming and deleting a chat -------------------------------------
+        # Its own chat, seeded through the record, so neither control is exercised
+        # against a conversation a later block still needs.
+        api_chat_append("e2e-doomed", [
+            {"role": "user", "content": "a chat that exists to be deleted"},
+            {"role": "assistant", "content": "understood"},
+        ])
+        open_chat_history(page)
+        # The panel asks the server on opening, so the new chat is there.
+        wait_until(lambda: page.locator(
+            ".chat-history-item", has_text="a chat that exists to be deleted").count() == 1)
+        doomed = page.locator(".chat-history-item",
+                              has_text="a chat that exists to be deleted").first
+
+        # This is an end-to-end test.
+        # A derived title is a starting point, not a name. Renaming goes through
+        # the in-app prompt dialog — never a native one, which the run-wide
+        # no-native-dialogs check also covers.
+        doomed.locator(".chat-history-rename").click()
+        page.wait_for_selector("#prompt-dialog[open]")
+        page.fill("#prompt-input", "Doomed chat, renamed")
+        page.click("#prompt-ok")
+        renamed = wait_until(lambda: page.locator(
+            ".chat-history-item", has_text="Doomed chat, renamed").count() == 1)
+        check("sessions: a chat can be renamed off its derived title",
+              renamed
+              and any(s["title"] == "Doomed chat, renamed" for s in api_chat_sessions()))
+
+        # This is an end-to-end test.
+        # Deleting has to reach the recall index, not just the list: ChatStore.sync
+        # only ever adds, so without the reindex a deleted chat would go on
+        # answering recall_chat — the worst version of this feature. The request is
+        # the observable half of that; ChatStore.prune's own test owns the rest.
+        page.locator(".chat-history-item", has_text="Doomed chat, renamed") \
+            .first.locator(".chat-history-delete").click()
+        page.wait_for_selector("#confirm-dialog[open]")
+        with page.expect_request("**/api/rag/chat/reindex"):
+            page.click("#confirm-ok")
+        gone = wait_until(lambda: page.locator(
+            ".chat-history-item", has_text="Doomed chat, renamed").count() == 0)
+        check("sessions: deleting a chat drops it from the list and the index",
+              gone
+              and all(s["title"] != "Doomed chat, renamed" for s in api_chat_sessions())
+              # Soft, not destroyed: the messages leave every live read, and the
+              # rows are still in assistant.db — which is why no route can show
+              # them, and why this asserts absence rather than presence.
+              and all("a chat that exists to be deleted" != m["content"]
+                      for m in api_chat_messages()))
 
         # Leave a chat that holds a REAL, recorded, priced turn open. Every chat
         # this block made with a mocked stream has no receipt — the brain never
