@@ -163,10 +163,12 @@
 <header>
   <h1>Lodestar RAG Lab <span class="pill" id="corpus"></span></h1>
   <div class="badges" id="caps"></div>
-  <!-- One click to see the system that actually ships. It fills every control
+  <!-- One click to the architecture that actually ships. It fills every control
        from /api/options -> production (derived from the brain's own constants),
-       then builds and retrieves, because "what does the real thing do" is a
-       question you ask before you start changing knobs. -->
+       because "what does the real thing do" is a question you ask before you
+       start changing knobs — and answering it by hand means copying nine values
+       out of the brain's source. Settings only: the run buttons are on the cards
+       below, and this one used to start a build that downloads a 2.2 GB encoder. -->
   <!-- The lab measures; the Inspector shows why. It is a separate service on its
        own port, so without a door named here :9003 is something you have to
        already know about. It sits at the far right of the row you press to run
@@ -174,7 +176,7 @@
        in a tab of its own, since the two are meant to be read side by side. -->
   <div class="inline" style="margin-top:.5rem">
     <button class="ghost" id="use-production"
-      title="Fill every setting with the shipped Assistant's own, then build and retrieve. Downloads the real Persian embedder (~2.2 GB) on first use.">Use the real assistant's settings, then run</button>
+      title="Fill every setting with the architecture the Assistant ships: chunking, embedder, retrieval, reranking, the relevance gate and the answerer. Nothing runs until you press a run button.">Use this project's RAG settings</button>
     <span class="muted" id="productionNote" style="font-size:.74rem"></span>
     <a class="lab-link right" id="open-inspector" href="http://localhost:9003/"
        target="_blank" rel="noopener">Open the Inspector (:9003) &rarr;</a>
@@ -552,6 +554,27 @@ async function api(path, body) {
   return data;
 }
 
+// Config fields this panel has no control for. Three of them exist today —
+// `rrf_k`, `agentic_weights`, `max_context_chars` — and they matter because the
+// production preset sets all three: without carrying them, applying "this
+// project's RAG settings" dropped them on the floor and the run fell back to the
+// lab's own defaults under a label claiming to be the shipped Assistant. They
+// happen to be equal right now, so the bug was invisible; the day the brain's
+// RRF_K moves it would not be. Whatever set them last keeps them, and a real
+// control always wins.
+let UNSHOWN = { index: {}, retrieval: {}, generation: {} };
+
+// Remember the parts of a config the controls cannot express, having applied it.
+function keepUnshown(applied) {
+  const shown = readConfig();
+  UNSHOWN = { index: {}, retrieval: {}, generation: {} };
+  for (const group of ['index', 'retrieval', 'generation']) {
+    for (const [key, value] of Object.entries(applied[group] || {})) {
+      if (!(key in shown[group])) UNSHOWN[group][key] = value;
+    }
+  }
+}
+
 function readConfig() {
   const cfg = {
     label: $('label').value,
@@ -578,6 +601,11 @@ function readConfig() {
   for (const select of document.querySelectorAll('.rag-model')) {
     const [group, field] = select.dataset.field.split('.');
     cfg[group][field] = select.value;
+  }
+  // Under the controls, never over them: a value you can see and change is
+  // always the one that runs.
+  for (const group of ['index', 'retrieval', 'generation']) {
+    cfg[group] = Object.assign({}, UNSHOWN[group], cfg[group]);
   }
   return cfg;
 }
@@ -883,6 +911,9 @@ $('use-production').onclick = async () => {
   applyDefaults(preset);
   $('label').value = preset.label || '';
   applyDependencies();
+  // The parts of it this panel has no control for, so the run posts the whole
+  // architecture rather than the visible two thirds of it.
+  keepUnshown(preset);
   // Stated on screen rather than left implicit: the button claims to be the
   // real system, so it has to say what it just filled in.
   const { index: idx, retrieval: ret } = preset;
@@ -890,10 +921,12 @@ $('use-production').onclick = async () => {
     `${idx.chunker} ${idx.chunk_chars}/${idx.overlap} · ${idx.embedder} · ` +
     `${ret.retriever} k=${ret.k} · ${ret.reranker} rerank · ` +
     `${ret.grader} gate @ ${ret.grade_threshold}`;
-  try {
-    await runJob('/api/indexes', Object.assign(readConfig(), { force: false }));
-    await doRetrieve();
-  } catch (e) { $('jobBox').innerHTML = `<div class="note">${e.message}</div>`; }
+  // Settings only. It used to build and retrieve as well, which meant a button
+  // reading "what does the real system use" started a job that downloads a
+  // 2.2 GB encoder on first use. The three run buttons are on the cards above,
+  // where a run belongs — pressing this one now changes what the panel says and
+  // nothing else.
+  remember(SAVED_CONFIG, readConfig());
 };
 
 $('cancel').onclick = async () => {

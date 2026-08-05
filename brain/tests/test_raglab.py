@@ -4717,3 +4717,93 @@ def test_the_leaderboard_says_how_much_of_the_disk_it_shows(client):
     assert body['total'] >= len(body['runs'])
     html = client.get('/').text
     assert '/api/evaluations?limit=' in html, 'the panel must ask for a stated limit'
+
+
+# --- the project's own RAG settings, in one click --------------------------
+
+# This is a unit test: both frontends' own source, against the served preset.
+def test_both_panels_fill_the_projects_settings_from_the_served_preset(client):
+    """One button, on each panel, that makes every control the shipped
+    Assistant's own — and neither panel knows what those values are.
+
+    `PRODUCTION_CONFIG` is derived from the brain's constants (`TOP_K`,
+    `CHUNK_SIZE`, `GRADE_THRESHOLD`, `Settings.embedder`/`grader`) and served from
+    `/api/options`, so a button claiming to be the real system cannot drift from
+    it. A preset kept in a browser is a preset that will drift — the same reason
+    the mode dropdown is served — and there are two browsers here to drift apart.
+
+    Settings only, both times. The panels have their own run buttons, and a
+    preset that also started a job would download a 2.2 GB encoder for someone
+    who only wanted to see what the real system uses."""
+    panel = client.get('/').text
+    app = (REPO_ROOT / 'app.js').read_text(encoding='utf-8')
+
+    assert 'OPTIONS.production' in panel
+    assert 'raglab-use-production' in app
+    assert 'options.production' in app
+
+    # The preset's own label is served with it, so its presence in a frontend
+    # would mean that frontend had a second copy of the preset to go stale.
+    served = client.get('/api/options').json()['production']
+    assert served['label'] == 'the shipped assistant'
+    for source, where in ((panel, 'the panel'), (app, 'app.js')):
+        assert served['label'] not in source, f'{where} keeps its own preset'
+
+    # Neither button runs anything.
+    handler = panel[panel.index("$('use-production').onclick"):]
+    handler = handler[:handler.index('\n};')]
+    assert '/api/indexes' not in handler, 'the preset must not start a build'
+    assert 'doRetrieve' not in handler, 'the preset must not start a retrieval'
+    assert 'then run' not in panel, 'the button no longer claims to run'
+
+
+# This is a unit test.
+def test_every_board_lab_control_has_a_stable_id():
+    """The board's lab panel built its controls with no ids, so the only way to
+    address one was by position — `.rag-panel select` first. A preset that fills
+    nine fields cannot be tested that way, and CSS/id names are test-stable API
+    here, so each control now carries `raglab-<field>`. The keys are unique
+    across the three groups, which is what makes the short form unambiguous."""
+    app = (REPO_ROOT / 'app.js').read_text(encoding='utf-8')
+    assert "control.id = 'raglab-' + field.key" in app
+    block = app[app.index('const RAG_FIELDS'):]
+    keys = re.findall(r"key: '([a-z_]+)'", block[:block.index('\n  ];')])
+    assert len(keys) == len(set(keys)), f'duplicate field keys: {keys}'
+
+
+# This is an integration test.
+def test_the_preset_carries_the_fields_the_panel_cannot_show(client):
+    """A preset the panel can only half-apply is a preset that lies.
+
+    Three fields of a `LabConfig` have no control on either panel — `rrf_k`,
+    `agentic_weights` and `max_context_chars` — and the production preset sets all
+    three. Dropped, the run falls back to `LabConfig`'s own defaults while the
+    label claims the shipped Assistant. Measured 2026-08-05 against the running
+    service: the three happen to equal the lab's defaults today, so the fault was
+    invisible — and would stop being invisible the day the brain's `RRF_K` moves.
+
+    So the panel keeps whatever the preset set that it cannot render, under the
+    controls rather than over them. This test is the tripwire for the other half:
+    a *new* preset field with no control is fine, and a field whose preset value
+    silently disagrees with the lab default is what has to be noticed."""
+    body = client.get('/api/options').json()
+    preset, defaults = body['production'], body['defaults']
+    panel = client.get('/').text
+
+    unshown = {}
+    for group in ('index', 'retrieval', 'generation'):
+        for key, value in preset[group].items():
+            # A control is `$('key')` in the panel, or a model dropdown carrying
+            # the dotted path — the two ways this page reads a field.
+            if f"$('{key}')" in panel or f'"{group}.{key}"' in panel:
+                continue
+            unshown[f'{group}.{key}'] = (value, defaults[group].get(key))
+
+    assert unshown, 'if nothing is unshown this guard has become dead weight'
+    assert 'UNSHOWN' in panel, 'the panel must carry what it cannot render'
+    for path, (wanted, fallback) in unshown.items():
+        assert wanted == fallback, (
+            f'{path}: the preset wants {wanted!r} but the lab defaults to '
+            f'{fallback!r}, and the panel has no control for it — so a run '
+            f'labelled "the shipped assistant" would use {fallback!r}. Give it '
+            f'a control, or confirm the carry-through still reaches the payload.')

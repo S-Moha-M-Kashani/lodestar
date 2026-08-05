@@ -2387,7 +2387,11 @@ try:
             # Every list leads with the value `defaults` below names, exactly as
             # the served ones now do — a mock that keeps the old order would let
             # the panel regress while this suite stayed green.
-            "chunkers": ["semantic-drift", "fixed"],
+            # `fixed-overlap` is what the production preset below names, and
+            # the real service serves it in this same list. A preset naming a
+            # strategy its own dropdown does not offer is an impossible state
+            # on the service and was a mock that contradicted itself.
+            "chunkers": ["semantic-drift", "fixed", "fixed-overlap"],
             "embedders": ["char-hash", "sentence-transformers", "fastembed",
                           "ascii-hash"],
             "retrievers": ["hybrid-rrf", "dense", "bm25"],
@@ -2423,6 +2427,25 @@ try:
                 "generation": {"answerer": "extractive", "key_facts_judge": False,
                                "model": "", "judge_model": "", "ragas_model": ""},
                 "label": "",
+            },
+            # The shipped Assistant's own settings, which the service derives from
+            # the brain's constants. Deliberately different from `defaults` in
+            # every field the button has to visibly change — a preset that
+            # happened to equal the defaults would let a broken button pass.
+            "production": {
+                "index": {"chunker": "fixed-overlap", "chunk_chars": 500,
+                          "overlap": 100, "contextual": False,
+                          "embedder": "sentence-transformers", "embed_model": ""},
+                "retrieval": {"retriever": "hybrid-rrf", "k": 8, "candidates": 40,
+                              "time_filter": True,
+                              "multi_query": True, "hyde": False, "mmr_lambda": 1.0,
+                              "reranker": "lexical", "rerank_depth": 20,
+                              "reranker_model": "", "grader": "llm",
+                              "grade_threshold": 0.4, "grader_model": "",
+                              "expansion_model": ""},
+                "generation": {"answerer": "llm", "key_facts_judge": False,
+                               "model": "", "judge_model": "", "ragas_model": ""},
+                "label": "the shipped assistant",
             },
             # Which languages an embedder can actually represent is the first
             # thing about it: on this corpus the English-only options measure
@@ -3275,8 +3298,46 @@ try:
               == "raglab-inspector-link")
         page.screenshot(path=shot("raglab-inspector-link.png"))
 
+        # ---- one click to the settings the project actually ships ---------------
+        # "What does the real thing do" is the question you ask before you start
+        # moving knobs, and answering it by hand means copying nine values out of
+        # the brain's source. The preset is *served* — derived from the brain's own
+        # constants — so this button cannot drift from the system it claims to be.
+        preset = page.locator("#raglab-use-production")
+        check("raglab: the panel offers the project's own RAG settings",
+              preset.count() == 1)
+        preset.click()
+        page.wait_for_timeout(200)
+        # Every field the mock's preset differs from its defaults in, so a button
+        # that only half-applied would fail rather than pass on the shared values.
+        applied = page.evaluate(
+            "() => ({ chunker: document.getElementById('raglab-chunker').value,"
+            " contextual: document.getElementById('raglab-contextual').checked,"
+            " embedder: document.getElementById('raglab-embedder').value,"
+            " grader: document.getElementById('raglab-grader').value,"
+            " threshold: document.getElementById('raglab-grade_threshold').value,"
+            " answerer: document.getElementById('raglab-answerer').value })")
+        check("raglab: the button changes every setting to the shipped one",
+              applied == {"chunker": "fixed-overlap", "contextual": False,
+                          "embedder": "sentence-transformers", "grader": "llm",
+                          "threshold": "0.4", "answerer": "llm"})
+        check("raglab: and says which architecture it just filled in",
+              "fixed-overlap" in page.locator(".rag-production-note").inner_text()
+              and "llm gate" in page.locator(".rag-production-note").inner_text().lower())
+        # Settings only. The panel has three run buttons of its own, and a preset
+        # that started a job would download a 2.2 GB encoder for someone who only
+        # wanted to read what the real system uses.
+        check("raglab: filling the preset starts no job",
+              page.locator(".rag-progress").count() == 0)
+        page.screenshot(path=shot("raglab-production-preset.png"))
+
         # A chosen strategy is what a developer changes twenty times in a sitting;
-        # losing it on every reload would make the page useless.
+        # losing it on every reload would make the page useless — and that has to
+        # hold for a preset just as much as for a hand-picked value.
+        page.reload()
+        page.wait_for_selector(".rag-grid")
+        check("raglab: the filled preset survives a reload",
+              page.locator("#raglab-chunker").input_value() == "fixed-overlap")
         page.select_option(".rag-panel select", "fixed")
         page.reload()
         page.wait_for_selector(".rag-grid")
