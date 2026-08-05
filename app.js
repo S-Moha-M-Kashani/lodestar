@@ -3624,6 +3624,12 @@
     head.appendChild(heading);
     sheet.appendChild(head);
 
+    // First in the sheet because that is where it is on screen — the margin at
+    // the top-left corner — and because tab order should reach the chat you are
+    // in before the conversation itself. Absolutely positioned out of the sheet
+    // on a wide window; with no margin to sit in it becomes an ordinary row here.
+    sheet.appendChild(renderChatDock());
+
     // Everything that is not the conversation lives behind one sign, sharing the
     // search fold's row so that row is the only furniture above the transcript.
     // A rail beside the transcript cost it 300px of width and stood mostly empty
@@ -3637,11 +3643,6 @@
     const toolbar = document.createElement('div');
     toolbar.className = 'assistant-toolbar';
     toolbar.appendChild(renderRecallPanel());
-    // Which chat you are in, and the two things you do about it. In the toolbar
-    // rather than behind the ⚙: a setting is chosen once and left alone, whereas
-    // starting a chat and finding an old one are things you reach for while
-    // reading. Still a panel and not a rail — see the width check in the e2e.
-    toolbar.appendChild(renderChatSwitcher());
     const cost = renderSessionCost();
     if (cost) toolbar.appendChild(cost);
     const extrasBtn = document.createElement('button');
@@ -3665,7 +3666,6 @@
     extras.appendChild(renderChatSettings());
     sheet.appendChild(extras);
 
-    if (assistantState.historyOpen) sheet.appendChild(renderChatHistory());
 
     // Anything waiting on the user shares one pinned strip directly under the
     // row above. Pinned because it used to scroll away: it is above the
@@ -3784,6 +3784,70 @@
   /** The current chat's title, as the button that opens the history — so the
    *  control that moves you between chats is also the label saying where you
    *  are — plus New chat beside it. */
+  /** How long the panel waits after the pointer leaves it. Long enough to cross
+   *  it with a wandering mouse, short enough that a panel you walked away from
+   *  is gone when you look back. Cancelled by re-entering or by focus landing
+   *  inside, so nobody reading the list with a keyboard is ever rushed. */
+  const CHAT_HISTORY_IDLE_MS = 4000;
+  let historyIdleTimer = null;
+
+  function cancelHistoryIdle() {
+    if (historyIdleTimer) clearTimeout(historyIdleTimer);
+    historyIdleTimer = null;
+  }
+
+  /** Close the panel once it has been left alone — but ask again rather than act
+   *  if it is still in use, and read the DOM afresh each time instead of holding
+   *  the dock element: every render replaces it, and a timer closing over the
+   *  previous one would decide on a node no longer in the page.
+   *
+   *  "In use" includes a dialog the panel itself opened. Rename and Delete both
+   *  open one in the middle of the screen, which necessarily takes the pointer
+   *  out of the dock — the panel closing under an open dialog loses the place
+   *  the user was working in, which is the bug this check exists for. */
+  function armHistoryIdle() {
+    cancelHistoryIdle();
+    historyIdleTimer = setTimeout(function settle() {
+      const dock = document.querySelector('.chat-dock');
+      const busy = document.querySelector('dialog[open]')
+        || (dock && (dock.matches(':hover') || dock.contains(document.activeElement)));
+      if (busy) {
+        historyIdleTimer = setTimeout(settle, CHAT_HISTORY_IDLE_MS);
+        return;
+      }
+      closeChatHistory();
+    }, CHAT_HISTORY_IDLE_MS);
+  }
+
+  function closeChatHistory({ focusBack = false } = {}) {
+    cancelHistoryIdle();
+    if (!assistantState.historyOpen) return;
+    assistantState.historyOpen = false;
+    render();
+    // Escape and a chosen chat return the caret to the button that opened the
+    // panel; a click elsewhere is the user already looking somewhere else.
+    if (focusBack) document.getElementById('chat-history-btn')?.focus();
+  }
+
+  /** The dock: the chat you are in, New chat under it, and the panel they open.
+   *  Its own element rather than three things in the toolbar, because they move
+   *  together — outside the sheet where there is room, inside it where there is
+   *  not. */
+  function renderChatDock() {
+    const dock = document.createElement('div');
+    dock.className = 'chat-dock';
+    dock.appendChild(renderChatSwitcher());
+    if (assistantState.historyOpen) {
+      dock.appendChild(renderChatHistory());
+      // Per-element, not on document: the dock is rebuilt by every render, so
+      // these listeners die with the element that owns them and cannot stack up.
+      dock.addEventListener('mouseleave', armHistoryIdle);
+      dock.addEventListener('mouseenter', cancelHistoryIdle);
+      dock.addEventListener('focusin', cancelHistoryIdle);
+    }
+    return dock;
+  }
+
   function renderChatSwitcher() {
     const wrap = document.createElement('div');
     wrap.className = 'chat-switcher';
@@ -3795,8 +3859,13 @@
     history.className = 'btn ghost chat-history-btn';
     // An unsaved new chat has no row in the list yet, and saying so is more
     // honest than borrowing the title of the chat you just left.
-    history.textContent = (current ? current.title : 'New chat') + ' ▾';
-    history.title = 'Your chats';
+    // The title rides in a span so the ellipsis clips the label rather than the
+    // button — the hint below is a pseudo-element of the button's own box.
+    const label = document.createElement('span');
+    label.className = 'chat-history-label';
+    label.textContent = (current ? current.title : 'New chat') + ' ▾';
+    history.appendChild(label);
+    history.dataset.hint = 'Your chats';
     history.setAttribute('aria-haspopup', 'true');
     history.setAttribute('aria-expanded', String(assistantState.historyOpen));
     history.setAttribute('aria-controls', 'chat-history');
@@ -3812,7 +3881,7 @@
     fresh.id = 'chat-new';
     fresh.className = 'btn ghost chat-new';
     fresh.textContent = '+';
-    fresh.title = 'New chat — a clean context, nothing carried over';
+    fresh.dataset.hint = 'New chat — a clean context, nothing carried over';
     fresh.setAttribute('aria-label', 'New chat');
     fresh.addEventListener('click', () => {
       // No confirmation: nothing is destroyed. The chat you were in is in the
@@ -5538,6 +5607,24 @@
   document.addEventListener('click', (e) => {
     const panel = $('#chat-menu-panel');
     if (panel && !panel.hidden && !e.target.closest('.chat-menu')) setChatMenuOpen(false);
+  });
+  // The chats panel closes the same two ways, and here for the same reason —
+  // the dock is rebuilt by every render. Its third way out, the idle timer,
+  // belongs to the dock element itself.
+  document.addEventListener('click', (e) => {
+    // A click inside a dialog is not a click elsewhere: Rename and Delete both
+    // open one, and it is centred on the screen rather than inside the dock, so
+    // without this the OK that applies a rename is also what closes the list it
+    // was applied in — the panel vanished the instant the work was confirmed.
+    if (e.target.closest('dialog')) return;
+    if (assistantState.historyOpen && !e.target.closest('.chat-dock')) {
+      closeChatHistory();
+    }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && assistantState.historyOpen) {
+      closeChatHistory({ focusBack: true });
+    }
   });
   document.addEventListener('keydown', (e) => {
     const panel = $('#chat-menu-panel');

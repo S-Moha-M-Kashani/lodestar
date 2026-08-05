@@ -2254,6 +2254,8 @@ body[data-view="assistant"] .app-footer { display: none; }
   border-radius: var(--radius);
   box-shadow: var(--shadow-card);
   padding: 16px;
+  /* The chat dock hangs off the outside of this edge. */
+  position: relative;
 }
 /* The sky is a photograph, not paper: --grid alone leaves the gradients in
    place, so the image is dropped outright the way Day does it. */
@@ -2717,14 +2719,112 @@ body[data-view="assistant"] .app-footer { display: none; }
   gap: 4px;
   align-self: center;
 }
-.chat-history-btn {
+/* The dock — the chat you are in and New chat under it, in the page margin off
+   the sheet's top-left corner. Out of the sheet because in the toolbar row they
+   were two more buttons among five and went unnoticed; stacked because the pair
+   reads as one control that way. 88px + a 6px gap is what the margin affords at
+   1440px, the narrowest window that still has one. */
+.chat-dock {
+  position: absolute;
+  top: 0;
+  inset-inline-end: calc(100% + 6px);
+  z-index: 30;
+  width: 88px;
+}
+.chat-dock .chat-switcher { flex-direction: column; align-items: stretch; gap: 5px; }
+.chat-dock .chat-history-btn { width: 100%; text-align: start; }
+.chat-dock .chat-new { width: 100%; }
+/* Hints open sideways here, not downwards: dropping below a stacked button puts
+   the hint on top of the button under it, which is the one you were reaching
+   for. Inward, too — anchored to the outer edge they would hang off the window. */
+.chat-dock [data-hint]::after {
+  top: 0;
+  inset-inline-start: calc(100% + 6px);
+  inset-inline-end: auto;
+}
+
+/* The panel drops from under the dock and is wider than it — 88px of margin
+   would truncate every chat title to nothing — so it overlays the transcript's
+   left edge for as long as it is open, which is only as long as it is used. */
+.chat-dock .chat-history {
+  position: absolute;
+  top: calc(100% + 6px);
+  inset-inline-start: 0;
+  width: min(320px, 46vw);
+  max-height: 52vh;
+  z-index: 35;
+  animation: chat-history-drop 150ms ease-out both;
+}
+@keyframes chat-history-drop {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-dock .chat-history { animation: none; }
+}
+
+/* No margin to hang in: an ordinary row at the top of the sheet instead.
+   Controls half off the window would be worse than controls in a crowded row.
+   1427px is where (viewport - 1240px sheet) / 2 stops clearing 88 + 6. */
+@media (max-width: 1427px) {
+  .chat-dock { position: static; width: auto; }
+  .chat-dock .chat-switcher { flex-direction: row; align-items: center; }
+  .chat-dock .chat-history-btn,
+  .chat-dock .chat-new { width: auto; }
+  .chat-dock .chat-history {
+    position: static;
+    width: auto;
+    max-height: 40vh;
+    margin-top: 2px;
+  }
+}
+
+.chat-history-btn { font-size: 0.78rem; }
+/* The title is clipped, never the button: an ellipsis on the button itself also
+   clips the hint below it, which is a pseudo-element of the same box. */
+.chat-history-label {
+  display: block;
   max-width: 22ch;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  font-size: 0.78rem;
 }
 .chat-new { font-size: 1rem; line-height: 1; padding-inline: 9px; }
+
+/* Our own hint, because the native `title` attribute's show delay belongs to the
+   browser — about a second, unreachable from here — and a hint that arrives
+   after the pointer has moved on is not a hint. Same surface as every other
+   floating thing; `aria-label` remains the accessible name, so this is
+   decoration a screen reader never has to read. */
+.chat-switcher [data-hint] { position: relative; }
+.chat-switcher [data-hint]::after {
+  content: attr(data-hint);
+  position: absolute;
+  top: calc(100% + 6px);
+  inset-inline-end: 0;
+  z-index: 45;
+  width: max-content;
+  max-width: 30ch;
+  padding: 5px 8px;
+  background: var(--card);
+  border: 1px solid var(--card-line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lift);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.02em;
+  white-space: normal;
+  text-align: start;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 90ms ease 120ms;
+}
+.chat-switcher [data-hint]:hover::after,
+.chat-switcher [data-hint]:focus-visible::after { opacity: 1; }
+@media (prefers-reduced-motion: reduce) {
+  .chat-switcher [data-hint]::after { transition: none; }
+}
 
 /* The chats. A panel across the sheet, never a rail beside the transcript — a
    rail was measured costing the conversation 300px and stood mostly empty. Its
@@ -2736,8 +2836,15 @@ body[data-view="assistant"] .app-footer { display: none; }
   max-height: 40vh;
   overflow-y: auto;
   padding: 8px 10px;
-  border: 1px solid var(--line);
+  /* The same surface every other panel in this app stands on (.menu-panel,
+     .plot-tip). It shipped with a --line border and nothing else, which on the
+     two dark skies is ~1.2:1 against the translucent sheet: the list of chats
+     read as loose text lying over the conversation. --card is itself
+     translucent under 'star', so the sky still shows through. */
+  background: var(--card);
+  border: 1px solid var(--card-line);
   border-radius: var(--radius);
+  box-shadow: var(--shadow-lift);
 }
 .chat-history-day {
   font-size: 0.68rem;
@@ -2785,17 +2892,33 @@ body[data-view="assistant"] .app-footer { display: none; }
   color: var(--ink-soft);
 }
 /* The per-row controls stay out of the way until the row is under the pointer:
-   a list of chats should read as a list, not as a row of buttons. */
+   a list of chats should read as a list, not as a row of buttons.
+   Collapsed rather than merely transparent — at `opacity: 0` alone they still
+   held 134px of a 298px row, which left "Earlier conversations" 52px to render
+   132px of text once this list moved into the dock's narrower panel. Width, not
+   `display: none`: a button nobody can tab to is not a hidden button, it is a
+   missing one. */
 .chat-history-rename,
 .chat-history-delete {
   flex: 0 0 auto;
   font-size: 0.68rem;
   opacity: 0;
+  max-width: 0;
+  overflow: hidden;
+  transition: max-width 120ms ease, opacity 120ms ease;
 }
+@media (prefers-reduced-motion: reduce) {
+  .chat-history-rename,
+  .chat-history-delete { transition: none; }
+}
+/* focus-within as well as hover: tabbing into a collapsed control has to open
+   it, or the keyboard path leads to a button with no box to draw. */
 .chat-history-item:hover .chat-history-rename,
 .chat-history-item:hover .chat-history-delete,
+.chat-history-item:focus-within .chat-history-rename,
+.chat-history-item:focus-within .chat-history-delete,
 .chat-history-rename:focus-visible,
-.chat-history-delete:focus-visible { opacity: 1; }
+.chat-history-delete:focus-visible { opacity: 1; max-width: 7rem; }
 
 /* The nudge, directly above the composer where the message it is about still
    sits. Ruled in the margin red because it is asking something, and it holds the

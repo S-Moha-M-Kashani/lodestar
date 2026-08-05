@@ -1805,6 +1805,101 @@ try:
               and sent3[0]["messages"][-1]["content"] == "picking this back up")
         page.unroute("**/api/agent/chat/stream")
 
+        # This is an end-to-end test.
+        # The panel has to paint its own surface. It shipped with a --line border
+        # and nothing else, and on the two dark skies that border is ~1.2:1
+        # against the translucent sheet: the container had no visible edge, so a
+        # list of chats read as loose text lying over the conversation. Every
+        # other panel in this app that sits on a surface — .menu-panel, .plot-tip
+        # — carries --card, --card-line and a lift; this asserts the panel's own
+        # paint rather than a screenshot, on the themes where it actually failed.
+        surfaces = {}
+        for sky in ("star", "dark"):
+            select_theme(sky)
+            page.wait_for_timeout(60)
+            open_chat_history(page)
+            surfaces[sky] = (css(".chat-history", "backgroundColor"),
+                             css(".chat-history", "boxShadow"))
+        select_theme("light")
+        check("sessions: the history panel paints its own surface on the dark skies",
+              all(bg not in ("rgba(0, 0, 0, 0)", "transparent") and shadow != "none"
+                  for bg, shadow in surfaces.values()))
+
+        # This is an end-to-end test.
+        # The hint has to be ours. Both switcher buttons used the native `title`
+        # attribute, and its show delay belongs to the browser — around a second,
+        # unreachable from CSS or JS — so the hint arrived after the pointer had
+        # already moved on. Asserted through the pseudo-element the replacement
+        # paints, plus the absence of the attribute that raced it; the accessible
+        # name has to survive, because a decorative hint is not a label.
+        page.hover("#chat-new")
+
+        def hint():
+            return page.evaluate("""() => {
+                const s = getComputedStyle(document.getElementById('chat-new'),
+                                           '::after');
+                return [s.content, s.opacity];
+            }""")
+
+        shown = wait_until(lambda: float(hint()[1]) > 0.9, timeout=0.4)
+        check("sessions: the New chat hint appears at once, not on the browser's delay",
+              shown and "New chat" in hint()[0]
+              and not page.get_attribute("#chat-new", "title")
+              and not page.get_attribute("#chat-history-btn", "title")
+              and page.get_attribute("#chat-new", "aria-label") == "New chat")
+
+        # ---- The dock ---------------------------------------------------------
+        # The two chat controls sit outside the sheet, in the page margin at its
+        # top-left corner, stacked — in the toolbar row they read as two more
+        # buttons among five and were missed. Asserted as geometry rather than a
+        # screenshot: what matters is that the dock clears the sheet, that it is
+        # level with the sheet's top, and that the + is under the chat button
+        # rather than beside it.
+        def box(sel):
+            return page.locator(sel).bounding_box()
+
+        page.set_viewport_size({"width": 1440, "height": 900})
+        page.wait_for_timeout(120)
+
+        # This is an end-to-end test.
+        dock, sheet_box = box(".chat-dock"), box(".assistant-sheet")
+        chat_btn, plus = box("#chat-history-btn"), box("#chat-new")
+        check("dock: the chat controls sit outside the sheet, stacked",
+              dock and sheet_box and chat_btn and plus
+              and dock["x"] + dock["width"] <= sheet_box["x"] + 1
+              and abs(dock["y"] - sheet_box["y"]) <= 8
+              and plus["y"] >= chat_btn["y"] + chat_btn["height"] - 1)
+
+        # This is an end-to-end test.
+        # Three ways out, because a panel hanging in the margin is easy to walk
+        # away from and one left open covers the transcript it opened over.
+        open_chat_history(page)
+        panel = box(".chat-history")
+        opened = bool(panel) and panel["y"] >= plus["y"]
+        page.keyboard.press("Escape")
+        by_escape = wait_until(lambda: page.locator(".chat-history").count() == 0)
+        open_chat_history(page)
+        page.mouse.click(1000, 700)          # empty transcript, not the dock
+        by_click = wait_until(lambda: page.locator(".chat-history").count() == 0)
+        open_chat_history(page)
+        page.mouse.move(1300, 820)           # pointer walks away and stays away
+        by_idle = wait_until(lambda: page.locator(".chat-history").count() == 0,
+                             timeout=9)
+        check("dock: the panel opens under the dock and closes when it is unused",
+              opened and by_escape and by_click and by_idle)
+
+        # This is an end-to-end test.
+        # Below the width where a margin exists, the dock tucks back inside the
+        # sheet: controls hanging off the left of the window would be worse than
+        # controls in a crowded row.
+        page.set_viewport_size({"width": 1200, "height": 800})
+        page.wait_for_timeout(160)
+        tucked, sheet_narrow = box(".chat-dock"), box(".assistant-sheet")
+        check("dock: with no margin to sit in, the dock tucks inside the sheet",
+              tucked and sheet_narrow and tucked["x"] >= sheet_narrow["x"] - 1)
+        page.set_viewport_size({"width": 1440, "height": 900})
+        page.wait_for_timeout(120)
+
         # ---- The topic-change nudge -------------------------------------------
         # Signal one is pure pattern matching, so it fires with BRAIN_EMBEDDER
         # =fake and needs no test-only override: typing a bare greeting into a
@@ -1884,6 +1979,12 @@ try:
         # A derived title is a starting point, not a name. Renaming goes through
         # the in-app prompt dialog — never a native one, which the run-wide
         # no-native-dialogs check also covers.
+        # Hover the row first, the way the control is actually reached: it is
+        # collapsed to no width until its row is under the pointer or holds focus,
+        # so that a 320px panel spends its width on chat titles rather than on two
+        # buttons nobody can see. A click without the hover is a click on
+        # something invisible, which is not an interaction this app offers.
+        doomed.hover()
         doomed.locator(".chat-history-rename").click()
         page.wait_for_selector("#prompt-dialog[open]")
         page.fill("#prompt-input", "Doomed chat, renamed")
@@ -1899,8 +2000,10 @@ try:
         # only ever adds, so without the reindex a deleted chat would go on
         # answering recall_chat — the worst version of this feature. The request is
         # the observable half of that; ChatStore.prune's own test owns the rest.
-        page.locator(".chat-history-item", has_text="Doomed chat, renamed") \
-            .first.locator(".chat-history-delete").click()
+        renamed_row = page.locator(".chat-history-item",
+                                   has_text="Doomed chat, renamed").first
+        renamed_row.hover()
+        renamed_row.locator(".chat-history-delete").click()
         page.wait_for_selector("#confirm-dialog[open]")
         with page.expect_request("**/api/rag/chat/reindex"):
             page.click("#confirm-ok")
