@@ -2694,7 +2694,11 @@ body[data-view="assistant"] .app-footer { display: none; }
   position: absolute;
   top: 2px;
   inset-inline-end: 4px;
-  background: none;
+  /* The bubble's own paper behind it: the control is over the first line of
+     text, and a long line runs right under it. `inherit` rather than a named
+     token so a user bubble and a reply each keep their own ground. */
+  background: inherit;
+  border-radius: var(--radius);
   border: 0;
   padding: 0 4px;
   font: inherit;
