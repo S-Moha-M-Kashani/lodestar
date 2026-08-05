@@ -135,7 +135,53 @@ PATCH  /api/chat/sessions/:id   <- {title}            rename; empty title refuse
 DELETE /api/chat/sessions/:id   -> soft delete: sets sessions.deleted_at
 POST   /api/chat/messages       <- gains sessionId (optional); optional per-row
                                    steps / usage / cost
+DELETE /api/chat/messages/:id   -> soft delete of ONE turn: sets messages.deleted_at
+GET    /api/chat/trash          -> {messages:[{...,deletedAt,sessionTitle}]}
+                                   turns deleted one at a time, newest first
+POST   /api/chat/trash/:id/restore -> clears deleted_at
+DELETE /api/chat/trash/:id      -> THE hard delete: removes the row
 ```
+
+### Deleting one message (added 2026-08-06)
+
+A whole chat could be deleted; one sentence inside it could not. So a pasted card
+number, a misdictated line, or an answer that quoted something private stayed in
+the record and in recall for good, and the only way out was to delete the whole
+conversation around it. The `×` on a turn is the missing granularity.
+
+It is the board's two-step, applied to chat, and the shape is the point: hiding
+and destroying are **different calls**. `DELETE /api/chat/messages/:id` stamps the
+row; the turn leaves every live read and lands in **Deleted messages** at the foot
+of the chats panel, carrying the title of the chat it came out of, because a
+sentence out of its conversation is unplaceable. From there, Restore or Delete
+permanently — and the purge requires `deleted_at IS NOT NULL`, so a live turn can
+never be erased by one call.
+
+This gives chat its first hard delete, which the section above deliberately ruled
+out. The promise it kept was that no *single* call could destroy a message; that
+promise is intact. What has changed is that the user can now finish the job
+themselves, which is what the durability pillar is actually for — never losing a
+thought is not the same as never being allowed to take one back.
+
+Two rules fall out of the design rather than out of taste:
+
+- **`GET /api/chat/trash` excludes the messages of a deleted chat.** There the
+  chat is the unit. Listing its turns loose would bury real deletions under a
+  whole transcript, and restoring one into a chat that cannot be opened would be
+  a restore with nothing to show for it.
+- **Both actions fire `/api/rag/chat/reindex`**, because the index has to follow
+  the record in *both* directions now: `prune` takes a hidden turn out of recall,
+  and `sync` — which only ever adds — is exactly what a restore needs.
+
+The client-side cost is one thing the transcript never carried: the record's row
+id. `restoredMessage` keeps it, and a settled turn learns it by aligning the chat
+on screen against the chat in the record on **role and text**. Not on position:
+the browser appends a turn when it is spoken and the brain records it once the
+model has answered, so the two lists differ by exactly the turns that failed, and
+a positional pairing would slide by one at the first error bubble — the `×` would
+then erase a different message than the one it sits on. A turn that matches
+nothing has no id and therefore no delete control, which is honest: there is
+nothing in the record to delete.
 
 ### Why `sessionId` is optional rather than required
 
@@ -164,7 +210,9 @@ currently records that "there are deliberately NO delete routes" for chat. It
 becomes a **soft** delete only — the messages are untouched and no hard-delete
 route exists for chat at all, so the durability promise holds. That comment is
 updated in the same change, because a stale comment claiming a stronger promise
-than the code keeps is worse than no comment.
+than the code keeps is worse than no comment. (The no-hard-delete half of that
+was relaxed in turn on 2026-08-06 — see *Deleting one message* above, which gives
+chat one purge, behind the same two-step the board has always had.)
 
 `messageCount` is counted in SQL rather than by loading transcripts: the history
 panel lists every chat, and reading every message to render a list is how a list

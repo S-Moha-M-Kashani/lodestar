@@ -12,7 +12,9 @@
 // the Trash (GET /api/trash) and are recoverable until an explicit, deliberate
 // purge (DELETE /api/cards/:id). That purge is the ONLY thing that truly erases
 // a card from the database; otherwise the only way to lose data is to delete
-// the database file itself.
+// the database file itself. The chat record works the same way and has exactly
+// one purge of its own (DELETE /api/chat/trash/:id) — same shape, same rule:
+// nothing is destroyed by the call that hides it.
 
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
@@ -316,9 +318,11 @@ const categoryIds = () => new Set(db.prepare('SELECT id FROM categories').all().
 // the boundary that makes a conversation a conversation; the docs are in
 // docs/superpowers/specs/2026-08-04-chat-sessions-design.md.
 //
-// `sessions.deleted_at` is the one destructive route chat has: soft, and it
-// takes the session's messages out of every live read. No hard delete for chat
-// exists — a message row is never removed by any API call.
+// Deleting is soft in both directions: `sessions.deleted_at` takes a whole
+// chat's messages out of every live read, `messages.deleted_at` takes one turn
+// out on its own. Chat has exactly one hard delete, and it is the board's shape
+// — DELETE /api/chat/trash/:id, reachable only for a row already stamped, so no
+// single call both hides a message and destroys it.
 
 const ASSISTANT_DB_PATH = resolveAssistantDb({ root: ROOT, env: process.env });
 mkdirSync(dirname(ASSISTANT_DB_PATH), { recursive: true });
@@ -849,7 +853,7 @@ function pruneOrphanedEdits() {
 
 /**
  * Decline a proposal. It goes to the Trash, recoverable, rather than being
- * erased — DELETE /api/cards/:id stays the only hard delete in the system.
+ * erased — DELETE /api/cards/:id stays the board's only hard delete.
  *
  * `pending` is cleared as well as `deleted_at` set: leaving it at 1 would mean a
  * restore from Trash brought back a row still invisible to the board, and the
