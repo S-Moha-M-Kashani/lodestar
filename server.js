@@ -308,8 +308,17 @@ const categoryIds = () => new Set(db.prepare('SELECT id FROM categories').all().
 // own file deliberately: the whole-board PUT /api/state soft-deletes every
 // card it does not see, and one bad save must never sit next to two kinds of
 // data. Chroma only ever holds chunks derived from these rows; this table is
-// what a re-index rebuilds from. deleted_at exists for a future chat trash;
-// nothing sets it yet — the API of this stage is append-and-read only.
+// what a re-index rebuilds from.
+//
+// The record is cut into SESSIONS. Before it was, every turn carried a slice of
+// one endless transcript plus its very first message as "framing", so a new
+// question was answered in terms of the oldest one on the board. A session is
+// the boundary that makes a conversation a conversation; the docs are in
+// docs/superpowers/specs/2026-08-04-chat-sessions-design.md.
+//
+// `sessions.deleted_at` is the one destructive route chat has: soft, and it
+// takes the session's messages out of every live read. No hard delete for chat
+// exists — a message row is never removed by any API call.
 
 const ASSISTANT_DB_PATH = resolveAssistantDb({ root: ROOT, env: process.env });
 mkdirSync(dirname(ASSISTANT_DB_PATH), { recursive: true });
@@ -324,37 +333,202 @@ chatDb.exec(`
   );
 `);
 
+chatDb.exec(`
+  CREATE TABLE IF NOT EXISTS sessions (
+    id         TEXT PRIMARY KEY,
+    title      TEXT    NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    deleted_at INTEGER
+  );
+`);
+
+// Same boot-time migration the board uses, for the same reason: an assistant.db
+// written before sessions existed has to keep working untouched.
+const chatColumns = new Set(chatDb.prepare('PRAGMA table_info(messages)').all().map((c) => c.name));
+if (!chatColumns.has('session_id')) chatDb.exec("ALTER TABLE messages ADD COLUMN session_id TEXT NOT NULL DEFAULT ''");
+// The assistant row's receipt. `steps` is the tool evidence, so reopening a
+// historic chat shows what it was based on and not only its prose. `usage` and
+// `cost` stay NULLABLE on purpose — pricing.py refuses to fabricate a zero, and
+// a turn stored as cost 0 would be a measurement nobody made.
+if (!chatColumns.has('steps')) chatDb.exec("ALTER TABLE messages ADD COLUMN steps TEXT NOT NULL DEFAULT '[]'");
+if (!chatColumns.has('usage')) chatDb.exec('ALTER TABLE messages ADD COLUMN usage TEXT');
+if (!chatColumns.has('cost')) chatDb.exec('ALTER TABLE messages ADD COLUMN cost REAL');
+
 const CHAT_ROLES = new Set(['user', 'assistant']);
+// The chat every caller that names no session lands in. A curl, an eval, or a
+// brain that was not told a session must still be recorded — losing the turn is
+// the bug this record exists to prevent — and it must be visibly apart from a
+// real conversation rather than mixed into one.
+const ADHOC_SESSION = 'adhoc';
+const ADHOC_TITLE = 'Unsessioned (API)';
+// What a pre-session record becomes. One session, so nothing is orphaned and
+// `session_id` is never empty after boot: no read path needs a NULL branch.
+const LEGACY_TITLE = 'Earlier conversations';
+// A title is one line of the first message. Long enough to tell two chats
+// apart, short enough that the history panel's rows stay one line each.
+const TITLE_MAX = 60;
+
+/** The title a chat gets from the message that opened it. Derived, never
+ *  generated: a model call here would cost a request and a wait to improve on
+ *  text the user just wrote, and it is the one place a paraphrase would sit
+ *  permanently in the furniture. */
+const chatTitleFrom = (content) =>
+  String(content ?? '').split('\n')[0].trim().slice(0, TITLE_MAX) || 'New chat';
+
+// Adopt a record written before sessions existed. Runs once: after it, no live
+// message has an empty session_id, so the condition is false on every later boot.
+{
+  const orphans = chatDb.prepare(
+    "SELECT id, content, created_at FROM messages WHERE session_id = '' ORDER BY created_at, id").all();
+  if (orphans.length) {
+    const first = orphans[0];
+    const last = orphans[orphans.length - 1];
+    const id = 'legacy-' + first.created_at;
+    chatDb.exec('BEGIN');
+    try {
+      // Dated by its own messages, not by the migration: a chat that claims to
+      // have started the moment you upgraded is a chat you cannot find again.
+      chatDb.prepare(
+        'INSERT INTO sessions (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)')
+        .run(id, LEGACY_TITLE, first.created_at, last.created_at);
+      chatDb.prepare("UPDATE messages SET session_id = ? WHERE session_id = ''").run(id);
+      chatDb.exec('COMMIT');
+    } catch (err) {
+      chatDb.exec('ROLLBACK');
+      throw err;
+    }
+  }
+}
+
+const rowToChatMessage = (r) => ({
+  id: r.id,
+  sessionId: r.session_id,
+  role: r.role,
+  content: r.content,
+  createdAt: r.created_at,
+  steps: safeJson(r.steps, []),
+  usage: safeJson(r.usage, null),
+  cost: r.cost === null || r.cost === undefined ? null : r.cost,
+});
+
+// A message is live when neither it nor the chat holding it has been deleted.
+// The join is the whole of what "deleting a chat" means to every other reader:
+// the rows survive in the file, and nothing live returns them.
+const LIVE_MESSAGES = `
+  FROM messages m LEFT JOIN sessions s ON s.id = m.session_id
+  WHERE m.deleted_at IS NULL AND s.deleted_at IS NULL`;
 
 function readChatMessages() {
   // created_at before id, so an imported older transcript reads in order.
   return chatDb.prepare(
-    'SELECT id, role, content, created_at FROM messages WHERE deleted_at IS NULL ORDER BY created_at, id')
-    .all()
-    .map((r) => ({ id: r.id, role: r.role, content: r.content, createdAt: r.created_at }));
+    `SELECT m.* ${LIVE_MESSAGES} ORDER BY m.created_at, m.id`)
+    .all().map(rowToChatMessage);
 }
 
-/** Append a batch of messages. All-or-nothing: one invalid row refuses the
- *  whole batch, so an import can never half-apply. createdAt is optional —
- *  imports keep their own timestamps, live turns are stamped here. Returns
- *  the inserted rows, or null when the batch is invalid. */
-function appendChatMessages(list) {
+/** Every live chat, newest activity first — the history panel's list.
+ *  messageCount is counted in SQL: the panel lists every chat, and reading
+ *  every transcript to render a list is how a list becomes slow at exactly the
+ *  point the feature becomes useful. */
+function readChatSessions() {
+  return chatDb.prepare(`
+    SELECT s.id, s.title, s.created_at, s.updated_at,
+           (SELECT COUNT(*) FROM messages m
+             WHERE m.session_id = s.id AND m.deleted_at IS NULL) AS n
+      FROM sessions s WHERE s.deleted_at IS NULL
+      ORDER BY s.updated_at DESC, s.created_at DESC`)
+    .all()
+    .map((r) => ({ id: r.id, title: r.title, createdAt: r.created_at,
+                   updatedAt: r.updated_at, messageCount: r.n }));
+}
+
+/** One chat and its whole transcript, or null when there is no such live chat. */
+function readChatSession(id) {
+  const s = chatDb.prepare(
+    'SELECT id, title, created_at, updated_at FROM sessions WHERE id = ? AND deleted_at IS NULL').get(id);
+  if (!s) return null;
+  const messages = chatDb.prepare(
+    `SELECT m.* ${LIVE_MESSAGES} AND m.session_id = ? ORDER BY m.created_at, m.id`)
+    .all(id).map(rowToChatMessage);
+  return {
+    session: { id: s.id, title: s.title, createdAt: s.created_at,
+               updatedAt: s.updated_at, messageCount: messages.length },
+    messages,
+  };
+}
+
+/** Rename a chat. An empty title refuses: a blank row in the history panel is
+ *  a chat you can see and cannot name. Returns the session, or null. */
+function renameChatSession(id, title) {
+  const clean = typeof title === 'string' ? title.trim().slice(0, 200) : '';
+  if (!clean) return null;
+  const { changes } = chatDb.prepare(
+    'UPDATE sessions SET title = ? WHERE id = ? AND deleted_at IS NULL').run(clean, id);
+  return changes ? readChatSession(id)?.session ?? null : null;
+}
+
+/** Soft-delete a chat. The messages are untouched — this stamps the session,
+ *  and the LIVE_MESSAGES join does the rest. Chroma still holds chunks derived
+ *  from them, which is why the browser fires /api/rag/chat/reindex afterwards:
+ *  ChatStore.prune is what makes the delete reach the index. */
+function deleteChatSession(id) {
+  const { changes } = chatDb.prepare(
+    'UPDATE sessions SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL').run(Date.now(), id);
+  return changes > 0;
+}
+
+/** Append a batch of messages to one chat. All-or-nothing: one invalid row
+ *  refuses the whole batch, so an import can never half-apply. createdAt is
+ *  optional — imports keep their own timestamps, live turns are stamped here.
+ *  The session row is upserted from the batch, so there is no "create session"
+ *  call any writer could forget to make. Returns the inserted rows, or null
+ *  when the batch is invalid. */
+function appendChatMessages(list, sessionId) {
   if (!Array.isArray(list) || list.length === 0) return null;
+  // A given session id must be a string: an object here would be stringified
+  // into a chat nobody can name again.
+  if (sessionId !== undefined && sessionId !== null && typeof sessionId !== 'string') return null;
   for (const m of list) {
     if (!m || typeof m !== 'object') return null;
     if (!CHAT_ROLES.has(m.role)) return null;
     if (typeof m.content !== 'string' || !m.content.trim()) return null;
     if (m.createdAt !== undefined && !Number.isFinite(m.createdAt)) return null;
+    if (m.cost !== undefined && m.cost !== null && !Number.isFinite(m.cost)) return null;
   }
-  const insert = chatDb.prepare('INSERT INTO messages (role, content, created_at) VALUES (?, ?, ?)');
+  const id = (typeof sessionId === 'string' && sessionId.trim()) || ADHOC_SESSION;
+  const insert = chatDb.prepare(`
+    INSERT INTO messages (session_id, role, content, created_at, steps, usage, cost)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`);
   const saved = [];
   chatDb.exec('BEGIN');
   try {
-    for (const m of list) {
-      const createdAt = m.createdAt ?? Date.now();
-      const { lastInsertRowid } = insert.run(m.role, m.content, createdAt);
-      saved.push({ id: Number(lastInsertRowid), role: m.role, content: m.content, createdAt });
+    const existing = chatDb.prepare('SELECT id FROM sessions WHERE id = ?').get(id);
+    const stamps = list.map((m) => m.createdAt ?? Date.now());
+    if (!existing) {
+      // Titled from the first USER message of the batch that opened the chat —
+      // an assistant's greeting is not what the conversation is about.
+      const opener = list.find((m) => m.role === 'user') ?? list[0];
+      const title = id === ADHOC_SESSION ? ADHOC_TITLE : chatTitleFrom(opener.content);
+      chatDb.prepare(
+        'INSERT INTO sessions (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)')
+        .run(id, title, Math.min(...stamps), Math.max(...stamps));
     }
+    for (const [i, m] of list.entries()) {
+      const createdAt = stamps[i];
+      const steps = JSON.stringify(Array.isArray(m.steps) ? m.steps : []);
+      const usage = m.usage && typeof m.usage === 'object' ? JSON.stringify(m.usage) : null;
+      const cost = Number.isFinite(m.cost) ? m.cost : null;
+      const { lastInsertRowid } = insert.run(id, m.role, m.content, createdAt, steps, usage, cost);
+      saved.push({ id: Number(lastInsertRowid), sessionId: id, role: m.role,
+                   content: m.content, createdAt,
+                   steps: JSON.parse(steps), usage: safeJson(usage, null), cost });
+    }
+    // updatedAt follows the newest message, which is what makes the history
+    // panel read as "what I am working on" and not "what I started". A later
+    // turn never retitles the chat.
+    chatDb.prepare(
+      'UPDATE sessions SET updated_at = ? WHERE id = ? AND updated_at < ?')
+      .run(Math.max(...stamps), id, Math.max(...stamps));
     chatDb.exec('COMMIT');
   } catch (err) {
     chatDb.exec('ROLLBACK');
@@ -740,21 +914,59 @@ const server = createServer(async (req, res) => {
     return sendJson(res, 405, { error: 'Method not allowed' });
   }
 
-  // The chat record — append-and-read only: no route can delete or rewrite a
-  // message, so the durability promise extends to chat.
+  // The chat record — a message row is never removed by any route, so the
+  // durability promise extends to chat. What a chat's DELETE stamps is its
+  // session; the messages stay in the file and simply stop being live.
   if (path === '/api/chat/messages') {
     if (req.method === 'GET') return sendJson(res, 200, { messages: readChatMessages() });
     if (req.method === 'POST') {
       try {
-        const saved = appendChatMessages(JSON.parse(await readBody(req)).messages);
+        const body = JSON.parse(await readBody(req));
+        const saved = appendChatMessages(body.messages, body.sessionId);
         if (!saved) {
           return sendJson(res, 400, { error:
-            'Body must be { messages: [{role, content, createdAt?}] } — role user|assistant, content non-empty' });
+            'Body must be { messages: [{role, content, createdAt?, steps?, usage?, cost?}], sessionId? }'
+            + ' — role user|assistant, content non-empty, sessionId a string' });
         }
         return sendJson(res, 200, { messages: saved });
       } catch (err) {
         return sendJson(res, 400, { error: 'Invalid JSON: ' + err.message });
       }
+    }
+    return sendJson(res, 405, { error: 'Method not allowed' });
+  }
+
+  // The chats themselves — the history panel's list.
+  if (path === '/api/chat/sessions') {
+    if (req.method === 'GET') return sendJson(res, 200, { sessions: readChatSessions() });
+    return sendJson(res, 405, { error: 'Method not allowed' });
+  }
+
+  if (path.startsWith('/api/chat/sessions/')) {
+    const id = decodeURIComponent(path.slice('/api/chat/sessions/'.length));
+    if (!id) return sendJson(res, 404, { error: 'No such chat' });
+    if (req.method === 'GET') {
+      const found = readChatSession(id);
+      return found ? sendJson(res, 200, found) : sendJson(res, 404, { error: 'No such chat' });
+    }
+    if (req.method === 'PATCH') {
+      try {
+        const { title } = JSON.parse(await readBody(req));
+        const session = renameChatSession(id, title);
+        if (!session) {
+          // One status for both "no such chat" and "blank title": the second is
+          // the interesting one, so the message names it.
+          return sendJson(res, 400, { error: 'A chat needs a non-empty title' });
+        }
+        return sendJson(res, 200, { session });
+      } catch (err) {
+        return sendJson(res, 400, { error: 'Invalid JSON: ' + err.message });
+      }
+    }
+    if (req.method === 'DELETE') {
+      return deleteChatSession(id)
+        ? sendJson(res, 200, { ok: true })
+        : sendJson(res, 404, { error: 'No such chat' });
     }
     return sendJson(res, 405, { error: 'Method not allowed' });
   }

@@ -18,6 +18,7 @@ from .pricing import model_prices, turn_cost
 from .safety import make_url_safety
 from .retrieval import (CardIndex, ChatStore, coverage, expand_queries,
                         gate_llm, make_embeddings)
+from .topics import detect_drift
 from .tools.board import BoardClient, make_board_tools
 from .tools.recap import make_recap_tool
 from .tools.retrieve import make_recall_tool, make_retrieve_tool
@@ -60,6 +61,20 @@ class ChatBody(BaseModel):
     # The browser defaults to the local Ollama provider. OpenRouter is an
     # explicit alternative because it can use billed remote models such as Nano.
     provider: Literal['ollama', 'openrouter'] | None = None
+    # Which chat this turn belongs to. Optional rather than required: the evals,
+    # any curl and sixteen tests post without one, and none of those should be a
+    # lost turn — Node files an unnamed batch under its reserved 'adhoc' chat.
+    # Empty is omitted from the record rather than sent as '', so the server can
+    # tell "no session named" from "a session named the empty string".
+    session_id: str = ''
+
+
+class TopicCheckBody(BaseModel):
+    """Asked before a turn is sent, never after. `recent` is the session's
+    recent user messages; `text` is what is in the composer."""
+
+    recent: list[str]
+    text: str
 
 
 class TranscribeBody(BaseModel):
@@ -163,10 +178,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # board and the brain in no promised order, so a board that is not up
         # yet is logged, never fatal.
         try:
-            added = memory.sync(board.list_chat())
-            if added:
+            recorded = board.list_chat()
+            added = memory.sync(recorded)
+            # And the other direction: a chat deleted while this brain was down
+            # must stop answering recall. sync only ever adds, so without the
+            # prune a deleted conversation would resurface in an answer.
+            dropped = memory.prune(recorded)
+            if added or dropped:
                 logging.getLogger(__name__).info(
-                    'chat index: %d recorded message(s) indexed at boot', added)
+                    'chat index: %d message(s) indexed, %d pruned at boot',
+                    added, dropped)
         except Exception as exc:
             logging.getLogger(__name__).warning(
                 'chat index not synced from the record: %s', exc)
@@ -202,23 +223,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             settings_for_turn = replace(settings, llm_provider=body.provider)
         return turn_cost(result.usage, model_prices(settings_for_turn, body.model))
 
-    def remember(messages: list[dict], reply: str) -> None:
+    def remember(body: ChatBody, result: AgentResult,
+                 cost: float | None) -> None:
         """Record both sides of the exchange — durably first (assistant.db,
         through the Node API like every write), then into the derived Chroma
         index. Every chat route must call this: a second route is a second
         place to forget. Failures are logged, never raised — the reply the
         user is already reading must not become a 500 after the fact, and a
         turn the record missed is still picked up by the next boot's sync
-        only if it was recorded, so the log line is the whole trace."""
-        last_user = next((m.get('content', '') for m in reversed(messages)
+        only if it was recorded, so the log line is the whole trace.
+
+        The assistant row carries the turn's receipt: its tool steps, so a
+        reopened chat shows the evidence and not only the prose, and its usage
+        and price. The brain is the only place all three are known at once, and
+        it is already the only writer of a turn.
+        """
+        last_user = next((m.get('content', '') for m in reversed(body.messages)
                           if m.get('role') == 'user'), '')
-        turn = [{'role': role, 'content': content}
-                for role, content in (('user', last_user), ('assistant', reply))
-                if content.strip()]   # the record refuses empty rows
+        turn: list[dict] = []
+        if last_user.strip():          # the record refuses empty rows
+            turn.append({'role': 'user', 'content': last_user})
+        if result.reply.strip():
+            turn.append({'role': 'assistant', 'content': result.reply,
+                         'steps': [_step_json(s) for s in result.steps],
+                         'usage': result.usage,
+                         # None, never 0.0, when the price is unknown: see
+                         # pricing.py. The column is nullable for this reason.
+                         'cost': cost})
         if not turn:
             return
         try:
-            rows = board.record_chat(turn)
+            rows = board.record_chat(turn, session_id=body.session_id)
         except Exception:
             logging.getLogger(__name__).exception(
                 'chat record unreachable — this turn is NOT in assistant.db')
@@ -238,9 +273,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # executor, so nothing here blocks the event loop.
         _refuse_if_oversized(body.messages)
         result = await agent.arun(body.messages, model=body.model,
-                                  provider=body.provider)
-        remember(body.messages, result.reply)
-        return _turn_json(result, priced(result, body))
+                                  provider=body.provider,
+                                  session_id=body.session_id)
+        cost = priced(result, body)
+        remember(body, result, cost)
+        return _turn_json(result, cost)
 
     @app.post('/agent/chat/stream')
     async def chat_stream(body: ChatBody) -> StreamingResponse:
@@ -259,7 +296,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         async def events():
             try:
                 async for kind, payload in agent.astream(
-                        body.messages, model=body.model, provider=body.provider):
+                        body.messages, model=body.model, provider=body.provider,
+                        session_id=body.session_id):
                     if kind == 'calling':
                         yield _sse('calling', payload)   # already {tool, arguments}
                     elif kind == 'step':
@@ -267,9 +305,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     elif kind == 'token':
                         yield _sse('token', {'text': payload})
                     else:
-                        remember(body.messages, payload.reply)
-                        yield _sse('done', _turn_json(payload,
-                                                      priced(payload, body)))
+                        cost = priced(payload, body)
+                        remember(body, payload, cost)
+                        yield _sse('done', _turn_json(payload, cost))
             except Exception as exc:
                 # The headers left long ago, so there is no status code to fail
                 # with. Staying quiet would leave the browser on "Thinking…"
@@ -282,6 +320,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return StreamingResponse(events(), media_type='text/event-stream',
                                  headers={'Cache-Control': 'no-cache',
                                           'X-Accel-Buffering': 'no'})
+
+    @app.post('/agent/topic-check')
+    def topic_check(body: TopicCheckBody) -> dict:
+        """Does the composer's text belong to the chat it is about to be sent to?
+
+        Called BEFORE the turn, which is what makes the nudge cheap and
+        reversible: nothing has been spent, and there is no answer sitting in the
+        wrong chat to move afterwards. It only reports — the browser offers the
+        choice and the user makes it.
+
+        Never raises. `detect_drift` fails open on its own, and a malformed body
+        is FastAPI's 422; there is no failure mode here that should stand between
+        the user and their own assistant.
+
+        The `fake` embedder is withheld deliberately. `LexicalHashEmbeddings` is a
+        hash of the words, so the distance between two of its vectors is an
+        artefact and not a similarity — judging *semantic* drift with it is a
+        category error, and it showed up as one: the offline e2e suite started
+        being asked whether every substantive message was a new subject. The
+        opener signal needs no model, so the nudge still works with it, and a real
+        embedder is unaffected.
+        """
+        semantic = None if settings.embedder == 'fake' else embeddings
+        verdict = detect_drift(body.recent, body.text, semantic)
+        return {'changed': verdict.changed, 'score': verdict.score,
+                'reason': verdict.reason}
 
     @app.post('/agent/transcribe')
     def transcribe(body: TranscribeBody) -> dict:
@@ -308,12 +372,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post('/rag/chat/reindex')
     def chat_reindex() -> dict:
         """The boot sync on demand — an import appends to the record while the
-        brain is already running. `memory: false` is the honest answer rather
+        brain is already running, and deleting a chat removes rows from it while
+        the brain is already running. `memory: false` is the honest answer rather
         than a 500: the import already succeeded into assistant.db, and the
-        next boot's sync indexes it."""
+        next boot's sync indexes it.
+
+        The browser fires this after deleting a chat, which is what makes the
+        delete reach Chroma at once instead of at the next boot."""
         if memory is None:
             return {'indexed': 0, 'memory': False}
-        return {'indexed': memory.sync(board.list_chat()), 'memory': True}
+        recorded = board.list_chat()
+        return {'indexed': memory.sync(recorded),
+                'pruned': memory.prune(recorded), 'memory': True}
 
     @app.post('/rag/recall')
     def recall(body: RecallBody) -> dict:

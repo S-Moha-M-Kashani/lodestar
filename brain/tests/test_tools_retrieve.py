@@ -41,10 +41,11 @@ class FakeStore:
     def __init__(self):
         self.asked = []
 
-    def search(self, text, k=5):
-        self.asked.append((text, k))
+    def search(self, text, k=5, exclude_session=None):
+        self.asked.append((text, k, exclude_session))
         return [{'text': 'the wifi password is hunter2', 'score': 0.9,
-                 'metadata': {'role': 'user'}}]
+                 'metadata': {'role': 'user', 'created_day': 20260712,
+                              'session_id': 's-old'}}]
 
 
 # This is a unit test.
@@ -117,4 +118,35 @@ def test_recall_chat_hands_back_what_the_store_found():
     assert tool.args_schema.model_json_schema()['required'] == ['text']
     matches = tool.run({'text': 'wifi password', 'k': 3})
     assert 'hunter2' in matches[0]['text']
-    assert store.asked == [('wifi password', 3)]
+    assert store.asked == [('wifi password', 3, None)]
+
+
+# This is a unit test.
+def test_recall_skips_the_chat_it_is_already_reading():
+    """The current conversation is already in the context window.
+
+    Returning it back spends the model's attention re-reading what it can
+    already see, and — worse — makes a fresh chat look like it has history the
+    moment the model reaches for the tool. Which chat that is arrives through
+    the run config, not as a tool argument: the model must not be able to name
+    (or spoof) it, and the args schema below is the assertion of that.
+    """
+    store = FakeStore()
+    tool = make_recall_tool(store)
+    config = {'configurable': {'session_id': 's-current'}}
+
+    matches = tool.run({'text': 'wifi password'}, config=config)
+    assert store.asked[-1] == ('wifi password', 5, 's-current')
+    assert 'session_id' not in tool.args_schema.model_json_schema()['properties'], (
+        'the session is injected, never offered to the model as an argument')
+
+    # Dated, so the model can say "you mentioned this on the 12th" instead of
+    # quoting the past as though it were said now. The date is already in the
+    # chunk metadata; the chat's *title* is deliberately not carried — see the
+    # spec's Recall section for why a copied title goes stale on rename.
+    assert matches[0]['day'] == 20260712
+
+    # Missing config is not an error: an eval or a curl runs without one, and a
+    # recall that excluded nothing is strictly better than a 500.
+    assert tool.run({'text': 'wifi password'})
+    assert store.asked[-1][2] is None

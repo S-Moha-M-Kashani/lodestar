@@ -57,10 +57,14 @@ approval, and updating one sends a suggested edit the user opens, adjusts and \
 saves. So say you have proposed or suggested something — never that you added \
 or changed it.
 
-The conversation you see may be a window, not the whole chat: long \
-conversations arrive as the opening message plus the recent turns. The older \
-turns are not lost — search them with recall_chat when the user refers to \
-something you cannot see, instead of guessing or saying it was never discussed.
+What you see is ONE conversation, not everything the user has ever said. They \
+keep separate chats and can start a new one at any time, so treat the messages \
+in front of you as the whole subject: do not carry over a topic from somewhere \
+else, and do not assume a new chat is a continuation of an older one. A very \
+long conversation may arrive trimmed to its recent turns. \
+Other conversations exist and are searchable with recall_chat — reach for it \
+only when the user refers to something outside this chat, rather than to \
+enrich a question that is already complete.
 
 Rules: never invent card ids — look them up with list_cards or \
 find_related first. Asked what the user's concerns, thoughts or day looked \
@@ -229,20 +233,29 @@ class LodestarAgent:
                             ToolErrorMiddleware(_tool_error)])
         return self._graphs[key]
 
-    @property
-    def _config(self) -> dict:
+    def _run_config(self, session_id: str | None = None) -> dict:
         # A step is a model turn plus a tool turn, and the run ends on a model
         # turn: 2n+1 nodes for n tool calls.
-        return {'recursion_limit': 2 * self.max_steps + 1}
+        #
+        # `session_id` rides in `configurable` rather than in a tool argument so
+        # a tool can know which conversation it is serving without the model
+        # being able to name it — recall_chat uses it to skip the chat already in
+        # front of the model. Absent when there is none, so a caller that names
+        # no session behaves exactly as before sessions existed.
+        config: dict = {'recursion_limit': 2 * self.max_steps + 1}
+        if session_id:
+            config['configurable'] = {'session_id': session_id}
+        return config
 
     def run(self, messages: list[dict], model: str | None = None,
-            provider: str | None = None) -> AgentResult:
+            provider: str | None = None,
+            session_id: str | None = None) -> AgentResult:
         seen: list[BaseMessage] = []
         try:
             # Streamed, not invoked: GraphRecursionError carries no messages,
             # so this is the only way to still report the steps taken.
             for chunk in self._graph(model, provider).stream(
-                    {'messages': messages}, config=self._config,
+                    {'messages': messages}, config=self._run_config(session_id),
                     stream_mode='values'):
                 seen = chunk['messages']
         except GraphRecursionError:
@@ -250,11 +263,12 @@ class LodestarAgent:
         return _result_from(seen)
 
     async def arun(self, messages: list[dict], model: str | None = None,
-                   provider: str | None = None) -> AgentResult:
+                   provider: str | None = None,
+                   session_id: str | None = None) -> AgentResult:
         seen: list[BaseMessage] = []
         try:
             async for chunk in self._graph(model, provider).astream(
-                    {'messages': messages}, config=self._config,
+                    {'messages': messages}, config=self._run_config(session_id),
                     stream_mode='values'):
                 seen = chunk['messages']
         except GraphRecursionError:
@@ -262,7 +276,8 @@ class LodestarAgent:
         return _result_from(seen)
 
     async def astream(self, messages: list[dict], model: str | None = None,
-                      provider: str | None = None
+                      provider: str | None = None,
+                      session_id: str | None = None
                       ) -> AsyncIterator[tuple[str, Any]]:
         """The same turn as `arun`, reported while it happens.
 
@@ -288,7 +303,7 @@ class LodestarAgent:
         announced: set[str] = set()
         try:
             async for mode, chunk in self._graph(model, provider).astream(
-                    {'messages': messages}, config=self._config,
+                    {'messages': messages}, config=self._run_config(session_id),
                     stream_mode=['values', 'messages']):
                 if mode == 'values':
                     seen = chunk['messages']

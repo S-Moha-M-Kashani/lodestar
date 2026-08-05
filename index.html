@@ -461,6 +461,22 @@
     </form>
   </dialog>
 
+  <!-- ask() with a text field: the confirm dialog answers yes or no, and
+       renaming a chat needs one line of typing. Its own dialog rather than a
+       mode of the one above, so neither has to hide half of itself. -->
+  <dialog id="prompt-dialog">
+    <form method="dialog" class="dialog-body">
+      <h2 id="prompt-title"></h2>
+      <label id="prompt-label" for="prompt-input"></label>
+      <input type="text" id="prompt-input" maxlength="200" autocomplete="off">
+      <div class="dialog-actions">
+        <span class="spacer"></span>
+        <button value="cancel" id="prompt-cancel" class="btn ghost">Cancel</button>
+        <button value="ok" id="prompt-ok" class="btn primary"></button>
+      </div>
+    </form>
+  </dialog>
+
   <footer class="app-footer">
     <p>Drag cards to move them · with a card focused: <kbd>Enter</kbd> edit · <kbd>[</kbd>/<kbd>]</kbd> change column · <kbd>Alt</kbd>+<kbd>↑</kbd>/<kbd>↓</kbd> reorder · <kbd>Del</kbd> delete</p>
   </footer>
