@@ -233,3 +233,50 @@ def test_no_whisper_model_is_named_anywhere_in_the_code():
              for n, line in enumerate(path.read_text().splitlines(), 1)
              if slug.search(line)]
     assert named == []
+
+
+# How this repo reads the environment: three shapes in Python, three in
+# JavaScript. `envKey:` is the odd one — scripts/db-location.mjs takes the name
+# as data, so a pattern that only matched `process.env.X` would miss BOARD_DB.
+_ENV_READS = re.compile(r"""
+    (?:os\.environ|environ|env)\.get\(\s*['"]([A-Z][A-Z0-9_]{2,})['"]
+  | (?:os\.environ|environ|env)\[\s*['"]([A-Z][A-Z0-9_]{2,})['"]\s*\]
+  | getenv\(\s*['"]([A-Z][A-Z0-9_]{2,})['"]
+  | process\.env\.([A-Z][A-Z0-9_]{2,})
+  | process\.env\[\s*['"]([A-Z][A-Z0-9_]{2,})['"]\s*\]
+  | envKey:\s*['"]([A-Z][A-Z0-9_]{2,})['"]
+""", re.VERBOSE)
+
+# `#VAR=` or `VAR=` at the start of a line — the template comments every
+# variable out, so both spellings count as documented.
+_ENV_DOCUMENTED = re.compile(r'^#?\s*([A-Z][A-Z0-9_]{2,})=')
+
+
+# This is a configuration invariant.
+def test_env_example_documents_every_variable_the_code_reads():
+    """`.env.example` is the only list of what this project can be configured
+    with, so a variable missing from it is undiscoverable and one lingering in it
+    after the code stopped reading it is a lie. Both directions are asserted for
+    that reason.
+
+    Scanned: the shipped code and the two hand-run surfaces that read the
+    environment on their own — the Node server, its scripts, the brain, the RAG
+    lab and the live evals. Not the unit tests: those set variables to exercise
+    the readers above, and a value invented for one assertion is not
+    configuration anyone should be told about.
+    """
+    root = Path(__file__).resolve().parents[2]
+    sources = [root / 'server.js', *sorted((root / 'scripts').glob('*.mjs')),
+               *sorted((root / 'brain' / 'src').rglob('*.py')),
+               *sorted((root / 'brain' / 'tests' / 'raglab').rglob('*.py')),
+               *sorted((root / 'brain' / 'tests' / 'evals').rglob('*.py'))]
+    read = {name for path in sources
+            for match in _ENV_READS.finditer(path.read_text())
+            for name in match.groups() if name}
+    documented = {match.group(1) for line in
+                  (root / '.env.example').read_text().splitlines()
+                  if (match := _ENV_DOCUMENTED.match(line))}
+    # NODE_ENV and friends belong to the runtime, not to this project.
+    read -= {'NODE_ENV', 'PATH', 'HOME'}
+    assert read - documented == set(), 'read by the code, absent from .env.example'
+    assert documented - read == set(), 'in .env.example, read by nothing'
