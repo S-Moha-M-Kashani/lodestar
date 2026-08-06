@@ -283,6 +283,33 @@ def test_prune_drops_chunks_the_record_no_longer_returns():
     assert store.prune([]) == 1
 
 
+# This is an integration test (in-process Chroma, no server, no disk).
+def test_a_restored_message_is_indexed_again():
+    """Deleting one turn is reversible, so the index has to be reversible too.
+
+    A single message can now be soft-deleted from a chat and restored from the
+    assistant's trash. Both halves reach Chroma through the same route the
+    browser already fires after a delete: `prune` takes the hidden turn out,
+    `sync` puts the restored one back. Without the second half, restore would
+    return a turn the assistant could still never recall — visible in the
+    transcript, absent from its own memory.
+    """
+    store = memory_store('chat-restore')
+    kept = row(1, 'the wifi password is hunter2')
+    hidden = row(2, 'dentist appointment moved to friday')
+    store.index_messages([kept, hidden])
+
+    assert store.prune([kept]) == 1
+    assert not store.search('dentist')
+
+    # The turn is back in the live record. sync only ever adds, which is exactly
+    # what a restore needs: the surviving chunks are left where they are.
+    assert store.sync([kept, hidden]) == 1, 'only the returning turn is indexed'
+    assert any('dentist' in h['text'] for h in store.search('dentist')), (
+        'a restored turn is recallable again')
+    assert store.sync([kept, hidden]) == 0, 'and it is not indexed twice'
+
+
 # This is an integration test.
 @respx.mock
 def test_a_board_down_at_boot_does_not_take_the_brain_down():

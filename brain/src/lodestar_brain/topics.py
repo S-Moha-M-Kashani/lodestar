@@ -27,10 +27,11 @@ import math
 import re
 from dataclasses import dataclass
 
-# Provisional, and knowingly so — see `Alternatives considered` below and the
-# eval in brain/tests/evals/. Cosine *distance* (1 - similarity), so bigger is
-# further apart.
-DRIFT_DISTANCE = 0.45
+# Measured, 2026-08-06, against the labelled pairs in brain/tests/evals/
+# with the real `heydariAI/persian-embeddings` model: same-subject pairs top
+# out at 0.639, new-subject pairs start at 0.778, so this is the midpoint of
+# the gap. Cosine *distance* (1 - similarity), so bigger is further apart.
+DRIFT_DISTANCE = 0.708
 
 # A greeting and nothing else. Tight and anchored at both ends on purpose: the
 # same trade the transcriber's `signals_no_audio` makes, for the same reason. A
@@ -168,13 +169,16 @@ torch or nltk to do it would make the module heavier than the thing it computes 
 while breaking the property that the brain's test suite runs offline with no
 extras. That is a taste call about dependencies, and it is stated as one.
 
-The part that is *not* taste is `DRIFT_DISTANCE = 0.45`, which is currently a
-guess. The measurement that settles it is the labelled fixture set in
-`brain/tests/evals/`: same-topic pairs, different-topic pairs and openers, scored
-against the real `heydariAI/persian-embeddings` model. **The number has not been
-measured yet.** If that set shows the distance signal cannot separate the pairs —
-say, false-positive rate above roughly 10%, where the nudge becomes nagging — then
-the LLM call rejected above has earned its latency, and `DriftVerdict` is the
-seam it arrives behind. Run the eval, then write the number into this note rather
-than only into a commit message.
+The part that is *not* taste is `DRIFT_DISTANCE`, and it is now a measurement,
+not a guess. The labelled fixture set in `brain/tests/evals/` — same-topic
+pairs, different-topic pairs and openers, scored against the real
+`heydariAI/persian-embeddings` model — came back cleanly separable on
+2026-08-06: same-subject distances span 0.367–0.639, new-subject 0.778–0.921,
+so any cut-off in (0.639, 0.778) works and 0.708 is the midpoint. The original
+guess of 0.45 sat *inside* the same-subject range and would have nudged 67% of
+on-topic messages. The classes separating this cleanly is also the verdict on
+the LLM call rejected above: it has not earned its latency. If a future, larger
+fixture set closes the gap — false-positive rate above roughly 10%, where the
+nudge becomes nagging — that decision reopens, and `DriftVerdict` is the seam
+it arrives behind.
 """
