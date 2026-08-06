@@ -1879,13 +1879,13 @@ try:
               and not page.get_attribute("#chat-history-btn", "title")
               and page.get_attribute("#chat-new", "aria-label") == "New chat")
 
-        # ---- The dock ---------------------------------------------------------
-        # The two chat controls sit outside the sheet, in the page margin at its
-        # top-left corner, stacked — in the toolbar row they read as two more
-        # buttons among five and were missed. Asserted as geometry rather than a
-        # screenshot: what matters is that the dock clears the sheet, that it is
-        # level with the sheet's top, and that the + is under the chat button
-        # rather than beside it.
+        # ---- The dock, and the assistant's tools in the header -----------------
+        # History and the settings gear live in the app header beside the theme
+        # picker. They were inside the sheet — the gear in the search row, the
+        # chats behind a ▾ on a button hanging in the page margin — and the
+        # person who asked for the trash could not find where deleted messages
+        # had gone. What stays in the margin is where you are and New chat: a
+        # label, because the list it used to open is now in the header.
         def box(sel):
             return page.locator(sel).bounding_box()
 
@@ -1894,29 +1894,55 @@ try:
 
         # This is an end-to-end test.
         dock, sheet_box = box(".chat-dock"), box(".assistant-sheet")
-        chat_btn, plus = box("#chat-history-btn"), box("#chat-new")
-        check("dock: the chat controls sit outside the sheet, stacked",
-              dock and sheet_box and chat_btn and plus
+        here, plus = box(".chat-current"), box("#chat-new")
+        check("dock: where you are and New chat stay in the margin, stacked",
+              dock and sheet_box and here and plus
               and dock["x"] + dock["width"] <= sheet_box["x"] + 1
               and abs(dock["y"] - sheet_box["y"]) <= 8
-              and plus["y"] >= chat_btn["y"] + chat_btn["height"] - 1)
+              and plus["y"] >= here["y"] + here["height"] - 1
+              # The ▾ is gone with the panel it opened: a control that no longer
+              # opens anything must not go on looking like one.
+              and page.locator(".chat-dock #chat-history-btn").count() == 0)
 
         # This is an end-to-end test.
-        # Three ways out, because a panel hanging in the margin is easy to walk
-        # away from and one left open covers the transcript it opened over.
+        # Both tools are header furniture now, and view-specific furniture at
+        # that — like the board's own search and filters, they belong to the
+        # screen they act on and must not sit there inert on the others.
+        hist, gear = box("#chat-history-btn"), box("#assistant-extras-btn")
+        theme = box("#theme-select")
+        in_header = (hist and gear and theme and sheet_box
+                     and hist["y"] + hist["height"] <= sheet_box["y"]
+                     and abs(hist["y"] - theme["y"]) <= 12
+                     and abs(gear["y"] - theme["y"]) <= 12)
+        page.click("[data-view='board']")
+        page.wait_for_selector(".column")
+        away = (page.locator("#chat-history-btn").count() == 0
+                or not page.locator("#chat-history-btn").is_visible())
+        page.click("[data-view='assistant']")
+        page.wait_for_selector("#chat-input")
+        check("tools: History and the gear sit in the header, only on the Assistant",
+              in_header and away and page.locator("#chat-history-btn").is_visible())
+
+        # This is an end-to-end test.
+        # Three ways out, because a panel dropped over the page is easy to walk
+        # away from and one left open covers what it opened over.
         open_chat_history(page)
-        panel = box(".chat-history")
-        opened = bool(panel) and panel["y"] >= plus["y"]
+        hist = box("#chat-history-btn")
+        # Polled, not sampled once: the panel is painted on the click and again
+        # when the chats and the trash come back from the server, and a box read
+        # in the instant between the two replacements is None.
+        opened = wait_until(lambda: bool(box(".chat-history"))
+                            and box(".chat-history")["y"] >= hist["y"])
         page.keyboard.press("Escape")
         by_escape = wait_until(lambda: page.locator(".chat-history").count() == 0)
         open_chat_history(page)
-        page.mouse.click(1000, 700)          # empty transcript, not the dock
+        page.mouse.click(700, 700)           # the transcript, not the tools
         by_click = wait_until(lambda: page.locator(".chat-history").count() == 0)
         open_chat_history(page)
-        page.mouse.move(1300, 820)           # pointer walks away and stays away
+        page.mouse.move(700, 820)            # pointer walks away and stays away
         by_idle = wait_until(lambda: page.locator(".chat-history").count() == 0,
                              timeout=9)
-        check("dock: the panel opens under the dock and closes when it is unused",
+        check("tools: the History panel drops from its button and closes when unused",
               opened and by_escape and by_click and by_idle)
 
         # This is an end-to-end test.

@@ -733,6 +733,7 @@
     renderCatRail();
     renderTagBar();
     renderHabitBanner();
+    renderAssistantTools();
     $('#undo-btn').disabled = timeline.index <= 0;
 
     if (dealCards) {
@@ -3782,32 +3783,17 @@
     // on a wide window; with no margin to sit in it becomes an ordinary row here.
     sheet.appendChild(renderChatDock());
 
-    // Everything that is not the conversation lives behind one sign, sharing the
-    // search fold's row so that row is the only furniture above the transcript.
-    // A rail beside the transcript cost it 300px of width and stood mostly empty
-    // — a model is chosen once and then left alone — so shut, which is how it
-    // starts, the conversation has the whole sheet.
-    //
-    // A button and a panel rather than a <details>: a disclosure's body lives
-    // inside its own subtree, so with the summary in this row's narrow right-hand
-    // cell the panel would open into that cell instead of across the sheet. Same
-    // wiring as the board's Menu.
+    // Everything that is not the conversation lives behind one sign — the gear,
+    // which is in the app header now beside the theme picker. Its panel stays
+    // here, at the top of the sheet directly under the button that opens it. A
+    // rail beside the transcript cost it 300px and stood mostly empty (a model
+    // is chosen once and then left alone), so shut, which is how it starts, the
+    // conversation has the whole sheet.
     const toolbar = document.createElement('div');
     toolbar.className = 'assistant-toolbar';
     toolbar.appendChild(renderRecallPanel());
     const cost = renderSessionCost();
     if (cost) toolbar.appendChild(cost);
-    const extrasBtn = document.createElement('button');
-    extrasBtn.type = 'button';
-    extrasBtn.id = 'assistant-extras-btn';
-    extrasBtn.className = 'assistant-extras-btn';
-    extrasBtn.textContent = '\u2699';
-    extrasBtn.title = 'Models, the RAG lab, export and import';
-    extrasBtn.setAttribute('aria-label', 'Assistant settings');
-    extrasBtn.setAttribute('aria-expanded', String(extrasOpen));
-    extrasBtn.setAttribute('aria-controls', 'assistant-extras');
-    extrasBtn.addEventListener('click', () => setExtrasOpen(!extrasOpen));
-    toolbar.appendChild(extrasBtn);
     sheet.appendChild(toolbar);
 
     const extras = document.createElement('div');
@@ -3955,14 +3941,24 @@
    *
    *  "In use" includes a dialog the panel itself opened. Rename and Delete both
    *  open one in the middle of the screen, which necessarily takes the pointer
-   *  out of the dock — the panel closing under an open dialog loses the place
-   *  the user was working in, which is the bug this check exists for. */
+   *  out of the tools — the panel closing under an open dialog loses the place
+   *  the user was working in, which is the bug this check exists for.
+   *
+   *  Focus counts only inside the PANEL, not anywhere in the tools. The button
+   *  is static markup and keeps focus after the click that opened the list, so
+   *  counting it would mean a panel opened with the mouse never idle-closes at
+   *  all — it survived only because the old dock was rebuilt by every render,
+   *  which dropped focus to the body by destroying the button holding it.
+   *  Someone reading the list with a keyboard has tabbed into it, and is still
+   *  never rushed. */
   function armHistoryIdle() {
     cancelHistoryIdle();
     historyIdleTimer = setTimeout(function settle() {
-      const dock = document.querySelector('.chat-dock');
+      const tools = document.querySelector('.assistant-tools');
+      const panel = document.getElementById('chat-history');
       const busy = document.querySelector('dialog[open]')
-        || (dock && (dock.matches(':hover') || dock.contains(document.activeElement)));
+        || (tools && tools.matches(':hover'))
+        || (panel && panel.contains(document.activeElement));
       if (busy) {
         historyIdleTimer = setTimeout(settle, CHAT_HISTORY_IDLE_MS);
         return;
@@ -3975,28 +3971,27 @@
     cancelHistoryIdle();
     if (!assistantState.historyOpen) return;
     assistantState.historyOpen = false;
-    render();
+    // The panel alone, not the whole view: closing a list must not repaint the
+    // transcript under it and lose the reader's place in the conversation.
+    renderAssistantTools();
     // Escape and a chosen chat return the caret to the button that opened the
     // panel; a click elsewhere is the user already looking somewhere else.
     if (focusBack) document.getElementById('chat-history-btn')?.focus();
   }
 
-  /** The dock: the chat you are in, New chat under it, and the panel they open.
-   *  Its own element rather than three things in the toolbar, because they move
-   *  together — outside the sheet where there is room, inside it where there is
-   *  not. */
+  /** The dock: which chat you are in, and New chat under it. In the page margin
+   *  off the sheet's corner, because in the toolbar row they were two more
+   *  buttons among five and went unnoticed.
+   *
+   *  It used to open the chats panel too, from a ▾ on the title. That panel is
+   *  in the header now — hanging it off a button in the margin is what made the
+   *  history, and the deleted messages at the foot of it, unfindable. So the
+   *  title is a label again: it says where you are, and no longer pretends to
+   *  be a control. */
   function renderChatDock() {
     const dock = document.createElement('div');
     dock.className = 'chat-dock';
     dock.appendChild(renderChatSwitcher());
-    if (assistantState.historyOpen) {
-      dock.appendChild(renderChatHistory());
-      // Per-element, not on document: the dock is rebuilt by every render, so
-      // these listeners die with the element that owns them and cannot stack up.
-      dock.addEventListener('mouseleave', armHistoryIdle);
-      dock.addEventListener('mouseenter', cancelHistoryIdle);
-      dock.addEventListener('focusin', cancelHistoryIdle);
-    }
     return dock;
   }
 
@@ -4005,28 +4000,15 @@
     wrap.className = 'chat-switcher';
 
     const current = assistantState.sessions.find((s) => s.id === assistantState.sessionId);
-    const history = document.createElement('button');
-    history.type = 'button';
-    history.id = 'chat-history-btn';
-    history.className = 'btn ghost chat-history-btn';
+    const here = document.createElement('span');
+    here.className = 'chat-current';
     // An unsaved new chat has no row in the list yet, and saying so is more
     // honest than borrowing the title of the chat you just left.
-    // The title rides in a span so the ellipsis clips the label rather than the
-    // button — the hint below is a pseudo-element of the button's own box.
     const label = document.createElement('span');
     label.className = 'chat-history-label';
-    label.textContent = (current ? current.title : 'New chat') + ' ▾';
-    history.appendChild(label);
-    history.dataset.hint = 'Your chats';
-    history.setAttribute('aria-haspopup', 'true');
-    history.setAttribute('aria-expanded', String(assistantState.historyOpen));
-    history.setAttribute('aria-controls', 'chat-history');
-    history.addEventListener('click', () => {
-      assistantState.historyOpen = !assistantState.historyOpen;
-      // Asked for on opening, so a chat added in another tab is there.
-      if (assistantState.historyOpen) { refreshChatSessions(); refreshChatTrash(); }
-      render();
-    });
+    label.textContent = current ? current.title : 'New chat';
+    here.appendChild(label);
+    here.title = current ? current.title : 'New chat';
 
     const fresh = document.createElement('button');
     fresh.type = 'button';
@@ -4042,8 +4024,27 @@
       announce('New chat');
     });
 
-    wrap.append(history, fresh);
+    wrap.append(here, fresh);
     return wrap;
+  }
+
+  /** The Assistant's two header tools: History and the settings gear, beside the
+   *  theme picker. Static markup driven from here, so the panel is not rebuilt
+   *  by a render of the transcript underneath it.
+   *
+   *  Shown only on the Assistant, like the search and filters beside them: a
+   *  gear that configures a screen you are not on is furniture that does
+   *  nothing. */
+  function renderAssistantTools() {
+    const tools = $('.assistant-tools');
+    if (!tools) return;
+    tools.hidden = view !== 'assistant';
+    const btn = $('#chat-history-btn');
+    if (btn) btn.setAttribute('aria-expanded', String(assistantState.historyOpen));
+    const slot = $('#chat-history-slot');
+    if (!slot) return;
+    slot.innerHTML = '';
+    if (view === 'assistant' && assistantState.historyOpen) slot.appendChild(renderChatHistory());
   }
 
   /** The chats, grouped by day, newest first. A panel across the sheet rather
@@ -5828,16 +5829,34 @@
     const panel = $('#chat-menu-panel');
     if (panel && !panel.hidden && !e.target.closest('.chat-menu')) setChatMenuOpen(false);
   });
-  // The chats panel closes the same two ways, and here for the same reason —
-  // the dock is rebuilt by every render. Its third way out, the idle timer,
-  // belongs to the dock element itself.
+  // The Assistant's two header tools. Static markup, so unlike everything else
+  // about the Assistant they are wired once here rather than on every render —
+  // and the History panel therefore survives a repaint of the transcript
+  // underneath it.
+  $('#chat-history-btn').addEventListener('click', () => {
+    assistantState.historyOpen = !assistantState.historyOpen;
+    // Asked for on opening, so a chat added in another tab is there, and so the
+    // deleted messages are the ones deleted since the panel was last read.
+    if (assistantState.historyOpen) { refreshChatSessions(); refreshChatTrash(); }
+    renderAssistantTools();
+  });
+  $('#assistant-extras-btn').addEventListener('click', () => setExtrasOpen(!extrasOpen));
+  // The panel's third way out. On the tools element, which owns both the button
+  // and the panel, so crossing from one to the other is never "left".
+  $('.assistant-tools').addEventListener('mouseleave', () => {
+    if (assistantState.historyOpen) armHistoryIdle();
+  });
+  $('.assistant-tools').addEventListener('mouseenter', cancelHistoryIdle);
+  $('.assistant-tools').addEventListener('focusin', cancelHistoryIdle);
+
+  // And the same two ways out the board's menus have.
   document.addEventListener('click', (e) => {
     // A click inside a dialog is not a click elsewhere: Rename and Delete both
-    // open one, and it is centred on the screen rather than inside the dock, so
+    // open one, and it is centred on the screen rather than inside the panel, so
     // without this the OK that applies a rename is also what closes the list it
     // was applied in — the panel vanished the instant the work was confirmed.
     if (e.target.closest('dialog')) return;
-    if (assistantState.historyOpen && !e.target.closest('.chat-dock')) {
+    if (assistantState.historyOpen && !e.target.closest('.assistant-tools')) {
       closeChatHistory();
     }
   });

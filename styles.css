@@ -2762,7 +2762,7 @@ body[data-view="assistant"] .app-footer { display: none; }
   width: 88px;
 }
 .chat-dock .chat-switcher { flex-direction: column; align-items: stretch; gap: 5px; }
-.chat-dock .chat-history-btn { width: 100%; text-align: start; }
+.chat-dock .chat-current { width: 100%; }
 .chat-dock .chat-new { width: 100%; }
 /* Hints open sideways here, not downwards: dropping below a stacked button puts
    the hint on top of the button under it, which is the one you were reaching
@@ -2773,16 +2773,27 @@ body[data-view="assistant"] .app-footer { display: none; }
   inset-inline-end: auto;
 }
 
-/* The panel drops from under the dock and is wider than it — 88px of margin
-   would truncate every chat title to nothing — so it overlays the transcript's
-   left edge for as long as it is open, which is only as long as it is used. */
-.chat-dock .chat-history {
+/* The Assistant's two header tools, and the panel one of them drops. Anchored
+   to the tools rather than to the page so the list hangs under the button that
+   opened it; end-aligned because the button is near the window's right edge and
+   a 320px panel anchored at its start would run off it. */
+.assistant-tools {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+/* `display: flex` outranks the UA's [hidden] rule, so without this the tools
+   would stay on screen on every other view — hidden in the markup and visible
+   on the page is the worst of both. */
+.assistant-tools[hidden] { display: none; }
+.assistant-tools .chat-history {
   position: absolute;
   top: calc(100% + 6px);
-  inset-inline-start: 0;
-  width: min(320px, 46vw);
-  max-height: 52vh;
-  z-index: 35;
+  inset-inline-end: 0;
+  width: min(320px, 92vw);
+  max-height: 62vh;
+  z-index: 60;
   animation: chat-history-drop 150ms ease-out both;
 }
 @keyframes chat-history-drop {
@@ -2790,7 +2801,7 @@ body[data-view="assistant"] .app-footer { display: none; }
   to { opacity: 1; transform: none; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .chat-dock .chat-history { animation: none; }
+  .assistant-tools .chat-history { animation: none; }
 }
 
 /* No margin to hang in: an ordinary row at the top of the sheet instead.
@@ -2799,25 +2810,33 @@ body[data-view="assistant"] .app-footer { display: none; }
 @media (max-width: 1427px) {
   .chat-dock { position: static; width: auto; }
   .chat-dock .chat-switcher { flex-direction: row; align-items: center; }
-  .chat-dock .chat-history-btn,
+  .chat-dock .chat-current,
   .chat-dock .chat-new { width: auto; }
-  .chat-dock .chat-history {
-    position: static;
-    width: auto;
-    max-height: 40vh;
-    margin-top: 2px;
-  }
 }
 
 .chat-history-btn { font-size: 0.78rem; }
+/* Where you are, not a control: it opened the chats panel until that moved to
+   the header, and a label that still looked like a button was the version of
+   this nobody could find their history in. */
+.chat-current {
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+  padding: 4px 6px;
+  min-width: 0;
+}
 /* The title is clipped, never the button: an ellipsis on the button itself also
    clips the hint below it, which is a pseudo-element of the same box. */
+/* Two lines in the 88px margin, not one: at one line a chat called "what should
+   I pack for berlin" reads "what shoul…", which names nothing. Clamped rather
+   than free-flowing so a pasted paragraph cannot push New chat down the page. */
 .chat-history-label {
-  display: block;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   max-width: 22ch;
   overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
 }
 .chat-new { font-size: 1rem; line-height: 1; padding-inline: 9px; }
 
