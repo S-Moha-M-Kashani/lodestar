@@ -2861,7 +2861,7 @@
   const assistantState = {
     messages: [], busy: false, draft: '', proposals: [], edits: [],
     sessionId: '', sessions: [], drift: null, driftDismissed: false,
-    historyOpen: false,
+    historyOpen: false, trash: [],
   };
 
   // The chat list and every message live in assistant.db. localStorage keeps two
@@ -2945,6 +2945,12 @@
     if (msg.role !== 'user' && msg.role !== 'assistant') return null;
     if (typeof msg.content !== 'string') return null;
     const out = { role: msg.role, content: msg.content };
+    // The record's row id, kept through the cache. It is what a per-message
+    // delete acts on: without it the turn on screen and the row in assistant.db
+    // cannot be told to be the same turn. A turn that has no id yet — an error,
+    // an abandoned partial, or one the brain has not recorded — simply has no
+    // delete control, which is honest: there is nothing in the record to delete.
+    if (Number.isInteger(msg.id)) out.id = msg.id;
     // `error` and `partial` are load-bearing, not decoration: sendChat filters
     // both out of the history it replays to the model. Persisting the text and
     // dropping the flag would silently undo that filter, and the model would be
@@ -3013,11 +3019,77 @@
         // The record wins unless the cache is ahead of it. The browser only
         // appends, so a longer cache is the record plus turns it never saw.
         if (recorded.length >= cached.length) assistantState.messages = recorded;
+        else adoptRecordedIds(assistantState.messages, recorded);
       }
     } catch { /* offline — the cache is what we have, and it is enough to read */ }
     try { localStorage.setItem(CHAT_SESSION_KEY, id); } catch { /* private mode */ }
     persistChat();
     if (view === 'assistant') render();
+  }
+
+  /** Give the transcript on screen the record's row ids, in place. Returns
+   *  whether anything was learned.
+   *
+   *  The two lists are the same conversation seen from two sides: the browser
+   *  appends a turn the moment it is spoken, the brain records it once the model
+   *  has answered. So they are aligned by walking both in order and matching
+   *  role and text — a positional pairing would slide by one at the first turn
+   *  the record never took, and the delete button on an error bubble would then
+   *  erase somebody else's message. Local turns that match nothing are exactly
+   *  those: errors and abandoned partials, which stay id-less. */
+  function adoptRecordedIds(local, recorded) {
+    let i = 0;
+    let learned = false;
+    for (const row of recorded) {
+      while (i < local.length
+             && !(local[i].role === row.role && local[i].content === row.content)) i += 1;
+      if (i >= local.length) break;
+      if (local[i].id !== row.id) { local[i].id = row.id; learned = true; }
+      i += 1;
+    }
+    return learned;
+  }
+
+  /** Re-read the open chat from the record, keeping the panel as it is. Used
+   *  after a restore: openChatSession would do it too, but it also closes the
+   *  chats panel, and putting three turns back one at a time should not take
+   *  three trips into the list. */
+  async function reloadOpenChat() {
+    const id = assistantState.sessionId;
+    if (!id) return;
+    try {
+      const res = await fetch('/api/chat/sessions/' + encodeURIComponent(id),
+        { headers: { Accept: 'application/json' } });
+      if (!res.ok) return;
+      const data = await res.json();
+      assistantState.messages = (data.messages || []).map(restoredMessage).filter(Boolean);
+      persistChat();
+      if (view === 'assistant') render();
+    } catch { /* offline — what is on screen is still the conversation */ }
+  }
+
+  /** Ask the record which rows the turns just taken became. One GET per settled
+   *  turn, and what it buys is the delete control appearing on the message you
+   *  just sent rather than only after a reload.
+   *
+   *  Asked only of a chat the record actually holds. A turn that died before the
+   *  brain could record it leaves no session row, and requesting it would be a
+   *  404 per failed turn in the console — an error log for the ordinary case of
+   *  "there is nothing to learn yet". */
+  async function learnRecordedIds() {
+    const id = assistantState.sessionId;
+    if (!id) return;
+    if (!assistantState.sessions.some((s) => s.id === id)) return;
+    try {
+      const res = await fetch('/api/chat/sessions/' + encodeURIComponent(id),
+        { headers: { Accept: 'application/json' } });
+      if (!res.ok) return;
+      const data = await res.json();
+      const recorded = (data.messages || []).map(restoredMessage).filter(Boolean);
+      if (!adoptRecordedIds(assistantState.messages, recorded)) return;
+      persistChat();
+      if (view === 'assistant') render();
+    } catch { /* offline — the ids arrive with the next reload */ }
   }
 
   /** Refresh the history list. */
@@ -3031,6 +3103,86 @@
         if (view === 'assistant') render();
       }
     } catch { /* offline — leave the list as it was */ }
+  }
+
+  /** Refresh the deleted-messages list. */
+  async function refreshChatTrash() {
+    try {
+      const res = await fetch('/api/chat/trash', { headers: { Accept: 'application/json' } });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data.messages)) {
+        assistantState.trash = data.messages;
+        if (view === 'assistant') render();
+      }
+    } catch { /* offline — leave the list as it was */ }
+  }
+
+  /** Tell the index the live record changed. Chroma holds chunks derived from
+   *  these rows, and `sync` only ever adds, so a hidden turn would go on
+   *  answering recall until the brain next booted. The same call covers a
+   *  restore, where it is `sync` rather than `prune` that has work to do. */
+  const reindexChat = () => { fetch('/api/rag/chat/reindex', { method: 'POST' }).catch(() => {}); };
+
+  /** Delete one turn. No confirmation, deliberately: nothing is destroyed here,
+   *  and the message says where it went. The board's To Trash reads the same. */
+  async function deleteChatMessage(msg) {
+    if (!Number.isInteger(msg.id)) return;
+    try {
+      const res = await fetch('/api/chat/messages/' + msg.id, { method: 'DELETE' });
+      if (!res.ok) throw new Error(`the server refused (${res.status})`);
+    } catch (err) {
+      announce(`Delete failed — ${err.message}`);
+      return;
+    }
+    const at = assistantState.messages.indexOf(msg);
+    if (at !== -1) assistantState.messages.splice(at, 1);
+    persistChat();
+    reindexChat();
+    render();
+    refreshChatTrash();
+    refreshChatSessions();
+    announce('Message deleted — recoverable under Deleted messages');
+  }
+
+  async function restoreChatMessage(row) {
+    try {
+      const res = await fetch('/api/chat/trash/' + row.id + '/restore', { method: 'POST' });
+      if (!res.ok) throw new Error(`the server refused (${res.status})`);
+    } catch (err) {
+      announce(`Restore failed — ${err.message}`);
+      return;
+    }
+    reindexChat();
+    await refreshChatTrash();
+    refreshChatSessions();
+    if (row.sessionId === assistantState.sessionId) await reloadOpenChat();
+    announce('Message restored');
+  }
+
+  async function purgeChatMessage(row) {
+    const sure = await ask({
+      title: 'Delete permanently?',
+      message: `“${short(row.content)}” will be erased from assistant.db and from the `
+        + 'assistant’s memory for good. This is the only action that truly deletes it, '
+        + 'and it cannot be undone.',
+      okLabel: 'Delete permanently',
+      danger: true,
+    });
+    if (!sure) return;
+    try {
+      const res = await fetch('/api/chat/trash/' + row.id, { method: 'DELETE' });
+      if (!res.ok) throw new Error(`the server refused (${res.status})`);
+    } catch (err) {
+      announce(`Delete failed — ${err.message}`);
+      return;
+    }
+    // The row is gone from the record, so the chunks derived from it have to go
+    // too — the prune already ran when it was hidden, but a restore in between
+    // would have put them back, and this is the call that settles it either way.
+    reindexChat();
+    await refreshChatTrash();
+    announce('Message deleted permanently');
   }
 
   /** Decide which chat the Assistant opens with. Resume the most recent one if
@@ -3872,7 +4024,7 @@
     history.addEventListener('click', () => {
       assistantState.historyOpen = !assistantState.historyOpen;
       // Asked for on opening, so a chat added in another tab is there.
-      if (assistantState.historyOpen) refreshChatSessions();
+      if (assistantState.historyOpen) { refreshChatSessions(); refreshChatTrash(); }
       render();
     });
 
@@ -3902,7 +4054,7 @@
     panel.id = 'chat-history';
     panel.className = 'chat-history';
 
-    if (!assistantState.sessions.length) {
+    if (!assistantState.sessions.length && !assistantState.trash.length) {
       const empty = document.createElement('p');
       empty.className = 'chat-status';
       empty.textContent = 'No earlier chats yet — this is the first one.';
@@ -3922,7 +4074,55 @@
       }
       panel.appendChild(renderChatHistoryRow(session));
     }
+    // The turns deleted one at a time, under the chats they came out of — the
+    // board's Trash in the place the assistant's own history is read. Absent
+    // entirely when empty: a permanent "nothing here" heading is furniture.
+    if (assistantState.trash.length) {
+      const heading = document.createElement('div');
+      heading.className = 'chat-history-day chat-trash-heading';
+      heading.textContent = 'Deleted messages';
+      panel.appendChild(heading);
+      for (const row of assistantState.trash) panel.appendChild(renderChatTrashRow(row));
+    }
     return panel;
+  }
+
+  /** One deleted turn: what it said, which chat it came out of, and the two
+   *  ways out. Both controls stay visible rather than appearing on hover — this
+   *  is the only screen where a permanent delete can be reached, and a hidden
+   *  destructive control is worse than a visible one. */
+  function renderChatTrashRow(row) {
+    const el = document.createElement('div');
+    el.className = 'chat-history-item chat-trash-item';
+
+    const text = document.createElement('div');
+    text.className = 'chat-history-open chat-trash-text';
+    const said = document.createElement('span');
+    said.className = 'chat-history-title';
+    said.textContent = row.content;
+    const from = document.createElement('span');
+    from.className = 'chat-history-count';
+    from.textContent = `${row.role === 'user' ? 'you' : 'assistant'} · ${row.sessionTitle}`;
+    text.append(said, from);
+
+    const restore = document.createElement('button');
+    restore.type = 'button';
+    restore.className = 'btn ghost chat-trash-restore';
+    restore.textContent = 'Restore';
+    restore.addEventListener('click', () => restoreChatMessage(row));
+
+    const purge = document.createElement('button');
+    purge.type = 'button';
+    purge.className = 'btn danger chat-trash-purge';
+    purge.textContent = 'Delete permanently';
+    purge.addEventListener('click', () => purgeChatMessage(row));
+
+    const actions = document.createElement('div');
+    actions.className = 'chat-trash-actions';
+    actions.append(restore, purge);
+
+    el.append(text, actions);
+    return el;
   }
 
   /** Today / Yesterday / the date — the way a reader actually looks for a
@@ -4303,6 +4503,22 @@
     body.className = 'chat-text';
     appendLinked(body, msg.content);
     el.appendChild(body);
+
+    // One turn, deletable on its own. Only for a turn the record knows: without
+    // a row id there is nothing to delete, and a control that quietly removed
+    // the message from the screen alone would be the opposite of this feature.
+    // It fades in on hover and on focus, so it is reachable by keyboard and is
+    // not a delete button standing over every sentence of the conversation.
+    if (Number.isInteger(msg.id)) {
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'chat-msg-delete';
+      remove.textContent = '×';
+      remove.title = 'Delete this message';
+      remove.setAttribute('aria-label', 'Delete this message');
+      remove.addEventListener('click', () => deleteChatMessage(msg));
+      el.appendChild(remove);
+    }
 
     // Everything that is *about* the answer rather than part of it goes in one
     // ruled strip beneath it — what it cited, what it cost, which tools ran —
@@ -4882,7 +5098,11 @@
     // The brain has just recorded the turn, so the chat's title, its position in
     // the list, and its message count have all changed. A first turn is also
     // what created the chat row at all.
-    refreshChatSessions();
+    // And the turn just spoken now has a row in the record — which is what a
+    // per-message delete acts on, so it is asked for here rather than at the
+    // next reload. After the list, not beside it: the list is what says whether
+    // this chat reached the record at all.
+    refreshChatSessions().then(learnRecordedIds);
   }
 
   async function adoptServerBoard() {

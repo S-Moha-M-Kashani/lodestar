@@ -976,7 +976,7 @@ test('LODESTAR_BACKUP_ON_WRITE=0 disables write-triggered backups', async () => 
 // A card the Assistant invents is a PROPOSAL: it lives in the cards table with
 // pending = 1, is invisible to the board, and becomes real only when the user
 // confirms it. Rejecting it sends it to the Trash, so DELETE /api/cards/:id
-// stays the only hard delete in the system.
+// stays the board's only hard delete.
 
 const postProposal = (base, card) =>
   fetch(base + '/api/proposals', {
@@ -1232,7 +1232,7 @@ test('DELETE /api/edits/:id discards a suggestion and leaves the card alone', as
     assert.equal((await getJson(s.base, '/api/edits')).edits.length, 0);
 
     // Discarding a suggestion is not a card operation: DELETE /api/cards/:id
-    // stays the only hard delete in the system, and this card is untouched.
+    // stays the board's only hard delete, and this card is untouched.
     const board = await getJson(s.base, '/api/state');
     assert.equal(board.cards.find((c) => c.id === 'a').title, 'Renew the passport');
 

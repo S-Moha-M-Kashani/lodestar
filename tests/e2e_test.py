@@ -149,6 +149,20 @@ def open_chat_history(page):
     page.wait_for_selector(".chat-history")
 
 
+def reopen_chat_history(page):
+    """Open the history panel from scratch, however it was left.
+
+    `open_chat_history` leaves an already-open panel alone, and an inherited one
+    may be seconds into its idle countdown — the pointer leaves the dock every
+    time a dialog takes it — so a wait that follows can watch the panel close
+    under it. Closing first means the click that reopens it is also the one that
+    asks the server for the list, and it puts focus back inside the dock, which
+    is what keeps the panel up while a check reads it."""
+    page.keyboard.press("Escape")
+    wait_until(lambda: page.locator(".chat-history").count() == 0)
+    open_chat_history(page)
+
+
 def carried_run(carried, seeded, asked):
     """The positions of the seeded messages a request carried, in order.
 
@@ -322,6 +336,23 @@ def api_chat_sessions():
 def api_chat_messages():
     with urllib.request.urlopen(URL + "/api/chat/messages", timeout=5) as r:
         return json.loads(r.read())["messages"]
+
+
+def api_chat_trash():
+    with urllib.request.urlopen(URL + "/api/chat/trash", timeout=5) as r:
+        return json.loads(r.read())["messages"]
+
+
+def api_chat_reindex():
+    """Sync the chat index with the record, and report what moved.
+
+    Seeding writes straight to assistant.db, so the brain has not indexed those
+    rows — and a delete cannot be shown to reach Chroma if the chunk was never
+    there. This is the call that puts them in, and its {indexed, pruned} is the
+    only view a browser-level test gets of the index."""
+    req = urllib.request.Request(URL + "/api/rag/chat/reindex", data=b"", method="POST")
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return json.loads(r.read())
 
 
 # Synthetic microphone: getUserMedia returns a generated tone instead of asking
@@ -2017,6 +2048,105 @@ try:
               # them, and why this asserts absence rather than presence.
               and all("a chat that exists to be deleted" != m["content"]
                       for m in api_chat_messages()))
+
+        # ---- Deleting one message, and the trash behind it --------------------
+        # Its own seeded chat again: this block deletes a turn out of the middle
+        # of a transcript, and doing that to a conversation a later check reads
+        # would make the two blocks depend on each other's order.
+        blurted = "my card number is 4111 1111 1111 1111"
+        api_chat_append("e2e-one-message", [
+            {"role": "user", "content": "what should I pack for berlin"},
+            {"role": "user", "content": blurted},
+            {"role": "assistant", "content": "please do not paste that here"},
+        ])
+        # Indexed first, or the delete below could not be shown to reach Chroma:
+        # a chunk that was never there cannot be pruned, and the check would
+        # pass on an index that had simply never heard of the message.
+        indexed_seed = api_chat_reindex()["indexed"] >= 3
+        # Opened fresh, not inherited: the panel left over from the block above
+        # was already counting down its idle timer — the pointer left the dock
+        # when the confirm dialog took it — and it would close mid-wait here.
+        # Escape first, then the click that opens it also refreshes the list.
+        reopen_chat_history(page)
+        wait_until(lambda: page.locator(
+            ".chat-history-item", has_text="what should I pack for berlin").count() == 1)
+        page.locator(".chat-history-item",
+                     has_text="what should I pack for berlin").first.click()
+        page.wait_for_selector("#chat-input")
+        wait_until(lambda: page.locator(".chat-msg").count() == 3)
+
+        # This is an end-to-end test.
+        # A whole chat could always be deleted; one sentence inside it could not,
+        # so a pasted card number stayed in the record and in recall for good.
+        # The control is quiet until its turn is under the pointer — a delete
+        # button over every sentence would make the transcript read as a list of
+        # things to remove — so hovering is how it is really reached.
+        doomed_msg = page.locator(".chat-msg", has_text=blurted).first
+        doomed_msg.hover()
+        with page.expect_response("**/api/rag/chat/reindex") as reindexed:
+            doomed_msg.locator(".chat-msg-delete").click()
+        # The response, not merely the request: what has to be true is that the
+        # chunk left Chroma, and `pruned` is that fact rather than a proxy for it.
+        pruned = reindexed.value.json().get("pruned", 0) >= 1
+        left = wait_until(lambda: page.locator(".chat-msg").count() == 2)
+        check("messages: deleting one turn drops it from the transcript and the index",
+              left and indexed_seed and pruned
+              and page.locator(".chat-msg", has_text=blurted).count() == 0
+              # Gone from every live read, so recall_chat stops answering from
+              # it — the reindex above is what carries that into Chroma.
+              and all(m["content"] != blurted for m in api_chat_messages())
+              # And its neighbours are untouched: a delete reaches one turn.
+              and page.locator(".chat-msg").count() == 2
+              and [m["content"] for m in api_chat_trash()] == [blurted])
+
+        # This is an end-to-end test.
+        # The trash is what makes the first delete safe to press: hidden, listed
+        # with the chat it came out of, and one click from being back.
+        reopen_chat_history(page)
+        listed = wait_until(lambda: page.locator(".chat-trash-item").count() == 1)
+        trashed_row = page.locator(".chat-trash-item").first
+        says_where = "what should I pack for berlin" in trashed_row.inner_text()
+        with page.expect_response("**/api/rag/chat/reindex") as resynced:
+            trashed_row.locator(".chat-trash-restore").click()
+        # The index has to follow the record in both directions: sync only ever
+        # adds, which is exactly what a restore needs, and without this the turn
+        # would come back visible and permanently unrecallable.
+        reindexed_back = resynced.value.json().get("indexed", 0) >= 1
+        back = wait_until(lambda: page.locator(".chat-msg").count() == 3)
+        check("messages: the trash lists a deleted turn and restores it in place",
+              listed and says_where and back and reindexed_back
+              # Order is by createdAt, so it returns to the middle of the chat
+              # it was taken out of rather than to the end.
+              and [m.strip() for m in page.locator(".chat-text").all_inner_texts()]
+                  == ["what should I pack for berlin", blurted,
+                      "please do not paste that here"]
+              and api_chat_trash() == [])
+
+        # This is an end-to-end test.
+        # The second step, and the only one that destroys anything: the row
+        # leaves assistant.db for good. Confirmed through the in-app dialog, and
+        # reindexed, because a restore may have put the chunks back since.
+        page.locator(".chat-msg", has_text=blurted).first.hover()
+        page.locator(".chat-msg", has_text=blurted).first.locator(".chat-msg-delete").click()
+        wait_until(lambda: page.locator(".chat-msg").count() == 2)
+        reopen_chat_history(page)
+        wait_until(lambda: page.locator(".chat-trash-item").count() == 1)
+        page.locator(".chat-trash-item").first.locator(".chat-trash-purge").click()
+        page.wait_for_selector("#confirm-dialog[open]")
+        with page.expect_request("**/api/rag/chat/reindex"):
+            page.click("#confirm-ok")
+        # The dialog took the pointer out of the dock, so hold the panel open the
+        # way a reader would — otherwise an emptied list and a closed panel look
+        # identical, and this check would pass for the wrong reason.
+        page.locator(".chat-dock").hover()
+        emptied = wait_until(lambda: page.locator(".chat-history").count() == 1
+                             and page.locator(".chat-trash-item").count() == 0)
+        check("messages: delete permanently erases the row from the record",
+              emptied and api_chat_trash() == []
+              # Nothing left to restore anywhere: this is the one chat route
+              # that really erases, and the chat holding it survives it.
+              and all(m["content"] != blurted for m in api_chat_messages())
+              and any(s["id"] == "e2e-one-message" for s in api_chat_sessions()))
 
         # Leave a chat that holds a REAL, recorded, priced turn open. Every chat
         # this block made with a mocked stream has no receipt — the brain never
