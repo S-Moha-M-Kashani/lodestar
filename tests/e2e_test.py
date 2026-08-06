@@ -1909,34 +1909,54 @@ try:
 
         # This is an end-to-end test.
         dock, sheet_box = box(".chat-dock"), box(".assistant-sheet")
-        here, plus = box(".chat-current"), box("#chat-new")
-        check("dock: where you are and New chat stay in the margin, stacked",
-              dock and sheet_box and here and plus
+        here = box(".chat-current")
+        check("dock: the margin keeps the chat's name and nothing else",
+              dock and sheet_box and here
               and dock["x"] + dock["width"] <= sheet_box["x"] + 1
               and abs(dock["y"] - sheet_box["y"]) <= 8
-              and plus["y"] >= here["y"] + here["height"] - 1
-              # The ▾ is gone with the panel it opened: a control that no longer
-              # opens anything must not go on looking like one.
-              and page.locator(".chat-dock #chat-history-btn").count() == 0)
+              # Every control has left it. A margin holding one label is a label;
+              # a margin holding buttons is a second toolbar nobody looks at,
+              # which is how the chats panel went unfound in the first place.
+              and page.locator(".chat-dock button").count() == 0)
 
         # This is an end-to-end test.
-        # Both tools are header furniture now, and view-specific furniture at
-        # that — like the board's own search and filters, they belong to the
-        # screen they act on and must not sit there inert on the others.
-        hist, gear = box("#chat-history-btn"), box("#assistant-extras-btn")
-        theme = box("#theme-select")
-        in_header = (hist and gear and theme and sheet_box
-                     and hist["y"] + hist["height"] <= sheet_box["y"]
-                     and abs(hist["y"] - theme["y"]) <= 12
-                     and abs(gear["y"] - theme["y"]) <= 12)
+        # All four tools are header furniture now, in one row, left to right in
+        # the order you reach for them: search the record, list it, start a new
+        # chat, configure. View-specific, like the board's own search and
+        # filters — a gear for a screen you are not on is furniture that does
+        # nothing.
+        recall = box(".assistant-tools .chat-recall")
+        hist, plus = box("#chat-history-btn"), box("#chat-new")
+        gear, theme = box("#assistant-extras-btn"), box("#theme-select")
+        row = [recall, hist, plus, gear, theme]
+        in_header = (all(row) and sheet_box
+                     and all(b["y"] + b["height"] <= sheet_box["y"] for b in row)
+                     and all(abs(b["y"] - theme["y"]) <= 12 for b in row))
+        ordered = all(row[i]["x"] < row[i + 1]["x"] for i in range(len(row) - 1))
         page.click("[data-view='board']")
         page.wait_for_selector(".column")
-        away = (page.locator("#chat-history-btn").count() == 0
-                or not page.locator("#chat-history-btn").is_visible())
+        away = not page.locator(".assistant-tools").is_visible()
         page.click("[data-view='assistant']")
         page.wait_for_selector("#chat-input")
-        check("tools: History and the gear sit in the header, only on the Assistant",
-              in_header and away and page.locator("#chat-history-btn").is_visible())
+        check("tools: search, History, New chat and the gear sit in the header, in order",
+              in_header and ordered and away
+              and page.locator(".assistant-tools").is_visible())
+
+        # This is an end-to-end test.
+        # The gear drops a panel like the two beside it. It used to open inside
+        # the sheet, which put a settings drawer in the reading column and left
+        # the button that opened it somewhere else entirely.
+        page.click("#assistant-extras-btn")
+        page.wait_for_selector("#assistant-extras:not([hidden])")
+        drawer = box("#assistant-extras")
+        gear = box("#assistant-extras-btn")
+        dropped = (drawer and gear and sheet_box
+                   and drawer["y"] >= gear["y"] + gear["height"] - 1
+                   and drawer["y"] < sheet_box["y"] + 40)
+        page.mouse.click(700, 700)
+        shut = wait_until(lambda: page.locator("#assistant-extras[hidden]").count() == 1)
+        check("tools: the settings drop from the gear and shut on a click outside",
+              dropped and shut)
 
         # This is an end-to-end test.
         # Three ways out, because a panel dropped over the page is easy to walk
@@ -2498,10 +2518,10 @@ try:
 
         # This is an end-to-end test.
         # A model is chosen once and then left alone, so the panel is folded like
-        # the evidence strip under a reply rather than filling the rail with
+        # the evidence strip under a reply rather than filling the sheet with
         # controls nobody is using. Staying open is the load-bearing half:
-        # choosing a provider re-renders the rail, and a panel that refolded
-        # itself after every pick would be unusable.
+        # choosing a provider re-renders these controls, and a panel that
+        # refolded itself after every pick would be unusable.
         folded_first = not page.locator("#model-text").is_visible()
         open_models(page)
         unfolded = page.locator("#model-text").is_visible()
@@ -2509,6 +2529,11 @@ try:
         page.wait_for_selector(".board .column")
         page.locator('.view-switch button[data-view="assistant"]').click()
         page.wait_for_selector("#chat-input")
+        # The settings are a dropdown in the header now, so leaving the view
+        # dismisses the drawer the way a click anywhere else does. What has to
+        # survive that is the FOLD inside it — reopening the gear must not also
+        # refold the pickers.
+        open_extras(page)
         check("assistant: the models panel is folded until asked for, then stays open",
               folded_first and unfolded and page.locator("#model-text").is_visible())
 
@@ -2571,6 +2596,11 @@ try:
         check("assistant: the chosen provider rides along on the chat request",
               '"provider":"openrouter"' in (prov_req.value.post_data or "").replace(" ", ""))
         page.wait_for_selector(".chat-msg.assistant")
+        # Sending is a click in the conversation, which dismisses the settings
+        # dropdown like any other click outside it. Reopened rather than kept
+        # open: a panel that survived a click into the transcript would be a
+        # panel that never goes away.
+        open_extras(page)
         page.select_option("#model-provider", "ollama")
         check("assistant: switching back restores the local list and its default",
               option_values("#model-text") == [DEFAULT_TEXT, ALT_TEXT, THIRD_TEXT]
@@ -2605,6 +2635,7 @@ try:
         page.wait_for_function(
             f"document.querySelectorAll('.chat-msg.assistant').length >= {n_replies + 1}")
 
+        open_extras(page)   # sending dismissed the dropdown, as a click outside it does
         page.select_option("#model-text", ALT_TEXT)
         page.reload()
         page.wait_for_selector("#board")

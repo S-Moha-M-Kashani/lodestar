@@ -251,16 +251,23 @@
              the left of them: shown only while the Assistant is open. The
              panel is a sibling of the button so it can drop from under it. -->
         <div class="assistant-tools" hidden>
+          <div id="chat-recall-slot"></div>
           <button id="chat-history-btn" class="btn ghost chat-history-btn" aria-haspopup="true" aria-expanded="false" aria-controls="chat-history">History</button>
-          <button id="assistant-extras-btn" class="assistant-extras-btn" aria-label="Assistant settings" aria-expanded="false" aria-controls="assistant-extras">⚙</button>
+          <button id="chat-new" class="btn ghost chat-new" data-hint="New chat — a clean context, nothing carried over" aria-label="New chat">+</button>
+          <button id="assistant-extras-btn" class="assistant-extras-btn" aria-label="Assistant settings" aria-haspopup="true" aria-expanded="false" aria-controls="assistant-extras">⚙</button>
           <div id="chat-history-slot"></div>
+          <div id="assistant-extras-slot"></div>
         </div>
-        <select id="theme-select" aria-label="Color theme" title="Color theme">
-          <option value="light">Morning</option>
-          <option value="white">Day</option>
-          <option value="sepia">Dusk</option>
-          <option value="dark">Night</option>
-          <option value="star">Star</option>
+        <!-- The control says what it is, not only what is chosen. Shut, a
+             <select> shows its selected option and nothing else, so "Morning"
+             sat in the toolbar naming no control at all; the word rides in each
+             option instead, which is the one way a closed select can carry it. -->
+        <select id="theme-select" aria-label="Theme" title="Theme">
+          <option value="light">Theme: Morning</option>
+          <option value="white">Theme: Day</option>
+          <option value="sepia">Theme: Dusk</option>
+          <option value="dark">Theme: Night</option>
+          <option value="star">Theme: Star</option>
         </select>
       </div>
     </div>

@@ -3783,27 +3783,18 @@
     // on a wide window; with no margin to sit in it becomes an ordinary row here.
     sheet.appendChild(renderChatDock());
 
-    // Everything that is not the conversation lives behind one sign — the gear,
-    // which is in the app header now beside the theme picker. Its panel stays
-    // here, at the top of the sheet directly under the button that opens it. A
-    // rail beside the transcript cost it 300px and stood mostly empty (a model
-    // is chosen once and then left alone), so shut, which is how it starts, the
-    // conversation has the whole sheet.
-    const toolbar = document.createElement('div');
-    toolbar.className = 'assistant-toolbar';
-    toolbar.appendChild(renderRecallPanel());
+    // Nothing above the transcript but what this conversation cost. Searching
+    // the record, the chats, New chat and the settings are all in the app header
+    // now, in one row of controls — the sheet holds the conversation and the
+    // things that belong to it, and a row of furniture above every reply was
+    // exactly what made the assistant's own history hard to find.
     const cost = renderSessionCost();
-    if (cost) toolbar.appendChild(cost);
-    sheet.appendChild(toolbar);
-
-    const extras = document.createElement('div');
-    extras.id = 'assistant-extras';
-    extras.className = 'assistant-extras';
-    extras.hidden = !extrasOpen;
-    extras.appendChild(renderChatActions());
-    extras.appendChild(renderChatSettings());
-    sheet.appendChild(extras);
-
+    if (cost) {
+      const toolbar = document.createElement('div');
+      toolbar.className = 'assistant-toolbar';
+      toolbar.appendChild(cost);
+      sheet.appendChild(toolbar);
+    }
 
     // Anything waiting on the user shares one pinned strip directly under the
     // row above. Pinned because it used to scroll away: it is above the
@@ -4010,21 +4001,7 @@
     here.appendChild(label);
     here.title = current ? current.title : 'New chat';
 
-    const fresh = document.createElement('button');
-    fresh.type = 'button';
-    fresh.id = 'chat-new';
-    fresh.className = 'btn ghost chat-new';
-    fresh.textContent = '+';
-    fresh.dataset.hint = 'New chat — a clean context, nothing carried over';
-    fresh.setAttribute('aria-label', 'New chat');
-    fresh.addEventListener('click', () => {
-      // No confirmation: nothing is destroyed. The chat you were in is in the
-      // record and one click away in the panel above.
-      startNewChat();
-      announce('New chat');
-    });
-
-    wrap.append(here, fresh);
+    wrap.append(here);
     return wrap;
   }
 
@@ -4041,10 +4018,36 @@
     tools.hidden = view !== 'assistant';
     const btn = $('#chat-history-btn');
     if (btn) btn.setAttribute('aria-expanded', String(assistantState.historyOpen));
+    const gear = $('#assistant-extras-btn');
+    if (gear) gear.setAttribute('aria-expanded', String(extrasOpen));
+    // Searching past conversations is the leftmost of the group: it acts on the
+    // record the two beside it list and start, and it is the one you reach for
+    // while reading rather than while administering.
+    const recall = $('#chat-recall-slot');
+    if (recall) {
+      recall.innerHTML = '';
+      if (view === 'assistant') recall.appendChild(renderRecallPanel());
+    }
     const slot = $('#chat-history-slot');
-    if (!slot) return;
-    slot.innerHTML = '';
-    if (view === 'assistant' && assistantState.historyOpen) slot.appendChild(renderChatHistory());
+    if (slot) {
+      slot.innerHTML = '';
+      if (view === 'assistant' && assistantState.historyOpen) slot.appendChild(renderChatHistory());
+    }
+    // The settings drop from the gear the way the chats drop from History —
+    // both are things you open, look at, and shut again. Built even while shut,
+    // because setExtrasOpen only flips `hidden`: it must not rebuild the model
+    // pickers, which would throw away a half-typed choice on every toggle.
+    const drawer = $('#assistant-extras-slot');
+    if (!drawer) return;
+    drawer.innerHTML = '';
+    if (view !== 'assistant') return;
+    const extras = document.createElement('div');
+    extras.id = 'assistant-extras';
+    extras.className = 'assistant-extras';
+    extras.hidden = !extrasOpen;
+    extras.appendChild(renderChatActions());
+    extras.appendChild(renderChatSettings());
+    drawer.appendChild(extras);
   }
 
   /** The chats, grouped by day, newest first. A panel across the sheet rather
@@ -4345,11 +4348,15 @@
   // on the sheet depends on whether this drawer is open.
   function setExtrasOpen(open) {
     extrasOpen = open;
-    const panel = $('#assistant-extras');
+    // Each half applied on its own, never behind a guard on both. The button is
+    // static markup and the panel exists only on the Assistant, so a shared
+    // early return left the button claiming "expanded" about a panel that had
+    // been torn down when the view changed — and the next visit found the gear
+    // saying open over a drawer that was shut.
     const btn = $('#assistant-extras-btn');
-    if (!panel || !btn) return;
-    panel.hidden = !open;
-    btn.setAttribute('aria-expanded', String(open));
+    if (btn) btn.setAttribute('aria-expanded', String(open));
+    const panel = $('#assistant-extras');
+    if (panel) panel.hidden = !open;
   }
 
   // Looked up rather than closed over: the rail is rebuilt on every render, so
@@ -4400,8 +4407,12 @@
       event.preventDefault();
       recallChat(input.value.trim());
     });
-    box.appendChild(form);
-    box.appendChild(renderRecallResults());
+    // The body rides in one box so the header can drop it as a panel from under
+    // the summary. Two loose siblings could not be positioned as one thing.
+    const drop = document.createElement('div');
+    drop.className = 'chat-recall-drop';
+    drop.append(form, renderRecallResults());
+    box.appendChild(drop);
 
     // render() rebuilds the whole sheet, and a streaming reply repaints it many
     // times a second — so without this, typing here while a reply arrives loses
@@ -5840,6 +5851,12 @@
     if (assistantState.historyOpen) { refreshChatSessions(); refreshChatTrash(); }
     renderAssistantTools();
   });
+  $('#chat-new').addEventListener('click', () => {
+    // No confirmation: nothing is destroyed. The chat you were in is in the
+    // record and one click away under History beside it.
+    startNewChat();
+    announce('New chat');
+  });
   $('#assistant-extras-btn').addEventListener('click', () => setExtrasOpen(!extrasOpen));
   // The panel's third way out. On the tools element, which owns both the button
   // and the panel, so crossing from one to the other is never "left".
@@ -5856,13 +5873,26 @@
     // without this the OK that applies a rename is also what closes the list it
     // was applied in — the panel vanished the instant the work was confirmed.
     if (e.target.closest('dialog')) return;
-    if (assistantState.historyOpen && !e.target.closest('.assistant-tools')) {
-      closeChatHistory();
-    }
+    const outside = !e.target.closest('.assistant-tools');
+    if (assistantState.historyOpen && outside) closeChatHistory();
+    // The settings drawer is a dropdown now and has to shut like one. A click
+    // INSIDE it is use, not dismissal — it holds the model pickers, the chat
+    // menu and the export controls, and a panel that closed under the hand
+    // reaching into it would be unusable.
+    if (extrasOpen && outside) setExtrasOpen(false);
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && assistantState.historyOpen) {
       closeChatHistory({ focusBack: true });
+    }
+  });
+  document.addEventListener('keydown', (e) => {
+    // Only when the menu inside it is already shut, so one Escape closes one
+    // thing: the chat menu's own handler below has the inner layer.
+    const inner = $('#chat-menu-panel');
+    if (e.key === 'Escape' && extrasOpen && (!inner || inner.hidden)) {
+      setExtrasOpen(false);
+      $('#assistant-extras-btn')?.focus();
     }
   });
   document.addEventListener('keydown', (e) => {
