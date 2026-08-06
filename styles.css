@@ -2293,6 +2293,14 @@ body[data-view="assistant"] .app-footer { display: none; }
 [data-theme="star"] #board,
 [data-theme="star"] .app-footer,
 [data-theme="star"] #habit-banner-slot { position: relative; z-index: 1; }
+/* The header outranks the board, because the header is what holds the panels
+   that drop OVER it. At equal z-index the later element in the DOM wins, so
+   #board did, and no z-index inside the header could beat that: a stacking
+   context is a ceiling for everything under it, so the History panel's own 60
+   counted only among its siblings and it painted below the assistant sheet.
+   Same ceiling sits over the board's Menu panel; it goes unnoticed there only
+   for as long as nothing on the board is painted under it. */
+[data-theme="star"] .app-header { z-index: 2; }
 
 /* The static field: three sizes of dot at three densities, so the sky has depth
    without 300 elements in the DOM. */

@@ -1844,17 +1844,32 @@ try:
         # other panel in this app that sits on a surface — .menu-panel, .plot-tip
         # — carries --card, --card-line and a lift; this asserts the panel's own
         # paint rather than a screenshot, on the themes where it actually failed.
-        surfaces = {}
+        surfaces, on_top = {}, {}
         for sky in ("star", "dark"):
             select_theme(sky)
             page.wait_for_timeout(60)
             open_chat_history(page)
             surfaces[sky] = (css(".chat-history", "backgroundColor"),
                              css(".chat-history", "boxShadow"))
+            # And it has to be the thing you are looking at. Asked of the browser
+            # rather than of z-index: the panel's own 60 is meaningless if an
+            # ancestor traps it, which is exactly what the star sky did — the
+            # header and #board both take z-index 1 there to clear the sky, and
+            # #board is later in the DOM, so the panel painted UNDER the sheet.
+            on_top[sky] = page.evaluate("""() => {
+                const p = document.querySelector('.chat-history');
+                if (!p) return false;
+                const b = p.getBoundingClientRect();
+                const hit = document.elementFromPoint(b.x + 20, b.y + 20);
+                return !!hit && p.contains(hit);
+            }""")
         select_theme("light")
         check("sessions: the history panel paints its own surface on the dark skies",
               all(bg not in ("rgba(0, 0, 0, 0)", "transparent") and shadow != "none"
                   for bg, shadow in surfaces.values()))
+        # This is an end-to-end test.
+        check("sessions: the history panel is on top of the sheet, on every sky",
+              all(on_top.values()))
 
         # This is an end-to-end test.
         # The hint has to be ours. Both switcher buttons used the native `title`
