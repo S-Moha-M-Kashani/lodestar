@@ -149,6 +149,20 @@ def open_chat_history(page):
     page.wait_for_selector(".chat-history")
 
 
+def reopen_chat_history(page):
+    """Open the history panel from scratch, however it was left.
+
+    `open_chat_history` leaves an already-open panel alone, and an inherited one
+    may be seconds into its idle countdown — the pointer leaves the dock every
+    time a dialog takes it — so a wait that follows can watch the panel close
+    under it. Closing first means the click that reopens it is also the one that
+    asks the server for the list, and it puts focus back inside the dock, which
+    is what keeps the panel up while a check reads it."""
+    page.keyboard.press("Escape")
+    wait_until(lambda: page.locator(".chat-history").count() == 0)
+    open_chat_history(page)
+
+
 def carried_run(carried, seeded, asked):
     """The positions of the seeded messages a request carried, in order.
 
@@ -322,6 +336,23 @@ def api_chat_sessions():
 def api_chat_messages():
     with urllib.request.urlopen(URL + "/api/chat/messages", timeout=5) as r:
         return json.loads(r.read())["messages"]
+
+
+def api_chat_trash():
+    with urllib.request.urlopen(URL + "/api/chat/trash", timeout=5) as r:
+        return json.loads(r.read())["messages"]
+
+
+def api_chat_reindex():
+    """Sync the chat index with the record, and report what moved.
+
+    Seeding writes straight to assistant.db, so the brain has not indexed those
+    rows — and a delete cannot be shown to reach Chroma if the chunk was never
+    there. This is the call that puts them in, and its {indexed, pruned} is the
+    only view a browser-level test gets of the index."""
+    req = urllib.request.Request(URL + "/api/rag/chat/reindex", data=b"", method="POST")
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return json.loads(r.read())
 
 
 # Synthetic microphone: getUserMedia returns a generated tone instead of asking
@@ -1805,6 +1836,162 @@ try:
               and sent3[0]["messages"][-1]["content"] == "picking this back up")
         page.unroute("**/api/agent/chat/stream")
 
+        # This is an end-to-end test.
+        # The panel has to paint its own surface. It shipped with a --line border
+        # and nothing else, and on the two dark skies that border is ~1.2:1
+        # against the translucent sheet: the container had no visible edge, so a
+        # list of chats read as loose text lying over the conversation. Every
+        # other panel in this app that sits on a surface — .menu-panel, .plot-tip
+        # — carries --card, --card-line and a lift; this asserts the panel's own
+        # paint rather than a screenshot, on the themes where it actually failed.
+        surfaces, on_top = {}, {}
+        for sky in ("star", "dark"):
+            select_theme(sky)
+            page.wait_for_timeout(60)
+            open_chat_history(page)
+            surfaces[sky] = (css(".chat-history", "backgroundColor"),
+                             css(".chat-history", "boxShadow"))
+            # And it has to be the thing you are looking at. Asked of the browser
+            # rather than of z-index: the panel's own 60 is meaningless if an
+            # ancestor traps it, which is exactly what the star sky did — the
+            # header and #board both take z-index 1 there to clear the sky, and
+            # #board is later in the DOM, so the panel painted UNDER the sheet.
+            on_top[sky] = page.evaluate("""() => {
+                const p = document.querySelector('.chat-history');
+                if (!p) return false;
+                const b = p.getBoundingClientRect();
+                const hit = document.elementFromPoint(b.x + 20, b.y + 20);
+                return !!hit && p.contains(hit);
+            }""")
+        select_theme("light")
+        check("sessions: the history panel paints its own surface on the dark skies",
+              all(bg not in ("rgba(0, 0, 0, 0)", "transparent") and shadow != "none"
+                  for bg, shadow in surfaces.values()))
+        # This is an end-to-end test.
+        check("sessions: the history panel is on top of the sheet, on every sky",
+              all(on_top.values()))
+
+        # This is an end-to-end test.
+        # The hint has to be ours. Both switcher buttons used the native `title`
+        # attribute, and its show delay belongs to the browser — around a second,
+        # unreachable from CSS or JS — so the hint arrived after the pointer had
+        # already moved on. Asserted through the pseudo-element the replacement
+        # paints, plus the absence of the attribute that raced it; the accessible
+        # name has to survive, because a decorative hint is not a label.
+        page.hover("#chat-new")
+
+        def hint():
+            return page.evaluate("""() => {
+                const s = getComputedStyle(document.getElementById('chat-new'),
+                                           '::after');
+                return [s.content, s.opacity];
+            }""")
+
+        shown = wait_until(lambda: float(hint()[1]) > 0.9, timeout=0.4)
+        check("sessions: the New chat hint appears at once, not on the browser's delay",
+              shown and "New chat" in hint()[0]
+              and not page.get_attribute("#chat-new", "title")
+              and not page.get_attribute("#chat-history-btn", "title")
+              and page.get_attribute("#chat-new", "aria-label") == "New chat")
+
+        # ---- The dock, and the assistant's tools in the header -----------------
+        # History and the settings gear live in the app header beside the theme
+        # picker. They were inside the sheet — the gear in the search row, the
+        # chats behind a ▾ on a button hanging in the page margin — and the
+        # person who asked for the trash could not find where deleted messages
+        # had gone. What stays in the margin is where you are and New chat: a
+        # label, because the list it used to open is now in the header.
+        def box(sel):
+            return page.locator(sel).bounding_box()
+
+        page.set_viewport_size({"width": 1440, "height": 900})
+        page.wait_for_timeout(120)
+
+        # This is an end-to-end test.
+        dock, sheet_box = box(".chat-dock"), box(".assistant-sheet")
+        here = box(".chat-current")
+        check("dock: the margin keeps the chat's name and nothing else",
+              dock and sheet_box and here
+              and dock["x"] + dock["width"] <= sheet_box["x"] + 1
+              and abs(dock["y"] - sheet_box["y"]) <= 8
+              # Every control has left it. A margin holding one label is a label;
+              # a margin holding buttons is a second toolbar nobody looks at,
+              # which is how the chats panel went unfound in the first place.
+              and page.locator(".chat-dock button").count() == 0)
+
+        # This is an end-to-end test.
+        # All four tools are header furniture now, in one row, left to right in
+        # the order you reach for them: search the record, list it, start a new
+        # chat, configure. View-specific, like the board's own search and
+        # filters — a gear for a screen you are not on is furniture that does
+        # nothing.
+        recall = box(".assistant-tools .chat-recall")
+        hist, plus = box("#chat-history-btn"), box("#chat-new")
+        gear, theme = box("#assistant-extras-btn"), box("#theme-select")
+        row = [recall, hist, plus, gear, theme]
+        in_header = (all(row) and sheet_box
+                     and all(b["y"] + b["height"] <= sheet_box["y"] for b in row)
+                     and all(abs(b["y"] - theme["y"]) <= 12 for b in row))
+        ordered = all(row[i]["x"] < row[i + 1]["x"] for i in range(len(row) - 1))
+        page.click("[data-view='board']")
+        page.wait_for_selector(".column")
+        away = not page.locator(".assistant-tools").is_visible()
+        page.click("[data-view='assistant']")
+        page.wait_for_selector("#chat-input")
+        check("tools: search, History, New chat and the gear sit in the header, in order",
+              in_header and ordered and away
+              and page.locator(".assistant-tools").is_visible())
+
+        # This is an end-to-end test.
+        # The gear drops a panel like the two beside it. It used to open inside
+        # the sheet, which put a settings drawer in the reading column and left
+        # the button that opened it somewhere else entirely.
+        page.click("#assistant-extras-btn")
+        page.wait_for_selector("#assistant-extras:not([hidden])")
+        drawer = box("#assistant-extras")
+        gear = box("#assistant-extras-btn")
+        dropped = (drawer and gear and sheet_box
+                   and drawer["y"] >= gear["y"] + gear["height"] - 1
+                   and drawer["y"] < sheet_box["y"] + 40)
+        page.mouse.click(700, 700)
+        shut = wait_until(lambda: page.locator("#assistant-extras[hidden]").count() == 1)
+        check("tools: the settings drop from the gear and shut on a click outside",
+              dropped and shut)
+
+        # This is an end-to-end test.
+        # Three ways out, because a panel dropped over the page is easy to walk
+        # away from and one left open covers what it opened over.
+        open_chat_history(page)
+        hist = box("#chat-history-btn")
+        # Polled, not sampled once: the panel is painted on the click and again
+        # when the chats and the trash come back from the server, and a box read
+        # in the instant between the two replacements is None.
+        opened = wait_until(lambda: bool(box(".chat-history"))
+                            and box(".chat-history")["y"] >= hist["y"])
+        page.keyboard.press("Escape")
+        by_escape = wait_until(lambda: page.locator(".chat-history").count() == 0)
+        open_chat_history(page)
+        page.mouse.click(700, 700)           # the transcript, not the tools
+        by_click = wait_until(lambda: page.locator(".chat-history").count() == 0)
+        open_chat_history(page)
+        page.mouse.move(700, 820)            # pointer walks away and stays away
+        by_idle = wait_until(lambda: page.locator(".chat-history").count() == 0,
+                             timeout=9)
+        check("tools: the History panel drops from its button and closes when unused",
+              opened and by_escape and by_click and by_idle)
+
+        # This is an end-to-end test.
+        # Below the width where a margin exists, the dock tucks back inside the
+        # sheet: controls hanging off the left of the window would be worse than
+        # controls in a crowded row.
+        page.set_viewport_size({"width": 1200, "height": 800})
+        page.wait_for_timeout(160)
+        tucked, sheet_narrow = box(".chat-dock"), box(".assistant-sheet")
+        check("dock: with no margin to sit in, the dock tucks inside the sheet",
+              tucked and sheet_narrow and tucked["x"] >= sheet_narrow["x"] - 1)
+        page.set_viewport_size({"width": 1440, "height": 900})
+        page.wait_for_timeout(120)
+
         # ---- The topic-change nudge -------------------------------------------
         # Signal one is pure pattern matching, so it fires with BRAIN_EMBEDDER
         # =fake and needs no test-only override: typing a bare greeting into a
@@ -1884,6 +2071,12 @@ try:
         # A derived title is a starting point, not a name. Renaming goes through
         # the in-app prompt dialog — never a native one, which the run-wide
         # no-native-dialogs check also covers.
+        # Hover the row first, the way the control is actually reached: it is
+        # collapsed to no width until its row is under the pointer or holds focus,
+        # so that a 320px panel spends its width on chat titles rather than on two
+        # buttons nobody can see. A click without the hover is a click on
+        # something invisible, which is not an interaction this app offers.
+        doomed.hover()
         doomed.locator(".chat-history-rename").click()
         page.wait_for_selector("#prompt-dialog[open]")
         page.fill("#prompt-input", "Doomed chat, renamed")
@@ -1899,8 +2092,10 @@ try:
         # only ever adds, so without the reindex a deleted chat would go on
         # answering recall_chat — the worst version of this feature. The request is
         # the observable half of that; ChatStore.prune's own test owns the rest.
-        page.locator(".chat-history-item", has_text="Doomed chat, renamed") \
-            .first.locator(".chat-history-delete").click()
+        renamed_row = page.locator(".chat-history-item",
+                                   has_text="Doomed chat, renamed").first
+        renamed_row.hover()
+        renamed_row.locator(".chat-history-delete").click()
         page.wait_for_selector("#confirm-dialog[open]")
         with page.expect_request("**/api/rag/chat/reindex"):
             page.click("#confirm-ok")
@@ -1914,6 +2109,105 @@ try:
               # them, and why this asserts absence rather than presence.
               and all("a chat that exists to be deleted" != m["content"]
                       for m in api_chat_messages()))
+
+        # ---- Deleting one message, and the trash behind it --------------------
+        # Its own seeded chat again: this block deletes a turn out of the middle
+        # of a transcript, and doing that to a conversation a later check reads
+        # would make the two blocks depend on each other's order.
+        blurted = "my card number is 4111 1111 1111 1111"
+        api_chat_append("e2e-one-message", [
+            {"role": "user", "content": "what should I pack for berlin"},
+            {"role": "user", "content": blurted},
+            {"role": "assistant", "content": "please do not paste that here"},
+        ])
+        # Indexed first, or the delete below could not be shown to reach Chroma:
+        # a chunk that was never there cannot be pruned, and the check would
+        # pass on an index that had simply never heard of the message.
+        indexed_seed = api_chat_reindex()["indexed"] >= 3
+        # Opened fresh, not inherited: the panel left over from the block above
+        # was already counting down its idle timer — the pointer left the dock
+        # when the confirm dialog took it — and it would close mid-wait here.
+        # Escape first, then the click that opens it also refreshes the list.
+        reopen_chat_history(page)
+        wait_until(lambda: page.locator(
+            ".chat-history-item", has_text="what should I pack for berlin").count() == 1)
+        page.locator(".chat-history-item",
+                     has_text="what should I pack for berlin").first.click()
+        page.wait_for_selector("#chat-input")
+        wait_until(lambda: page.locator(".chat-msg").count() == 3)
+
+        # This is an end-to-end test.
+        # A whole chat could always be deleted; one sentence inside it could not,
+        # so a pasted card number stayed in the record and in recall for good.
+        # The control is quiet until its turn is under the pointer — a delete
+        # button over every sentence would make the transcript read as a list of
+        # things to remove — so hovering is how it is really reached.
+        doomed_msg = page.locator(".chat-msg", has_text=blurted).first
+        doomed_msg.hover()
+        with page.expect_response("**/api/rag/chat/reindex") as reindexed:
+            doomed_msg.locator(".chat-msg-delete").click()
+        # The response, not merely the request: what has to be true is that the
+        # chunk left Chroma, and `pruned` is that fact rather than a proxy for it.
+        pruned = reindexed.value.json().get("pruned", 0) >= 1
+        left = wait_until(lambda: page.locator(".chat-msg").count() == 2)
+        check("messages: deleting one turn drops it from the transcript and the index",
+              left and indexed_seed and pruned
+              and page.locator(".chat-msg", has_text=blurted).count() == 0
+              # Gone from every live read, so recall_chat stops answering from
+              # it — the reindex above is what carries that into Chroma.
+              and all(m["content"] != blurted for m in api_chat_messages())
+              # And its neighbours are untouched: a delete reaches one turn.
+              and page.locator(".chat-msg").count() == 2
+              and [m["content"] for m in api_chat_trash()] == [blurted])
+
+        # This is an end-to-end test.
+        # The trash is what makes the first delete safe to press: hidden, listed
+        # with the chat it came out of, and one click from being back.
+        reopen_chat_history(page)
+        listed = wait_until(lambda: page.locator(".chat-trash-item").count() == 1)
+        trashed_row = page.locator(".chat-trash-item").first
+        says_where = "what should I pack for berlin" in trashed_row.inner_text()
+        with page.expect_response("**/api/rag/chat/reindex") as resynced:
+            trashed_row.locator(".chat-trash-restore").click()
+        # The index has to follow the record in both directions: sync only ever
+        # adds, which is exactly what a restore needs, and without this the turn
+        # would come back visible and permanently unrecallable.
+        reindexed_back = resynced.value.json().get("indexed", 0) >= 1
+        back = wait_until(lambda: page.locator(".chat-msg").count() == 3)
+        check("messages: the trash lists a deleted turn and restores it in place",
+              listed and says_where and back and reindexed_back
+              # Order is by createdAt, so it returns to the middle of the chat
+              # it was taken out of rather than to the end.
+              and [m.strip() for m in page.locator(".chat-text").all_inner_texts()]
+                  == ["what should I pack for berlin", blurted,
+                      "please do not paste that here"]
+              and api_chat_trash() == [])
+
+        # This is an end-to-end test.
+        # The second step, and the only one that destroys anything: the row
+        # leaves assistant.db for good. Confirmed through the in-app dialog, and
+        # reindexed, because a restore may have put the chunks back since.
+        page.locator(".chat-msg", has_text=blurted).first.hover()
+        page.locator(".chat-msg", has_text=blurted).first.locator(".chat-msg-delete").click()
+        wait_until(lambda: page.locator(".chat-msg").count() == 2)
+        reopen_chat_history(page)
+        wait_until(lambda: page.locator(".chat-trash-item").count() == 1)
+        page.locator(".chat-trash-item").first.locator(".chat-trash-purge").click()
+        page.wait_for_selector("#confirm-dialog[open]")
+        with page.expect_request("**/api/rag/chat/reindex"):
+            page.click("#confirm-ok")
+        # The dialog took the pointer out of the dock, so hold the panel open the
+        # way a reader would — otherwise an emptied list and a closed panel look
+        # identical, and this check would pass for the wrong reason.
+        page.locator(".chat-dock").hover()
+        emptied = wait_until(lambda: page.locator(".chat-history").count() == 1
+                             and page.locator(".chat-trash-item").count() == 0)
+        check("messages: delete permanently erases the row from the record",
+              emptied and api_chat_trash() == []
+              # Nothing left to restore anywhere: this is the one chat route
+              # that really erases, and the chat holding it survives it.
+              and all(m["content"] != blurted for m in api_chat_messages())
+              and any(s["id"] == "e2e-one-message" for s in api_chat_sessions()))
 
         # Leave a chat that holds a REAL, recorded, priced turn open. Every chat
         # this block made with a mocked stream has no receipt — the brain never
@@ -2224,10 +2518,10 @@ try:
 
         # This is an end-to-end test.
         # A model is chosen once and then left alone, so the panel is folded like
-        # the evidence strip under a reply rather than filling the rail with
+        # the evidence strip under a reply rather than filling the sheet with
         # controls nobody is using. Staying open is the load-bearing half:
-        # choosing a provider re-renders the rail, and a panel that refolded
-        # itself after every pick would be unusable.
+        # choosing a provider re-renders these controls, and a panel that
+        # refolded itself after every pick would be unusable.
         folded_first = not page.locator("#model-text").is_visible()
         open_models(page)
         unfolded = page.locator("#model-text").is_visible()
@@ -2235,6 +2529,11 @@ try:
         page.wait_for_selector(".board .column")
         page.locator('.view-switch button[data-view="assistant"]').click()
         page.wait_for_selector("#chat-input")
+        # The settings are a dropdown in the header now, so leaving the view
+        # dismisses the drawer the way a click anywhere else does. What has to
+        # survive that is the FOLD inside it — reopening the gear must not also
+        # refold the pickers.
+        open_extras(page)
         check("assistant: the models panel is folded until asked for, then stays open",
               folded_first and unfolded and page.locator("#model-text").is_visible())
 
@@ -2297,6 +2596,11 @@ try:
         check("assistant: the chosen provider rides along on the chat request",
               '"provider":"openrouter"' in (prov_req.value.post_data or "").replace(" ", ""))
         page.wait_for_selector(".chat-msg.assistant")
+        # Sending is a click in the conversation, which dismisses the settings
+        # dropdown like any other click outside it. Reopened rather than kept
+        # open: a panel that survived a click into the transcript would be a
+        # panel that never goes away.
+        open_extras(page)
         page.select_option("#model-provider", "ollama")
         check("assistant: switching back restores the local list and its default",
               option_values("#model-text") == [DEFAULT_TEXT, ALT_TEXT, THIRD_TEXT]
@@ -2331,6 +2635,7 @@ try:
         page.wait_for_function(
             f"document.querySelectorAll('.chat-msg.assistant').length >= {n_replies + 1}")
 
+        open_extras(page)   # sending dismissed the dropdown, as a click outside it does
         page.select_option("#model-text", ALT_TEXT)
         page.reload()
         page.wait_for_selector("#board")

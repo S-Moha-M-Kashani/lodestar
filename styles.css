@@ -2254,6 +2254,8 @@ body[data-view="assistant"] .app-footer { display: none; }
   border-radius: var(--radius);
   box-shadow: var(--shadow-card);
   padding: 16px;
+  /* The chat dock hangs off the outside of this edge. */
+  position: relative;
 }
 /* The sky is a photograph, not paper: --grid alone leaves the gradients in
    place, so the image is dropped outright the way Day does it. */
@@ -2291,6 +2293,14 @@ body[data-view="assistant"] .app-footer { display: none; }
 [data-theme="star"] #board,
 [data-theme="star"] .app-footer,
 [data-theme="star"] #habit-banner-slot { position: relative; z-index: 1; }
+/* The header outranks the board, because the header is what holds the panels
+   that drop OVER it. At equal z-index the later element in the DOM wins, so
+   #board did, and no z-index inside the header could beat that: a stacking
+   context is a ceiling for everything under it, so the History panel's own 60
+   counted only among its siblings and it painted below the assistant sheet.
+   Same ceiling sits over the board's Menu panel; it goes unnoticed there only
+   for as long as nothing on the board is painted under it. */
+[data-theme="star"] .app-header { z-index: 2; }
 
 /* The static field: three sizes of dot at three densities, so the sky has depth
    without 300 elements in the DOM. */
@@ -2431,14 +2441,32 @@ body[data-view="assistant"] .app-footer { display: none; }
   color: var(--ink);
   border-color: var(--ink-soft);
 }
+/* The settings drawer. A dropdown from the gear in the header, like the chats
+   from History beside it: both are things you open, read and shut again, and
+   the pair reads as one row of controls rather than as two different kinds of
+   thing. It carries a panel's own surface because it now floats over the page
+   instead of sitting in the sheet's flow. */
 .assistant-extras {
+  position: absolute;
+  top: calc(100% + 6px);
+  inset-inline-end: 0;
+  z-index: 60;
+  width: min(520px, 92vw);
+  max-height: 70vh;
+  overflow-y: auto;
+  /* Stacked, not wrapped: side by side in a 520px panel the two blocks left the
+     lab and the chat menu in a narrow column with the whole models fold beside
+     them, and half the panel empty under the buttons. */
   display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  gap: 8px 12px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
   padding: 10px 12px;
-  border: 1px solid var(--line);
+  background: var(--card);
+  border: 1px solid var(--card-line);
   border-radius: var(--radius);
+  box-shadow: var(--shadow-lift);
+  text-align: start;
 }
 /* display:flex would otherwise defeat the [hidden] attribute */
 .assistant-extras[hidden] { display: none; }
@@ -2674,6 +2702,7 @@ body[data-view="assistant"] .app-footer { display: none; }
   padding: 4px 2px;
 }
 .chat-msg {
+  position: relative;
   padding: 10px 14px;
   border: 1px solid var(--card-line);
   border-radius: var(--radius);
@@ -2682,6 +2711,35 @@ body[data-view="assistant"] .app-footer { display: none; }
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+/* Strike one turn out of the record. Quiet until the turn is under the pointer
+   or the button is tabbed to: a delete control standing over every sentence
+   would make the transcript read as a list of things to remove. Transparent
+   rather than collapsed — unlike the chat-history rows, nothing here is
+   competing for the width, and the bubble's own corner is where it belongs. */
+.chat-msg-delete {
+  position: absolute;
+  top: 2px;
+  inset-inline-end: 4px;
+  /* The bubble's own paper behind it: the control is over the first line of
+     text, and a long line runs right under it. `inherit` rather than a named
+     token so a user bubble and a reply each keep their own ground. */
+  background: inherit;
+  border-radius: var(--radius);
+  border: 0;
+  padding: 0 4px;
+  font: inherit;
+  font-size: 0.9rem;
+  line-height: 1.2;
+  color: var(--ink-soft);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.chat-msg:hover .chat-msg-delete,
+.chat-msg:focus-within .chat-msg-delete,
+.chat-msg-delete:focus-visible { opacity: 1; }
+.chat-msg-delete:hover { color: var(--danger); }
+@media (prefers-reduced-motion: reduce) { .chat-msg-delete { transition: none; } }
 /* What was asked is a note in the margin; the answer is the entry. So the
    question stays short and right-hung, and the reply takes the whole sheet —
    its content is card rows, which want the width. */
@@ -2717,14 +2775,126 @@ body[data-view="assistant"] .app-footer { display: none; }
   gap: 4px;
   align-self: center;
 }
-.chat-history-btn {
+/* The dock — the chat you are in and New chat under it, in the page margin off
+   the sheet's top-left corner. Out of the sheet because in the toolbar row they
+   were two more buttons among five and went unnoticed; stacked because the pair
+   reads as one control that way. 88px + a 6px gap is what the margin affords at
+   1440px, the narrowest window that still has one. */
+.chat-dock {
+  position: absolute;
+  top: 0;
+  inset-inline-end: calc(100% + 6px);
+  z-index: 30;
+  width: 88px;
+}
+.chat-dock .chat-switcher { flex-direction: column; align-items: stretch; gap: 5px; }
+.chat-dock .chat-current { width: 100%; }
+
+/* The Assistant's two header tools, and the panel one of them drops. Anchored
+   to the tools rather than to the page so the list hangs under the button that
+   opened it; end-aligned because the button is near the window's right edge and
+   a 320px panel anchored at its start would run off it. */
+.assistant-tools {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+/* `display: flex` outranks the UA's [hidden] rule, so without this the tools
+   would stay on screen on every other view — hidden in the markup and visible
+   on the page is the worst of both. */
+.assistant-tools[hidden] { display: none; }
+.assistant-tools .chat-history {
+  position: absolute;
+  top: calc(100% + 6px);
+  inset-inline-end: 0;
+  width: min(320px, 92vw);
+  max-height: 62vh;
+  z-index: 60;
+  animation: chat-history-drop 150ms ease-out both;
+}
+@keyframes chat-history-drop {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .assistant-tools .chat-history { animation: none; }
+}
+
+/* No margin to hang in: an ordinary row at the top of the sheet instead.
+   Controls half off the window would be worse than controls in a crowded row.
+   1427px is where (viewport - 1240px sheet) / 2 stops clearing 88 + 6. */
+@media (max-width: 1427px) {
+  .chat-dock { position: static; width: auto; }
+  .chat-dock .chat-switcher { flex-direction: row; align-items: center; }
+  .chat-dock .chat-current { width: auto; }
+}
+
+.chat-history-btn { font-size: 0.78rem; }
+/* Where you are, not a control: it opened the chats panel until that moved to
+   the header, and a label that still looked like a button was the version of
+   this nobody could find their history in. */
+.chat-current {
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+  padding: 4px 6px;
+  min-width: 0;
+}
+/* The title is clipped, never the button: an ellipsis on the button itself also
+   clips the hint below it, which is a pseudo-element of the same box. */
+/* Two lines in the 88px margin, not one: at one line a chat called "what should
+   I pack for berlin" reads "what shoul…", which names nothing. Clamped rather
+   than free-flowing so a pasted paragraph cannot push New chat down the page. */
+.chat-history-label {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   max-width: 22ch;
   overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-size: 0.78rem;
+  overflow-wrap: anywhere;
 }
 .chat-new { font-size: 1rem; line-height: 1; padding-inline: 9px; }
+
+/* Our own hint, because the native `title` attribute's show delay belongs to the
+   browser — about a second, unreachable from here — and a hint that arrives
+   after the pointer has moved on is not a hint. Same surface as every other
+   floating thing; `aria-label` remains the accessible name, so this is
+   decoration a screen reader never has to read. */
+.chat-switcher [data-hint],
+.assistant-tools [data-hint] { position: relative; }
+.chat-switcher [data-hint]::after,
+.assistant-tools [data-hint]::after {
+  content: attr(data-hint);
+  position: absolute;
+  top: calc(100% + 6px);
+  inset-inline-end: 0;
+  z-index: 45;
+  width: max-content;
+  max-width: 30ch;
+  padding: 5px 8px;
+  background: var(--card);
+  border: 1px solid var(--card-line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lift);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.02em;
+  white-space: normal;
+  text-align: start;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 90ms ease 120ms;
+}
+.chat-switcher [data-hint]:hover::after,
+.chat-switcher [data-hint]:focus-visible::after,
+.assistant-tools [data-hint]:hover::after,
+.assistant-tools [data-hint]:focus-visible::after { opacity: 1; }
+@media (prefers-reduced-motion: reduce) {
+  .chat-switcher [data-hint]::after,
+  .assistant-tools [data-hint]::after { transition: none; }
+}
 
 /* The chats. A panel across the sheet, never a rail beside the transcript — a
    rail was measured costing the conversation 300px and stood mostly empty. Its
@@ -2736,8 +2906,15 @@ body[data-view="assistant"] .app-footer { display: none; }
   max-height: 40vh;
   overflow-y: auto;
   padding: 8px 10px;
-  border: 1px solid var(--line);
+  /* The same surface every other panel in this app stands on (.menu-panel,
+     .plot-tip). It shipped with a --line border and nothing else, which on the
+     two dark skies is ~1.2:1 against the translucent sheet: the list of chats
+     read as loose text lying over the conversation. --card is itself
+     translucent under 'star', so the sky still shows through. */
+  background: var(--card);
+  border: 1px solid var(--card-line);
   border-radius: var(--radius);
+  box-shadow: var(--shadow-lift);
 }
 .chat-history-day {
   font-size: 0.68rem;
@@ -2785,17 +2962,65 @@ body[data-view="assistant"] .app-footer { display: none; }
   color: var(--ink-soft);
 }
 /* The per-row controls stay out of the way until the row is under the pointer:
-   a list of chats should read as a list, not as a row of buttons. */
+   a list of chats should read as a list, not as a row of buttons.
+   Collapsed rather than merely transparent — at `opacity: 0` alone they still
+   held 134px of a 298px row, which left "Earlier conversations" 52px to render
+   132px of text once this list moved into the dock's narrower panel. Width, not
+   `display: none`: a button nobody can tab to is not a hidden button, it is a
+   missing one. */
 .chat-history-rename,
 .chat-history-delete {
   flex: 0 0 auto;
   font-size: 0.68rem;
   opacity: 0;
+  max-width: 0;
+  overflow: hidden;
+  transition: max-width 120ms ease, opacity 120ms ease;
 }
+@media (prefers-reduced-motion: reduce) {
+  .chat-history-rename,
+  .chat-history-delete { transition: none; }
+}
+/* focus-within as well as hover: tabbing into a collapsed control has to open
+   it, or the keyboard path leads to a button with no box to draw. */
 .chat-history-item:hover .chat-history-rename,
 .chat-history-item:hover .chat-history-delete,
+.chat-history-item:focus-within .chat-history-rename,
+.chat-history-item:focus-within .chat-history-delete,
 .chat-history-rename:focus-visible,
-.chat-history-delete:focus-visible { opacity: 1; }
+.chat-history-delete:focus-visible { opacity: 1; max-width: 7rem; }
+
+/* Deleted messages — the assistant's Trash, at the foot of the same panel the
+   chats are read in. Its controls do NOT hide on hover like the rows above:
+   this is the only place a permanent delete can be reached, and a destructive
+   action you have to find by pointing at it is worse than a visible one. The
+   row stacks instead, because "Delete permanently" and a sentence of transcript
+   do not both fit across a 320px panel. */
+.chat-trash-heading {
+  color: var(--danger);
+  border-top: 1px solid var(--card-line);
+  margin-top: 6px;
+}
+.chat-trash-item {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  padding-block: 4px;
+}
+.chat-trash-text {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+  cursor: default;
+}
+.chat-trash-item .chat-history-count { align-self: flex-start; }
+.chat-trash-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.chat-trash-restore,
+.chat-trash-purge { flex: 0 0 auto; font-size: 0.68rem; }
 
 /* The nudge, directly above the composer where the message it is about still
    sits. Ruled in the margin red because it is asking something, and it holds the
@@ -2910,6 +3135,26 @@ body[data-view="assistant"] .app-footer { display: none; }
 /* Searching what was said before. Folded away by default: it is a way back to
    something, not part of asking the next question. */
 .chat-recall { border: 1px solid var(--card-line); border-radius: var(--radius); padding: 6px 10px; }
+/* In the header it is the leftmost of the four tools, and its body drops as a
+   panel like the two beside it. Anchored to its START edge, unlike History and
+   the settings: it sits at the left of the group, so opening rightwards keeps
+   the panel under the page rather than off it. */
+.assistant-tools .chat-recall { position: relative; padding: 5px 9px; }
+.assistant-tools .chat-recall-drop {
+  position: absolute;
+  top: calc(100% + 6px);
+  inset-inline-start: 0;
+  z-index: 60;
+  width: min(440px, 92vw);
+  max-height: 62vh;
+  overflow-y: auto;
+  padding: 10px 12px;
+  background: var(--card);
+  border: 1px solid var(--card-line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lift);
+}
+.assistant-tools .chat-recall-form { margin-top: 0; }
 .chat-recall-name {
   font-family: var(--mono);
   font-size: 0.75rem;

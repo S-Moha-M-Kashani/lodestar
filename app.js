@@ -733,6 +733,7 @@
     renderCatRail();
     renderTagBar();
     renderHabitBanner();
+    renderAssistantTools();
     $('#undo-btn').disabled = timeline.index <= 0;
 
     if (dealCards) {
@@ -2861,7 +2862,7 @@
   const assistantState = {
     messages: [], busy: false, draft: '', proposals: [], edits: [],
     sessionId: '', sessions: [], drift: null, driftDismissed: false,
-    historyOpen: false,
+    historyOpen: false, trash: [],
   };
 
   // The chat list and every message live in assistant.db. localStorage keeps two
@@ -2945,6 +2946,12 @@
     if (msg.role !== 'user' && msg.role !== 'assistant') return null;
     if (typeof msg.content !== 'string') return null;
     const out = { role: msg.role, content: msg.content };
+    // The record's row id, kept through the cache. It is what a per-message
+    // delete acts on: without it the turn on screen and the row in assistant.db
+    // cannot be told to be the same turn. A turn that has no id yet — an error,
+    // an abandoned partial, or one the brain has not recorded — simply has no
+    // delete control, which is honest: there is nothing in the record to delete.
+    if (Number.isInteger(msg.id)) out.id = msg.id;
     // `error` and `partial` are load-bearing, not decoration: sendChat filters
     // both out of the history it replays to the model. Persisting the text and
     // dropping the flag would silently undo that filter, and the model would be
@@ -3013,11 +3020,77 @@
         // The record wins unless the cache is ahead of it. The browser only
         // appends, so a longer cache is the record plus turns it never saw.
         if (recorded.length >= cached.length) assistantState.messages = recorded;
+        else adoptRecordedIds(assistantState.messages, recorded);
       }
     } catch { /* offline — the cache is what we have, and it is enough to read */ }
     try { localStorage.setItem(CHAT_SESSION_KEY, id); } catch { /* private mode */ }
     persistChat();
     if (view === 'assistant') render();
+  }
+
+  /** Give the transcript on screen the record's row ids, in place. Returns
+   *  whether anything was learned.
+   *
+   *  The two lists are the same conversation seen from two sides: the browser
+   *  appends a turn the moment it is spoken, the brain records it once the model
+   *  has answered. So they are aligned by walking both in order and matching
+   *  role and text — a positional pairing would slide by one at the first turn
+   *  the record never took, and the delete button on an error bubble would then
+   *  erase somebody else's message. Local turns that match nothing are exactly
+   *  those: errors and abandoned partials, which stay id-less. */
+  function adoptRecordedIds(local, recorded) {
+    let i = 0;
+    let learned = false;
+    for (const row of recorded) {
+      while (i < local.length
+             && !(local[i].role === row.role && local[i].content === row.content)) i += 1;
+      if (i >= local.length) break;
+      if (local[i].id !== row.id) { local[i].id = row.id; learned = true; }
+      i += 1;
+    }
+    return learned;
+  }
+
+  /** Re-read the open chat from the record, keeping the panel as it is. Used
+   *  after a restore: openChatSession would do it too, but it also closes the
+   *  chats panel, and putting three turns back one at a time should not take
+   *  three trips into the list. */
+  async function reloadOpenChat() {
+    const id = assistantState.sessionId;
+    if (!id) return;
+    try {
+      const res = await fetch('/api/chat/sessions/' + encodeURIComponent(id),
+        { headers: { Accept: 'application/json' } });
+      if (!res.ok) return;
+      const data = await res.json();
+      assistantState.messages = (data.messages || []).map(restoredMessage).filter(Boolean);
+      persistChat();
+      if (view === 'assistant') render();
+    } catch { /* offline — what is on screen is still the conversation */ }
+  }
+
+  /** Ask the record which rows the turns just taken became. One GET per settled
+   *  turn, and what it buys is the delete control appearing on the message you
+   *  just sent rather than only after a reload.
+   *
+   *  Asked only of a chat the record actually holds. A turn that died before the
+   *  brain could record it leaves no session row, and requesting it would be a
+   *  404 per failed turn in the console — an error log for the ordinary case of
+   *  "there is nothing to learn yet". */
+  async function learnRecordedIds() {
+    const id = assistantState.sessionId;
+    if (!id) return;
+    if (!assistantState.sessions.some((s) => s.id === id)) return;
+    try {
+      const res = await fetch('/api/chat/sessions/' + encodeURIComponent(id),
+        { headers: { Accept: 'application/json' } });
+      if (!res.ok) return;
+      const data = await res.json();
+      const recorded = (data.messages || []).map(restoredMessage).filter(Boolean);
+      if (!adoptRecordedIds(assistantState.messages, recorded)) return;
+      persistChat();
+      if (view === 'assistant') render();
+    } catch { /* offline — the ids arrive with the next reload */ }
   }
 
   /** Refresh the history list. */
@@ -3031,6 +3104,86 @@
         if (view === 'assistant') render();
       }
     } catch { /* offline — leave the list as it was */ }
+  }
+
+  /** Refresh the deleted-messages list. */
+  async function refreshChatTrash() {
+    try {
+      const res = await fetch('/api/chat/trash', { headers: { Accept: 'application/json' } });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data.messages)) {
+        assistantState.trash = data.messages;
+        if (view === 'assistant') render();
+      }
+    } catch { /* offline — leave the list as it was */ }
+  }
+
+  /** Tell the index the live record changed. Chroma holds chunks derived from
+   *  these rows, and `sync` only ever adds, so a hidden turn would go on
+   *  answering recall until the brain next booted. The same call covers a
+   *  restore, where it is `sync` rather than `prune` that has work to do. */
+  const reindexChat = () => { fetch('/api/rag/chat/reindex', { method: 'POST' }).catch(() => {}); };
+
+  /** Delete one turn. No confirmation, deliberately: nothing is destroyed here,
+   *  and the message says where it went. The board's To Trash reads the same. */
+  async function deleteChatMessage(msg) {
+    if (!Number.isInteger(msg.id)) return;
+    try {
+      const res = await fetch('/api/chat/messages/' + msg.id, { method: 'DELETE' });
+      if (!res.ok) throw new Error(`the server refused (${res.status})`);
+    } catch (err) {
+      announce(`Delete failed — ${err.message}`);
+      return;
+    }
+    const at = assistantState.messages.indexOf(msg);
+    if (at !== -1) assistantState.messages.splice(at, 1);
+    persistChat();
+    reindexChat();
+    render();
+    refreshChatTrash();
+    refreshChatSessions();
+    announce('Message deleted — recoverable under Deleted messages');
+  }
+
+  async function restoreChatMessage(row) {
+    try {
+      const res = await fetch('/api/chat/trash/' + row.id + '/restore', { method: 'POST' });
+      if (!res.ok) throw new Error(`the server refused (${res.status})`);
+    } catch (err) {
+      announce(`Restore failed — ${err.message}`);
+      return;
+    }
+    reindexChat();
+    await refreshChatTrash();
+    refreshChatSessions();
+    if (row.sessionId === assistantState.sessionId) await reloadOpenChat();
+    announce('Message restored');
+  }
+
+  async function purgeChatMessage(row) {
+    const sure = await ask({
+      title: 'Delete permanently?',
+      message: `“${short(row.content)}” will be erased from assistant.db and from the `
+        + 'assistant’s memory for good. This is the only action that truly deletes it, '
+        + 'and it cannot be undone.',
+      okLabel: 'Delete permanently',
+      danger: true,
+    });
+    if (!sure) return;
+    try {
+      const res = await fetch('/api/chat/trash/' + row.id, { method: 'DELETE' });
+      if (!res.ok) throw new Error(`the server refused (${res.status})`);
+    } catch (err) {
+      announce(`Delete failed — ${err.message}`);
+      return;
+    }
+    // The row is gone from the record, so the chunks derived from it have to go
+    // too — the prune already ran when it was hidden, but a restore in between
+    // would have put them back, and this is the call that settles it either way.
+    reindexChat();
+    await refreshChatTrash();
+    announce('Message deleted permanently');
   }
 
   /** Decide which chat the Assistant opens with. Resume the most recent one if
@@ -3624,48 +3777,24 @@
     head.appendChild(heading);
     sheet.appendChild(head);
 
-    // Everything that is not the conversation lives behind one sign, sharing the
-    // search fold's row so that row is the only furniture above the transcript.
-    // A rail beside the transcript cost it 300px of width and stood mostly empty
-    // — a model is chosen once and then left alone — so shut, which is how it
-    // starts, the conversation has the whole sheet.
-    //
-    // A button and a panel rather than a <details>: a disclosure's body lives
-    // inside its own subtree, so with the summary in this row's narrow right-hand
-    // cell the panel would open into that cell instead of across the sheet. Same
-    // wiring as the board's Menu.
-    const toolbar = document.createElement('div');
-    toolbar.className = 'assistant-toolbar';
-    toolbar.appendChild(renderRecallPanel());
-    // Which chat you are in, and the two things you do about it. In the toolbar
-    // rather than behind the ⚙: a setting is chosen once and left alone, whereas
-    // starting a chat and finding an old one are things you reach for while
-    // reading. Still a panel and not a rail — see the width check in the e2e.
-    toolbar.appendChild(renderChatSwitcher());
+    // First in the sheet because that is where it is on screen — the margin at
+    // the top-left corner — and because tab order should reach the chat you are
+    // in before the conversation itself. Absolutely positioned out of the sheet
+    // on a wide window; with no margin to sit in it becomes an ordinary row here.
+    sheet.appendChild(renderChatDock());
+
+    // Nothing above the transcript but what this conversation cost. Searching
+    // the record, the chats, New chat and the settings are all in the app header
+    // now, in one row of controls — the sheet holds the conversation and the
+    // things that belong to it, and a row of furniture above every reply was
+    // exactly what made the assistant's own history hard to find.
     const cost = renderSessionCost();
-    if (cost) toolbar.appendChild(cost);
-    const extrasBtn = document.createElement('button');
-    extrasBtn.type = 'button';
-    extrasBtn.id = 'assistant-extras-btn';
-    extrasBtn.className = 'assistant-extras-btn';
-    extrasBtn.textContent = '\u2699';
-    extrasBtn.title = 'Models, the RAG lab, export and import';
-    extrasBtn.setAttribute('aria-label', 'Assistant settings');
-    extrasBtn.setAttribute('aria-expanded', String(extrasOpen));
-    extrasBtn.setAttribute('aria-controls', 'assistant-extras');
-    extrasBtn.addEventListener('click', () => setExtrasOpen(!extrasOpen));
-    toolbar.appendChild(extrasBtn);
-    sheet.appendChild(toolbar);
-
-    const extras = document.createElement('div');
-    extras.id = 'assistant-extras';
-    extras.className = 'assistant-extras';
-    extras.hidden = !extrasOpen;
-    extras.appendChild(renderChatActions());
-    extras.appendChild(renderChatSettings());
-    sheet.appendChild(extras);
-
-    if (assistantState.historyOpen) sheet.appendChild(renderChatHistory());
+    if (cost) {
+      const toolbar = document.createElement('div');
+      toolbar.className = 'assistant-toolbar';
+      toolbar.appendChild(cost);
+      sheet.appendChild(toolbar);
+    }
 
     // Anything waiting on the user shares one pinned strip directly under the
     // row above. Pinned because it used to scroll away: it is above the
@@ -3784,45 +3913,141 @@
   /** The current chat's title, as the button that opens the history — so the
    *  control that moves you between chats is also the label saying where you
    *  are — plus New chat beside it. */
+  /** How long the panel waits after the pointer leaves it. Long enough to cross
+   *  it with a wandering mouse, short enough that a panel you walked away from
+   *  is gone when you look back. Cancelled by re-entering or by focus landing
+   *  inside, so nobody reading the list with a keyboard is ever rushed. */
+  const CHAT_HISTORY_IDLE_MS = 4000;
+  let historyIdleTimer = null;
+
+  function cancelHistoryIdle() {
+    if (historyIdleTimer) clearTimeout(historyIdleTimer);
+    historyIdleTimer = null;
+  }
+
+  /** Close the panel once it has been left alone — but ask again rather than act
+   *  if it is still in use, and read the DOM afresh each time instead of holding
+   *  the dock element: every render replaces it, and a timer closing over the
+   *  previous one would decide on a node no longer in the page.
+   *
+   *  "In use" includes a dialog the panel itself opened. Rename and Delete both
+   *  open one in the middle of the screen, which necessarily takes the pointer
+   *  out of the tools — the panel closing under an open dialog loses the place
+   *  the user was working in, which is the bug this check exists for.
+   *
+   *  Focus counts only inside the PANEL, not anywhere in the tools. The button
+   *  is static markup and keeps focus after the click that opened the list, so
+   *  counting it would mean a panel opened with the mouse never idle-closes at
+   *  all — it survived only because the old dock was rebuilt by every render,
+   *  which dropped focus to the body by destroying the button holding it.
+   *  Someone reading the list with a keyboard has tabbed into it, and is still
+   *  never rushed. */
+  function armHistoryIdle() {
+    cancelHistoryIdle();
+    historyIdleTimer = setTimeout(function settle() {
+      const tools = document.querySelector('.assistant-tools');
+      const panel = document.getElementById('chat-history');
+      const busy = document.querySelector('dialog[open]')
+        || (tools && tools.matches(':hover'))
+        || (panel && panel.contains(document.activeElement));
+      if (busy) {
+        historyIdleTimer = setTimeout(settle, CHAT_HISTORY_IDLE_MS);
+        return;
+      }
+      closeChatHistory();
+    }, CHAT_HISTORY_IDLE_MS);
+  }
+
+  function closeChatHistory({ focusBack = false } = {}) {
+    cancelHistoryIdle();
+    if (!assistantState.historyOpen) return;
+    assistantState.historyOpen = false;
+    // The panel alone, not the whole view: closing a list must not repaint the
+    // transcript under it and lose the reader's place in the conversation.
+    renderAssistantTools();
+    // Escape and a chosen chat return the caret to the button that opened the
+    // panel; a click elsewhere is the user already looking somewhere else.
+    if (focusBack) document.getElementById('chat-history-btn')?.focus();
+  }
+
+  /** The dock: which chat you are in, and New chat under it. In the page margin
+   *  off the sheet's corner, because in the toolbar row they were two more
+   *  buttons among five and went unnoticed.
+   *
+   *  It used to open the chats panel too, from a ▾ on the title. That panel is
+   *  in the header now — hanging it off a button in the margin is what made the
+   *  history, and the deleted messages at the foot of it, unfindable. So the
+   *  title is a label again: it says where you are, and no longer pretends to
+   *  be a control. */
+  function renderChatDock() {
+    const dock = document.createElement('div');
+    dock.className = 'chat-dock';
+    dock.appendChild(renderChatSwitcher());
+    return dock;
+  }
+
   function renderChatSwitcher() {
     const wrap = document.createElement('div');
     wrap.className = 'chat-switcher';
 
     const current = assistantState.sessions.find((s) => s.id === assistantState.sessionId);
-    const history = document.createElement('button');
-    history.type = 'button';
-    history.id = 'chat-history-btn';
-    history.className = 'btn ghost chat-history-btn';
+    const here = document.createElement('span');
+    here.className = 'chat-current';
     // An unsaved new chat has no row in the list yet, and saying so is more
     // honest than borrowing the title of the chat you just left.
-    history.textContent = (current ? current.title : 'New chat') + ' ▾';
-    history.title = 'Your chats';
-    history.setAttribute('aria-haspopup', 'true');
-    history.setAttribute('aria-expanded', String(assistantState.historyOpen));
-    history.setAttribute('aria-controls', 'chat-history');
-    history.addEventListener('click', () => {
-      assistantState.historyOpen = !assistantState.historyOpen;
-      // Asked for on opening, so a chat added in another tab is there.
-      if (assistantState.historyOpen) refreshChatSessions();
-      render();
-    });
+    const label = document.createElement('span');
+    label.className = 'chat-history-label';
+    label.textContent = current ? current.title : 'New chat';
+    here.appendChild(label);
+    here.title = current ? current.title : 'New chat';
 
-    const fresh = document.createElement('button');
-    fresh.type = 'button';
-    fresh.id = 'chat-new';
-    fresh.className = 'btn ghost chat-new';
-    fresh.textContent = '+';
-    fresh.title = 'New chat — a clean context, nothing carried over';
-    fresh.setAttribute('aria-label', 'New chat');
-    fresh.addEventListener('click', () => {
-      // No confirmation: nothing is destroyed. The chat you were in is in the
-      // record and one click away in the panel above.
-      startNewChat();
-      announce('New chat');
-    });
-
-    wrap.append(history, fresh);
+    wrap.append(here);
     return wrap;
+  }
+
+  /** The Assistant's two header tools: History and the settings gear, beside the
+   *  theme picker. Static markup driven from here, so the panel is not rebuilt
+   *  by a render of the transcript underneath it.
+   *
+   *  Shown only on the Assistant, like the search and filters beside them: a
+   *  gear that configures a screen you are not on is furniture that does
+   *  nothing. */
+  function renderAssistantTools() {
+    const tools = $('.assistant-tools');
+    if (!tools) return;
+    tools.hidden = view !== 'assistant';
+    const btn = $('#chat-history-btn');
+    if (btn) btn.setAttribute('aria-expanded', String(assistantState.historyOpen));
+    const gear = $('#assistant-extras-btn');
+    if (gear) gear.setAttribute('aria-expanded', String(extrasOpen));
+    // Searching past conversations is the leftmost of the group: it acts on the
+    // record the two beside it list and start, and it is the one you reach for
+    // while reading rather than while administering.
+    const recall = $('#chat-recall-slot');
+    if (recall) {
+      recall.innerHTML = '';
+      if (view === 'assistant') recall.appendChild(renderRecallPanel());
+    }
+    const slot = $('#chat-history-slot');
+    if (slot) {
+      slot.innerHTML = '';
+      if (view === 'assistant' && assistantState.historyOpen) slot.appendChild(renderChatHistory());
+    }
+    // The settings drop from the gear the way the chats drop from History —
+    // both are things you open, look at, and shut again. Built even while shut,
+    // because setExtrasOpen only flips `hidden`: it must not rebuild the model
+    // pickers, which would throw away a half-typed choice on every toggle.
+    const drawer = $('#assistant-extras-slot');
+    if (!drawer) return;
+    drawer.innerHTML = '';
+    if (view !== 'assistant') return;
+    const extras = document.createElement('div');
+    extras.id = 'assistant-extras';
+    extras.className = 'assistant-extras';
+    extras.hidden = !extrasOpen;
+    extras.appendChild(renderChatActions());
+    extras.appendChild(renderChatSettings());
+    drawer.appendChild(extras);
   }
 
   /** The chats, grouped by day, newest first. A panel across the sheet rather
@@ -3833,7 +4058,7 @@
     panel.id = 'chat-history';
     panel.className = 'chat-history';
 
-    if (!assistantState.sessions.length) {
+    if (!assistantState.sessions.length && !assistantState.trash.length) {
       const empty = document.createElement('p');
       empty.className = 'chat-status';
       empty.textContent = 'No earlier chats yet — this is the first one.';
@@ -3853,7 +4078,55 @@
       }
       panel.appendChild(renderChatHistoryRow(session));
     }
+    // The turns deleted one at a time, under the chats they came out of — the
+    // board's Trash in the place the assistant's own history is read. Absent
+    // entirely when empty: a permanent "nothing here" heading is furniture.
+    if (assistantState.trash.length) {
+      const heading = document.createElement('div');
+      heading.className = 'chat-history-day chat-trash-heading';
+      heading.textContent = 'Deleted messages';
+      panel.appendChild(heading);
+      for (const row of assistantState.trash) panel.appendChild(renderChatTrashRow(row));
+    }
     return panel;
+  }
+
+  /** One deleted turn: what it said, which chat it came out of, and the two
+   *  ways out. Both controls stay visible rather than appearing on hover — this
+   *  is the only screen where a permanent delete can be reached, and a hidden
+   *  destructive control is worse than a visible one. */
+  function renderChatTrashRow(row) {
+    const el = document.createElement('div');
+    el.className = 'chat-history-item chat-trash-item';
+
+    const text = document.createElement('div');
+    text.className = 'chat-history-open chat-trash-text';
+    const said = document.createElement('span');
+    said.className = 'chat-history-title';
+    said.textContent = row.content;
+    const from = document.createElement('span');
+    from.className = 'chat-history-count';
+    from.textContent = `${row.role === 'user' ? 'you' : 'assistant'} · ${row.sessionTitle}`;
+    text.append(said, from);
+
+    const restore = document.createElement('button');
+    restore.type = 'button';
+    restore.className = 'btn ghost chat-trash-restore';
+    restore.textContent = 'Restore';
+    restore.addEventListener('click', () => restoreChatMessage(row));
+
+    const purge = document.createElement('button');
+    purge.type = 'button';
+    purge.className = 'btn danger chat-trash-purge';
+    purge.textContent = 'Delete permanently';
+    purge.addEventListener('click', () => purgeChatMessage(row));
+
+    const actions = document.createElement('div');
+    actions.className = 'chat-trash-actions';
+    actions.append(restore, purge);
+
+    el.append(text, actions);
+    return el;
   }
 
   /** Today / Yesterday / the date — the way a reader actually looks for a
@@ -4075,11 +4348,15 @@
   // on the sheet depends on whether this drawer is open.
   function setExtrasOpen(open) {
     extrasOpen = open;
-    const panel = $('#assistant-extras');
+    // Each half applied on its own, never behind a guard on both. The button is
+    // static markup and the panel exists only on the Assistant, so a shared
+    // early return left the button claiming "expanded" about a panel that had
+    // been torn down when the view changed — and the next visit found the gear
+    // saying open over a drawer that was shut.
     const btn = $('#assistant-extras-btn');
-    if (!panel || !btn) return;
-    panel.hidden = !open;
-    btn.setAttribute('aria-expanded', String(open));
+    if (btn) btn.setAttribute('aria-expanded', String(open));
+    const panel = $('#assistant-extras');
+    if (panel) panel.hidden = !open;
   }
 
   // Looked up rather than closed over: the rail is rebuilt on every render, so
@@ -4130,8 +4407,12 @@
       event.preventDefault();
       recallChat(input.value.trim());
     });
-    box.appendChild(form);
-    box.appendChild(renderRecallResults());
+    // The body rides in one box so the header can drop it as a panel from under
+    // the summary. Two loose siblings could not be positioned as one thing.
+    const drop = document.createElement('div');
+    drop.className = 'chat-recall-drop';
+    drop.append(form, renderRecallResults());
+    box.appendChild(drop);
 
     // render() rebuilds the whole sheet, and a streaming reply repaints it many
     // times a second — so without this, typing here while a reply arrives loses
@@ -4234,6 +4515,22 @@
     body.className = 'chat-text';
     appendLinked(body, msg.content);
     el.appendChild(body);
+
+    // One turn, deletable on its own. Only for a turn the record knows: without
+    // a row id there is nothing to delete, and a control that quietly removed
+    // the message from the screen alone would be the opposite of this feature.
+    // It fades in on hover and on focus, so it is reachable by keyboard and is
+    // not a delete button standing over every sentence of the conversation.
+    if (Number.isInteger(msg.id)) {
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'chat-msg-delete';
+      remove.textContent = '×';
+      remove.title = 'Delete this message';
+      remove.setAttribute('aria-label', 'Delete this message');
+      remove.addEventListener('click', () => deleteChatMessage(msg));
+      el.appendChild(remove);
+    }
 
     // Everything that is *about* the answer rather than part of it goes in one
     // ruled strip beneath it — what it cited, what it cost, which tools ran —
@@ -4813,7 +5110,11 @@
     // The brain has just recorded the turn, so the chat's title, its position in
     // the list, and its message count have all changed. A first turn is also
     // what created the chat row at all.
-    refreshChatSessions();
+    // And the turn just spoken now has a row in the record — which is what a
+    // per-message delete acts on, so it is asked for here rather than at the
+    // next reload. After the list, not beside it: the list is what says whether
+    // this chat reached the record at all.
+    refreshChatSessions().then(learnRecordedIds);
   }
 
   async function adoptServerBoard() {
@@ -5538,6 +5839,61 @@
   document.addEventListener('click', (e) => {
     const panel = $('#chat-menu-panel');
     if (panel && !panel.hidden && !e.target.closest('.chat-menu')) setChatMenuOpen(false);
+  });
+  // The Assistant's two header tools. Static markup, so unlike everything else
+  // about the Assistant they are wired once here rather than on every render —
+  // and the History panel therefore survives a repaint of the transcript
+  // underneath it.
+  $('#chat-history-btn').addEventListener('click', () => {
+    assistantState.historyOpen = !assistantState.historyOpen;
+    // Asked for on opening, so a chat added in another tab is there, and so the
+    // deleted messages are the ones deleted since the panel was last read.
+    if (assistantState.historyOpen) { refreshChatSessions(); refreshChatTrash(); }
+    renderAssistantTools();
+  });
+  $('#chat-new').addEventListener('click', () => {
+    // No confirmation: nothing is destroyed. The chat you were in is in the
+    // record and one click away under History beside it.
+    startNewChat();
+    announce('New chat');
+  });
+  $('#assistant-extras-btn').addEventListener('click', () => setExtrasOpen(!extrasOpen));
+  // The panel's third way out. On the tools element, which owns both the button
+  // and the panel, so crossing from one to the other is never "left".
+  $('.assistant-tools').addEventListener('mouseleave', () => {
+    if (assistantState.historyOpen) armHistoryIdle();
+  });
+  $('.assistant-tools').addEventListener('mouseenter', cancelHistoryIdle);
+  $('.assistant-tools').addEventListener('focusin', cancelHistoryIdle);
+
+  // And the same two ways out the board's menus have.
+  document.addEventListener('click', (e) => {
+    // A click inside a dialog is not a click elsewhere: Rename and Delete both
+    // open one, and it is centred on the screen rather than inside the panel, so
+    // without this the OK that applies a rename is also what closes the list it
+    // was applied in — the panel vanished the instant the work was confirmed.
+    if (e.target.closest('dialog')) return;
+    const outside = !e.target.closest('.assistant-tools');
+    if (assistantState.historyOpen && outside) closeChatHistory();
+    // The settings drawer is a dropdown now and has to shut like one. A click
+    // INSIDE it is use, not dismissal — it holds the model pickers, the chat
+    // menu and the export controls, and a panel that closed under the hand
+    // reaching into it would be unusable.
+    if (extrasOpen && outside) setExtrasOpen(false);
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && assistantState.historyOpen) {
+      closeChatHistory({ focusBack: true });
+    }
+  });
+  document.addEventListener('keydown', (e) => {
+    // Only when the menu inside it is already shut, so one Escape closes one
+    // thing: the chat menu's own handler below has the inner layer.
+    const inner = $('#chat-menu-panel');
+    if (e.key === 'Escape' && extrasOpen && (!inner || inner.hidden)) {
+      setExtrasOpen(false);
+      $('#assistant-extras-btn')?.focus();
+    }
   });
   document.addEventListener('keydown', (e) => {
     const panel = $('#chat-menu-panel');
