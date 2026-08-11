@@ -210,6 +210,30 @@ Everything that tests the lab moves with it. Three files are new or reshaped:
   the lab), and only the `raglab` entry in its source list goes. The new repo gets
   the same both-directions assertion over its own sources and `.env.example`.
 
+### Eight tests lose half their subject
+
+`test_raglab.py` reads Lodestar's `app.js` in eight tests, because until now
+there were two frontends over one API and the invariant worth pinning was that
+they could not disagree. Deleting the board's view deletes half of that subject,
+so "relocate as-is" is impossible here and these are the one set of tests the
+move genuinely rewrites:
+
+| Test | Becomes |
+| --- | --- |
+| `test_both_frontends_read_the_progress_detail` | the panel alone |
+| `test_both_rag_lab_frontends_offer_a_cooperative_stop` | the panel alone |
+| `test_both_frontends_watch_the_ask_as_a_job` | the panel alone |
+| `test_both_panels_send_you_to_the_inspector` | the panel alone |
+| `test_neither_panel_still_asks_one_question` | the panel alone |
+| `test_both_panels_offer_the_mode_dropdown` | the panel alone |
+| `test_both_panels_fill_the_projects_settings_from_the_served_preset` | the panel alone; the "no frontend keeps its own copy of the preset" half survives for the one frontend left |
+| `test_every_board_lab_control_has_a_stable_id` | **deleted** — its whole subject is the board's `raglab-<field>` ids |
+
+Each rewrite keeps the assertion and narrows the subject. None of them loosens
+into a weaker claim about the same thing, which is the failure mode worth naming:
+a test that used to compare two implementations and now merely checks that one of
+them mentions a string is not the same test with one argument removed.
+
 ## What leaves Lodestar
 
 | File | Change |
