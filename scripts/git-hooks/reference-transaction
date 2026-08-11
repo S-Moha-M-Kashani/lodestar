@@ -1,0 +1,39 @@
+#!/bin/sh
+# Refuse to delete refs/heads/development.
+#
+# development is the full copy of this project: it is the only branch that
+# carries README-Development.md, ROADMAP-Development.md, 125.md and
+# docs/report/. master is a published subset, deliberately smaller, so
+# "restore it from master" is not available the way it is for any other
+# branch. Deleting development loses work that exists nowhere else.
+#
+# Git runs this hook for every ref transaction, with $1 in
+# prepared|committed|aborted and one "<old> <new> <ref>" line per ref on
+# stdin. Only "prepared" can still refuse — exiting non-zero there aborts
+# the whole transaction, so the branch is never unlinked. Anything else
+# must exit 0 or ordinary commits and fetches start failing.
+#
+# Install: git config core.hooksPath scripts/git-hooks
+# (also copied to .git/hooks/reference-transaction, which survives a
+# checkout of master, where this file does not exist)
+
+[ "$1" = prepared ] || exit 0
+
+while read -r old new ref; do
+	# A deletion sets the new oid to all zeros. Matching on "any character
+	# that is not 0" rather than a literal 40 zeros keeps this correct
+	# under sha256 repositories, where the oid is 64 characters long.
+	case "$new" in
+	*[!0]*) continue ;;
+	esac
+	if [ "$ref" = refs/heads/development ]; then
+		echo "refused: development cannot be deleted." >&2
+		echo "It is the full copy of this project — README-Development.md," >&2
+		echo "ROADMAP-Development.md, 125.md and docs/report/ exist on no" >&2
+		echo "other branch, so master cannot restore it." >&2
+		echo "To override, remove the reference-transaction hook first." >&2
+		exit 1
+	fi
+done
+
+exit 0

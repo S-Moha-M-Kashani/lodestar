@@ -53,8 +53,6 @@ backups/
 .vscode/
 .claude/
 
-# Dev-only docs, kept local and out of git entirely so no merge can ever
-# carry them to master. No git history — back them up outside the repo.
-README-Development.md
-ROADMAP-Development.md
-125.md
+# Dev-only docs are tracked here: development is the full copy, so nothing
+# the project holds depends on one machine's disk. They are dropped from
+# master when it is published, the way 125.md and docs/report/ already are.
