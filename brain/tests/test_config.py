@@ -259,16 +259,16 @@ def test_env_example_documents_every_variable_the_code_reads():
     after the code stopped reading it is a lie. Both directions are asserted for
     that reason.
 
-    Scanned: the shipped code and the two hand-run surfaces that read the
-    environment on their own — the Node server, its scripts, the brain, the RAG
-    lab and the live evals. Not the unit tests: those set variables to exercise
-    the readers above, and a value invented for one assertion is not
-    configuration anyone should be told about.
+    Scanned: the shipped code and the hand-run surfaces that read the
+    environment on their own — the Node server, its scripts, the brain and the
+    live evals. Not the unit tests: those set variables to exercise the readers
+    above, and a value invented for one assertion is not configuration anyone
+    should be told about. The RAG lab was scanned here until 2026-08-11 and now
+    audits its own `.env.example` in its own repository.
     """
     root = Path(__file__).resolve().parents[2]
     sources = [root / 'server.js', *sorted((root / 'scripts').glob('*.mjs')),
                *sorted((root / 'brain' / 'src').rglob('*.py')),
-               *sorted((root / 'brain' / 'tests' / 'raglab').rglob('*.py')),
                *sorted((root / 'brain' / 'tests' / 'evals').rglob('*.py'))]
     read = {name for path in sources
             for match in _ENV_READS.finditer(path.read_text())

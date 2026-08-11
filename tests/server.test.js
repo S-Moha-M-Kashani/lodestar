@@ -323,76 +323,51 @@ test('an SSE upstream reaches the browser frame by frame, not all at the end', a
   } finally { await s.stop(); await brain.stop(); }
 });
 
-// ---- RAG lab proxy -------------------------------------------------------
-// The lab is a second upstream, separate from the brain: it runs only when a
-// developer starts it, and it must never be reached at AGENT_URL — a request
-// for lab options landing on the brain would 404 in a way that reads like the
-// lab is broken.
+// ---- What the proxy does with an upstream's answer -----------------------
+// These two behaviours used to be tested through the RAG lab, which was a second
+// upstream until it moved to its own repository on 2026-08-11. Neither is about
+// having two upstreams — they are about not mangling the one there is — so they
+// are retargeted at the brain rather than deleted with the lab's own tests.
 
 // This is an integration test.
-test('/api/raglab/* is proxied to the lab, not to the brain', async () => {
+test('the proxy forwards POST bodies and query strings unchanged', async () => {
   const seen = [];
-  const lab = await startStubBrain((req) => seen.push(req), {
-    status: 200, body: { chunkers: ['fixed'] },
+  const brain = await startStubBrain((req) => seen.push(req), {
+    status: 200, body: { ok: true },
   });
-  const brain = await startStubBrain((req) => seen.push({ ...req, wrong: true }));
-  const s = await startServer({ env: { AGENT_URL: brain.url, RAGLAB_URL: lab.url } });
+  const s = await startServer({ env: { AGENT_URL: brain.url } });
   try {
-    const res = await fetch(s.base + '/api/raglab/options');
-    assert.equal(res.status, 200);
-    assert.deepEqual(await res.json(), { chunkers: ['fixed'] });
-    assert.equal(seen.length, 1, 'exactly one upstream was called');
-    assert.equal(seen[0].wrong, undefined, 'the brain must not receive lab traffic');
-    // The lab serves /api/options; the browser asks for /api/raglab/options.
-    assert.equal(seen[0].path, '/api/options');
-  } finally { await s.stop(); await lab.stop(); await brain.stop(); }
-});
-
-// This is an integration test.
-test('/api/raglab/* forwards POST bodies and query strings', async () => {
-  const seen = [];
-  const lab = await startStubBrain((req) => seen.push(req), {
-    status: 200, body: { job_id: 'abc' },
-  });
-  const s = await startServer({ env: { RAGLAB_URL: lab.url } });
-  try {
-    const res = await fetch(s.base + '/api/raglab/run?limit=5', {
+    const res = await fetch(s.base + '/api/agent/chat?stream=0', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ index: { chunker: 'session' } }),
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
     });
     assert.equal(res.status, 200);
-    assert.deepEqual(await res.json(), { job_id: 'abc' });
-    assert.equal(seen[0].path, '/api/run?limit=5');
-    assert.deepEqual(JSON.parse(seen[0].body), { index: { chunker: 'session' } });
-  } finally { await s.stop(); await lab.stop(); }
+    assert.deepEqual(await res.json(), { ok: true });
+    // The '/api' prefix is the board's, not the brain's, and the query string
+    // rides along: a proxy that dropped it would silently change the request.
+    assert.equal(seen[0].path, '/agent/chat?stream=0');
+    assert.deepEqual(JSON.parse(seen[0].body),
+      { messages: [{ role: 'user', content: 'hi' }] });
+  } finally { await s.stop(); await brain.stop(); }
 });
 
 // This is an integration test.
-test('the lab being down is reported as the lab, not as the assistant', async () => {
-  // Distinct wording is the whole point: "assistant unavailable" would send the
-  // user restarting a brain that is running perfectly well.
-  const s = await startServer({ env: { RAGLAB_URL: 'http://127.0.0.1:59998' } });
-  try {
-    const res = await fetch(s.base + '/api/raglab/options');
-    assert.equal(res.status, 503);
-    assert.deepEqual(await res.json(), { error: 'RAG lab unavailable' });
-  } finally { await s.stop(); }
-});
-
-// This is an integration test.
-test('a lab error status passes through instead of becoming a 503', async () => {
-  const lab = await startStubBrain(() => {}, {
-    status: 400, body: { detail: 'unknown chunker: nope' },
+test('an upstream error status passes through instead of becoming a 503', async () => {
+  // 503 means "could not reach it". A 400 that arrived as an answer has to keep
+  // its own status, or a bad request is indistinguishable from a dead service and
+  // the message telling you what was wrong with it never reaches the page.
+  const brain = await startStubBrain(() => {}, {
+    status: 400, body: { detail: 'unknown model: nope' },
   });
-  const s = await startServer({ env: { RAGLAB_URL: lab.url } });
+  const s = await startServer({ env: { AGENT_URL: brain.url } });
   try {
-    const res = await fetch(s.base + '/api/raglab/query', {
+    const res = await fetch(s.base + '/api/agent/chat', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ question: 'x' }),
+      body: JSON.stringify({ messages: [] }),
     });
     assert.equal(res.status, 400);
-    assert.deepEqual(await res.json(), { detail: 'unknown chunker: nope' });
-  } finally { await s.stop(); await lab.stop(); }
+    assert.deepEqual(await res.json(), { detail: 'unknown model: nope' });
+  } finally { await s.stop(); await brain.stop(); }
 });
 
 // This is an integration test.
