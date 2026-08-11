@@ -73,10 +73,39 @@ test('the hook refuses to delete development, and nothing else', (t) => {
     'committing must still work — the hook runs on every ref transaction');
 });
 
+// This is an integration test (real git, a temporary repo and a bare remote).
+test('the hook refuses to push development, under any name', (t) => {
+  const dir = repoWithHook();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const remote = mkdtempSync(join(tmpdir(), 'lodestar-remote-'));
+  t.after(() => rmSync(remote, { recursive: true, force: true }));
+  git(remote, 'init', '-q', '--bare');
+  git(dir, 'remote', 'add', 'origin', remote);
+  copyFileSync(join(ROOT, 'scripts', 'git-hooks', 'pre-push'), join(dir, '.git', 'hooks', 'pre-push'));
+  chmodSync(join(dir, '.git', 'hooks', 'pre-push'), 0o755);
+
+  const pushed = git(dir, 'push', 'origin', 'development');
+  assert.equal(pushed.ok, false, 'pushing development must fail');
+  assert.match(pushed.output, /never pushed/);
+
+  // The same content under another name is the same disclosure, so the hook
+  // reads the local ref rather than what it would be called on the remote.
+  assert.equal(git(dir, 'push', 'origin', 'development:main').ok, false,
+    'pushing development under another name must fail too');
+
+  assert.equal(git(dir, 'push', 'origin', 'master').ok, true,
+    'master is the branch that gets published — it must still push');
+  const onRemote = git(remote, 'branch', '--format=%(refname:short)').output;
+  assert.match(onRemote, /master/);
+  assert.doesNotMatch(onRemote, /development/, 'development must not exist on the remote');
+});
+
 // This is a configuration invariant test.
-test('the repository has the hook installed, and tracks its source', () => {
-  assert.equal(git(ROOT, 'ls-files', '--error-unmatch', 'scripts/git-hooks/reference-transaction').ok,
-    true, 'the hook source must be tracked, or a fresh clone cannot restore it');
+test('the repository has the hooks installed, and tracks their source', () => {
+  for (const hook of ['reference-transaction', 'pre-push']) {
+    assert.equal(git(ROOT, 'ls-files', '--error-unmatch', `scripts/git-hooks/${hook}`).ok,
+      true, `${hook} must be tracked, or a fresh clone cannot restore it`);
+  }
   // The installed copy lives in .git/hooks so it applies whichever branch is
   // checked out — including master, which does not carry the tracked file.
   assert.equal(git(ROOT, 'rev-parse', '--verify', 'refs/heads/development').ok, true);
