@@ -18,7 +18,7 @@
 
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readdirSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -908,9 +908,33 @@ function purgeCard(id) {
 const STATIC = {
   '/': ['index.html', 'text/html; charset=utf-8'],
   '/index.html': ['index.html', 'text/html; charset=utf-8'],
-  '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
   '/styles.css': ['styles.css', 'text/css; charset=utf-8'],
 };
+
+// The frontend is a tree of ES modules under js/, so the whitelist is built
+// from the directory at boot rather than listed by hand — a module added
+// without a matching entry here would 404 in the browser and take the whole
+// import graph down with it. It stays a whitelist: the walk happens once, at
+// start-up, and a request still only ever names a key of this object, so no
+// request path is ever joined onto the filesystem.
+function addModules(dir = 'js') {
+  for (const entry of readdirSync(join(ROOT, dir), { withFileTypes: true })) {
+    const rel = `${dir}/${entry.name}`;
+    if (entry.isDirectory()) addModules(rel);
+    else if (entry.name.endsWith('.js')) STATIC['/' + rel] = [rel, 'text/javascript; charset=utf-8'];
+  }
+}
+try {
+  addModules();
+} catch (err) {
+  // A missing js/ must not take the API down with it — the board's data is
+  // reachable over HTTP whether or not this copy of the server has a frontend
+  // beside it, and tests/databases.test.js boots server.js alone in a temp
+  // directory to prove exactly that. It is still said out loud, because the
+  // other way to arrive here is a deployment that shipped without its
+  // frontend, and that must not present as a merely blank page.
+  console.warn(`No frontend modules found at ${join(ROOT, 'js')} — serving the API only.`, err.message);
+}
 
 function sendJson(res, status, body, headers = {}) {
   const text = JSON.stringify(body);
