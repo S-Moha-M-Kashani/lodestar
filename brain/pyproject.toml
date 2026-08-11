@@ -32,10 +32,10 @@ dependencies = [
 
 [project.optional-dependencies]
 semantic = ["fastembed>=0.7"]
-# The RAG lab reaches embedding models fastembed does not serve — Qwen3 and the
-# Persian-tuned encoders, which are plain HuggingFace checkpoints. torch is a
-# ~1 GB install, so this stays an extra: without it every such model reports NA
-# in the panel instead of the lab failing to start.
+# The default embedder is a Persian-tuned HuggingFace checkpoint, which fastembed
+# does not serve. torch is a ~1 GB install, so this stays an extra rather than a
+# dependency: it is what keeps the brain suite installable — and offline — with no
+# extras at all.
 local-embeddings = ["sentence-transformers>=3.0"]
 # Local, offline dictation with NVIDIA Parakeet TDT. mlx is Apple-Silicon only,
 # so the marker keeps `uv sync --extra voice` harmless on Linux and in Docker —

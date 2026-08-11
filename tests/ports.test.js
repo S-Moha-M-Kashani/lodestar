@@ -174,100 +174,6 @@ test('the paired test board and test brain point at each other', () => {
   assert.notEqual(testBoardPort(), MAIN_BOARD_PORT);
 });
 
-// The RAG Lab (brain/tests/raglab) is a test-only workbench reached from a page
-// inside the board. It is a *third* service in the 9000 block, not a frontend:
-// the boards own 3000/3001, so a lab that bound 3001 would take the test board's
-// port and there would be no platform left to open the lab page from. What must
-// also never drift is which data it can reach — a lab that rebuilds collections
-// dozens of times per sweep, pointed at the production Chroma database, would
-// delete real chat memory.
-const RAGLAB_PORT = 9002;
-const raglabPort = () => portOf('raglab', /--port\s+(\d+)/);
-
-// This is a configuration invariant.
-test('the RAG lab lives in the 9000 block, not on a board port', () => {
-  const port = raglabPort();
-  assert.equal(port, RAGLAB_PORT);
-  assert.notEqual(port, MAIN_BOARD_PORT);
-  assert.notEqual(port, testBoardPort(),
-    'the test board needs :3001 — the lab page is served from it');
-});
-
-// This is a configuration invariant.
-test('the RAG lab never binds a port owned by Chroma or a brain', () => {
-  const port = raglabPort();
-  assert.ok(!CHROMA_PORTS.includes(port), `raglab binds :${port}, Chroma's port`);
-  assert.notEqual(port, MAIN_BRAIN_PORT);
-  assert.notEqual(port, testBrainPort());
-});
-
-// This is a configuration invariant.
-test('the RAG lab launcher installs the backend its default embedder needs', () => {
-  // The lab now defaults to a Persian-tuned sentence-transformers model. Without
-  // the local-embeddings extra the service starts happily and then fails on the
-  // first index build — which reads as "the lab is broken", not "install this".
-  const cfg = read('brain/tests/raglab/config.py');
-  const chosen = cfg.match(/embedder: str = '([^']+)'/);
-  assert.ok(chosen, 'could not read the default embedder out of the lab config');
-  const needed = {
-    fastembed: 'semantic',
-    'sentence-transformers': 'local-embeddings',
-  }[chosen[1]];
-  if (!needed) return;                        // a hash embedder needs nothing
-  assert.match(scripts.raglab, new RegExp(`--extra\\s+${needed}\\b`));
-});
-
-// This is a configuration invariant.
-const INSPECTOR_PORT = 9003;
-const inspectorPort = () => portOf('raglab:inspector', /--port\s+(\d+)/);
-
-test('the RAG lab Inspector lives in the 9000 block on its own port', () => {
-  const port = inspectorPort();
-  assert.equal(port, INSPECTOR_PORT);
-  assert.notEqual(port, RAGLAB_PORT, 'the Inspector is a second service, not the lab');
-  assert.notEqual(port, MAIN_BOARD_PORT);
-  assert.notEqual(port, testBoardPort());
-  assert.notEqual(port, MAIN_BRAIN_PORT);
-  assert.notEqual(port, testBrainPort());
-  assert.ok(!CHROMA_PORTS.includes(port), `inspector binds :${port}, Chroma's port`);
-});
-
-// This is a configuration invariant.
-test('the Inspector launcher installs the backend its default embedder needs', () => {
-  const cfg = read('brain/tests/raglab/config.py');
-  const chosen = cfg.match(/embedder: str = '([^']+)'/);
-  const needed = { fastembed: 'semantic', 'sentence-transformers': 'local-embeddings' }[chosen[1]];
-  if (!needed) return;
-  assert.match(scripts['raglab:inspector'], new RegExp(`--extra\\s+${needed}\\b`));
-});
-
-// This is a configuration invariant: no raglab* command may name a database.
-test('the Inspector command names no database', () => {
-  assert.ok(!/DATABASE|chroma/i.test(scripts['raglab:inspector']),
-    'a raglab command must not name a database');
-});
-
-// This is a configuration invariant.
-test('the one-command lab runner delegates the launch instead of copying it', () => {
-  // `npm run lab` runs the suite and then starts the lab. The launch line it
-  // starts has to be *the* launch line: raglab carries four version pins and an
-  // --extra chosen by the default embedder (asserted above), and a second copy
-  // inside the runner is the copy that would still say `fastembed` a year from
-  // now. So the runner shells `npm run raglab` and reads the port back out of
-  // it, and this test is what stops someone inlining it for speed.
-  assert.match(scripts.lab, /scripts\/lab\.mjs/);
-  const runner = read('scripts/lab.mjs');
-  assert.match(runner, /'npm',\s*\['run',\s*'raglab'\]/,
-    'the runner must start the lab via npm run raglab');
-  // Comments stripped: the prose explaining *why* the launch is not respelled
-  // here is allowed to name the thing it is not doing.
-  const code = runner.replace(/^\s*\/\/.*$/gm, '');
-  assert.ok(!/--extra|uvicorn/.test(code),
-    'the runner respells the uvicorn launch — it must delegate to npm run raglab');
-  assert.ok(!new RegExp(`\\b${RAGLAB_PORT}\\b`).test(code),
-    'the runner hardcodes the port instead of reading it from the raglab script');
-});
-
 // This is a configuration invariant.
 test('the brain launcher installs the backend its default embedder needs', () => {
   // The same pairing as the lab above, for the same reason: the brain defaults
@@ -290,55 +196,6 @@ test('the brain launcher installs the backend its default embedder needs', () =>
     `test-brain runs the ${chosen} embedder but never installs the ` +
       `'${needed}' extra it needs`,
   );
-});
-
-// This is a configuration invariant.
-test("the Node proxy's default RAGLAB_URL matches the port the lab binds", () => {
-  const m = read('server.js').match(
-    /RAGLAB_URL\s*=\s*process\.env\.RAGLAB_URL\s*\|\|\s*'http:\/\/127\.0\.0\.1:(\d+)'/,
-  );
-  assert.ok(m, 'could not read the RAGLAB_URL default out of server.js');
-  assert.equal(Number(m[1]), raglabPort());
-});
-
-// This is a configuration invariant.
-test('the e2e suite pins RAGLAB_URL at a port it never starts', () => {
-  // The suite checks the "lab is not running" panel, so it must not inherit
-  // server.js's :9002 default: on a machine with the real lab up, the proxy
-  // reaches it and three checks go red — green in CI, red for whoever is
-  // actually working on the lab, which is the worst way round.
-  const e2e = read('tests/e2e_test.py');
-  const pin = e2e.match(/"RAGLAB_URL":\s*f"http:\/\/127\.0\.0\.1:\{RAGLAB_PORT\}"/);
-  assert.ok(pin, 'tests/e2e_test.py must pass RAGLAB_URL to the Node server');
-  const port = e2e.match(/RAGLAB_PORT\s*=\s*int\(os\.environ\.get\("TEST_RAGLAB_PORT",\s*"(\d+)"\)\)/);
-  assert.ok(port, 'could not read RAGLAB_PORT out of tests/e2e_test.py');
-  assert.notEqual(Number(port[1]), raglabPort(),
-    'the e2e proxy port must differ from the port a real lab binds');
-});
-
-// This is a configuration invariant.
-test('lab traffic and assistant traffic go to different upstreams', () => {
-  // One prefix routed to the wrong service is a silent 404 that reads as "the
-  // lab is broken", so the split is asserted rather than trusted.
-  const server = read('server.js');
-  assert.match(server, /\/api\/raglab\//);
-  assert.match(server, /RAG lab unavailable/);
-  assert.match(server, /assistant unavailable/);
-});
-
-// This is a configuration invariant.
-test('no RAG lab command names a vector database', () => {
-  // The lab's experiments are ephemeral: the index is process memory and the
-  // only thing written down is the JSON run. So there is no database to pin —
-  // and pinning one again would be the persistence coming back, one typo away
-  // from the chat memory a sweep would rebuild forty times.
-  for (const [name, script] of Object.entries(scripts)) {
-    if (!name.startsWith('raglab')) continue;
-    assert.ok(
-      !/CHROMA/.test(script),
-      `the "${name}" script still names a Chroma database: ${script}`,
-    );
-  }
 });
 
 // This is a configuration invariant.
@@ -377,11 +234,11 @@ test('the brain Dockerfile EXPOSEs the port it serves', () => {
   assert.equal(Number(exposed[1]), Number(served[1]));
 });
 
-// Ollama is a *fifth* process, and unlike the other four it is not ours: it is
-// installed system-wide and owns 11434 by convention. The brain and the lab both
-// reach it as clients, so the requirement is only that we never bind it — and
-// that both defaults name the same port, since a lab pointed at a port nothing
-// serves fails as "LLM metrics unavailable", which reads like a missing key.
+// Ollama is one more process, and unlike ours it is not ours: it is installed
+// system-wide and owns 11434 by convention. The brain reaches it as a client, so
+// the requirement is only that we never bind it. The RAG lab used to be checked
+// here too, against the same port for the same reason; it moved to its own
+// repository on 2026-08-11 and holds that default itself.
 const OLLAMA_PORT = 11434;
 
 // This is a configuration invariant.
@@ -392,17 +249,10 @@ test('the local model server is reached, never bound', () => {
   assert.ok(brain, 'could not read ollama_base_url out of the brain settings');
   assert.equal(Number(brain[1]), OLLAMA_PORT);
 
-  const lab = read('brain/tests/raglab/config.py').match(
-    /ollama_base_url: str = 'http:\/\/localhost:(\d+)\/v1'/,
-  );
-  assert.ok(lab, 'could not read ollama_base_url out of the lab settings');
-  assert.equal(Number(lab[1]), Number(brain[1]));
-
   // And it collides with nothing we start ourselves.
   const ours = [
     MAIN_BOARD_PORT,
     MAIN_BRAIN_PORT,
-    RAGLAB_PORT,
     testBoardPort(),
     testBrainPort(),
     ...CHROMA_PORTS,

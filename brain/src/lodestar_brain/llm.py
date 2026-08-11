@@ -7,8 +7,10 @@ Two backends serve a real model, and they differ only in *where it runs*:
 'openrouter' pays a remote API, 'ollama' talks to a model on this machine. Both
 are built through `init_chat_model` as OpenAI-compatible endpoints, because
 Ollama serves an OpenAI-compatible /v1 — so a local model costs the brain no new
-dependency, and it keeps working under the lab's `npm run raglab` pin of
-`langchain-openai<1`, which ChatOllama is not covered by. Since the two differ
+dependency. It also kept working under the `langchain-openai<1` the RAG lab
+pinned for ragas, which ChatOllama would not have; the lab became its own
+project in August 2026 and took that constraint with it, but the reason to build
+both backends at one OpenAI-compatible site is unchanged. Since the two differ
 in nothing but the endpoint and the patience it deserves, `_endpoint` holds that
 difference and there is one construction site rather than two: a knob that
 applies to both cannot be added to one and forgotten on the other.
@@ -29,7 +31,7 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from .config import PROVIDER_MODELS, Settings
 
 # A remote API answers in seconds; a local model on a laptop does not. Measured
-# on gemma4:e2b judging this project's RAG lab: a single call took ~8s, but under
+# on gemma4:e2b judging the RAG lab (2026-07): a single call took ~8s, but under
 # three concurrent requests individual calls reached 80–92s — so the 90s that is
 # generous for OpenRouter is the exact reason a local judged run lost three of
 # its four deciding metrics to TimeoutError. Two constants rather than one

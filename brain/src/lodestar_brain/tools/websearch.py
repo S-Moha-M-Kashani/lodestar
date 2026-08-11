@@ -41,7 +41,7 @@ def _refusal(url: str, reason: str) -> list[dict]:
 
 
 def make_search_tool(provider: SearchProvider, safety=None) -> BaseTool:
-    """`safety` is optional so the RAG lab and the eval harness, which have no
+    """`safety` is optional so the eval harness, which have no
     opinion about link reputation, keep the one-argument form."""
 
     @tool('web_search', args_schema=WebSearchArgs)
