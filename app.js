@@ -3757,8 +3757,8 @@
   function renderAssistant() {
     // Asked on entering the view rather than at load, and retried on every entry
     // until it answers — a brain started after the page must be found without a
-    // reload, exactly like the RAG lab's own re-probe. Not awaited: the view
-    // renders from the presets and re-renders only if the answer changes a pick.
+    // reload. Not awaited: the view renders from the presets and re-renders only
+    // if the answer changes a pick.
     if (!brainModels.provider) probeBrainModels();
     const sheet = document.createElement('section');
     sheet.className = 'assistant-sheet';

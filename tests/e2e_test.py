@@ -20,11 +20,6 @@ from playwright.sync_api import sync_playwright
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PORT = int(os.environ.get("TEST_PORT", "8799"))
 BRAIN_PORT = int(os.environ.get("TEST_BRAIN_PORT", "8798"))
-# The RAG lab is the one upstream this suite deliberately never starts, because
-# the absent-lab panel is part of what it checks. So the proxy is pinned at a
-# port nothing listens on: left unset, server.js falls back to :9002 and the
-# suite would reach a real lab a developer happens to have running, turning
-# three checks red on their machine and green in CI.
 URL = f"http://localhost:{PORT}"
 DB_PATH = os.path.join(tempfile.mkdtemp(prefix="qboard-test-"), "board.db")
 # The chat record beside it — without this the spawned server would write chat
