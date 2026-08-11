@@ -33,12 +33,6 @@ const PORT = Number(process.env.PORT) || 3000;
 // root-level board.db in — backed up first — the first time it boots.
 const DB_PATH = resolveBoardDb({ root: ROOT, env: process.env });
 const AGENT_URL = process.env.AGENT_URL || 'http://127.0.0.1:9000';
-// The RAG lab (brain/tests/raglab) — developer tooling, in the 9000 block like
-// the brains but a separate service, and usually not running at all. The
-// Assistant's lab page reaches it through this proxy so the browser talks to one
-// origin, exactly as it does for the brain.
-const RAGLAB_URL = process.env.RAGLAB_URL || 'http://127.0.0.1:9002';
-
 // A token bucket in front of the brain. This is the only place that can refuse:
 // the brain answers whatever reaches it, so a client stuck in a retry loop would
 // spend real API credit or pin a local model for minutes. Capacity and refill
@@ -1146,21 +1140,20 @@ const server = createServer(async (req, res) => {
     return sendJson(res, 405, { error: 'Method not allowed' });
   }
 
-  // Upstream proxies. Two services, deliberately reported apart: the brain holds
-  // the LLM key so the browser never sees it, and the RAG lab is developer
-  // tooling that is usually not running. Telling the user "assistant
-  // unavailable" because the lab is down would send them restarting a brain
-  // that works fine.
-  const upstream = path.startsWith('/api/raglab/')
-    ? { url: RAGLAB_URL + '/api' + path.slice('/api/raglab'.length), down: 'RAG lab unavailable' }
-    : path.startsWith('/api/agent/') || path.startsWith('/api/rag/')
-      ? { url: AGENT_URL + path.slice('/api'.length), down: 'assistant unavailable',
-          limited: true }
-      : null;
+  // The one upstream: the brain holds the LLM key, so the browser never talks to
+  // it directly. There used to be a second — the RAG lab on :9002, reported apart
+  // so "assistant unavailable" never sent anyone restarting a brain that was fine
+  // — and the lab moved to its own repository on 2026-08-11, where it is browsed
+  // directly.
+  const upstream = path.startsWith('/api/agent/') || path.startsWith('/api/rag/')
+    ? { url: AGENT_URL + path.slice('/api'.length), down: 'assistant unavailable',
+        limited: true }
+    : null;
   if (upstream) {
-    // Only the brain is metered, and it is metered before the body is read, so a
-    // flood costs nothing to refuse. The lab is left alone: it runs only when a
-    // developer starts it, and rate-limiting your own workbench is noise.
+    // Metered before the body is read, so a flood costs nothing to refuse. The
+    // flag stays although there is only one upstream left to carry it: it says
+    // that metering is a property of *this* upstream and not of proxying, which
+    // is what kept the RAG lab unmetered while it was the second one.
     if (upstream.limited) {
       const after = agentRetryAfter();
       if (after !== null) {
