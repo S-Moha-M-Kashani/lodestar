@@ -11,16 +11,6 @@ wheels/
 
 # Test artifacts
 tests/artifacts/
-# RAG Lab output: one JSON file per eval run, which is the lab's *only* durable
-# artifact — the index, the retrieved contexts and the answers live in process
-# memory and are discarded with it. Reproducible from the fixtures,
-# machine-specific, and appended to on every sweep.
-brain/tests/raglab/.runs/
-# `.screens/` is deliberately NOT ignored. A judge screen is the evidence for
-# which model was allowed to grade the four deciding metrics, so it is part of
-# the argument rather than an artifact of a machine — and the one thing this
-# project has already lost to a wiped scratch directory.
-
 # Node / SQLite
 node_modules/
 *.db
