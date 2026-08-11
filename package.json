@@ -1,24 +1,17 @@
 {
   "name": "lodestar",
   "version": "1.1.0",
-  "description": "Lodestar — your compass for life: capture every open question, prioritize what matters, and never lose one. SQLite-backed so nothing is lost.",
+  "description": "Lodestar \u2014 your compass for life: capture every open question, prioritize what matters, and never lose one. SQLite-backed so nothing is lost.",
   "type": "module",
   "scripts": {
     "start": "node server.js",
     "test-board": "PORT=3001 BOARD_DB=databases/test/board-3001.db ASSISTANT_DB=databases/test/assistant-3001.db AGENT_URL=http://127.0.0.1:9001 node server.js",
     "test-brain": "BOARD_API_URL=http://127.0.0.1:3001 BRAIN_CHROMA_URL=http://localhost:8004 BRAIN_CHROMA_DATABASE=lodestar-test uv run --project brain --extra local-embeddings uvicorn lodestar_brain.server:app --port 9001",
-    "lab": "node scripts/lab.mjs",
-    "raglab": "uv run --project brain --extra semantic --extra local-embeddings --with 'ragas==0.4.*' --with 'langchain-community<0.4' --with 'langchain-openai<1' --with rapidfuzz uvicorn --app-dir brain/tests raglab.server:app --port 9002",
-    "raglab:inspector": "uv run --project brain --extra semantic --extra local-embeddings uvicorn --app-dir brain/tests raglab.inspector:app --port 9003",
-    "raglab:sweep": "PYTHONPATH=brain/tests uv run --project brain --extra semantic --extra local-embeddings --with 'ragas==0.4.*' --with 'langchain-community<0.4' --with 'langchain-openai<1' --with rapidfuzz python -m raglab.sweep",
-    "raglab:judgescreen": "PYTHONPATH=brain/tests uv run --project brain python -m raglab.judgescreen",
-    "raglab:leaderboard": "PYTHONPATH=brain/tests uv run --project brain python -m raglab.leaderboard",
     "chroma": "docker compose up -d chroma",
     "chroma-test": "docker compose up -d chroma-test",
     "backup": "node scripts/backup-db.mjs",
     "test:server": "node scripts/backup-db.mjs && node --test tests/*.test.js",
-    "test:all": "node scripts/backup-db.mjs && node --test tests/*.test.js && uv run --project brain pytest brain/tests -v && uv run --with playwright python tests/e2e_test.py",
-    "test:raglab": "uv run --project brain pytest brain/tests/test_raglab.py -v"
+    "test:all": "node scripts/backup-db.mjs && node --test tests/*.test.js && uv run --project brain pytest brain/tests -v && uv run --with playwright python tests/e2e_test.py"
   },
   "engines": {
     "node": ">=23.4.0"
