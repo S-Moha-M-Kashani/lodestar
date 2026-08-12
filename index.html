@@ -406,6 +406,7 @@
     <div class="dialog-body">
       <h2>Import cards</h2>
       <p class="import-copy">Choose a Lodestar JSON file. You'll then decide whether to <strong>add</strong> its cards to the board or <strong>substitute</strong> the whole board.</p>
+      <p class="import-copy">An <strong>Asana</strong> project export works too — drop it in as it comes. Each task and subtask becomes a task card, keeping its notes, dates and a link back to Asana; completed ones land in Done.</p>
       <p class="import-copy">Writing the file yourself, or asking an AI to generate one? It must match this shape:</p>
       <pre id="import-schema" class="import-schema" tabindex="0" aria-label="Expected JSON file format"></pre>
       <p class="import-hint">Only "title" is required per card — everything else gets a default: cards land in the Inbox as questions, "num" (the permanent C-012 ledger number) is assigned automatically, timestamps are Unix milliseconds. "categories" is optional too — it carries custom life areas ("h" is an oklch hue, 0–359), and importing adopts any your board doesn't have yet.</p>

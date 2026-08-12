@@ -1,4 +1,5 @@
 import { assistantState, newSessionId, refreshChatSessions } from '../assistant/session.js';
+import { asanaToLodestar, isAsanaExport } from '../core/asana.js';
 import { ensureNums, parseState, uid } from '../core/cards.js';
 import { CAT_LIMIT, catById, categories, setCategories } from '../core/categories.js';
 import { commit } from '../core/history.js';
@@ -256,7 +257,14 @@ $('#import-input').addEventListener('change', async (e) => {
   importDialog.close();
   if (!file) return;
   try {
-    pendingImport = parseState(await file.text());
+    const text = await file.text();
+    // An Asana export is translated first and then validated like any other
+    // file — never trusted straight onto the board. A file that is not JSON at
+    // all falls through to parseState, which is what reports it.
+    let parsed = null;
+    try { parsed = JSON.parse(text); } catch { /* parseState says so below */ }
+    pendingImport = parseState(
+      isAsanaExport(parsed) ? JSON.stringify(asanaToLodestar(parsed)) : text);
     const n = pendingImport.cards.length;
     $('#import-mode-copy').textContent =
       `The file contains ${n} card${n === 1 ? '' : 's'}. Add ${n === 1 ? 'it' : 'them'} to the current board, ` +
@@ -266,7 +274,7 @@ $('#import-input').addEventListener('change', async (e) => {
     pendingImport = null;
     ask({
       title: 'Could not import this file',
-      message: 'It does not match the Lodestar format — open Import JSON to see (and copy) the expected schema.',
+      message: 'It is neither a Lodestar board nor an Asana export — open Import JSON to see (and copy) the expected schema.',
       cancelLabel: null,
     });
   }
