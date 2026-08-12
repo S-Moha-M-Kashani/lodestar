@@ -1308,6 +1308,36 @@ try:
         check("import: add mode adopts a new category from the file onto the rail",
               page.locator('.cat-tab[data-cat="garden"]').count() == 1)
 
+        # ---- Import: an Asana export ----------------------------------------
+        # Asana is not a second import pipeline. The file is translated into the
+        # board's own import JSON and then travels the identical path: the same
+        # add-or-substitute choice, the same validation, the same whole-board
+        # PUT. This block is what proves the seam holds end to end — a converter
+        # that is only unit-tested can still be wired to nothing.
+        asana_file = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  "fixtures", "asana-export.json")
+        before_asana = page.locator(".card").count()
+        page.set_input_files("#import-input", asana_file)
+        page.wait_for_selector("#import-mode-dialog[open]")
+        check("import: an Asana export offers the same add-or-substitute choice",
+              "6 cards" in page.locator("#import-mode-copy").inner_text())
+        page.click("#import-add")
+        page.wait_for_timeout(200)
+        check("import: the Asana tasks and their subtasks land on the board",
+              page.locator(".card").count() == before_asana + 6)
+        check("import: completed Asana tasks arrive in Done, the rest by section",
+              page.locator('[data-col="answered"] .card', has_text="methods section").count() == 1
+              and page.locator('[data-col="in-progress"] .card', has_text="Bibliography issues").count() == 1
+              and page.locator('[data-col="inbox"] .card', has_text="Submit final files").count() == 1)
+        page.locator(".card", has_text="Three bullet points").first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        asana_notes = page.locator("#card-notes").input_value()
+        check("import: an imported card keeps its parent and a link back to Asana",
+              "Subtask of: Highlights file" in asana_notes
+              and "app.asana.com" in asana_notes)
+        page.click("#cancel-dialog")
+        page.wait_for_timeout(100)
+
         # ---- Decisional-balance preview ---------------------------------------
         page.fill(".quick-add input", "Should we adopt the new framework?")
         page.press(".quick-add input", "Enter")
