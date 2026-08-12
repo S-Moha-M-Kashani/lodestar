@@ -25,12 +25,22 @@ const millis = (iso) => {
   return Number.isNaN(t) ? undefined : t;
 };
 
-/** Project and section names, lowercased. Asana's own `tags` array is a
- *  different thing and is empty in every export seen so far; the grouping a
- *  reader actually recognises is which project and which section a task sits
- *  in, and tags are the only place a card can hold either today. */
+/** Where the card came from, then its project and section names, lowercased.
+ *  Asana's own `tags` array is a different thing and is empty in every export
+ *  seen so far; the grouping a reader actually recognises is which project and
+ *  which section a task sits in, and tags are the only place a card can hold
+ *  either today.
+ *
+ *  The IMPORTED stamp comes first and is on every card without exception —
+ *  including the nested subtasks, which inherit no memberships and would
+ *  otherwise arrive untagged. Once the importer has reminted ids and ledger
+ *  numbers, nothing else on the board records that a card was imported at all,
+ *  so this tag is the only way to review a batch, or to find it again to
+ *  undo it, after the undo history has rolled past. */
+const IMPORTED = 'asana';
+
 const tagsOf = (task) => {
-  const out = [];
+  const out = [IMPORTED];
   for (const m of task.memberships || []) {
     for (const name of [m.project?.name, m.section?.name]) {
       const t = text(name).toLowerCase();

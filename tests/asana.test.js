@@ -51,8 +51,12 @@ test('a task becomes a card, and what has no home on the board is dropped', () =
   // When it was finished, not when Asana last touched the row: the Review
   // view reads updatedAt to decide what has been left alone.
   assert.equal(methods.updatedAt, Date.parse('2026-02-10T13:53:05.074Z'));
-  // Project and section are the only Asana grouping a card can carry today.
-  assert.deepEqual(methods.tags, ['manuscript project', 'manuscript']);
+  // Every imported card is stamped 'asana' first, then its project and
+  // section — the only Asana grouping a card can carry today. The stamp is
+  // what makes an import reviewable and reversible after the fact: filter on
+  // it and you have exactly the cards that came out of the file, which
+  // nothing else on the board records once the ids have been reminted.
+  assert.deepEqual(methods.tags, ['asana', 'manuscript project', 'manuscript']);
   // The notes are kept whole and the link is appended, so the card can always
   // be taken back to the row it came from.
   assert.equal(methods.notes,
@@ -109,6 +113,8 @@ test('the subtask tree is flattened once, however often Asana repeats a task', (
   assert.match(byTitle(cards, 'Three bullet points').notes, /^Subtask of: Highlights file\nAsana: /);
 
   // A nested subtask inherits nothing from its parent's memberships, so it
-  // carries no tags rather than borrowed ones.
-  assert.deepEqual(decl.tags, []);
+  // carries no project or section rather than borrowed ones — but it is still
+  // stamped, or an import could not be filtered back out whole.
+  assert.deepEqual(decl.tags, ['asana']);
+  assert.ok(cards.every((c) => c.tags[0] === 'asana'));
 });

@@ -1335,6 +1335,10 @@ try:
         check("import: an imported card keeps its parent and a link back to Asana",
               "Subtask of: Highlights file" in asana_notes
               and "app.asana.com" in asana_notes)
+        # The stamp every imported card wears, on the card the export gave the
+        # least to work with: no project, no section, no notes of its own.
+        check("import: an imported card is tagged 'asana' on the card itself",
+              page.locator("#card-tags").input_value().startswith("asana"))
         page.click("#cancel-dialog")
         page.wait_for_timeout(100)
 
