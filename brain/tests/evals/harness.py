@@ -13,7 +13,7 @@ from pathlib import Path
 
 from langchain_core.messages import AIMessage
 
-from lodestar_brain import untrusted
+from lodestar_brain.middleware import untrusted
 from lodestar_brain.agent import LodestarAgent
 from lodestar_brain.config import Settings
 from lodestar_brain.llm import FakeChat

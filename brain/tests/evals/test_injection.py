@@ -37,7 +37,7 @@ import os
 import pytest
 from langchain_core.messages import AIMessage
 
-from lodestar_brain import untrusted
+from lodestar_brain.middleware import untrusted
 from lodestar_brain.config import load_settings
 from lodestar_brain.llm import FakeChat
 
