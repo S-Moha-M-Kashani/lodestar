@@ -1,3 +1,4 @@
+import { boardUrl } from '../core/boards.js';
 import { cardLabel } from '../core/cards.js';
 import { render } from '../ui/render.js';
 
@@ -118,7 +119,7 @@ async function recallChat(text) {
   recallState.failed = false;
   render();
   try {
-    const res = await fetch('/api/rag/recall', {
+    const res = await fetch(boardUrl('/api/rag/recall'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text, k: 5 }),

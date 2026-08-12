@@ -1,4 +1,5 @@
 import { setChatScroll } from './streaming.js';
+import { boardUrl } from '../core/boards.js';
 import { uid } from '../core/cards.js';
 import { short } from '../core/history.js';
 import { KEY_PREFIX } from '../core/keys.js';
@@ -259,7 +260,7 @@ export async function learnRecordedIds() {
 /** Refresh the history list. */
 export async function refreshChatSessions() {
   try {
-    const res = await fetch('/api/chat/sessions', { headers: { Accept: 'application/json' } });
+    const res = await fetch(boardUrl('/api/chat/sessions'), { headers: { Accept: 'application/json' } });
     if (!res.ok) return;
     const data = await res.json();
     if (Array.isArray(data.sessions)) {
@@ -272,7 +273,7 @@ export async function refreshChatSessions() {
 /** Refresh the deleted-messages list. */
 export async function refreshChatTrash() {
   try {
-    const res = await fetch('/api/chat/trash', { headers: { Accept: 'application/json' } });
+    const res = await fetch(boardUrl('/api/chat/trash'), { headers: { Accept: 'application/json' } });
     if (!res.ok) return;
     const data = await res.json();
     if (Array.isArray(data.messages)) {
@@ -286,7 +287,7 @@ export async function refreshChatTrash() {
  *  these rows, and `sync` only ever adds, so a hidden turn would go on
  *  answering recall until the brain next booted. The same call covers a
  *  restore, where it is `sync` rather than `prune` that has work to do. */
-const reindexChat = () => { fetch('/api/rag/chat/reindex', { method: 'POST' }).catch(() => {}); };
+const reindexChat = () => { fetch(boardUrl('/api/rag/chat/reindex'), { method: 'POST' }).catch(() => {}); };
 
 /** Delete one turn. No confirmation, deliberately: nothing is destroyed here,
  *  and the message says where it went. The board's To Trash reads the same. */

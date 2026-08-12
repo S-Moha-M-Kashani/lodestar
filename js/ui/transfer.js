@@ -1,5 +1,6 @@
 import { assistantState, newSessionId, refreshChatSessions } from '../assistant/session.js';
 import { asanaToLodestar, isAsanaExport } from '../core/asana.js';
+import { activeBoardId, boardUrl } from '../core/boards.js';
 import { ensureNums, parseState, uid } from '../core/cards.js';
 import { CAT_LIMIT, catById, categories, setCategories } from '../core/categories.js';
 import { commit } from '../core/history.js';
@@ -116,7 +117,7 @@ export async function importChatFile(file) {
   try {
     const res = await fetch('/api/chat/messages', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ sessionId: importedInto, messages: clean }),
+      body: JSON.stringify({ sessionId: importedInto, boardId: activeBoardId, messages: clean }),
     });
     if (!res.ok) throw new Error(`the server refused the import (${res.status})`);
   } catch (err) {
@@ -128,7 +129,7 @@ export async function importChatFile(file) {
   // brain's next start, which runs the same sync, if it is off or away.
   let indexed = ' (recall index catches up at the next brain start)';
   try {
-    const rag = await (await fetch('/api/rag/chat/reindex', { method: 'POST' })).json();
+    const rag = await (await fetch(boardUrl('/api/rag/chat/reindex'), { method: 'POST' })).json();
     if (rag.memory) indexed = ` (${rag.indexed} indexed for recall)`;
   } catch { /* the note above already says what happens */ }
   announce(`Imported ${clean.length} messages into the chat record${indexed}`);

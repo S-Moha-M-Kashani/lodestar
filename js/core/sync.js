@@ -1,3 +1,4 @@
+import { boardUrl } from './boards.js';
 import { ensureNums, sanitizeCard } from './cards.js';
 import { categories, sanitizeCategories, setCategories } from './categories.js';
 import { saveState, saveTimeline, snapshot, timeline } from './history.js';
@@ -11,7 +12,10 @@ import { render } from '../ui/render.js';
 // whole board is pushed on every change, so deleting a card is the only
 // thing that removes its row server-side.
 
-const API = '/api/state';
+// Board-scoped on every call: without the parameter the server answers with —
+// and writes to — its default board, so a save made on the second board would
+// land on the first and archive everything there.
+const API = () => boardUrl('/api/state');
 export let serverAvailable = false;
 let serverOffline = false; // true once a push has failed, to warn only once
 let pushTimer = null;
@@ -31,7 +35,7 @@ export function pushToServer() {
   clearTimeout(pushTimer);
   pushTimer = setTimeout(async () => {
     try {
-      const res = await fetch(API, {
+      const res = await fetch(API(), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ version: 1, cards: state.cards, categories }),
@@ -48,10 +52,19 @@ export function pushToServer() {
   }, 150);
 }
 
+/** Drop a save that has not gone yet. Called when leaving a board: the pending
+ *  push names the board being left, and if that board is the one just deleted
+ *  the write arrives as a 400 against something that no longer exists. The
+ *  board's own cards are already on the server — this only ever discards a
+ *  push that would have been redundant or refused. */
+export function cancelPendingPush() {
+  clearTimeout(pushTimer);
+}
+
 export async function initServerSync() {
   let board;
   try {
-    const res = await fetch(API, { headers: { Accept: 'application/json' } });
+    const res = await fetch(API(), { headers: { Accept: 'application/json' } });
     if (!res.ok) return; // no usable backend — stay in localStorage mode
     board = await res.json();
   } catch (_) {
@@ -94,7 +107,7 @@ export async function adoptServerBoard() {
   // The agent mutated the DB through the Node API; adopt the server's board so a
   // debounced local push can't overwrite the agent's change with stale state.
   try {
-    const res = await fetch(API);
+    const res = await fetch(API());
     if (!res.ok) return;
     const data = await res.json();
     if (data && Array.isArray(data.cards)) {

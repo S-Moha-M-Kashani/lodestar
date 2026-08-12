@@ -27,7 +27,7 @@ class FakeSearch:
 
 
 class FakeMemory:
-    def search(self, text, k=5):
+    def search(self, text, k=5, board_id=None):
         return []
 
 

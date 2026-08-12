@@ -1,3 +1,4 @@
+import { DEFAULT_BOARD_ID, activeBoardId, boardSuffix } from './boards.js';
 import { parseState, seedCards } from './cards.js';
 import { setCategories } from './categories.js';
 import { COLUMNS, VIEWS } from './constants.js';
@@ -16,7 +17,9 @@ export let loadedFromStorage = false; // true when this browser already had a sa
 
 function loadState() {
   try {
-    const json = localStorage.getItem(STORAGE_KEY);
+    // Per board: the cache is this browser's copy of one board's cards, and a
+    // single key would hand the board you left to the board you opened.
+    const json = localStorage.getItem(STORAGE_KEY + boardSuffix);
     if (json) {
       const saved = parseState(json);
       if (saved.categories) setCategories(saved.categories);
@@ -26,7 +29,12 @@ function loadState() {
   } catch (err) {
     console.warn('Could not load saved board, starting fresh.', err);
   }
-  return { version: 1, columns: COLUMNS, cards: seedCards() };
+  // The seed cards are what an empty *app* opens with — an explanation of the
+  // board, written as cards. A board someone just created is not that: they
+  // asked for somewhere new to put things, and six examples in it would be six
+  // cards to delete. Only the default board is ever seeded.
+  const cards = activeBoardId === DEFAULT_BOARD_ID ? seedCards() : [];
+  return { version: 1, columns: COLUMNS, cards };
 }
 
 export let state = loadState();

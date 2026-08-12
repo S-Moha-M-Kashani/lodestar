@@ -203,6 +203,24 @@
         <div>
           <h1>Lodestar</h1>
           <p class="tagline">Your compass for life!</p>
+          <!-- Which board you are on, and the only way to reach another. With
+               the brand rather than in the toolbar: a board is the workspace
+               everything else filters and searches, not another filter. Hidden
+               until the server has listed the boards — with no backend there is
+               one board, held in this browser, and a picker offering to switch
+               between one thing is furniture that does nothing. -->
+          <div class="board-switch" hidden>
+            <select id="board-select" aria-label="Board" title="Board"></select>
+            <div class="toolbar-menu">
+              <button id="board-menu-btn" class="btn ghost" aria-haspopup="true" aria-expanded="false" title="Add, rename or remove a board">⋯</button>
+              <div id="board-menu-panel" class="menu-panel" hidden>
+                <button id="board-new" class="menu-item" title="Start a board with its own cards and its own chats">＋ New board</button>
+                <button id="board-rename" class="menu-item" title="Rename the board you are on">Rename board</button>
+                <button id="board-delete" class="menu-item" title="Remove this board — its cards are kept and it can be restored">Delete board</button>
+                <button id="board-trash-btn" class="menu-item" title="Boards you deleted — restore one, or erase it for good">Deleted boards…</button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
       <div class="view-switch" role="group" aria-label="Switch view">
@@ -447,6 +465,18 @@
       <div class="dialog-actions">
         <span class="spacer"></span>
         <button type="button" id="close-history" class="btn ghost">Close</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="boards-dialog">
+    <div class="dialog-body">
+      <h2>Deleted boards</h2>
+      <p class="import-copy">A deleted board is hidden, never emptied — its cards and its chats are still in the database. Restore one to bring it back whole. <strong>Delete permanently</strong> is the only thing that erases a board, and it takes everything on it.</p>
+      <div id="boards-trash-list" class="history-list"></div>
+      <div class="dialog-actions">
+        <span class="spacer"></span>
+        <button type="button" id="close-boards" class="btn ghost">Close</button>
       </div>
     </div>
   </dialog>

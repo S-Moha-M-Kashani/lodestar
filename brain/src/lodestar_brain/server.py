@@ -7,7 +7,7 @@ import logging
 from dataclasses import replace
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -67,6 +67,11 @@ class ChatBody(BaseModel):
     # Empty is omitted from the record rather than sent as '', so the server can
     # tell "no session named" from "a session named the empty string".
     session_id: str = ''
+    # Which board the user is looking at. Optional and omitted-when-empty for
+    # exactly the same reasons, and it decides which cards the tools read and
+    # which board a proposal lands on — so an Assistant answering about one
+    # board can never file its suggestions on another.
+    board_id: str = ''
 
 
 class TopicCheckBody(BaseModel):
@@ -178,7 +183,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # board and the brain in no promised order, so a board that is not up
         # yet is logged, never fatal.
         try:
-            recorded = board.list_chat()
+            recorded = board.list_all_chat()
             added = memory.sync(recorded)
             # And the other direction: a chat deleted while this brain was down
             # must stop answering recall. sync only ever adds, so without the
@@ -253,7 +258,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not turn:
             return
         try:
-            rows = board.record_chat(turn, session_id=body.session_id)
+            rows = board.record_chat(turn, session_id=body.session_id,
+                                     board_id=body.board_id)
         except Exception:
             logging.getLogger(__name__).exception(
                 'chat record unreachable — this turn is NOT in assistant.db')
@@ -274,7 +280,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         _refuse_if_oversized(body.messages)
         result = await agent.arun(body.messages, model=body.model,
                                   provider=body.provider,
-                                  session_id=body.session_id)
+                                  session_id=body.session_id,
+                                  board_id=body.board_id)
         cost = priced(result, body)
         remember(body, result, cost)
         return _turn_json(result, cost)
@@ -297,7 +304,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             try:
                 async for kind, payload in agent.astream(
                         body.messages, model=body.model, provider=body.provider,
-                        session_id=body.session_id):
+                        session_id=body.session_id, board_id=body.board_id):
                     if kind == 'calling':
                         yield _sse('calling', payload)   # already {tool, arguments}
                     elif kind == 'step':
@@ -381,12 +388,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         delete reach Chroma at once instead of at the next boot."""
         if memory is None:
             return {'indexed': 0, 'memory': False}
-        recorded = board.list_chat()
+        recorded = board.list_all_chat()
         return {'indexed': memory.sync(recorded),
                 'pruned': memory.prune(recorded), 'memory': True}
 
     @app.post('/rag/recall')
-    def recall(body: RecallBody) -> dict:
+    def recall(body: RecallBody, board_id: str = Query('', alias='board')) -> dict:
         """Searches the chat record AND the board's cards; every match says
         which with `source`. `memory` says whether the chat side had anywhere
         to look.
@@ -399,10 +406,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         board that is down costs the card half, never the whole answer.
         Chat and card hits are grouped, not sorted together: a weighted-RRF
         score and a coverage score share no scale, and interleaving them
-        would pretend a calibration that was never measured."""
+        would pretend a calibration that was never measured.
+
+        `?board=` scopes both halves. It is a query parameter rather than a
+        body field because the browser reaches this through the Node proxy,
+        which forwards the query string as it is."""
         cards: list[dict] = []
         try:
-            index.build(board.list_cards())
+            index.build(board.list_cards(board_id))
             # llm=None: the search box answers directly, so it gets the fast
             # ungated pipeline — the gate exists for contexts a model reads.
             hits = index.search(body.text, k=body.k, llm=None)
@@ -422,7 +433,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if memory is None:
             return {'matches': cards, 'memory': False}
         chat = [hit | {'source': 'chat'}
-                for hit in memory.search(body.text, k=body.k)]
+                for hit in memory.search(body.text, k=body.k,
+                                         board_id=board_id or None)]
         return {'matches': chat + cards, 'memory': True}
 
     return app

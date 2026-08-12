@@ -10,6 +10,7 @@ record, and a model-written summary of what the *user* said that day.
 from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel
 
@@ -38,7 +39,8 @@ def make_recap_tool(client: BoardClient, store=None, llm=None,
     names, so a test cannot flake across a UTC midnight."""
 
     @tool('daily_recap', args_schema=DailyRecapArgs)
-    def daily_recap(day: str = 'yesterday') -> dict:
+    def daily_recap(day: str = 'yesterday',
+                    config: RunnableConfig = None) -> dict:
         """What one day actually held: the cards created, the messages sent to
         the assistant, what the conversations were about, and a summary of the
         user's own words. Use it when asked about the user's concerns, thoughts
@@ -48,7 +50,8 @@ def make_recap_tool(client: BoardClient, store=None, llm=None,
         # The same UTC day-int the chunk metadata carries — see day_int.
         wanted = target.year * 10000 + target.month * 100 + target.day
 
-        cards = [c for c in client.list_cards()
+        board = (config or {}).get('configurable', {}).get('board_id') or ''
+        cards = [c for c in client.list_cards(board)
                  if day_int(c.get('createdAt')) == wanted]
         titles = [c.get('title', '') for c in cards]
 
@@ -58,7 +61,7 @@ def make_recap_tool(client: BoardClient, store=None, llm=None,
         labels = [meta['label'] if 'label' in meta else meta['summary']
                   for meta in chunks if 'label' in meta or 'summary' in meta]
 
-        messages = [m for m in client.list_chat()
+        messages = [m for m in client.list_chat(board)
                     if day_int(m.get('createdAt')) == wanted]
         user = [m for m in messages if m.get('role') == 'user']
         assistant = [m for m in messages if m.get('role') == 'assistant']

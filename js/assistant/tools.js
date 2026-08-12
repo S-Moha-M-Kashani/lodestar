@@ -2,6 +2,7 @@ import { renderChatSettings } from './models.js';
 import { renderRecallPanel } from './recall.js';
 import { assistantState, chatCacheKey, openChatSession, purgeChatMessage, refreshChatSessions, restoreChatMessage, startNewChat } from './session.js';
 import { sendChat } from './streaming.js';
+import { boardUrl } from '../core/boards.js';
 import { view } from '../core/state.js';
 import { ask, prompt } from '../ui/dialogs.js';
 import { $, announce } from '../ui/dom.js';
@@ -323,7 +324,7 @@ async function deleteChat(session) {
   // The record no longer returns those rows; this is what takes them out of
   // the recall index too, rather than leaving a deleted chat answering
   // questions until the brain next boots.
-  fetch('/api/rag/chat/reindex', { method: 'POST' }).catch(() => {});
+  fetch(boardUrl('/api/rag/chat/reindex'), { method: 'POST' }).catch(() => {});
   await refreshChatSessions();
   if (session.id === assistantState.sessionId) startNewChat({ focus: false });
   else render();

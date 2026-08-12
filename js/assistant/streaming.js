@@ -1,6 +1,7 @@
 import { assistantModels } from './models.js';
 import { CONTEXT_MESSAGES, assistantState, contextWindow, learnRecordedIds, newSessionId, persistChat, refreshChatSessions, replayable } from './session.js';
 import { appendLinked, paintChatSoon, sseFrames } from './transcript.js';
+import { activeBoardId } from '../core/boards.js';
 import { adoptServerBoard } from '../core/sync.js';
 import { announce } from '../ui/dom.js';
 import { refreshEdits, refreshProposals } from '../ui/proposals.js';
@@ -211,6 +212,10 @@ export async function sendChat(text) {
         // and scopes recall_chat away from it — the only reason the brain needs
         // to know, since the browser does its own windowing.
         session_id: assistantState.sessionId,
+        // And which board. The brain reads and proposes cards through it, and
+        // records the turn under it — an Assistant answering out of one board
+        // while filing its proposals on another is the failure this prevents.
+        board_id: activeBoardId,
         model: assistantModels.text,
         // Always sent, including against a brain configured as 'fake'. The
         // offline contract is the server's to keep (make_chat_model checks

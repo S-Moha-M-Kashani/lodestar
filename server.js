@@ -28,7 +28,10 @@ import { DatabaseSync } from 'node:sqlite';
 import { resolveBoardDb, resolveAssistantDb } from './scripts/db-location.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
-const PORT = Number(process.env.PORT) || 3000;
+// `|| 3000` would be wrong here: PORT=0 is a real request — it asks the kernel
+// for any free port, which is how the tests start servers that cannot collide —
+// and zero is falsy, so it used to arrive as 3000 and bind the dev board's port.
+const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 // databases/board.db by default (BOARD_DB overrides), moving a legacy
 // root-level board.db in — backed up first — the first time it boots.
 const DB_PATH = resolveBoardDb({ root: ROOT, env: process.env });
@@ -192,9 +195,38 @@ const safeJson = (json, fallback) => {
 mkdirSync(dirname(DB_PATH), { recursive: true });
 
 const db = new DatabaseSync(DB_PATH);
+
+// The boards themselves. Created and seeded BEFORE `cards`, because a card's
+// board_id references this table and the very first card must have a board to
+// point at. A board is soft-deleted like everything else here: `deleted_at`
+// takes it out of the picker and out of every scoped read, and its cards sit
+// untouched in the file until the board is either restored or purged.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS boards (
+    id         TEXT PRIMARY KEY,
+    name       TEXT    NOT NULL,
+    position   INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    deleted_at INTEGER
+  );
+`);
+
+// The board every card had before boards existed, and the one a caller that
+// names none is answered with. Its id is fixed: it is written into the
+// board_id column default below, so a database migrated by ALTER TABLE and one
+// created fresh agree on where the existing cards live.
+const DEFAULT_BOARD_ID = 'main';
+if (db.prepare('SELECT COUNT(*) AS n FROM boards').get().n === 0) {
+  const now = Date.now();
+  db.prepare('INSERT INTO boards (id, name, position, created_at, updated_at) VALUES (?, ?, 0, ?, ?)')
+    .run(DEFAULT_BOARD_ID, 'Lodestar', now, now);
+}
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS cards (
     id         TEXT PRIMARY KEY,
+    board_id   TEXT    NOT NULL DEFAULT 'main' REFERENCES boards(id),
     column_id  TEXT    NOT NULL,
     title      TEXT    NOT NULL,
     notes      TEXT    NOT NULL DEFAULT '',
@@ -243,6 +275,26 @@ if (!columnNames.has('habit_freq')) db.exec("ALTER TABLE cards ADD COLUMN habit_
 if (!columnNames.has('habit_count')) db.exec('ALTER TABLE cards ADD COLUMN habit_count INTEGER NOT NULL DEFAULT 1');
 if (!columnNames.has('habit_times')) db.exec("ALTER TABLE cards ADD COLUMN habit_times TEXT NOT NULL DEFAULT '[]'");
 if (!columnNames.has('habit_history')) db.exec("ALTER TABLE cards ADD COLUMN habit_history TEXT NOT NULL DEFAULT '{}'");
+// Every card written before boards existed belongs to the default board, which
+// the column default says without a single UPDATE. The REFERENCES clause is
+// carried across too, so a migrated database and a fresh one have one schema
+// rather than differing by a constraint only new files got.
+if (!columnNames.has('board_id')) {
+  // SQLite refuses ADD COLUMN with a REFERENCES clause and a non-NULL default
+  // while foreign keys are enforced, because an existing row could violate the
+  // constraint it is being given. (An empty table is accepted, which is why
+  // this only ever shows up against a database with cards in it.) They go off
+  // for the length of the one statement and straight back on, and the check
+  // below asserts what the pragma was turned off to assume: every migrated card
+  // now points at the seeded default board.
+  db.exec('PRAGMA foreign_keys = OFF');
+  db.exec("ALTER TABLE cards ADD COLUMN board_id TEXT NOT NULL DEFAULT 'main' REFERENCES boards(id)");
+  db.exec('PRAGMA foreign_keys = ON');
+  const orphans = db.prepare('PRAGMA foreign_key_check(cards)').all();
+  if (orphans.length) {
+    throw new Error(`${orphans.length} card(s) reference a board that does not exist`);
+  }
+}
 
 // An edit the Assistant wants is a SUGGESTION, and it lives here rather than in
 // `cards`. A pending row in `cards` would be a card — it would need a title, a
@@ -298,6 +350,164 @@ function writeCategories(cats) {
 const categoryIds = () => new Set(db.prepare('SELECT id FROM categories').all().map((r) => r.id));
 
 // --------------------------------------------------------------------------
+// Boards
+// --------------------------------------------------------------------------
+// One database, several boards. Cards and chats carry a board_id; the category
+// registry deliberately does not, because colour means category everywhere in
+// this app and per-board hues would make one colour mean two things.
+
+const BOARD_NAME_MAX = 60;
+const newBoardId = () => 'b-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+
+/** A board's name, or '' if it hasn't got a usable one. Blank refuses: an
+ *  unnamed row in the picker is a board you can see and cannot choose. */
+const boardName = (raw) => (typeof raw === 'string' ? raw.trim().slice(0, BOARD_NAME_MAX) : '');
+
+const rowToBoard = (r) => ({
+  id: r.id, name: r.name, position: r.position,
+  createdAt: r.created_at, updatedAt: r.updated_at,
+  ...(r.deleted_at ? { deletedAt: r.deleted_at } : {}),
+  ...(r.n === undefined ? {} : { cardCount: r.n }),
+});
+
+// Counted in SQL for the same reason the chat list counts its messages there:
+// the picker shows every board, and reading every board to render a list is how
+// a list gets slow exactly when the feature starts being useful.
+const BOARD_CARD_COUNT = `
+  (SELECT COUNT(*) FROM cards c
+    WHERE c.board_id = b.id AND c.deleted_at IS NULL AND c.pending = 0) AS n`;
+
+function readBoards() {
+  return db.prepare(
+    `SELECT b.*, ${BOARD_CARD_COUNT} FROM boards b
+      WHERE b.deleted_at IS NULL ORDER BY b.position ASC, b.created_at ASC`)
+    .all().map(rowToBoard);
+}
+
+/** Deleted boards, newest deletion first — the picker's own trash. */
+function readBoardsTrash() {
+  return db.prepare(
+    `SELECT b.*, ${BOARD_CARD_COUNT} FROM boards b
+      WHERE b.deleted_at IS NOT NULL ORDER BY b.deleted_at DESC`)
+    .all().map(rowToBoard);
+}
+
+/** The board a request that names none is answered with: the first live one.
+ *  Deliberately not the constant — `main` can itself be deleted once there is
+ *  somewhere else to go, and every caller written before boards existed must
+ *  keep addressing a real board rather than a stamped one. */
+function defaultBoardId() {
+  const row = db.prepare(
+    'SELECT id FROM boards WHERE deleted_at IS NULL ORDER BY position ASC, created_at ASC LIMIT 1').get();
+  return row ? row.id : DEFAULT_BOARD_ID;
+}
+
+/** Which board this request is about. Returns null for a board that does not
+ *  exist or has been deleted — the caller answers 400, because quietly serving
+ *  another board's cards is how you edit the wrong board without noticing. */
+function resolveBoard(url) {
+  const raw = url.searchParams.get('board');
+  if (!raw) return defaultBoardId();
+  const row = db.prepare('SELECT id FROM boards WHERE id = ? AND deleted_at IS NULL').get(raw);
+  return row ? row.id : null;
+}
+
+/** Same question, asked of a request body — the chat POST names its board there
+ *  rather than in the query string, beside the session it also names. */
+function resolveBoardId(raw) {
+  if (raw === undefined || raw === null || raw === '') return defaultBoardId();
+  if (typeof raw !== 'string') return null;
+  const row = db.prepare('SELECT id FROM boards WHERE id = ? AND deleted_at IS NULL').get(raw);
+  return row ? row.id : null;
+}
+
+function createBoard(rawName) {
+  const name = boardName(rawName);
+  if (!name) return null;
+  const now = Date.now();
+  const next = db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS p FROM boards').get().p;
+  const id = newBoardId();
+  db.prepare('INSERT INTO boards (id, name, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+    .run(id, name, next, now, now);
+  return rowToBoard({ id, name, position: next, created_at: now, updated_at: now, n: 0 });
+}
+
+function renameBoard(id, rawName) {
+  const name = boardName(rawName);
+  if (!name) return null;
+  const { changes } = db.prepare(
+    'UPDATE boards SET name = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL')
+    .run(name, Date.now(), id);
+  return changes ? readBoards().find((b) => b.id === id) ?? null : null;
+}
+
+const liveBoardCount = () =>
+  db.prepare('SELECT COUNT(*) AS n FROM boards WHERE deleted_at IS NULL').get().n;
+
+/** Soft-delete a board. Its cards and chats are not touched — this stamps one
+ *  row, and every scoped read does the rest, which is what makes a restore
+ *  bring the board back whole rather than partly.
+ *
+ *  Returns 'last' rather than deleting the only live board: a picker with
+ *  nothing in it is a dead end, and it is never what anyone meant. */
+function deleteBoard(id) {
+  const live = db.prepare('SELECT id FROM boards WHERE id = ? AND deleted_at IS NULL').get(id);
+  if (!live) return 'missing';
+  if (liveBoardCount() <= 1) return 'last';
+  db.prepare('UPDATE boards SET deleted_at = ? WHERE id = ?').run(Date.now(), id);
+  return 'ok';
+}
+
+function restoreBoard(id) {
+  const { changes } = db.prepare(
+    'UPDATE boards SET deleted_at = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NOT NULL')
+    .run(Date.now(), id);
+  return changes ? readBoards().find((b) => b.id === id) ?? null : null;
+}
+
+/**
+ * Erase a board and everything that belongs to it. This is the board-level
+ * "Delete permanently", and `deleted_at IS NOT NULL` is load-bearing exactly as
+ * it is for a card and for a chat message: only what is already in the trash can
+ * be destroyed, so no single call both hides a board and erases it.
+ *
+ * The two databases are purged in their own transactions — they are separate
+ * files and no transaction spans them. The board row goes last, so a failure
+ * part-way leaves a board still in the trash rather than orphaned rows with
+ * nothing to name them.
+ */
+function purgeBoard(id) {
+  const stamped = db.prepare('SELECT id FROM boards WHERE id = ? AND deleted_at IS NOT NULL').get(id);
+  if (!stamped) return null;
+
+  const sessions = chatDb.prepare('SELECT id FROM sessions WHERE board_id = ?').all(id).map((r) => r.id);
+  chatDb.exec('BEGIN');
+  try {
+    for (const sessionId of sessions) {
+      chatDb.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
+    }
+    chatDb.prepare('DELETE FROM sessions WHERE board_id = ?').run(id);
+    chatDb.exec('COMMIT');
+  } catch (err) {
+    chatDb.exec('ROLLBACK');
+    throw err;
+  }
+
+  let cards = 0;
+  db.exec('BEGIN');
+  try {
+    db.prepare(`DELETE FROM card_edits WHERE card_id IN (SELECT id FROM cards WHERE board_id = ?)`).run(id);
+    cards = db.prepare('DELETE FROM cards WHERE board_id = ?').run(id).changes;
+    db.prepare('DELETE FROM boards WHERE id = ?').run(id);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  return { cards, sessions: sessions.length };
+}
+
+// --------------------------------------------------------------------------
 // The chat record (assistant.db)
 // --------------------------------------------------------------------------
 // The assistant's transcript, given the same durability the board has — in its
@@ -334,12 +544,24 @@ chatDb.exec(`
 chatDb.exec(`
   CREATE TABLE IF NOT EXISTS sessions (
     id         TEXT PRIMARY KEY,
+    board_id   TEXT    NOT NULL DEFAULT 'main',
     title      TEXT    NOT NULL,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     deleted_at INTEGER
   );
 `);
+
+// A chat belongs to a board, and this column carries NO foreign key — `boards`
+// lives in board.db and SQLite cannot reference across files. That separation
+// is deliberate (the whole-board PUT must never sit next to two kinds of data),
+// so the board id is checked by the server on the way in instead. `messages`
+// needs no column of its own: a message belongs to a session, and the session
+// knows its board.
+const sessionColumns = new Set(chatDb.prepare('PRAGMA table_info(sessions)').all().map((c) => c.name));
+if (!sessionColumns.has('board_id')) {
+  chatDb.exec("ALTER TABLE sessions ADD COLUMN board_id TEXT NOT NULL DEFAULT 'main'");
+}
 
 // Same boot-time migration the board uses, for the same reason: an assistant.db
 // written before sessions existed has to keep working untouched.
@@ -360,6 +582,12 @@ const CHAT_ROLES = new Set(['user', 'assistant']);
 // real conversation rather than mixed into one.
 const ADHOC_SESSION = 'adhoc';
 const ADHOC_TITLE = 'Unsessioned (API)';
+// One per board, since a chat belongs to a board and an unsessioned turn is
+// still a turn someone can go and read. The default board keeps the bare id:
+// sixteen brain tests, the evals and every curl written before boards existed
+// name no board, and their record must stay exactly where it has always been.
+const adhocSessionId = (boardId) =>
+  (boardId === DEFAULT_BOARD_ID ? ADHOC_SESSION : `${ADHOC_SESSION}-${boardId}`);
 // What a pre-session record becomes. One session, so nothing is orphaned and
 // `session_id` is never empty after boot: no read path needs a NULL branch.
 const LEGACY_TITLE = 'Earlier conversations';
@@ -402,6 +630,9 @@ const chatTitleFrom = (content) =>
 const rowToChatMessage = (r) => ({
   id: r.id,
   sessionId: r.session_id,
+  // Present only where the read joined the session — the index needs it to
+  // keep one board's conversations out of another's recall.
+  ...(r.board_id ? { boardId: r.board_id } : {}),
   role: r.role,
   content: r.content,
   createdAt: r.created_at,
@@ -417,25 +648,29 @@ const LIVE_MESSAGES = `
   FROM messages m LEFT JOIN sessions s ON s.id = m.session_id
   WHERE m.deleted_at IS NULL AND s.deleted_at IS NULL`;
 
-function readChatMessages() {
+/** The live record. One board's, or — with no board named — every board's,
+ *  which only the brain's index maintenance asks for. */
+function readChatMessages(boardId) {
   // created_at before id, so an imported older transcript reads in order.
+  const scope = boardId ? ' AND s.board_id = ?' : '';
+  const args = boardId ? [boardId] : [];
   return chatDb.prepare(
-    `SELECT m.* ${LIVE_MESSAGES} ORDER BY m.created_at, m.id`)
-    .all().map(rowToChatMessage);
+    `SELECT m.*, s.board_id AS board_id ${LIVE_MESSAGES}${scope} ORDER BY m.created_at, m.id`)
+    .all(...args).map(rowToChatMessage);
 }
 
 /** Every live chat, newest activity first — the history panel's list.
  *  messageCount is counted in SQL: the panel lists every chat, and reading
  *  every transcript to render a list is how a list becomes slow at exactly the
  *  point the feature becomes useful. */
-function readChatSessions() {
+function readChatSessions(boardId) {
   return chatDb.prepare(`
     SELECT s.id, s.title, s.created_at, s.updated_at,
            (SELECT COUNT(*) FROM messages m
              WHERE m.session_id = s.id AND m.deleted_at IS NULL) AS n
-      FROM sessions s WHERE s.deleted_at IS NULL
+      FROM sessions s WHERE s.deleted_at IS NULL AND s.board_id = ?
       ORDER BY s.updated_at DESC, s.created_at DESC`)
-    .all()
+    .all(boardId)
     .map((r) => ({ id: r.id, title: r.title, createdAt: r.created_at,
                    updatedAt: r.updated_at, messageCount: r.n }));
 }
@@ -499,13 +734,13 @@ function deleteChatMessage(id) {
  *  the unit: listing its turns loose would bury real deletions under a whole
  *  transcript, and restoring one into a chat that cannot be opened would be a
  *  restore with nothing to show for it. */
-function readChatTrash() {
+function readChatTrash(boardId) {
   return chatDb.prepare(`
     SELECT m.*, s.title AS session_title
       FROM messages m JOIN sessions s ON s.id = m.session_id
-     WHERE m.deleted_at IS NOT NULL AND s.deleted_at IS NULL
+     WHERE m.deleted_at IS NOT NULL AND s.deleted_at IS NULL AND s.board_id = ?
      ORDER BY m.deleted_at DESC, m.id DESC`)
-    .all()
+    .all(boardId)
     .map((r) => ({ ...rowToChatMessage(r), deletedAt: r.deleted_at,
                    sessionTitle: r.session_title }));
 }
@@ -537,7 +772,7 @@ function purgeChatMessage(id) {
  *  The session row is upserted from the batch, so there is no "create session"
  *  call any writer could forget to make. Returns the inserted rows, or null
  *  when the batch is invalid. */
-function appendChatMessages(list, sessionId) {
+function appendChatMessages(list, sessionId, boardId) {
   if (!Array.isArray(list) || list.length === 0) return null;
   // A given session id must be a string: an object here would be stringified
   // into a chat nobody can name again.
@@ -549,7 +784,8 @@ function appendChatMessages(list, sessionId) {
     if (m.createdAt !== undefined && !Number.isFinite(m.createdAt)) return null;
     if (m.cost !== undefined && m.cost !== null && !Number.isFinite(m.cost)) return null;
   }
-  const id = (typeof sessionId === 'string' && sessionId.trim()) || ADHOC_SESSION;
+  const board = boardId || DEFAULT_BOARD_ID;
+  const id = (typeof sessionId === 'string' && sessionId.trim()) || adhocSessionId(board);
   const insert = chatDb.prepare(`
     INSERT INTO messages (session_id, role, content, created_at, steps, usage, cost)
     VALUES (?, ?, ?, ?, ?, ?, ?)`);
@@ -562,10 +798,10 @@ function appendChatMessages(list, sessionId) {
       // Titled from the first USER message of the batch that opened the chat —
       // an assistant's greeting is not what the conversation is about.
       const opener = list.find((m) => m.role === 'user') ?? list[0];
-      const title = id === ADHOC_SESSION ? ADHOC_TITLE : chatTitleFrom(opener.content);
+      const title = id === adhocSessionId(board) ? ADHOC_TITLE : chatTitleFrom(opener.content);
       chatDb.prepare(
-        'INSERT INTO sessions (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)')
-        .run(id, title, Math.min(...stamps), Math.max(...stamps));
+        'INSERT INTO sessions (id, board_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+        .run(id, board, title, Math.min(...stamps), Math.max(...stamps));
     }
     for (const [i, m] of list.entries()) {
       const createdAt = stamps[i];
@@ -626,26 +862,30 @@ function safeTags(json) {
 
 // The live board is the cards that are neither soft-deleted nor still
 // awaiting the user's approval.
-function readBoard() {
+function readBoard(boardId) {
   const catIds = categoryIds();
   const rows = db.prepare(
-    'SELECT * FROM cards WHERE deleted_at IS NULL AND pending = 0 ORDER BY position ASC').all();
+    'SELECT * FROM cards WHERE board_id = ? AND deleted_at IS NULL AND pending = 0 ORDER BY position ASC')
+    .all(boardId);
   return { version: 1, cards: rows.map((r) => rowToCard(r, catIds)), categories: readCategories() };
 }
 
 // Cards the Assistant proposed, oldest first, still waiting to be accepted.
-function readProposals() {
+function readProposals(boardId) {
   const catIds = categoryIds();
   const rows = db.prepare(
-    'SELECT * FROM cards WHERE deleted_at IS NULL AND pending = 1 ORDER BY created_at ASC').all();
+    'SELECT * FROM cards WHERE board_id = ? AND deleted_at IS NULL AND pending = 1 ORDER BY created_at ASC')
+    .all(boardId);
   return { version: 1, cards: rows.map((r) => rowToCard(r, catIds)) };
 }
 
 // The Trash is the soft-deleted cards, newest deletion first. They are still
 // in the database and can be restored (re-added by the client) until purged.
-function readTrash() {
+function readTrash(boardId) {
   const catIds = categoryIds();
-  const rows = db.prepare('SELECT * FROM cards WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC').all();
+  const rows = db.prepare(
+    'SELECT * FROM cards WHERE board_id = ? AND deleted_at IS NOT NULL ORDER BY deleted_at DESC')
+    .all(boardId);
   return { version: 1, cards: rows.map((r) => rowToCard(r, catIds)) };
 }
 
@@ -692,8 +932,12 @@ const cryptoId = () => 'id-' + Math.random().toString(36).slice(2) + Date.now().
  *
  * Returns { board, created } — `created` is how many of these cards the database
  * had never seen, which is what triggers a backup.
+ *
+ * Everything here is scoped to ONE board. The sweep is where that matters most:
+ * unscoped, a keystroke on this board would archive every card on every other
+ * one, which is the worst thing this file could be made to do.
  */
-function writeBoard(cards) {
+function writeBoard(cards, boardId) {
   const now = Date.now();
   const catIds = categoryIds();
   const clean = cards.map((c) => cleanCard(c, now, catIds)).filter(Boolean);
@@ -707,11 +951,11 @@ function writeBoard(cards) {
 
   const softDelete = db.prepare('UPDATE cards SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL');
   const upsert = db.prepare(`
-    INSERT INTO cards (id, column_id, title, notes, type, category, importance, urgency,
+    INSERT INTO cards (id, board_id, column_id, title, notes, type, category, importance, urgency,
                        effort, control, effort_src, control_src, deadline,
                        habit_freq, habit_count, habit_times, habit_history,
                        num, tags, created_at, updated_at, position, deleted_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
     ON CONFLICT(id) DO UPDATE SET
       column_id = excluded.column_id, title = excluded.title, notes = excluded.notes,
       type = excluded.type, category = excluded.category,
@@ -727,18 +971,22 @@ function writeBoard(cards) {
   `);
   // NOTE: `pending` is deliberately absent from both the column list and the
   // conflict SET, so a board save can neither create a proposal nor silently
-  // accept one. Only /api/proposals/:id/confirm clears that flag.
+  // accept one. Only /api/proposals/:id/confirm clears that flag. `board_id` is
+  // absent from the SET for the same shape of reason: a card that already exists
+  // keeps the board it is on, so no whole-board save can move a card between
+  // boards. Moving one is a feature with its own questions to answer, not a
+  // side effect of a save.
 
   db.exec('BEGIN');
   try {
     // `AND pending = 0` is load-bearing: the browser cannot see proposals, so it
     // never sends them, and without this clause every save would archive them.
     for (const { id } of db.prepare(
-      'SELECT id FROM cards WHERE deleted_at IS NULL AND pending = 0').all()) {
+      'SELECT id FROM cards WHERE board_id = ? AND deleted_at IS NULL AND pending = 0').all(boardId)) {
       if (!keep.has(id)) softDelete.run(now, id);
     }
     clean.forEach((c, i) =>
-      upsert.run(c.id, c.columnId, c.title, c.notes, c.type, c.category, c.importance, c.urgency,
+      upsert.run(c.id, boardId, c.columnId, c.title, c.notes, c.type, c.category, c.importance, c.urgency,
         c.effort, c.control, c.effortSrc, c.controlSrc, c.deadline,
         c.habitFreq, c.habitCount, JSON.stringify(c.habitTimes), JSON.stringify(c.habitHistory),
         c.num, JSON.stringify(c.tags), c.createdAt, c.updatedAt, i));
@@ -751,7 +999,7 @@ function writeBoard(cards) {
   // filtered on read, so the row does not linger and reappear if the card is
   // later restored from Trash carrying an edit the user never saw.
   pruneOrphanedEdits();
-  return { board: readBoard(), created };
+  return { board: readBoard(boardId), created };
 }
 
 /**
@@ -760,18 +1008,18 @@ function writeBoard(cards) {
  * keeps it off the board until the user accepts it. Returns the stored proposal,
  * or null if the card had no usable title.
  */
-function writeProposal(raw) {
+function writeProposal(raw, boardId) {
   const now = Date.now();
   const catIds = categoryIds();
   const card = cleanCard(raw, now, catIds);
   if (!card) return null;
   db.prepare(`
-    INSERT INTO cards (id, column_id, title, notes, type, category, importance, urgency,
+    INSERT INTO cards (id, board_id, column_id, title, notes, type, category, importance, urgency,
                        effort, control, effort_src, control_src, deadline,
                        habit_freq, habit_count, habit_times, habit_history,
                        num, tags, created_at, updated_at, position, deleted_at, pending)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1)
-  `).run(card.id, card.columnId, card.title, card.notes, card.type, card.category,
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1)
+  `).run(card.id, boardId, card.columnId, card.title, card.notes, card.type, card.category,
     card.importance, card.urgency, card.effort, card.control, card.effortSrc,
     card.controlSrc, card.deadline,
     card.habitFreq, card.habitCount,
@@ -783,14 +1031,18 @@ function writeProposal(raw) {
 }
 
 /**
- * Accept a proposal: it becomes an ordinary board card. Returns false if there
- * is no such pending card, so confirming twice (or confirming something already
- * live) is a 404 rather than a silent no-op.
+ * Accept a proposal: it becomes an ordinary board card. Returns the id of the
+ * board it landed on — the route answers with that board, and a proposal knows
+ * which one it belongs to, so accepting one never needs to be told. Returns null
+ * if there is no such pending card, so confirming twice (or confirming something
+ * already live) is a 404 rather than a silent no-op.
  */
 function confirmProposal(id) {
-  return db.prepare(
-    'UPDATE cards SET pending = 0, updated_at = ? WHERE id = ? AND pending = 1 AND deleted_at IS NULL',
-  ).run(Date.now(), id).changes > 0;
+  const row = db.prepare(
+    'SELECT board_id FROM cards WHERE id = ? AND pending = 1 AND deleted_at IS NULL').get(id);
+  if (!row) return null;
+  db.prepare('UPDATE cards SET pending = 0, updated_at = ? WHERE id = ?').run(Date.now(), id);
+  return row.board_id;
 }
 
 // Fields a suggestion may name. The same set `update_card` has always been able
@@ -820,9 +1072,13 @@ function writeEdit(raw) {
   return row;
 }
 
-/** Suggestions still worth showing: oldest first, like the proposal list. */
-function readEdits() {
-  return db.prepare('SELECT * FROM card_edits ORDER BY created_at ASC').all()
+/** Suggestions still worth showing: oldest first, like the proposal list.
+ *  Scoped through the card rather than by a column of its own — a suggestion
+ *  points at a card, and that card already knows which board it is on. */
+function readEdits(boardId) {
+  return db.prepare(`
+    SELECT e.* FROM card_edits e JOIN cards c ON c.id = e.card_id
+     WHERE c.board_id = ? ORDER BY e.created_at ASC`).all(boardId)
     .map((r) => ({ id: r.id, cardId: r.card_id, fields: JSON.parse(r.fields),
       createdAt: r.created_at }));
 }
@@ -958,10 +1214,88 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const path = url.pathname;
 
+  // Which board this request is about, for every route that reads or writes
+  // board data. Absent means the default board, so every caller written before
+  // boards existed still addresses a real one; a named board that is gone or
+  // never existed is refused below rather than quietly swapped for another.
+  const boardId = resolveBoard(url);
+  const noSuchBoard = () => sendJson(res, 400, { error: 'No such board' });
+
+  // The boards themselves. Checked before the board-data routes only for
+  // reading order; the paths do not overlap.
+  if (path === '/api/boards') {
+    if (req.method === 'GET') {
+      return sendJson(res, 200, { boards: readBoards(), defaultId: defaultBoardId() });
+    }
+    if (req.method === 'POST') {
+      try {
+        const board = createBoard(JSON.parse(await readBody(req))?.name);
+        if (!board) return sendJson(res, 400, { error: 'A board needs a non-empty name' });
+        return sendJson(res, 200, { board });
+      } catch (err) {
+        return sendJson(res, 400, { error: 'Invalid JSON: ' + err.message });
+      }
+    }
+    return sendJson(res, 405, { error: 'Method not allowed' });
+  }
+
+  // Deleted boards, and the two ways out of the trash. Matched before
+  // /api/boards/:id, or 'trash' would be read as a board id.
+  if (path === '/api/boards/trash') {
+    if (req.method === 'GET') return sendJson(res, 200, { boards: readBoardsTrash() });
+    return sendJson(res, 405, { error: 'Method not allowed' });
+  }
+
+  if (path.startsWith('/api/boards/trash/')) {
+    const rest = decodeURIComponent(path.slice('/api/boards/trash/'.length));
+    if (rest.endsWith('/restore')) {
+      if (req.method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed' });
+      const board = restoreBoard(rest.slice(0, -'/restore'.length));
+      return board
+        ? sendJson(res, 200, { board })
+        : sendJson(res, 404, { error: 'No such deleted board' });
+    }
+    if (req.method === 'DELETE') {
+      const purged = purgeBoard(rest);
+      // 404 for a board that is live as well as for one that never existed: the
+      // only thing that can be erased is something already in the trash.
+      return purged
+        ? sendJson(res, 200, { ok: true, ...purged })
+        : sendJson(res, 404, { error: 'No such deleted board' });
+    }
+    return sendJson(res, 405, { error: 'Method not allowed' });
+  }
+
+  if (path.startsWith('/api/boards/')) {
+    const id = decodeURIComponent(path.slice('/api/boards/'.length));
+    if (req.method === 'PATCH') {
+      try {
+        const board = renameBoard(id, JSON.parse(await readBody(req))?.name);
+        // One status for both "no such board" and "blank name": the second is
+        // the interesting one, so the message names it.
+        return board
+          ? sendJson(res, 200, { board })
+          : sendJson(res, 400, { error: 'A board needs a non-empty name' });
+      } catch (err) {
+        return sendJson(res, 400, { error: 'Invalid JSON: ' + err.message });
+      }
+    }
+    if (req.method === 'DELETE') {
+      const outcome = deleteBoard(id);
+      if (outcome === 'missing') return sendJson(res, 404, { error: 'No such board' });
+      if (outcome === 'last') {
+        return sendJson(res, 409, { error: 'The last board cannot be deleted' });
+      }
+      return sendJson(res, 200, { ok: true });
+    }
+    return sendJson(res, 405, { error: 'Method not allowed' });
+  }
+
   // API
   if (path === '/api/state') {
+    if (boardId === null) return noSuchBoard();
     if (req.method === 'GET') {
-      return sendJson(res, 200, readBoard());
+      return sendJson(res, 200, readBoard(boardId));
     }
     if (req.method === 'PUT') {
       try {
@@ -973,7 +1307,7 @@ const server = createServer(async (req, res) => {
         // category validate against the fresh registry.
         const cats = sanitizeCategories(parsed.categories);
         if (cats) writeCategories(cats);
-        const { board, created } = writeBoard(parsed.cards);
+        const { board, created } = writeBoard(parsed.cards, boardId);
         sendJson(res, 200, board);
         // After the response: one snapshot per save that brought new cards,
         // however many they were. Never before, or the backup would miss them.
@@ -988,7 +1322,8 @@ const server = createServer(async (req, res) => {
 
   // The Trash — soft-deleted cards, recoverable until purged.
   if (path === '/api/trash') {
-    if (req.method === 'GET') return sendJson(res, 200, readTrash());
+    if (boardId === null) return noSuchBoard();
+    if (req.method === 'GET') return sendJson(res, 200, readTrash(boardId));
     return sendJson(res, 405, { error: 'Method not allowed' });
   }
 
@@ -997,14 +1332,19 @@ const server = createServer(async (req, res) => {
   // The single exception is DELETE /api/chat/trash/:id below — chat's own
   // "Delete permanently", reachable only for something already in the trash.
   if (path === '/api/chat/messages') {
-    if (req.method === 'GET') return sendJson(res, 200, { messages: readChatMessages() });
+    if (boardId === null) return noSuchBoard();
+    if (req.method === 'GET') return sendJson(res, 200, { messages: readChatMessages(boardId) });
     if (req.method === 'POST') {
       try {
         const body = JSON.parse(await readBody(req));
-        const saved = appendChatMessages(body.messages, body.sessionId);
+        // The board is named in the body here, beside the session, because this
+        // is the one chat route the brain posts to and both travel together.
+        const target = resolveBoardId(body.boardId);
+        if (target === null) return noSuchBoard();
+        const saved = appendChatMessages(body.messages, body.sessionId, target);
         if (!saved) {
           return sendJson(res, 400, { error:
-            'Body must be { messages: [{role, content, createdAt?, steps?, usage?, cost?}], sessionId? }'
+            'Body must be { messages: [{role, content, createdAt?, steps?, usage?, cost?}], sessionId?, boardId? }'
             + ' — role user|assistant, content non-empty, sessionId a string' });
         }
         return sendJson(res, 200, { messages: saved });
@@ -1012,6 +1352,17 @@ const server = createServer(async (req, res) => {
         return sendJson(res, 400, { error: 'Invalid JSON: ' + err.message });
       }
     }
+    return sendJson(res, 405, { error: 'Method not allowed' });
+  }
+
+  // Every board's live messages, in one read. The brain's chat index is one
+  // Chroma collection over the whole record, and its maintenance needs the
+  // whole record: `prune` drops chunks whose message is no longer live, so
+  // handing it one board's messages would erase every other board from the
+  // index. Nothing in the browser calls this — recall is board-scoped, and this
+  // is the one read that deliberately is not.
+  if (path === '/api/chat/messages/all') {
+    if (req.method === 'GET') return sendJson(res, 200, { messages: readChatMessages() });
     return sendJson(res, 405, { error: 'Method not allowed' });
   }
 
@@ -1029,7 +1380,8 @@ const server = createServer(async (req, res) => {
   // The assistant's trash — turns deleted one at a time, recoverable until the
   // deliberate second step.
   if (path === '/api/chat/trash') {
-    if (req.method === 'GET') return sendJson(res, 200, { messages: readChatTrash() });
+    if (boardId === null) return noSuchBoard();
+    if (req.method === 'GET') return sendJson(res, 200, { messages: readChatTrash(boardId) });
     return sendJson(res, 405, { error: 'Method not allowed' });
   }
 
@@ -1054,7 +1406,8 @@ const server = createServer(async (req, res) => {
 
   // The chats themselves — the history panel's list.
   if (path === '/api/chat/sessions') {
-    if (req.method === 'GET') return sendJson(res, 200, { sessions: readChatSessions() });
+    if (boardId === null) return noSuchBoard();
+    if (req.method === 'GET') return sendJson(res, 200, { sessions: readChatSessions(boardId) });
     return sendJson(res, 405, { error: 'Method not allowed' });
   }
 
@@ -1091,10 +1444,11 @@ const server = createServer(async (req, res) => {
   // Deliberately NOT part of /api/state: they never travel through a whole-board
   // PUT, so the "never send a partial card list" contract is untouched.
   if (path === '/api/proposals') {
-    if (req.method === 'GET') return sendJson(res, 200, readProposals());
+    if (boardId === null) return noSuchBoard();
+    if (req.method === 'GET') return sendJson(res, 200, readProposals(boardId));
     if (req.method === 'POST') {
       try {
-        const proposal = writeProposal(JSON.parse(await readBody(req)));
+        const proposal = writeProposal(JSON.parse(await readBody(req)), boardId);
         if (!proposal) return sendJson(res, 400, { error: 'A proposal needs a title' });
         return sendJson(res, 200, proposal);
       } catch (err) {
@@ -1109,7 +1463,8 @@ const server = createServer(async (req, res) => {
   // saving the board, which is PUT /api/state like any other edit they make.
   // All this surface can do is hold a suggestion and let go of it.
   if (path === '/api/edits') {
-    if (req.method === 'GET') return sendJson(res, 200, { edits: readEdits() });
+    if (boardId === null) return noSuchBoard();
+    if (req.method === 'GET') return sendJson(res, 200, { edits: readEdits(boardId) });
     if (req.method === 'POST') {
       try {
         const stored = writeEdit(JSON.parse(await readBody(req)));
@@ -1140,8 +1495,9 @@ const server = createServer(async (req, res) => {
     const action = rest.slice(slash + 1);
     if (req.method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed' });
     if (action === 'confirm') {
-      if (!confirmProposal(id)) return sendJson(res, 404, { error: 'No such proposal' });
-      sendJson(res, 200, readBoard());
+      const landedOn = confirmProposal(id);
+      if (!landedOn) return sendJson(res, 404, { error: 'No such proposal' });
+      sendJson(res, 200, readBoard(landedOn));
       // The card is the user's now, which is the moment worth a snapshot.
       backupAfterNewCards();
       return;
@@ -1247,5 +1603,10 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`Lodestar running at http://localhost:${PORT}  (db: ${DB_PATH})`);
+  // The port the OS actually gave us, not the one we asked for. They differ for
+  // exactly one caller and it matters there: PORT=0 lets the kernel hand out a
+  // free port, which is how the test harness starts a dozen servers at once
+  // without them fighting over a number somebody guessed.
+  const { port } = server.address();
+  console.log(`Lodestar running at http://localhost:${port}  (db: ${DB_PATH})`);
 });

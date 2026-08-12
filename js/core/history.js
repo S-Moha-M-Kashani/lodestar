@@ -1,3 +1,4 @@
+import { boardSuffix } from './boards.js';
 import { categories } from './categories.js';
 import { HISTORY_KEY, HISTORY_LIMIT, STORAGE_KEY } from './keys.js';
 import { setCards, setDealCards, state } from './state.js';
@@ -25,7 +26,9 @@ export let timeline = { entries: [], index: -1 };
  *  a single closure runs strictly top to bottom. */
 export function initTimeline() {
   try {
-    const raw = localStorage.getItem(HISTORY_KEY);
+    // Per board, like the board cache: an undo restores card snapshots, so a
+    // shared timeline would let one board's undo deal another board's cards.
+    const raw = localStorage.getItem(HISTORY_KEY + boardSuffix);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed && Array.isArray(parsed.entries) && Number.isInteger(parsed.index)) timeline = parsed;
@@ -39,7 +42,7 @@ export function initTimeline() {
 
 export function saveTimeline() {
   try {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(timeline));
+    localStorage.setItem(HISTORY_KEY + boardSuffix, JSON.stringify(timeline));
   } catch (err) {
     console.warn('Could not save history.', err);
   }
@@ -47,7 +50,7 @@ export function saveTimeline() {
 
 export function saveState() {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...state, categories }));
+    localStorage.setItem(STORAGE_KEY + boardSuffix, JSON.stringify({ ...state, categories }));
   } catch (err) {
     console.warn('Could not save board.', err);
   }

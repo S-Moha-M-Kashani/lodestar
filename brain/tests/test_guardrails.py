@@ -250,5 +250,5 @@ def test_the_brain_has_no_way_to_write_a_card():
     every failure mode the removal closed.
     """
     surface = {name for name in vars(BoardClient) if not name.startswith('_')}
-    assert surface == {'list_cards', 'list_chat', 'record_chat',
+    assert surface == {'list_cards', 'list_chat', 'list_all_chat', 'record_chat',
                        'create_proposal', 'create_edit'}

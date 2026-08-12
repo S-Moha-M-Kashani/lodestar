@@ -101,7 +101,9 @@ def test_recall_searches_cards_and_chat_with_source_labels():
                    'title': 'buy a fig tree for the balcony',
                    'columnId': 'inbox', 'type': 'task', 'category': 'home',
                    'createdAt': ms(2026, 7, 1), 'updatedAt': ms(2026, 7, 1)}]}))
-    respx.get(f'{BOARD}/api/chat/messages').mock(
+    # /all, because that is what the boot sync reads: the index spans every
+    # board, so seeding it from one board's messages would prune the rest.
+    respx.get(f'{BOARD}/api/chat/messages/all').mock(
         return_value=httpx.Response(200, json={'messages': [row(1, PASSWORD)]}))
     client = TestClient(create_app(Settings(
         llm_provider='fake', embedder='fake', board_api_url=BOARD,
@@ -197,7 +199,9 @@ def test_recall_says_nothing_rather_than_noise():
             {'id': 'c2', 'num': 2, 'title': 'Which Stoic should I read?',
              'columnId': 'inbox', 'type': 'question', 'category': 'mind',
              'createdAt': ms(2026, 7, 1), 'updatedAt': ms(2026, 7, 1)}]}))
-    respx.get(f'{BOARD}/api/chat/messages').mock(
+    # /all, because that is what the boot sync reads: the index spans every
+    # board, so seeding it from one board's messages would prune the rest.
+    respx.get(f'{BOARD}/api/chat/messages/all').mock(
         return_value=httpx.Response(200, json={'messages': [row(1, PASSWORD)]}))
     client = TestClient(create_app(Settings(
         llm_provider='fake', embedder='fake', board_api_url=BOARD,

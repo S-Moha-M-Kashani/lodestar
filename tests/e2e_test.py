@@ -260,8 +260,9 @@ def start_brain():
     raise RuntimeError("brain did not become ready")
 
 
-def api_state():
-    with urllib.request.urlopen(URL + "/api/state", timeout=3) as r:
+def api_state(board=""):
+    query = f"?board={board}" if board else ""
+    with urllib.request.urlopen(URL + "/api/state" + query, timeout=3) as r:
         return json.loads(r.read())
 
 
@@ -394,6 +395,13 @@ try:
         errors = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+        # Every failed response, for diagnosis only — several blocks below
+        # provoke 4xx and 503 deliberately, so this is never asserted on. It
+        # exists because "Failed to load resource: 400" in the console names
+        # no URL, which makes an intermittent one impossible to chase.
+        failed_responses = []
+        page.on("response", lambda r: failed_responses.append(
+            f"{r.status} {r.request.method} {r.url}") if r.status >= 400 else None)
         # Native confirm/alert should never be used anymore — record any that fire.
         native_dialogs = []
         page.on("dialog", lambda d: (native_dialogs.append(d.message), d.dismiss()))
@@ -2123,7 +2131,7 @@ try:
         renamed_row.hover()
         renamed_row.locator(".chat-history-delete").click()
         page.wait_for_selector("#confirm-dialog[open]")
-        with page.expect_request("**/api/rag/chat/reindex"):
+        with page.expect_request("**/api/rag/chat/reindex*"):
             page.click("#confirm-ok")
         gone = wait_until(lambda: page.locator(
             ".chat-history-item", has_text="Doomed chat, renamed").count() == 0)
@@ -2170,7 +2178,7 @@ try:
         # things to remove — so hovering is how it is really reached.
         doomed_msg = page.locator(".chat-msg", has_text=blurted).first
         doomed_msg.hover()
-        with page.expect_response("**/api/rag/chat/reindex") as reindexed:
+        with page.expect_response("**/api/rag/chat/reindex*") as reindexed:
             doomed_msg.locator(".chat-msg-delete").click()
         # The response, not merely the request: what has to be true is that the
         # chunk left Chroma, and `pruned` is that fact rather than a proxy for it.
@@ -2193,7 +2201,7 @@ try:
         listed = wait_until(lambda: page.locator(".chat-trash-item").count() == 1)
         trashed_row = page.locator(".chat-trash-item").first
         says_where = "what should I pack for berlin" in trashed_row.inner_text()
-        with page.expect_response("**/api/rag/chat/reindex") as resynced:
+        with page.expect_response("**/api/rag/chat/reindex*") as resynced:
             trashed_row.locator(".chat-trash-restore").click()
         # The index has to follow the record in both directions: sync only ever
         # adds, which is exactly what a restore needs, and without this the turn
@@ -2220,7 +2228,7 @@ try:
         wait_until(lambda: page.locator(".chat-trash-item").count() == 1)
         page.locator(".chat-trash-item").first.locator(".chat-trash-purge").click()
         page.wait_for_selector("#confirm-dialog[open]")
-        with page.expect_request("**/api/rag/chat/reindex"):
+        with page.expect_request("**/api/rag/chat/reindex*"):
             page.click("#confirm-ok")
         # The dialog took the pointer out of the dock, so hold the panel open the
         # way a reader would — otherwise an emptied list and a closed panel look
@@ -2356,7 +2364,7 @@ try:
         # Reporting a switched-off memory as "no matches" sends the user hunting
         # for a conversation that was never recordable.
         if has_panel:
-            page.route("**/api/rag/recall", lambda route: route.fulfill(
+            page.route("**/api/rag/recall*", lambda route: route.fulfill(
                 status=200, content_type="application/json",
                 body='{"matches": [], "memory": false}'))
             page.fill("#recall-input", "anything at all")
@@ -2365,7 +2373,7 @@ try:
                 lambda: "memory is off"
                 in page.locator(".chat-recall").inner_text().lower())
             off_text = page.locator(".chat-recall").inner_text().lower()
-            page.unroute("**/api/rag/recall")
+            page.unroute("**/api/rag/recall*")
         check("assistant: memory being off is not reported as 'no matches'",
               said_off and "no matches" not in off_text
               and page.locator(".recall-hit").count() == 0)
@@ -2932,7 +2940,7 @@ try:
             check("chat import: a confirm dialog states how many turns will import",
                   wait_until(lambda: page.locator("#confirm-dialog").is_visible())
                   and str(len(clean_msgs)) in page.locator("#confirm-copy").inner_text())
-            with page.expect_request("**/api/rag/chat/reindex"):
+            with page.expect_request("**/api/rag/chat/reindex*"):
                 page.click("#confirm-ok")
             check("chat import: the clean turns land in the record",
                   wait_until(lambda: len(record_messages()) == before_import + len(clean_msgs)))
@@ -3419,6 +3427,77 @@ try:
         page.select_option("#type-filter", "")
         page.wait_for_timeout(150)
 
+        # ---- Several boards --------------------------------------------------
+        # Switching reloads the page on purpose (see core/boards.js), so every
+        # step here waits for the board to be painted again rather than for a
+        # re-render in place.
+        def board_menu(action_sel):
+            page.click("#board-menu-btn")
+            page.click(action_sel)
+
+        # Switching boards reloads, and the board being opened may be empty —
+        # so the thing to wait for is the picker naming it, never a card.
+        def wait_for_board(name):
+            page.wait_for_function(
+                "name => document.querySelector('#board-select')"
+                "?.selectedOptions[0]?.textContent.includes(name)", arg=name)
+            page.wait_for_selector(".quick-add input")
+
+        def fill_prompt(text):
+            page.fill("#prompt-input", text)
+            page.click("#prompt-ok")
+            wait_for_board(text)
+
+        before = page.locator(".card").count()
+        check("boards: the picker names the board you are on",
+              "Lodestar" in page.locator("#board-select").inner_text())
+
+        board_menu("#board-new")
+        fill_prompt("Getaway")
+        check("boards: a new board opens empty, and the picker follows",
+              page.locator(".card").count() == 0
+              and "Getaway" in page.locator("#board-select").inner_text())
+
+        page.fill(".quick-add input", "Book the ferry")
+        page.press(".quick-add input", "Enter")
+        page.wait_for_timeout(400)
+        new_id = page.evaluate("() => document.querySelector('#board-select').value")
+        check("boards: a card saved here lands on this board alone",
+              [c["title"] for c in api_state(new_id)["cards"]] == ["Book the ferry"]
+              and all(c["title"] != "Book the ferry" for c in api_state()["cards"]))
+        check("boards: the first board kept every card it had",
+              len(api_state()["cards"]) == before)
+        check("boards: each board numbers its own cards from C-001",
+              api_state(new_id)["cards"][0]["num"] == 1)
+
+        page.select_option("#board-select", "main")
+        wait_for_board("Lodestar")
+        check("boards: switching back shows the first board, not the new one",
+              page.locator(".card").count() == before
+              and page.locator(".card", has_text="Book the ferry").count() == 0)
+
+        # Deleting is soft: the board leaves the picker, its cards stay in the
+        # database, and the trash is where it comes back from.
+        page.select_option("#board-select", new_id)
+        wait_for_board("Getaway")
+        board_menu("#board-delete")
+        page.click("#confirm-ok")
+        wait_for_board("Lodestar")
+        check("boards: deleting the board you are on moves you to another",
+              page.evaluate("() => document.querySelector('#board-select').value") == "main"
+              and "Getaway" not in page.locator("#board-select").inner_text())
+
+        board_menu("#board-trash-btn")
+        page.wait_for_selector("#boards-dialog .history-row")
+        check("boards: a deleted board is listed with its cards intact",
+              "Getaway · 1 card(s)" in page.locator("#boards-trash-list").inner_text())
+        page.click("#boards-dialog .history-row button:has-text('Restore')")
+        page.wait_for_timeout(300)
+        check("boards: restoring brings the board back with its cards",
+              "Getaway" in page.locator("#board-select").inner_text()
+              and [c["title"] for c in api_state(new_id)["cards"]] == ["Book the ferry"])
+        page.click("#close-boards")
+
         # ---- Server-offline banner + recovery -------------------------------
         def block_state_put(route):
             if route.request.method == "PUT":
@@ -3428,14 +3507,14 @@ try:
 
         # Force the next debounced PUT /api/state to fail.
         n_before = len(errors)
-        page.route("**/api/state", block_state_put)
+        page.route("**/api/state*", block_state_put)
         page.fill(".quick-add input", "Trigger an offline push")
         page.press(".quick-add input", "Enter")
         page.wait_for_timeout(400)  # debounce is 150ms + failure
         check("offline: PUT failure announces the local-save message",
               "saved locally" in page.locator("#live-region").inner_text())
         # Recovery: stop aborting, trigger another push, expect the reconnect message.
-        page.unroute("**/api/state", block_state_put)
+        page.unroute("**/api/state*", block_state_put)
         page.fill(".quick-add input", "Trigger a reconnect push")
         page.press(".quick-add input", "Enter")
         page.wait_for_timeout(400)
@@ -3453,6 +3532,7 @@ try:
         check("console: no JS errors during entire run", not errors)
         if errors:
             print("Errors:", errors)
+            print("Failed responses:", failed_responses)
         if native_dialogs:
             print("Native dialogs (should be none):", native_dialogs)
 

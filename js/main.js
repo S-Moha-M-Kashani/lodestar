@@ -1,7 +1,9 @@
 import { ensureChatSession } from './assistant/session.js';
 import { cancelRecording, voiceState } from './assistant/voice.js';
+import { loadBoards } from './core/boards.js';
 import { initTimeline } from './core/history.js';
 import { initServerSync } from './core/sync.js';
+import { initBoardPicker } from './ui/boards-picker.js';
 import { announce } from './ui/dom.js';
 import { HABIT_MUTE_KEY, habitMuted, renderHabitBanner, setHabitMuted, syncHabitMute } from './ui/habits.js';
 import { refreshEdits, refreshProposals } from './ui/proposals.js';
@@ -73,7 +75,15 @@ setInterval(renderHabitBanner, 30_000);
 initTimeline();      // the undo timeline, opened on the board as restored
 syncViewButtons();   // mark the restored view before the first paint
 render();            // instant paint from localStorage
-initServerSync();    // then reconcile with the SQLite backend if one is running
+// The picker only appears once the server has listed the boards, and that list
+// is also what catches an active board this browser remembers but the database
+// no longer has — loadBoards resets and reloads there, so the sync below must
+// not run first and push a stale board's cards at whatever answers.
+loadBoards().then((ok) => {
+  if (!ok) return;
+  initBoardPicker();
+  initServerSync();  // then reconcile with the SQLite backend if one is running
+});
 refreshProposals();  // and surface anything the Assistant left awaiting approval
 refreshEdits();
 // Which chat is open. Unconditional rather than only when the Assistant is the
