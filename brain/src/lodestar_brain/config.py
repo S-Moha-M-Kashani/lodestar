@@ -94,6 +94,16 @@ class Settings:
     # and `off` is how you say you meant to run without one.
     url_safety: str = 'off'
     safe_browsing_key: str = ''
+    # 'langsmith' | 'off' — where a turn's trace goes (`middleware/tracing.py`).
+    #
+    # Inert here and real in `load_settings`, the same split `url_safety` and
+    # `chroma_url` use: a Settings built in code is a test or an eval and must
+    # ship nothing anywhere, while one built from the environment is the product
+    # and traces. `off` is not merely "no key" — it is a named choice that turns
+    # egress off at the source, because a missing key makes langsmith warn and
+    # call out anyway.
+    tracing: str = 'off'
+    langsmith_api_key: str = ''
 
     def __post_init__(self):
         # An unknown provider gets the remote slug and is rejected by
@@ -151,6 +161,8 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         omni_model=env.get('BRAIN_OMNI_MODEL', 'google/gemini-2.5-flash-lite'),
         url_safety=env.get('BRAIN_URL_SAFETY', 'google-safe-browsing'),
         safe_browsing_key=env.get('GOOGLE_SAFE_BROWSING_KEY', ''),
+        tracing=env.get('BRAIN_TRACING', 'langsmith'),
+        langsmith_api_key=env.get('LANGSMITH_API_KEY', ''),
         parakeet_model=env.get('BRAIN_PARAKEET_MODEL',
                                'mlx-community/parakeet-tdt-0.6b-v3'),
     )

@@ -126,6 +126,18 @@ def test_url_safety_is_real_from_the_environment_and_inert_in_code():
         env={'GOOGLE_SAFE_BROWSING_KEY': 'k'}).safe_browsing_key == 'k'
 
 
+# This is a configuration invariant: the product traces, and a Settings built in
+# code ships nothing anywhere — the same split url_safety and chroma_url use.
+def test_tracing_is_real_from_the_environment_and_inert_in_code():
+    assert load_settings(env={}).tracing == 'langsmith'
+    # Unit tests and evals build Settings directly; none of them may put a
+    # private board's conversations on a third party's server by default.
+    assert Settings().tracing == 'off'
+    assert load_settings(env={'BRAIN_TRACING': 'off'}).tracing == 'off'
+    assert load_settings(
+        env={'LANGSMITH_API_KEY': 'ls-k'}).langsmith_api_key == 'ls-k'
+
+
 # Real data and non-real data live in *different Chroma databases*, so all
 # non-production memory can be wiped with a single database drop:
 #   :3000 (board.db)      -> database 'lodestar'      collection chat-board-3000
