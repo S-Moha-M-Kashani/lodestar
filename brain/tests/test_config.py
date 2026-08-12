@@ -217,15 +217,15 @@ def test_no_whisper_model_is_named_anywhere_in_the_code():
 
     Code and config only: `docs/` is the historical record and may say whatever
     was true when it was written. The pattern is the model slug, not the English
-    word — app.js's "seeded whisper of noise" is about noise, and a future local
-    faster-whisper backend would be a real option, not this dead one. This file
-    is skipped because it has to hold the pattern it looks for.
+    word — the star sky's "seeded whisper of noise" is about noise, and a future
+    local faster-whisper backend would be a real option, not this dead one. This
+    file is skipped because it has to hold the pattern it looks for.
     """
     root = Path(__file__).resolve().parents[2]
     assert (root / '.env.example').exists(), 'scan is anchored at the repo root'
     slug = re.compile(r'openai/whisper|whisper-large', re.IGNORECASE)
     scanned = [root / '.env.example', root / 'docker-compose.yml',
-               root / 'server.js', root / 'app.js',
+               root / 'server.js', *sorted((root / 'js').rglob('*.js')),
                *sorted((root / 'brain' / 'src').rglob('*.py')),
                *sorted((root / 'brain' / 'tests').rglob('*.py'))]
     named = [f'{path.relative_to(root)}:{n}'

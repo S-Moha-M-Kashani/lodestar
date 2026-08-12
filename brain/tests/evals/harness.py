@@ -52,10 +52,10 @@ class InMemoryBoard:
         self._proposals = []
         self._edits = []
 
-    def list_cards(self):
+    def list_cards(self, board_id=''):
         return [dict(c) for c in self._cards]
 
-    def create_proposal(self, card):
+    def create_proposal(self, card, board_id=''):
         """Mirrors POST /api/proposals: the card is stored but stays OFF the
         board until the user confirms it, so list_cards must not show it."""
         proposal = dict(card)

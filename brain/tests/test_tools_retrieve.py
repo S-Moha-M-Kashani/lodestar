@@ -41,8 +41,8 @@ class FakeStore:
     def __init__(self):
         self.asked = []
 
-    def search(self, text, k=5, exclude_session=None):
-        self.asked.append((text, k, exclude_session))
+    def search(self, text, k=5, exclude_session=None, board_id=None):
+        self.asked.append((text, k, exclude_session, board_id))
         return [{'text': 'the wifi password is hunter2', 'score': 0.9,
                  'metadata': {'role': 'user', 'created_day': 20260712,
                               'session_id': 's-old'}}]
@@ -118,7 +118,7 @@ def test_recall_chat_hands_back_what_the_store_found():
     assert tool.args_schema.model_json_schema()['required'] == ['text']
     matches = tool.run({'text': 'wifi password', 'k': 3})
     assert 'hunter2' in matches[0]['text']
-    assert store.asked == [('wifi password', 3, None)]
+    assert store.asked == [('wifi password', 3, None, None)]
 
 
 # This is a unit test.
@@ -133,10 +133,15 @@ def test_recall_skips_the_chat_it_is_already_reading():
     """
     store = FakeStore()
     tool = make_recall_tool(store)
-    config = {'configurable': {'session_id': 's-current'}}
+    config = {'configurable': {'session_id': 's-current', 'board_id': 'b-work'}}
 
     matches = tool.run({'text': 'wifi password'}, config=config)
-    assert store.asked[-1] == ('wifi password', 5, 's-current')
+    # The board travels the same way and for a stronger version of the same
+    # reason: recall must not reach into another board's conversations, and
+    # which board that is was the user's choice, not the model's.
+    assert store.asked[-1] == ('wifi password', 5, 's-current', 'b-work')
+    assert 'board_id' not in tool.args_schema.model_json_schema()['properties'], (
+        'the board is injected, never offered to the model as an argument')
     assert 'session_id' not in tool.args_schema.model_json_schema()['properties'], (
         'the session is injected, never offered to the model as an argument')
 
@@ -150,3 +155,4 @@ def test_recall_skips_the_chat_it_is_already_reading():
     # recall that excluded nothing is strictly better than a 500.
     assert tool.run({'text': 'wifi password'})
     assert store.asked[-1][2] is None
+    assert store.asked[-1][3] is None

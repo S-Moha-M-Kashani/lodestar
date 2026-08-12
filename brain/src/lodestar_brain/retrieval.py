@@ -987,6 +987,25 @@ def ensure_database(url: str, database: str,
         pass   # already exists
 
 
+# The board a chunk written before boards existed belongs to. Matches the
+# server's own column default, so a chunk indexed then and a session migrated
+# then agree about where they are.
+LEGACY_BOARD = 'main'
+
+
+def _on_board(metadata: dict | None, board_id: str | None) -> bool:
+    """Whether a chunk belongs to the board being searched.
+
+    True whenever `board_id` is None, so a caller that names no board — an
+    eval, a curl, the boot sync — sees everything, exactly as before boards
+    existed. A chunk carrying no board_id is one indexed before they did, and
+    those live on the default board.
+    """
+    if not board_id:
+        return True
+    return (metadata or {}).get('board_id', LEGACY_BOARD) == board_id
+
+
 def _in_session(metadata: dict | None, session_id: str | None) -> bool:
     """Whether a chunk belongs to the session being excluded.
 
@@ -1051,7 +1070,9 @@ class ChatStore:
                        'created_day': day_int(row.get('createdAt')),
                        # Which conversation this came from, so recall can skip
                        # the one the model is already reading.
-                       'session_id': row.get('sessionId') or ''}
+                       'session_id': row.get('sessionId') or '',
+                       # And which board, so it cannot reach into another one.
+                       'board_id': row.get('boardId') or LEGACY_BOARD}
             for n, chunk in enumerate(split_text(row.get('content', ''))):
                 texts.append(chunk)
                 ids.append(f"{row['id']}:{n}")
@@ -1109,7 +1130,8 @@ class ChatStore:
 
     def search(self, text: str, k: int = 5,
                scope: TimeScope | None = None, *,
-               evidence: bool = True, exclude_session: str | None = None) -> list[dict]:
+               evidence: bool = True, exclude_session: str | None = None,
+               board_id: str | None = None) -> list[dict]:
         """Hybrid, BM25-heavy: dense from Chroma, BM25 over the same chunks,
         each fused across the expanded queries (synonyms, cross-script), then
         combined by weighted RRF (RECALL_WEIGHTS). Fused inline rather than
@@ -1124,10 +1146,11 @@ class ChatStore:
         reaching «دعوامون» — that are the point of having a dense index.
 
         `exclude_session` drops one conversation from the results: the one the
-        caller is already reading. It is filtered here rather than in a Chroma
-        `where` clause so that the lexical half is filtered by the same rule —
-        two halves of one search disagreeing about what is eligible is a bug
-        nobody would find."""
+        caller is already reading. `board_id` keeps only the board being
+        searched. Both are filtered here rather than in a Chroma `where` clause
+        so that the lexical half is filtered by the same rule — two halves of
+        one search disagreeing about what is eligible is a bug nobody would
+        find."""
         total = self.count()
         if total == 0:
             return []   # an empty store is a normal state, not a failed query
@@ -1135,7 +1158,8 @@ class ChatStore:
         corpus = [Document(id=id_, page_content=content, metadata=meta or {})
                   for id_, content, meta in zip(raw['ids'], raw['documents'],
                                                 raw['metadatas'])
-                  if not _in_session(meta, exclude_session)]
+                  if _on_board(meta, board_id)
+                  and not _in_session(meta, exclude_session)]
         if not corpus:
             return []
         depth = min(total, max(k, CANDIDATES))

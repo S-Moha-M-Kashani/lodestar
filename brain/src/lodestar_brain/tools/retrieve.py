@@ -37,10 +37,12 @@ def make_retrieve_tool(index: CardIndex, client: BoardClient, llm=None,
                        threshold: float = GRADE_THRESHOLD,
                        memory: ChatStore | None = None) -> BaseTool:
     @tool('find_related', args_schema=FindRelatedArgs)
-    def find_related(text: str, k: int = 5) -> list[dict]:
+    def find_related(text: str, k: int = 5,
+                     config: RunnableConfig = None) -> list[dict]:
         """Find board cards related to a text, best first. Use it to answer from
         what is already on the board and to avoid creating a duplicate."""
-        cards = client.list_cards()
+        board = (config or {}).get('configurable', {}).get('board_id') or None
+        cards = client.list_cards(board or '')
         index.build(cards)     # the board is small; rebuilding keeps it fresh
         by_id = {card['id']: card for card in cards}
         hits = index.search(text, k=k, llm=llm, threshold=threshold)
@@ -60,7 +62,8 @@ def make_retrieve_tool(index: CardIndex, client: BoardClient, llm=None,
                                'role': hit['metadata'].get('role', '')},
                       'rank': rank}
                      for rank, hit in enumerate(
-                         memory.search(text, k=k, evidence=False), start=1)]
+                         memory.search(text, k=k, evidence=False,
+                                       board_id=board), start=1)]
         return rows
 
     if memory is not None:
@@ -84,7 +87,9 @@ def make_recall_tool(store: ChatStore) -> BaseTool:
         # `config` is excluded from the schema the model sees because
         # `args_schema` above declares the schema explicitly.
         current = (config or {}).get('configurable', {}).get('session_id')
-        hits = store.search(text, k=k, exclude_session=current or None)
+        board = (config or {}).get('configurable', {}).get('board_id')
+        hits = store.search(text, k=k, exclude_session=current or None,
+                            board_id=board or None)
         # Dated, so a recalled line can be attributed instead of quoted as
         # though it were said now. The date is already in the chunk metadata;
         # the chat's title deliberately is not — a copy of it here would go

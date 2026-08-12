@@ -217,11 +217,13 @@ test('server boot migrates a legacy board.db and still serves its cards', async 
   copyFileSync(join(ROOT, 'server.js'), join(tmpRoot, 'server.js'));
   cpSync(join(ROOT, 'scripts'), join(tmpRoot, 'scripts'), { recursive: true });
 
-  const port = 21000 + Math.floor(Date.now() % 30000);
+  // PORT=0: the kernel picks a free one and the server reports it, the same way
+  // the shared harness does. A port derived from the clock collides with
+  // whichever other suite happens to start alongside this one.
   const proc = spawn('node', ['server.js'], {
     cwd: tmpRoot,
     env: {
-      ...process.env, PORT: String(port), NODE_NO_WARNINGS: '1',
+      ...process.env, PORT: '0', NODE_NO_WARNINGS: '1',
       LODESTAR_BACKUP_ON_WRITE: '0', ...safeEnv(tmpRoot),
       BOARD_DB: '', // empty means unset here: the default path must apply
       ASSISTANT_DB: '', // same — the default real/ path must apply
@@ -230,7 +232,9 @@ test('server boot migrates a legacy board.db and still serves its cards', async 
   });
   proc.stderr.on('data', () => {});
   try {
-    await waitForLine(proc, new RegExp(`Lodestar running at http://localhost:${port}\\b`));
+    const [, bound] = await waitForLine(
+      proc, /Lodestar running at http:\/\/localhost:(\d+)\b/);
+    const port = Number(bound);
 
     assert.ok(existsSync(join(tmpRoot, 'databases', 'real', 'board.db')),
       'the board now lives in databases/real/');

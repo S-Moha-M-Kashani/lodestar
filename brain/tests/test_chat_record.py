@@ -68,13 +68,28 @@ def test_board_client_records_and_lists_chat():
     echoed = [row(1, 'hi'), row(2, 'hello', role='assistant')]
     post = respx.post(f'{BOARD}/api/chat/messages').mock(
         return_value=httpx.Response(200, json={'messages': echoed}))
-    respx.get(f'{BOARD}/api/chat/messages').mock(
+    scoped = respx.get(f'{BOARD}/api/chat/messages').mock(
+        return_value=httpx.Response(200, json={'messages': echoed}))
+    every = respx.get(f'{BOARD}/api/chat/messages/all').mock(
         return_value=httpx.Response(200, json={'messages': echoed}))
 
     client = BoardClient(BOARD)
     assert client.record_chat(sent) == echoed
     assert json.loads(post.calls.last.request.content) == {'messages': sent}
     assert client.list_chat() == echoed
+    # An empty board is omitted, never sent as '': the server files an unnamed
+    # batch under its default board, and it can only do that if it can tell the
+    # two apart. Named, it travels as a query parameter on the read and in the
+    # body on the write, beside the session it belongs with.
+    assert 'board' not in scoped.calls.last.request.url.params
+    assert client.record_chat(sent, board_id='b-home') == echoed
+    assert json.loads(post.calls.last.request.content)['boardId'] == 'b-home'
+    assert client.list_chat('b-home') == echoed
+    assert 'board=b-home' in str(scoped.calls.last.request.url)
+    # The index reads every board at once — pruning from one board's messages
+    # would drop all the others out of recall.
+    assert client.list_all_chat() == echoed
+    assert every.called
 
 
 # This is an integration test (in-process Chroma, no server, no disk).
@@ -141,7 +156,7 @@ def test_every_turn_lands_in_the_record_even_without_chroma():
 # This is an integration test.
 @respx.mock
 def test_boot_syncs_the_index_from_the_record():
-    respx.get(f'{BOARD}/api/chat/messages').mock(
+    respx.get(f'{BOARD}/api/chat/messages/all').mock(
         return_value=httpx.Response(200, json={'messages': [
             row(1, 'the wifi password is hunter2')]}))
     respx.post(f'{BOARD}/api/chat/messages').mock(
@@ -164,7 +179,7 @@ def test_reindex_route_rebuilds_the_index_from_the_record():
     """Stage 4: an import appends to the record while the brain is already
     running, so the boot sync has already happened. POST /rag/chat/reindex is
     that same sync on demand — and it answers honestly when memory is off."""
-    record = respx.get(f'{BOARD}/api/chat/messages').mock(
+    record = respx.get(f'{BOARD}/api/chat/messages/all').mock(
         return_value=httpx.Response(200, json={'messages': []}))
     respx.post(f'{BOARD}/api/chat/messages').mock(
         return_value=httpx.Response(200, json={'messages': []}))
@@ -315,7 +330,7 @@ def test_a_restored_message_is_indexed_again():
 def test_a_board_down_at_boot_does_not_take_the_brain_down():
     # The boot sync is best-effort: the brain must serve even when Node is
     # not up yet (compose starts them together, in no promised order).
-    respx.get(f'{BOARD}/api/chat/messages').mock(
+    respx.get(f'{BOARD}/api/chat/messages/all').mock(
         side_effect=httpx.ConnectError('board is down'))
     client = TestClient(create_app(Settings(
         llm_provider='fake', embedder='fake', board_api_url=BOARD,

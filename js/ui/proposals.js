@@ -1,4 +1,5 @@
 import { assistantState } from '../assistant/session.js';
+import { boardUrl } from '../core/boards.js';
 import { cardLabel, typeVal } from '../core/cards.js';
 import { catLabel } from '../core/categories.js';
 import { TYPE_META } from '../core/constants.js';
@@ -16,7 +17,7 @@ const PROPOSALS_API = '/api/proposals';
 
 export async function refreshProposals() {
   try {
-    const res = await fetch(PROPOSALS_API, { headers: { Accept: 'application/json' } });
+    const res = await fetch(boardUrl(PROPOSALS_API), { headers: { Accept: 'application/json' } });
     if (!res.ok) return;
     const data = await res.json();
     if (data && Array.isArray(data.cards)) {
@@ -113,7 +114,7 @@ export function setReviewingEditId(id) {
 
 export async function refreshEdits() {
   try {
-    const res = await fetch(EDITS_API, { headers: { Accept: 'application/json' } });
+    const res = await fetch(boardUrl(EDITS_API), { headers: { Accept: 'application/json' } });
     if (!res.ok) return;
     const data = await res.json();
     if (data && Array.isArray(data.edits)) {

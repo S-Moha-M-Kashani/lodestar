@@ -233,7 +233,8 @@ class LodestarAgent:
                             ToolErrorMiddleware(_tool_error)])
         return self._graphs[key]
 
-    def _run_config(self, session_id: str | None = None) -> dict:
+    def _run_config(self, session_id: str | None = None,
+                    board_id: str | None = None) -> dict:
         # A step is a model turn plus a tool turn, and the run ends on a model
         # turn: 2n+1 nodes for n tool calls.
         #
@@ -242,20 +243,31 @@ class LodestarAgent:
         # being able to name it — recall_chat uses it to skip the chat already in
         # front of the model. Absent when there is none, so a caller that names
         # no session behaves exactly as before sessions existed.
+        #
+        # `board_id` travels the same way and for a stronger version of the same
+        # reason: which board the user is looking at is not the model's decision,
+        # and a tool argument is something a model can get wrong or be talked
+        # into. Absent means the board API's own default board.
         config: dict = {'recursion_limit': 2 * self.max_steps + 1}
+        configurable = {}
         if session_id:
-            config['configurable'] = {'session_id': session_id}
+            configurable['session_id'] = session_id
+        if board_id:
+            configurable['board_id'] = board_id
+        if configurable:
+            config['configurable'] = configurable
         return config
 
     def run(self, messages: list[dict], model: str | None = None,
             provider: str | None = None,
-            session_id: str | None = None) -> AgentResult:
+            session_id: str | None = None,
+            board_id: str | None = None) -> AgentResult:
         seen: list[BaseMessage] = []
         try:
             # Streamed, not invoked: GraphRecursionError carries no messages,
             # so this is the only way to still report the steps taken.
             for chunk in self._graph(model, provider).stream(
-                    {'messages': messages}, config=self._run_config(session_id),
+                    {'messages': messages}, config=self._run_config(session_id, board_id),
                     stream_mode='values'):
                 seen = chunk['messages']
         except GraphRecursionError:
@@ -264,11 +276,12 @@ class LodestarAgent:
 
     async def arun(self, messages: list[dict], model: str | None = None,
                    provider: str | None = None,
-                   session_id: str | None = None) -> AgentResult:
+                   session_id: str | None = None,
+                   board_id: str | None = None) -> AgentResult:
         seen: list[BaseMessage] = []
         try:
             async for chunk in self._graph(model, provider).astream(
-                    {'messages': messages}, config=self._run_config(session_id),
+                    {'messages': messages}, config=self._run_config(session_id, board_id),
                     stream_mode='values'):
                 seen = chunk['messages']
         except GraphRecursionError:
@@ -277,7 +290,8 @@ class LodestarAgent:
 
     async def astream(self, messages: list[dict], model: str | None = None,
                       provider: str | None = None,
-                      session_id: str | None = None
+                      session_id: str | None = None,
+                      board_id: str | None = None
                       ) -> AsyncIterator[tuple[str, Any]]:
         """The same turn as `arun`, reported while it happens.
 
@@ -303,7 +317,7 @@ class LodestarAgent:
         announced: set[str] = set()
         try:
             async for mode, chunk in self._graph(model, provider).astream(
-                    {'messages': messages}, config=self._run_config(session_id),
+                    {'messages': messages}, config=self._run_config(session_id, board_id),
                     stream_mode=['values', 'messages']):
                 if mode == 'values':
                     seen = chunk['messages']

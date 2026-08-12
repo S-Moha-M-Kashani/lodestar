@@ -2794,6 +2794,29 @@ body[data-view="assistant"] .app-footer { display: none; }
    to the tools rather than to the page so the list hangs under the button that
    opened it; end-aligned because the button is near the window's right edge and
    a 320px panel anchored at its start would run off it. */
+/* The board picker, under the tagline. It names the workspace the whole
+   header is about, which is why it sits with the brand and not among the
+   filters. */
+.board-switch {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: 4px;
+}
+/* Same trap as .assistant-tools below: `display: flex` outranks the UA's
+   [hidden] rule, so without this the picker shows even with no backend to
+   list a second board. */
+.board-switch[hidden] { display: none; }
+.board-switch #board-select {
+  max-width: 172px;
+  font-size: 11px;
+  padding-block: 3px;
+}
+.board-switch #board-menu-btn { padding: 3px 7px; }
+/* Drops from the left, under the brand, rather than off the header's edge. */
+.board-switch .menu-panel { left: 0; right: auto; }
+
 .assistant-tools {
   position: relative;
   display: flex;

@@ -9,6 +9,7 @@ board, and asks.
 from typing import Literal
 
 import httpx
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
@@ -33,23 +34,51 @@ Rank = Literal['high', 'low', '']
 
 
 class BoardClient:
+    """The board API, one board at a time.
+
+    Every call takes an optional `board_id`, and an empty one is *omitted*
+    rather than sent blank — the server has to be able to tell "no board named"
+    (answer with the default board, which is what every caller written before
+    boards existed relies on) from "a board named the empty string". The id
+    itself never comes from the model: it rides the agent's run config.
+    """
+
     def __init__(self, base_url: str, timeout: float = 10.0):
         self.base_url = base_url.rstrip('/')
         self.timeout = timeout
 
-    def list_cards(self) -> list[dict]:
-        res = httpx.get(f'{self.base_url}/api/state', timeout=self.timeout)
+    @staticmethod
+    def _scope(board_id: str = '') -> dict:
+        return {'board': board_id} if board_id else {}
+
+    def list_cards(self, board_id: str = '') -> list[dict]:
+        res = httpx.get(f'{self.base_url}/api/state',
+                        params=self._scope(board_id), timeout=self.timeout)
         res.raise_for_status()
         return res.json()['cards']
 
-    def list_chat(self) -> list[dict]:
-        """The live chat record, oldest first."""
-        res = httpx.get(f'{self.base_url}/api/chat/messages', timeout=self.timeout)
+    def list_chat(self, board_id: str = '') -> list[dict]:
+        """The live chat record for one board, oldest first."""
+        res = httpx.get(f'{self.base_url}/api/chat/messages',
+                        params=self._scope(board_id), timeout=self.timeout)
+        res.raise_for_status()
+        return res.json()['messages']
+
+    def list_all_chat(self) -> list[dict]:
+        """Every board's live messages, for maintaining the chat index.
+
+        The index is one collection over the whole record and `prune` deletes
+        chunks whose message is no longer live — so syncing it from a single
+        board's messages would drop every other board out of recall. The only
+        caller is index maintenance; everything a person reads is scoped.
+        """
+        res = httpx.get(f'{self.base_url}/api/chat/messages/all',
+                        timeout=self.timeout)
         res.raise_for_status()
         return res.json()['messages']
 
     def record_chat(self, messages: list[dict],
-                    session_id: str = '') -> list[dict]:
+                    session_id: str = '', board_id: str = '') -> list[dict]:
         """Append to the durable chat record (assistant.db) — through the Node
         API like every write, never SQLite directly. Returns the inserted rows
         with their ids, which is what the Chroma index chunks are keyed on.
@@ -61,12 +90,17 @@ class BoardClient:
         payload: dict = {'messages': messages}
         if session_id:
             payload['sessionId'] = session_id
+        # In the body, not the query string: this is the one chat route the
+        # brain posts to, and the board travels beside the session it belongs
+        # with rather than in a different part of the request.
+        if board_id:
+            payload['boardId'] = board_id
         res = httpx.post(f'{self.base_url}/api/chat/messages',
                          json=payload, timeout=self.timeout)
         res.raise_for_status()
         return res.json()['messages']
 
-    def create_proposal(self, card: dict) -> dict:
+    def create_proposal(self, card: dict, board_id: str = '') -> dict:
         """Offer one card for the user's approval.
 
         On its own endpoint, never the whole-board PUT — which this client no
@@ -74,8 +108,8 @@ class BoardClient:
         card even by mistake, so "never send a partial card list" stops being a
         rule anyone has to remember here.
         """
-        res = httpx.post(f'{self.base_url}/api/proposals',
-                         json=card, timeout=self.timeout)
+        res = httpx.post(f'{self.base_url}/api/proposals', json=card,
+                         params=self._scope(board_id), timeout=self.timeout)
         res.raise_for_status()
         return res.json()
 
@@ -134,10 +168,18 @@ class UpdateCardArgs(BaseModel):
 
 
 def make_board_tools(client: BoardClient) -> list[BaseTool]:
+    # Which board these tools operate on. It comes from the run config, never
+    # from the model: the user chose a board in the picker, and that choice is
+    # not something a tool call should be able to name, mistype or be argued
+    # out of. '' means the board API's own default.
+    def board_of(config: RunnableConfig | None) -> str:
+        return (config or {}).get('configurable', {}).get('board_id') or ''
+
     @tool('list_cards', args_schema=ListCardsArgs)
-    def list_cards(column_id: str = '', search: str = '') -> list[dict]:
+    def list_cards(column_id: str = '', search: str = '',
+                   config: RunnableConfig = None) -> list[dict]:
         """List cards on the board, optionally filtered by column or free text."""
-        cards = client.list_cards()
+        cards = client.list_cards(board_of(config))
         if column_id:
             cards = [c for c in cards if c['columnId'] == column_id]
         if search:
@@ -151,7 +193,8 @@ def make_board_tools(client: BoardClient) -> list[BaseTool]:
     def create_card(title: str, notes: str = '', type: str = 'question',
                         category: str = '', column_id: str = 'inbox',
                         tags: list | None = None, frequency: str = '',
-                        times_per_period: int = 1) -> dict:
+                        times_per_period: int = 1,
+                        config: RunnableConfig = None) -> dict:
         """Propose a new card (question, problem, task, idea, plan or habit).
 
         A habit is something repeated on a schedule — give it a frequency and
@@ -166,7 +209,7 @@ def make_board_tools(client: BoardClient) -> list[BaseTool]:
         if type == 'habit':
             card['habitFreq'] = frequency or 'daily'
             card['habitCount'] = times_per_period
-        proposal = client.create_proposal(card)
+        proposal = client.create_proposal(card, board_of(config))
         # `pending` tells the model the card is not on the board yet, so it
         # reports a proposal instead of claiming it added something.
         return {**_brief(proposal), 'pending': True}
@@ -176,7 +219,8 @@ def make_board_tools(client: BoardClient) -> list[BaseTool]:
                         type: str | None = None, category: str | None = None,
                         column_id: str | None = None,
                         importance: str | None = None, urgency: str | None = None,
-                        tags: list | None = None) -> dict:
+                        tags: list | None = None,
+                        config: RunnableConfig = None) -> dict:
         """Suggest a change to an existing card (move columns, set type/category,
         importance/urgency, tags, or add findings to notes).
 
@@ -184,7 +228,7 @@ def make_board_tools(client: BoardClient) -> list[BaseTool]:
         adjust if they want, and save themselves — so say you have suggested an
         edit, and never that you made one.
         """
-        cards = client.list_cards()
+        cards = client.list_cards(board_of(config))
         target = next((c for c in cards if c['id'] == id), None)
         if target is None:
             return {'error': f'no card with id {id!r} — use list_cards first'}

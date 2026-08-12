@@ -1,3 +1,4 @@
+import { boardUrl } from './boards.js';
 import { cardLabel, ensureNums, sanitizeCard } from './cards.js';
 import { COLUMNS } from './constants.js';
 import { commit, saveTimeline, short, timeline } from './history.js';
@@ -12,12 +13,12 @@ import { announce, getCard } from '../ui/dom.js';
 // good. The Trash is server-backed, so it only appears when a backend is
 // running (localStorage-only mode relies on the History timeline instead).
 
-const TRASH_API = '/api/trash';
+const TRASH_API = () => boardUrl('/api/trash');
 
 export async function fetchTrash() {
   if (!serverAvailable) return [];
   try {
-    const res = await fetch(TRASH_API, { headers: { Accept: 'application/json' } });
+    const res = await fetch(TRASH_API(), { headers: { Accept: 'application/json' } });
     if (!res.ok) return [];
     const data = await res.json();
     return Array.isArray(data.cards) ? data.cards.map((c) => sanitizeCard(c)).filter(Boolean) : [];
