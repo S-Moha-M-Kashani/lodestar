@@ -386,7 +386,7 @@ test('static index.html served at / with html content-type', async () => {
 test('whitelisted path with wrong method falls through to 404', async () => {
   const s = await startServer();
   try {
-    const res = await fetch(s.base + '/app.js', { method: 'POST' });
+    const res = await fetch(s.base + '/js/main.js', { method: 'POST' });
     assert.equal(res.status, 404);
   } finally { await s.stop(); }
 });
