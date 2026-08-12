@@ -1,4 +1,4 @@
-import { boardUrl } from './boards.js';
+import { boardUrl, leavingBoard } from './boards.js';
 import { ensureNums, sanitizeCard } from './cards.js';
 import { categories, sanitizeCategories, setCategories } from './categories.js';
 import { saveState, saveTimeline, snapshot, timeline } from './history.js';
@@ -31,9 +31,12 @@ const boardFingerprint = (cards) =>
     c.num, (c.tags || []).join('|')].join('␟')).join('␞');
 
 export function pushToServer() {
-  if (!serverAvailable) return;
+  // Nothing is written to a board we are on our way off: the URL names that
+  // board, and by the time a debounced save fires it may have been deleted.
+  if (!serverAvailable || leavingBoard) return;
   clearTimeout(pushTimer);
   pushTimer = setTimeout(async () => {
+    if (leavingBoard) return;
     try {
       const res = await fetch(API(), {
         method: 'PUT',
