@@ -500,6 +500,9 @@
   </footer>
 
   <div id="live-region" class="visually-hidden" aria-live="polite"></div>
-  <script src="app.js"></script>
+  <!-- The whole frontend, as native ES modules — no bundler and no build step.
+       type="module" is deferred, so the DOM above is parsed before any of it
+       runs and a module may look up its own elements at the top level. -->
+  <script type="module" src="js/main.js"></script>
 </body>
 </html>

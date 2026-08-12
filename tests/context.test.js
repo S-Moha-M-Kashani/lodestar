@@ -41,7 +41,9 @@ function constant(source, name) {
   return Number(m[1].replaceAll('_', ''));
 }
 
-const app = read('app.js');
+// The three browser-side numbers all live in the chat-session module; the
+// frontend was one 6,400-line app.js when this file was written.
+const app = read('js', 'assistant', 'session.js');
 const brain = read('brain', 'src', 'lodestar_brain', 'server.py');
 
 // This is a configuration invariant.
@@ -83,9 +85,9 @@ test('no message is pinned outside the context budget', () => {
   // the install. Saying "hi" got an answer about last month.
   //
   // Sessions replace it: the window is one conversation, so the framing is the
-  // conversation. Asserted on the source because app.js is one IIFE with
-  // nothing exported — the same reason the brain's refusal is matched by regex
-  // above.
+  // conversation. Asserted on the source rather than by calling contextWindow,
+  // because what must not come back is a *shape* of code, not a return value —
+  // the same reason the brain's refusal is matched by regex above.
   // The mechanism, not the word for it: what must not come back is the lookup
   // that found the message to pin. Asserting on the prose would only forbid
   // *describing* the bug, which is the opposite of useful.
