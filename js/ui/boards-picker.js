@@ -1,5 +1,6 @@
 import { activeBoard, activeBoardId, boards, createBoard, deleteBoard, fetchDeletedBoards,
-  loadBoards, openBoard, purgeBoard, renameBoard, restoreBoard, setBoards } from '../core/boards.js';
+  loadBoards, openBoard, purgeBoard, renameBoard, restoreBoard, setBoards,
+  startLeavingBoard } from '../core/boards.js';
 import { cancelPendingPush } from '../core/sync.js';
 import { ask, prompt } from './dialogs.js';
 import { $, announce } from './dom.js';
@@ -104,6 +105,10 @@ $('#board-delete').addEventListener('click', async () => {
     danger: true,
   });
   if (!ok) return;
+  // Before the request, not after it: the save that would land on this board
+  // is already queued, and the delete is an await it can fire inside.
+  startLeavingBoard();
+  cancelPendingPush();
   try {
     await deleteBoard(current.id);
     // Whichever board is left. The list still holds the deleted one, so it is

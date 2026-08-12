@@ -29,6 +29,18 @@ export let activeBoardId = stored();
 export let boardSuffix = suffixFor(activeBoardId);
 export let boards = []; // the live boards, as the server last listed them
 
+// Set the moment we commit to leaving this board — before the delete request
+// goes, not after it comes back. A save is debounced, so the window between
+// "delete this board" and the page reloading is long enough for a timer to
+// expire inside it, and the write then lands on a board the server has already
+// stamped. Cancelling the pending push is not enough on its own: the cancel
+// happens after an await, and the timer can fire during it.
+export let leavingBoard = false;
+
+export function startLeavingBoard() {
+  leavingBoard = true;
+}
+
 /** Add `?board=` to an API path. Every board-scoped route takes it; the ones
  *  addressed by a card, chat or message id do not need it, because those ids
  *  are unique across boards and the row itself knows where it belongs. */
@@ -86,6 +98,7 @@ export const activeBoard = () => boards.find((b) => b.id === activeBoardId) || n
  */
 export function openBoard(id) {
   if (id === activeBoardId) return;
+  startLeavingBoard();
   setActiveBoard(id);
   location.reload();
 }
