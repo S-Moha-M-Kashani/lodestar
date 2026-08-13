@@ -23,6 +23,20 @@ PROVIDER_MODELS = {'openrouter': 'openai/gpt-5-nano',
                    'ollama': '4skl/gemma4-e2b-mtp',
                    'fake': 'openai/gpt-5-nano'}
 
+# What a long conversation is allowed to cost, and in which order the two
+# defences fire. The argument for these four numbers is in
+# `middleware/summarize.py`; they live here because a threshold nobody can move
+# without editing code is a threshold nobody moves. Either trigger set to 0
+# switches its middleware off entirely.
+#
+# CLEAR_TOOLS_TOKENS is deliberately half of SUMMARY_TOKENS: dropping tool
+# output the model has already read back is cheap and reversible, and summarising
+# the conversation is neither, so the cheap one always gets first refusal.
+SUMMARY_TOKENS = 8_000
+SUMMARY_KEEP = 20
+CLEAR_TOOLS_TOKENS = 4_000
+CLEAR_TOOLS_KEEP = 3
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -114,6 +128,15 @@ class Settings:
     # a script, and none of those may write into databases/real. ':memory:' is
     # per-process and disappears with it.
     checkpoint_db: str = ':memory:'
+    # Context budget. Real in code as well as from the environment — unlike
+    # tracing or the checkpoint file, these change what the *model* is sent, so a
+    # test or an eval that ran with different thresholds than the product would
+    # be measuring a different agent. `middleware/summarize.py` argues the
+    # numbers; 0 on either trigger switches that middleware off.
+    summary_tokens: int = SUMMARY_TOKENS
+    summary_keep: int = SUMMARY_KEEP
+    clear_tools_tokens: int = CLEAR_TOOLS_TOKENS
+    clear_tools_keep: int = CLEAR_TOOLS_KEEP
 
     def __post_init__(self):
         # An unknown provider gets the remote slug and is rejected by
@@ -179,4 +202,10 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
                               'databases/real/brain-checkpoints.db'),
         parakeet_model=env.get('BRAIN_PARAKEET_MODEL',
                                'mlx-community/parakeet-tdt-0.6b-v3'),
+        summary_tokens=int(env.get('BRAIN_SUMMARY_TOKENS', SUMMARY_TOKENS)),
+        summary_keep=int(env.get('BRAIN_SUMMARY_KEEP', SUMMARY_KEEP)),
+        clear_tools_tokens=int(env.get('BRAIN_CLEAR_TOOLS_TOKENS',
+                                       CLEAR_TOOLS_TOKENS)),
+        clear_tools_keep=int(env.get('BRAIN_CLEAR_TOOLS_KEEP',
+                                     CLEAR_TOOLS_KEEP)),
     )

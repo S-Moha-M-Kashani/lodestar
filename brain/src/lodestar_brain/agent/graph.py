@@ -14,6 +14,7 @@ from typing import Any
 from uuid import uuid4
 
 from langchain.agents import create_agent
+from langchain.agents.middleware import AgentMiddleware, ToolCallLimitMiddleware
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import (AIMessage, BaseMessage, HumanMessage,
                                      RemoveMessage)
@@ -24,6 +25,7 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from ..config import Settings
 from ..llm import make_chat_model
 from ..middleware.errors import ToolErrorMiddleware, _tool_error
+from ..middleware.summarize import make_context_editor, make_summarizer
 from ..middleware.untrusted import UntrustedToolOutput
 from .prompt import SYSTEM_PROMPT
 from .result import (STEP_LIMIT_REPLY, AgentResult, _calls_in, _result_from,
@@ -38,9 +40,16 @@ def _spoken(messages: Iterable[BaseMessage]) -> list[tuple[str, str]]:
     turn ended on. A tool call, a tool answer, and the commentary an AIMessage
     may carry alongside a tool call are all chips in the Assistant rather than
     lines in the transcript, so they are not part of what can be compared.
+
+    A summary is skipped for the same reason, and it is a HumanMessage, which is
+    the one that would otherwise be mistaken for something the user typed.
+    `SummarizationMiddleware` marks it `lc_source='summarization'` — the
+    framework's own flag, read here rather than a prefix match on its wording.
     """
     said: list[tuple[str, str]] = []
     for message in messages:
+        if message.additional_kwargs.get('lc_source') == 'summarization':
+            continue
         if isinstance(message, HumanMessage):
             said.append(('user', _text(message).strip()))
         elif isinstance(message, AIMessage) and not message.tool_calls:
@@ -59,6 +68,44 @@ def _said(message: Any) -> tuple[str, str]:
             str(message.get('content', '')).strip())
 
 
+def _hooks(middleware: list, hook: str) -> int:
+    """How many of these middlewares become a graph node at `hook`.
+
+    The test `create_agent` itself applies, restated: a hook counts when the
+    class overrides either the sync or the async form. Asking the instances
+    rather than hard-coding a number means a middleware added later is counted
+    without anyone remembering to.
+    """
+    return sum(1 for m in middleware
+               if getattr(m.__class__, hook) is not getattr(AgentMiddleware, hook)
+               or getattr(m.__class__, f'a{hook}')
+               is not getattr(AgentMiddleware, f'a{hook}'))
+
+
+def _window(said: list[tuple[str, str]], incoming: list) -> int | None:
+    """Where the thread's transcript sits inside the browser's, or None.
+
+    A thread that has never been summarised holds a *prefix* of the browser's
+    conversation, and the answer is 0. Once `SummarizationMiddleware` has fired,
+    it holds a contiguous *window* instead — the summary stands in for
+    everything before it, and what survives verbatim is the tail. Searching for
+    the window rather than assuming a prefix is what stops a summarised thread
+    being read as a diverged one; without it the very next turn would replace the
+    thread wholesale, throwing away the summary that had just been paid for and
+    re-sending every message it had replaced.
+
+    Earliest match wins, so an unsummarised thread answers 0 exactly as the
+    prefix comparison did. Still exact and still all-or-nothing: a deleted or
+    edited turn breaks contiguity and gets no match, which is the wholesale
+    replacement it should get.
+    """
+    for start in range(len(incoming) - len(said) + 1):
+        if all(mine == _said(theirs)
+               for mine, theirs in zip(said, incoming[start:])):
+            return start
+    return None
+
+
 def _turn_input(prior: list[BaseMessage], incoming: list) -> tuple[dict, set]:
     """What of `incoming` a thread that already holds `prior` has not heard.
 
@@ -69,24 +116,23 @@ def _turn_input(prior: list[BaseMessage], incoming: list) -> tuple[dict, set]:
     every turn, and the turn after that a third. The token bill would grow with
     the number of turns squared, which is the opposite of why the thread exists.
 
-    So the incoming list is reconciled against the thread by *prefix*, aligned on
-    role and text and never on position — the same rule `adoptRecordedIds` uses
-    in the frontend, for the same reason. When the two align, only the suffix is
-    fed. When they do not — history edited, a turn deleted, a step-limit reply
-    the thread never wrote — the thread's messages are dropped and replaced
-    wholesale, because appending onto a history that has moved is how you get a
-    conversation neither side ever had.
+    So the incoming list is reconciled against the thread by *content*, aligned
+    on role and text and never on position — the same rule `adoptRecordedIds`
+    uses in the frontend, for the same reason. When the thread's transcript is
+    found in the incoming one, only what follows it is fed. When it is not —
+    history edited, a turn deleted, a step-limit reply the thread never wrote —
+    the thread's messages are dropped and replaced wholesale, because appending
+    onto a history that has moved is how you get a conversation neither side
+    ever had.
 
     Returns the graph input and the ids the thread held *before* this turn, which
     is what lets the caller report this turn's steps and spend rather than the
     thread's whole life.
     """
     said = _spoken(prior)
-    aligned = (len(incoming) >= len(said)
-               and all(mine == _said(theirs)
-                       for mine, theirs in zip(said, incoming)))
-    if aligned:
-        return {'messages': incoming[len(said):]}, {m.id for m in prior}
+    start = _window(said, incoming) if len(incoming) >= len(said) else None
+    if start is not None:
+        return {'messages': incoming[start + len(said):]}, {m.id for m in prior}
     return {'messages': [RemoveMessage(id=REMOVE_ALL_MESSAGES), *incoming]}, set()
 
 
@@ -102,6 +148,10 @@ class LodestarAgent:
         self._checkpointer = None  # attached by the app's lifespan, not at build
         self._store = None
         self._graphs: dict[tuple[str, str], Any] = {}
+        # How many graph nodes one tool round costs. Set by `_middleware`, which
+        # is the only thing that knows — see `_run_config`.
+        self._per_step = 2
+        self._per_run = 0
         # Build the default graph now rather than on the first request: an
         # unknown BRAIN_LLM has to fail at boot (create_app builds the agent),
         # which is the no-auto-modes rule. Lazily, a typo would serve a healthy
@@ -139,21 +189,64 @@ class LodestarAgent:
         key = (provider or self.settings.llm_provider, model or '')
         if key not in self._graphs:
             llm = self._llm or make_chat_model(self.settings, model, provider)
-            # UntrustedToolOutput sits outside the error middleware, so a tool's
-            # failure message is fenced too: the text in "board unreachable at …"
-            # is not ours either.
             self._graphs[key] = create_agent(
                 model=llm, tools=self.tools, system_prompt=self.system_prompt,
-                middleware=[UntrustedToolOutput(),
-                            ToolErrorMiddleware(_tool_error)],
+                middleware=self._middleware(llm),
                 state_schema=LodestarState, context_schema=TurnContext,
                 checkpointer=self._checkpointer, store=self._store)
         return self._graphs[key]
 
+    def _middleware(self, llm: BaseChatModel) -> list:
+        """Everything the graph wears, in the one order that is load-bearing.
+
+        The two that wrap a *tool call* nest outside-in as listed, and that
+        nesting is the rule:
+
+        - `UntrustedToolOutput` is outermost, so a tool's failure message is
+          fenced too — the text in "board unreachable at …" is not ours either.
+        - `ToolErrorMiddleware` sits inside it, turning a raising tool into
+          something the model can read.
+
+        The rest touch the *model* call and cannot disturb that: the summariser
+        and the tool-call limit are state hooks, the context editor wraps the
+        request. Either summarisation knob set to 0 returns None from its
+        factory and drops out here, so switching it off leaves no middleware to
+        ask.
+        """
+        # The runaway guard `recursion_limit` cannot be. It counts *nodes*, and
+        # a model that requests six tool calls in one message spends one node
+        # and six calls — six board fetches, or six web searches, against a
+        # budget that never noticed. So the limit is per run and generous
+        # (parallel calls are legitimate), and 'continue' rather than 'end':
+        # the model is told the tool is spent and still gets to answer, which
+        # is what the step-limit path had to give up on.
+        limit = ToolCallLimitMiddleware(run_limit=2 * self.max_steps,
+                                        exit_behavior='continue')
+        middleware = [m for m in (UntrustedToolOutput(),
+                                  ToolErrorMiddleware(_tool_error),
+                                  make_summarizer(self.settings, llm),
+                                  make_context_editor(self.settings),
+                                  limit) if m is not None]
+        # `create_agent` compiles each before_model/after_model hook into its own
+        # graph node, and `recursion_limit` counts nodes. So a middleware with a
+        # state hook silently shortens the step budget — adding two of them here
+        # cut a max_steps=2 run to one tool call, which is the sort of change
+        # that looks like a model getting worse. `_run_config` derives the limit
+        # from this shape instead of from the constant 2n+1 it used to be.
+        self._per_step = 2 + _hooks(middleware, 'before_model') \
+            + _hooks(middleware, 'after_model')
+        self._per_run = _hooks(middleware, 'before_agent') \
+            + _hooks(middleware, 'after_agent')
+        return middleware
+
     def _run_config(self, session_id: str | None = None,
                     board_id: str | None = None) -> dict:
         # A step is a model turn plus a tool turn, and the run ends on a model
-        # turn: 2n+1 nodes for n tool calls.
+        # turn — which was 2n+1 nodes for n tool calls until middleware started
+        # adding nodes of its own. `_per_step` and `_per_run` are that shape,
+        # counted from the middleware actually installed, so `max_steps` keeps
+        # meaning tool rounds rather than "tool rounds, minus however many state
+        # hooks were added since".
         #
         # One thread per chat, so reopening a conversation resumes the state the
         # last turn left. A request that names no session gets a thread of its
@@ -166,7 +259,9 @@ class LodestarAgent:
         # something a model can get wrong or be talked into. Absent means the
         # board API's own default board. The *session* deliberately no longer
         # travels here: it is `TurnContext`, typed and out of the checkpoint.
-        config: dict = {'recursion_limit': 2 * self.max_steps + 1,
+        config: dict = {'recursion_limit': self._per_run
+                        + self.max_steps * self._per_step
+                        + (self._per_step - 1),
                         'configurable': {'thread_id': session_id or
                                          f'adhoc-{uuid4()}'}}
         if board_id:
