@@ -35,9 +35,34 @@ SEASONS = {
     'تابستون': ((6, 22), (9, 22)), 'پاییز': ((9, 23), (12, 21)),
     'زمستان': ((12, 22), (3, 20)), 'زمستون': ((12, 22), (3, 20)),
 }
-# The English half is new and unmeasured — the measured corpus is Farsi — and it is
-# deliberately not a mirror. «پارسال تابستون» shifts a further year because the
-# Persian year turns at Nowruz, while "last summer" means the most recent one.
+# Measured 2026-08-13 over 31 English time expressions, anchored at that date:
+# the branches this half targets, the Farsi branches with no English mirror, and
+# ordinary phrasings neither targets. The table is in
+# `brain/tests/evals/test_timescope_english.py`, which prints it.
+#
+# As shipped that morning it resolved 15 of the 31 and 13 of those were right.
+# One was wrong — "last summer" asked in August returned the summer we were
+# standing in, because `_window` reads "most recent" as "already started" and
+# nothing read the word "last"; that is the shift in `_english_scope` below, made
+# after the measurement, and it takes the figure to 14 of 31. One is coarse:
+# "March 2025" falls through to the bare-year branch and returns all of 2025.
+# The 16 misses are calendar-relative ("this week/month/year", "earlier this
+# week", "today"), Gregorian month names ("in June", "since April"), spans that
+# are not "<digits> months ago" ("past 3 months", "the last 6 months", "the last
+# 30 days", "two weeks ago", "a couple of weeks ago", "the last few weeks"),
+# weekdays ("last Tuesday"), "in the past year" and "last night".
+#
+# Precision is the weaker half and is not counted in that fraction: bare season
+# nouns match anywhere, so 3 of 5 control phrases with no time language at all
+# ("buy a winter coat", "spring cleaning the flat", "did the summer camp invoice
+# arrive") filter the board to a season. Only 'fall' carries the determiner
+# guard. A false positive *removes* good candidates, so this is the worse half to
+# be weak in — see the note at the foot of the file for why it is not a
+# one-liner.
+#
+# The half is deliberately not a mirror of the Farsi one. «پارسال تابستون»
+# shifts a further year because the Persian year turns at Nowruz, while "last
+# summer" means the most recent summer, whichever Persian year it fell in.
 ENGLISH_SEASONS = {'spring': ((3, 21), (6, 21)), 'summer': ((6, 22), (9, 22)),
                    'autumn': ((9, 23), (12, 21)), 'fall': ((9, 23), (12, 21)),
                    'winter': ((12, 22), (3, 20))}
@@ -176,7 +201,20 @@ def _english_scope(text: str, anchor: date) -> TimeScope | None:
         pattern = (r'\b(?:last|this|in|during)\s+(?:the\s+)?fall\b'
                    if name == 'fall' else rf'\b{name}\b')
         if re.search(pattern, text):
-            return _scope(*_window(anchor, start, end), name, 'season')
+            first, last = _window(anchor, start, end)
+            # "last summer" asked in August is not the summer we are standing
+            # in. `_window` returns the window that has already *started*, which
+            # in season is the current one, and "last" is the one word that says
+            # it is not — so the shift applies only while the window is still
+            # running (`last >= anchor`, and `_window` guarantees the other
+            # side). Asked in March, "last summer" is already a finished summer
+            # and nothing shifts, which is why the bug survived the unit test.
+            if last >= anchor and re.search(rf'\blast\s+(?:the\s+)?{name}\b',
+                                            text):
+                return _scope(date(first.year - 1, *start),
+                              date(last.year - 1, *end), f'last {name}',
+                              'season')
+            return _scope(first, last, name, 'season')
     if re.search(r'\byesterday\b', text):
         return _scope(anchor - timedelta(days=1), anchor - timedelta(days=1),
                       'yesterday', 'relative')
@@ -248,6 +286,29 @@ inside the tolerance of a filter whose windows are 30 days wide — and
 `jdatetime` would fix only that day. `duckling` is the one that would genuinely
 be better, and what would change the decision is deployment: if the brain ever
 runs beside other services anyway, its grain-aware ranges beat this module's
-hand-written branches, and the English half — new, unmeasured, written for this
-board rather than for a corpus — is the first thing it should replace.
-"""
+hand-written branches, and the English half is the first thing it should
+replace — now with a number behind that sentence rather than an admission.
+
+*The English half, measured.* 2026-08-13, anchored at that date, over 31 English
+time expressions and 5 controls carrying no time language: the branches this half
+targets, the Farsi branches it has no mirror for, and phrasings neither targets
+(«this month», «in June», «past 3 months», «two weeks ago», «last Tuesday»). No
+model and no key — a deterministic parser is checkable offline, so this is
+arithmetic over a table rather than a proxy. Provenance and the misses are listed
+beside `ENGLISH_SEASONS`; the run is
+`brain/tests/evals/test_timescope_english.py`. **As shipped: 15 of 31 resolved,
+13 of them right.** One wrong ("last summer" in August returned the summer in
+progress) was fixed in the same change and is the difference between 13 and 14;
+the other 16 return nothing, which costs selectivity and no correctness.
+
+*What that says about which library to reach for.* The 16 misses are recall, and
+recall here is cheap to buy by hand — each is one branch, and `dateparser` would
+close most of them tomorrow for a dependency. The controls are the argument for
+`duckling`: 3 of the 5 fired, because bare season nouns match anywhere and "buy a
+winter coat" is a noun phrase, not a date. Requiring a determiner (the guard
+'fall' already carries) is not the fix — «over the summer» and «notes from the
+autumn» need one list of prepositions and «summer 2025» needs none — and a
+keyword screen cannot tell a season used as a time from a season used as an
+adjective. A grain-aware parse can. What would change the decision is a board
+that types English as often as it types Farsi: today it does not, and the cost of
+these false positives is paid on the English half of a mostly-Persian corpus."""
