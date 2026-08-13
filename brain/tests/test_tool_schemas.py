@@ -7,18 +7,23 @@ makes that drift impossible; these assertions are what keeps the *names* and
 *enums* from drifting instead, the way the CSS class names are pinned for the
 e2e suite.
 
-Tools are built straight from the factories with fakes, so all seven are
+Tools are built straight from the factories with fakes, so all eight are
 present regardless of whether Chroma is configured — in create_app, recall_chat
 is conditional on it.
 """
 from lodestar_brain.retrieval import CardIndex, LexicalHashEmbeddings
 from lodestar_brain.tools.board import COLUMNS, HABIT_FREQS, TYPES, make_board_tools
+from lodestar_brain.tools.memory import make_memory_tool
 from lodestar_brain.tools.recap import make_recap_tool
 from lodestar_brain.tools.retrieve import make_recall_tool, make_retrieve_tool
 from lodestar_brain.tools.websearch import make_search_tool
 
 EXPECTED = {'list_cards', 'create_card', 'update_card',
-            'web_search', 'find_related', 'recall_chat', 'daily_recap'}
+            'web_search', 'find_related', 'recall_chat', 'daily_recap',
+            # The agent's own scratch pad, and the only tool here that writes.
+            # What it writes to is the checkpoint store — never a card, never
+            # the chat record — and every write is a visible step.
+            'remember_fact'}
 
 
 class FakeSearch:
@@ -37,7 +42,7 @@ def tools_by_name():
     index = CardIndex(LexicalHashEmbeddings())
     tools = [*make_board_tools(None), make_search_tool(FakeSearch()),
              make_retrieve_tool(index, None), make_recall_tool(FakeMemory()),
-             make_recap_tool(None)]
+             make_recap_tool(None), make_memory_tool()]
     return {t.name: t for t in tools}
 
 
@@ -60,7 +65,7 @@ def _enum(tool, field):
 
 
 # This is a unit test.
-def test_the_seven_tool_names_are_exactly_these():
+def test_the_eight_tool_names_are_exactly_these():
     assert set(tools_by_name()) == EXPECTED
 
 

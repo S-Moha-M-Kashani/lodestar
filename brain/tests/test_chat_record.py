@@ -28,7 +28,10 @@ Contract under test:
 - `ChatStore.prune(rows)` removes chunks for messages the live record no longer
   returns, which is what makes deleting a chat reach the index instead of
   leaving it answering `recall_chat` forever.
+- Both chat routes record *after* the response, as a background task — and the
+  turn still always lands, including with Chroma down.
 """
+import asyncio
 from datetime import datetime, timezone
 
 import httpx
@@ -38,7 +41,7 @@ from fastapi.testclient import TestClient
 
 from lodestar_brain.config import Settings
 from lodestar_brain.retrieval import ChatStore, LexicalHashEmbeddings, MEMORY_URL
-from lodestar_brain.server import create_app
+from lodestar_brain.server import ChatBody, create_app
 from lodestar_brain.tools.board import BoardClient
 
 BOARD = 'http://board.test'
@@ -74,21 +77,25 @@ def test_board_client_records_and_lists_chat():
         return_value=httpx.Response(200, json={'messages': echoed}))
 
     client = BoardClient(BOARD)
-    assert client.record_chat(sent) == echoed
+    # Every call is a coroutine — the brain answers on an async route and a
+    # board read is almost all waiting. Driven with asyncio.run here because a
+    # unit test is one of the callers that has no loop of its own.
+    run = asyncio.run
+    assert run(client.record_chat(sent)) == echoed
     assert json.loads(post.calls.last.request.content) == {'messages': sent}
-    assert client.list_chat() == echoed
+    assert run(client.list_chat()) == echoed
     # An empty board is omitted, never sent as '': the server files an unnamed
     # batch under its default board, and it can only do that if it can tell the
     # two apart. Named, it travels as a query parameter on the read and in the
     # body on the write, beside the session it belongs with.
     assert 'board' not in scoped.calls.last.request.url.params
-    assert client.record_chat(sent, board_id='b-home') == echoed
+    assert run(client.record_chat(sent, board_id='b-home')) == echoed
     assert json.loads(post.calls.last.request.content)['boardId'] == 'b-home'
-    assert client.list_chat('b-home') == echoed
+    assert run(client.list_chat('b-home')) == echoed
     assert 'board=b-home' in str(scoped.calls.last.request.url)
     # The index reads every board at once — pruning from one board's messages
     # would drop all the others out of recall.
-    assert client.list_all_chat() == echoed
+    assert run(client.list_all_chat()) == echoed
     assert every.called
 
 
@@ -155,17 +162,61 @@ def test_every_turn_lands_in_the_record_even_without_chroma():
 
 # This is an integration test.
 @respx.mock
+def test_the_stream_records_its_turn_after_the_last_event():
+    """Bookkeeping is not something the user waits for — and is never skipped.
+
+    Recording used to happen beside the `done` frame, so the last event of every
+    turn was held back for a round trip to Node and an embedding pass: the answer
+    finished arriving after the work of filing it. It is a background task now,
+    which Starlette awaits once the final chunk is sent.
+
+    Both halves are asserted, because moving it is only safe if it still always
+    happens. The route is driven directly rather than through TestClient for
+    exactly that reason: TestClient runs the whole app — background tasks
+    included — before a single byte is readable, so it can prove the turn lands
+    and can never prove it landed *after*. Chroma is off, which is the
+    configuration that used to lose turns outright.
+    """
+    record = respx.post(f'{BOARD}/api/chat/messages').mock(
+        return_value=httpx.Response(200, json={'messages': []}))
+    app = create_app(Settings(llm_provider='fake', embedder='fake',
+                              board_api_url=BOARD, chroma_url=''))
+    stream = next(route.endpoint for route in app.routes
+                  if getattr(route, 'path', '') == '/agent/chat/stream')
+
+    async def drive():
+        response = await stream(ChatBody(messages=[
+            {'role': 'user', 'content': 'the wifi password is hunter2'}]))
+        frames = [chunk async for chunk in response.body_iterator]
+        return response, frames
+
+    response, frames = asyncio.run(drive())
+    assert any('event: done' in str(frame) for frame in frames)
+    assert not record.called, (
+        'the turn was recorded before the browser had the whole stream')
+
+    asyncio.run(response.background())   # what Starlette does after the last chunk
+    assert record.called, 'a turn must reach the record even with Chroma down'
+    sent = json.loads(record.calls.last.request.content)['messages']
+    assert [m['role'] for m in sent] == ['user', 'assistant']
+
+
+# This is an integration test.
+@respx.mock
 def test_boot_syncs_the_index_from_the_record():
     respx.get(f'{BOARD}/api/chat/messages/all').mock(
         return_value=httpx.Response(200, json={'messages': [
             row(1, 'the wifi password is hunter2')]}))
     respx.post(f'{BOARD}/api/chat/messages').mock(
         return_value=httpx.Response(200, json={'messages': []}))
-    client = TestClient(create_app(Settings(
-        llm_provider='fake', embedder='fake', board_api_url=BOARD,
-        chroma_url=MEMORY_URL, chat_collection='chat-boot-sync')))
-
-    res = client.post('/rag/recall', json={'text': 'wifi password'})
+    # `with`, so the lifespan runs — the boot sync happens when the *service*
+    # starts, which is what "at boot" has meant since the board client became a
+    # coroutine and create_app stayed synchronous (see `sync_chat_index`).
+    with TestClient(create_app(Settings(
+            llm_provider='fake', embedder='fake', board_api_url=BOARD,
+            chroma_url=MEMORY_URL,
+            chat_collection='chat-boot-sync'))) as client:
+        res = client.post('/rag/recall', json={'text': 'wifi password'})
     assert res.status_code == 200
     body = res.json()
     assert body['memory'] is True
@@ -332,7 +383,10 @@ def test_a_board_down_at_boot_does_not_take_the_brain_down():
     # not up yet (compose starts them together, in no promised order).
     respx.get(f'{BOARD}/api/chat/messages/all').mock(
         side_effect=httpx.ConnectError('board is down'))
-    client = TestClient(create_app(Settings(
-        llm_provider='fake', embedder='fake', board_api_url=BOARD,
-        chroma_url=MEMORY_URL, chat_collection='chat-board-down')))
-    assert client.get('/health').json()['ok'] is True
+    # Inside the lifespan, which is where the sync now happens: without the
+    # `with` this asserts nothing, because nothing would have called the board.
+    with TestClient(create_app(Settings(
+            llm_provider='fake', embedder='fake', board_api_url=BOARD,
+            chroma_url=MEMORY_URL,
+            chat_collection='chat-board-down'))) as client:
+        assert client.get('/health').json()['ok'] is True

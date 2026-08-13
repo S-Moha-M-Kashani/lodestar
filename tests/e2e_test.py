@@ -25,6 +25,10 @@ DB_PATH = os.path.join(tempfile.mkdtemp(prefix="qboard-test-"), "board.db")
 # The chat record beside it — without this the spawned server would write chat
 # rows into the repo's real databases/ folder.
 ASSISTANT_DB_PATH = os.path.join(os.path.dirname(DB_PATH), "assistant.db")
+# And the brain's own working memory — its conversation threads — for the same
+# reason: BRAIN_CHECKPOINT_DB defaults into databases/real/ when nothing says
+# otherwise, and a spawned test brain has no business there.
+CHECKPOINT_DB_PATH = os.path.join(os.path.dirname(DB_PATH), "brain-checkpoints.db")
 
 # Write-triggered backups are exercised against a throwaway directory, and with
 # rclone pointed at a path that does not exist. The suite must never add to the
@@ -244,6 +248,10 @@ def start_brain():
              # which is deliberate — so the offline run names the fake one rather
              # than letting the brain fail at boot with nothing to search anyway.
              "BRAIN_URL_SAFETY": "fake",
+             # The agent's threads go beside this run's throwaway board, never
+             # into databases/real/: an e2e turn must not resume — or grow —
+             # a real conversation.
+             "BRAIN_CHECKPOINT_DB": CHECKPOINT_DB_PATH,
              "BRAIN_CHAT_COLLECTION": "chat-e2e"},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,

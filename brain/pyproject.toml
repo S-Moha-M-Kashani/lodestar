@@ -28,6 +28,12 @@ dependencies = [
   # langchain_core BaseRetriever, so EnsembleRetriever cannot tell the
   # difference.
   "rank-bm25>=0.2.2",
+  # The one package behind all three durable pieces: the checkpointer that gives
+  # a chat thread short-term memory, the store that holds facts across sessions,
+  # and the node cache. LangGraph ships them as separate classes but in a single
+  # distribution, so the whole of "the brain remembers" costs one dependency
+  # (plus aiosqlite and sqlite-vec) rather than three.
+  "langgraph-checkpoint-sqlite>=3.1.1,<4.0",
 ]
 
 [project.optional-dependencies]

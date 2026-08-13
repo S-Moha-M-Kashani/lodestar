@@ -23,6 +23,20 @@ PROVIDER_MODELS = {'openrouter': 'openai/gpt-5-nano',
                    'ollama': '4skl/gemma4-e2b-mtp',
                    'fake': 'openai/gpt-5-nano'}
 
+# What a long conversation is allowed to cost, and in which order the two
+# defences fire. The argument for these four numbers is in
+# `middleware/summarize.py`; they live here because a threshold nobody can move
+# without editing code is a threshold nobody moves. Either trigger set to 0
+# switches its middleware off entirely.
+#
+# CLEAR_TOOLS_TOKENS is deliberately half of SUMMARY_TOKENS: dropping tool
+# output the model has already read back is cheap and reversible, and summarising
+# the conversation is neither, so the cheap one always gets first refusal.
+SUMMARY_TOKENS = 8_000
+SUMMARY_KEEP = 20
+CLEAR_TOOLS_TOKENS = 4_000
+CLEAR_TOOLS_KEEP = 3
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -94,6 +108,35 @@ class Settings:
     # and `off` is how you say you meant to run without one.
     url_safety: str = 'off'
     safe_browsing_key: str = ''
+    # 'langsmith' | 'off' — where a turn's trace goes (`middleware/tracing.py`).
+    #
+    # Inert here and real in `load_settings`, the same split `url_safety` and
+    # `chroma_url` use: a Settings built in code is a test or an eval and must
+    # ship nothing anywhere, while one built from the environment is the product
+    # and traces. `off` is not merely "no key" — it is a named choice that turns
+    # egress off at the source, because a missing key makes langsmith warn and
+    # call out anyway.
+    tracing: str = 'off'
+    langsmith_api_key: str = ''
+    # The agent's own working memory: LangGraph's checkpointer (one thread per
+    # chat, so reopening a conversation resumes it) and its long-term store,
+    # sharing one sqlite file. Never board.db and never assistant.db — those are
+    # the *record*, and losing this file costs resume, never a card or a turn.
+    #
+    # Inert in code and real from the environment, the same split url_safety,
+    # tracing and chroma_url use: a Settings built directly is a test, an eval or
+    # a script, and none of those may write into databases/real. ':memory:' is
+    # per-process and disappears with it.
+    checkpoint_db: str = ':memory:'
+    # Context budget. Real in code as well as from the environment — unlike
+    # tracing or the checkpoint file, these change what the *model* is sent, so a
+    # test or an eval that ran with different thresholds than the product would
+    # be measuring a different agent. `middleware/summarize.py` argues the
+    # numbers; 0 on either trigger switches that middleware off.
+    summary_tokens: int = SUMMARY_TOKENS
+    summary_keep: int = SUMMARY_KEEP
+    clear_tools_tokens: int = CLEAR_TOOLS_TOKENS
+    clear_tools_keep: int = CLEAR_TOOLS_KEEP
 
     def __post_init__(self):
         # An unknown provider gets the remote slug and is rejected by
@@ -151,6 +194,18 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         omni_model=env.get('BRAIN_OMNI_MODEL', 'google/gemini-2.5-flash-lite'),
         url_safety=env.get('BRAIN_URL_SAFETY', 'google-safe-browsing'),
         safe_browsing_key=env.get('GOOGLE_SAFE_BROWSING_KEY', ''),
+        tracing=env.get('BRAIN_TRACING', 'langsmith'),
+        langsmith_api_key=env.get('LANGSMITH_API_KEY', ''),
+        # Beside the other real databases, and covered by no backup: it is
+        # derived working memory, not a record.
+        checkpoint_db=env.get('BRAIN_CHECKPOINT_DB',
+                              'databases/real/brain-checkpoints.db'),
         parakeet_model=env.get('BRAIN_PARAKEET_MODEL',
                                'mlx-community/parakeet-tdt-0.6b-v3'),
+        summary_tokens=int(env.get('BRAIN_SUMMARY_TOKENS', SUMMARY_TOKENS)),
+        summary_keep=int(env.get('BRAIN_SUMMARY_KEEP', SUMMARY_KEEP)),
+        clear_tools_tokens=int(env.get('BRAIN_CLEAR_TOOLS_TOKENS',
+                                       CLEAR_TOOLS_TOKENS)),
+        clear_tools_keep=int(env.get('BRAIN_CLEAR_TOOLS_KEEP',
+                                     CLEAR_TOOLS_KEEP)),
     )

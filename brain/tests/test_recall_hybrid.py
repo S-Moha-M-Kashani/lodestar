@@ -105,12 +105,15 @@ def test_recall_searches_cards_and_chat_with_source_labels():
     # board, so seeding it from one board's messages would prune the rest.
     respx.get(f'{BOARD}/api/chat/messages/all').mock(
         return_value=httpx.Response(200, json={'messages': [row(1, PASSWORD)]}))
-    client = TestClient(create_app(Settings(
-        llm_provider='fake', embedder='fake', board_api_url=BOARD,
-        chroma_url=MEMORY_URL, chat_collection='chat-recall-cards')))
-
-    res = client.post('/rag/recall',
-                      json={'text': 'wifi password fig tree', 'k': 5})
+    # `with`, so the app's lifespan runs: the boot sync is what seeds the index
+    # from the record, and it belongs to the running service rather than to the
+    # object graph — see `sync_chat_index` for why it cannot live anywhere else.
+    with TestClient(create_app(Settings(
+            llm_provider='fake', embedder='fake', board_api_url=BOARD,
+            chroma_url=MEMORY_URL,
+            chat_collection='chat-recall-cards'))) as client:
+        res = client.post('/rag/recall',
+                          json={'text': 'wifi password fig tree', 'k': 5})
     assert res.status_code == 200
     body = res.json()
     assert body['memory'] is True
