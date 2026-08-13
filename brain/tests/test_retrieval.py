@@ -290,11 +290,20 @@ def test_time_language_resolves_to_a_date_range():
             scope('پارسال تابستون چطور بود').to_int) == (20240622, 20240922)
     assert scope('دیروز').from_int == scope('دیروز').to_int == 20260309
 
-    # English is new and unmeasured, and deliberately not a mirror: "last
-    # summer" means the most recent summer, where «پارسال تابستون» shifts a
-    # further year because the Persian year has not turned yet.
+    # English is deliberately not a mirror: "last summer" means the most recent
+    # summer, where «پارسال تابستون» shifts a further year because the Persian
+    # year has not turned yet. Coverage of the English half is measured in
+    # brain/tests/evals/test_timescope_english.py.
     assert (scope('how was last summer').from_int,
             scope('how was last summer').to_int) == (20250622, 20250922)
+    # The same two questions in August, when the summer is the one in progress
+    # — the anchor at which "last" has to be read rather than inferred from
+    # which window has started. Here the Persian year *has* turned, so both
+    # halves name the same summer by two different routes.
+    august = date(2026, 8, 13)
+    for question in ('how was last summer', 'پارسال تابستون چطور بود'):
+        window = retrieval.resolve_time_scope(question, august)
+        assert (window.from_int, window.to_int) == (20250622, 20250922), question
     assert (scope('what did I do last month').from_int,
             scope('what did I do last month').to_int) == (20260201, 20260228)
     assert (scope('anything from 2024').from_int,

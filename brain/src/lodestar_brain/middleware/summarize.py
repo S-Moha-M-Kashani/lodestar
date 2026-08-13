@@ -19,18 +19,75 @@ thresholds* are the design and neither belongs in the graph module:
 2. **Summarising** (`SummarizationMiddleware`). Past `summary_tokens` the older
    turns are collapsed into one summary and the newest `summary_keep` messages
    are kept verbatim. This one spends a model call and is lossy, so its trigger
-   sits at twice the first one's: by the time it fires, dropping tool output has
-   already been tried and was not enough.
+   sits at twice the first one's. That was meant to make it the second rung of a
+   ladder — dropping tool output tried first and found wanting — and measurement
+   says it is not one: the trigger counts a thread the clearing never touched.
+   See "Why 8 000 and 4 000" below.
 
 **Why 8 000 and 4 000.** The route refuses past 120 000 characters, which is
-roughly 30 000 tokens, so 8 000 leaves a summariser several turns of room before
-the cap it exists to make unnecessary — and an ordinary turn on this board is a
-few hundred tokens, so nothing routine crosses it. They are deliberately
-conservative rather than optimal: summarisation is the one change here that can
-alter what the model *says*, and a threshold that is too high costs money, while
-one that is too low costs answers. The measurement that would settle them is a
-replay of real conversations at several triggers, scored for whether the answer
-survived; until that exists these are a judgement call and are labelled as one.
+roughly 30 000 approximate tokens, so 8 000 leaves a summariser several turns of
+room before the cap it exists to make unnecessary — and an ordinary turn on this
+board is a few hundred tokens, so nothing routine crosses it. They are
+deliberately conservative rather than optimal: summarisation is the one change
+here that can alter what the model *says*, and a threshold that is too high costs
+money, while one that is too low costs answers.
+
+Two things about them are now measured (2026-08-13), and neither is the value.
+
+**Neither trigger has ever been reached.** Across the live `assistant.db` and all
+100 backups of it, the largest conversation this board has ever held is 20
+messages and ~2 060 approximate tokens — half the cheap trigger and a quarter of
+the summariser's. Both defences are, against every conversation on record, dead
+code; the numbers describe a conversation nobody has had yet, which is why the
+experiment below cannot be run today and is written down instead:
+
+    sqlite3 databases/real/assistant.db "select session_id, count(*),
+      sum(length(content)) from messages where deleted_at is null
+      group by session_id order by 3 desc"
+
+**The 1:2 ratio does not do what it says.** `tests/evals/test_context_budget.py`
+replays a tool-heavy conversation through this stack. On it, clearing alone takes
+the peak request from 9 720 to 3 654 approximate tokens and never needs help;
+adding the summariser at 8 000 spends a model call and a lossy rewrite to take a
+further **zero** off that peak, because the two are hooked into different places.
+`SummarizationMiddleware` is a `before_model` state hook and counts the *thread*,
+which holds every tool result in full for ever; `ContextEditingMiddleware` wraps
+the model call and edits a *copy*. So the cheap defence's saving is real on the
+wire and invisible to the expensive defence's trigger, and "by the time it fires,
+dropping tool output has already been tried and was not enough" is not something
+the trigger is in a position to know.
+
+What that measurement changes is the reasoning, not the constants. The two are
+not one defence at two severities but answers to two different causes of growth:
+clearing bounds the part of the context that is *tool output*, summarisation the
+part that is *spoken*, and only the second grows without a ceiling. 4 000 and
+8 000 are kept — nothing measured says where else to put them — but the ladder
+they were arranged into is not there, and a future change should size them
+against the two quantities separately rather than at a ratio to each other.
+
+**The experiment that would settle the values**, in the detail it needs to be
+runnable the day the input exists:
+
+- *Input*: at least twenty real conversations, one subject each, each past 8 000
+  approximate tokens of **spoken** text with tool output excluded, in both
+  languages this board is used in. Segmented per chat — the `sessions` table
+  gives that now, the pre-sessions rows do not.
+- *Label*: per conversation, one probe question whose correct answer is a fact
+  stated in the span summarisation would collapse (anything older than the newest
+  `summary_keep` messages), plus the exact string the reply has to contain.
+- *Vary*: `summary_tokens` over 4 000 / 8 000 / 16 000 / 32 000, against the model
+  that answers, holding `summary_keep` fixed.
+- *Score*: substring match of the labelled fact in the reply — the injection
+  eval's discipline, not a judge — plus the dollars `pricing.py` reports per turn.
+- *Read it*: recall flat across the triggers means 8 000 is too low and should
+  rise until cost rather than recall binds. Recall falling as the trigger rises
+  means the collapsed span is the problem, and the fix is `summary_keep` or
+  llmlingua-style compression rather than a bigger number. Recall already poor at
+  8 000 means summarising is the wrong defence here and the 120 000-character
+  refusal should be left to do its job.
+- *Cost*: one summariser call plus one answer per conversation per trigger — some
+  eighty turns, single-digit dollars. **The corpus is what is missing, not the
+  budget.**
 
 **The summariser is the model that answers.** No second seam: `make_chat_model`
 already builds it, and a summariser on a different model would mean a
@@ -156,5 +213,12 @@ What would change it: a measured answer-quality loss from summarisation. If
 replaying real conversations at these thresholds shows the summary dropping
 things the user then had to repeat, the fix is not a bigger number — it is
 llmlingua-style compression that never rewrites, or Zep's per-turn window, and
-the trigger becomes the knob that chooses between them.
+the trigger becomes the knob that chooses between them. That replay is specified
+turn by turn in the module docstring above and is **blocked on its input**: no
+conversation on this board, live or in a hundred backups, has ever reached even
+half of `clear_tools_tokens`, so there is nothing yet to replay. The half that
+could be measured without a corpus has been (`test_context_budget.py`), and it
+already points llmlingua's way for one of the two growth causes: on a tool-heavy
+conversation the summariser rewrites turns to save nothing the placeholder had
+not saved already.
 """
