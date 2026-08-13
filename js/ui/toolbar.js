@@ -1,5 +1,5 @@
 import { assistantState, refreshChatSessions, refreshChatTrash, startNewChat } from '../assistant/session.js';
-import { armHistoryIdle, cancelHistoryIdle, closeChatHistory, extrasOpen, renderAssistantTools, setChatMenuOpen, setExtrasOpen } from '../assistant/tools.js';
+import { armHistoryIdle, cancelHistoryIdle, closeChatHistory, closeChatRowMenus, extrasOpen, fromChatRowMenu, renderAssistantTools, setChatMenuOpen, setExtrasOpen } from '../assistant/tools.js';
 import { filters } from '../core/state.js';
 import { $, announce } from './dom.js';
 import { render } from './render.js';
@@ -86,6 +86,11 @@ document.addEventListener('click', (e) => {
   // without this the OK that applies a rename is also what closes the list it
   // was applied in — the panel vanished the instant the work was confirmed.
   if (e.target.closest('dialog')) return;
+  // A row's actions dismiss on the same rule, one level in: a click on the +
+  // or inside the actions it unfolded is use, and anything else folds them —
+  // including a click on another row, which would otherwise leave the list with
+  // two rows of buttons in it.
+  if (!fromChatRowMenu(e)) closeChatRowMenus();
   const outside = !e.target.closest('.assistant-tools');
   if (assistantState.historyOpen && outside) closeChatHistory();
   // The settings drawer is a dropdown now and has to shut like one. A click
@@ -95,9 +100,14 @@ document.addEventListener('click', (e) => {
   if (extrasOpen && outside) setExtrasOpen(false);
 });
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && assistantState.historyOpen) {
-    closeChatHistory({ focusBack: true });
-  }
+  if (e.key !== 'Escape') return;
+  // One Escape closes one thing, innermost first — the same rule the chat menu
+  // inside the extras drawer follows. Decided here rather than in a second
+  // listener beside it: two handlers would both fire on the one keypress, and
+  // whichever ran first would close its own layer and then hand the other a
+  // page where nothing was in the way.
+  if (closeChatRowMenus({ focusBack: true })) return;
+  if (assistantState.historyOpen) closeChatHistory({ focusBack: true });
 });
 document.addEventListener('keydown', (e) => {
   // Only when the menu inside it is already shut, so one Escape closes one

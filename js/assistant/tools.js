@@ -245,6 +245,50 @@ function dayGroupLabel(ms) {
   return then.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
+// The id a row's actions are named by, so its + can point `aria-controls` at
+// them. A counter and not the session id: the id is a client-supplied string
+// (`adhoc`, `e2e-doomed`, whatever an import carried) and nothing guarantees it
+// is a legal, unique DOM id.
+let rowActionsSeq = 0;
+
+/** Is this event inside a row's own control — its + or the actions it unfolds?
+ *  Both count as use, so neither dismisses the thing being used. */
+export const fromChatRowMenu = (e) =>
+  Boolean(e.target.closest?.('.chat-row-menu-btn, .chat-row-actions'));
+
+/** Fold away whichever row is unfolded, and say whether there was one.
+ *
+ *  At most one ever is: opening a row folds the others first, so a list read
+ *  top to bottom does not end up with five rows of buttons in it. The answer is
+ *  what lets Escape close one thing at a time — the row's actions before the
+ *  list they are unfolded in. */
+export function closeChatRowMenus({ focusBack = false } = {}) {
+  const open = document.querySelector('.chat-row-actions:not([hidden])');
+  if (!open) return false;
+  open.hidden = true;
+  const btn = open.closest('.chat-history-item')?.querySelector('.chat-row-menu-btn');
+  if (btn) {
+    btn.setAttribute('aria-expanded', 'false');
+    if (focusBack) btn.focus();
+  }
+  return true;
+}
+
+/** One chat in the list: what it is called, how long it is, and a + holding
+ *  what can be done to it.
+ *
+ *  Rename and Delete used to sit in the row itself, collapsed to `max-width: 0`
+ *  until the row was hovered — which is why they could not be reached at all
+ *  without a pointer. They are behind one always-painted control now, the same
+ *  shape the board's cards use (`ui/card-menu.js`): a real button in flow, 24px
+ *  on a finger, tabbable, and costing the row 24px instead of the 134px two
+ *  buttons held.
+ *
+ *  It unfolds *inside* the row rather than dropping a panel over it, because
+ *  this list is itself a 320px dropdown with `overflow-y: auto` — an absolutely
+ *  positioned panel would be clipped by that scroller, and dodging the clip is
+ *  the flip-and-measure code card-menu needs. Unfolded, the actions take a line
+ *  of their own and the title keeps the whole width it had. */
 function renderChatHistoryRow(session) {
   const row = document.createElement('div');
   row.className = 'chat-history-item';
@@ -274,15 +318,40 @@ function renderChatHistoryRow(session) {
   rename.type = 'button';
   rename.className = 'btn ghost chat-history-rename';
   rename.textContent = 'Rename';
-  rename.addEventListener('click', () => renameChat(session));
+  rename.addEventListener('click', () => { closeChatRowMenus(); renameChat(session); });
 
   const remove = document.createElement('button');
   remove.type = 'button';
   remove.className = 'btn ghost chat-history-delete';
   remove.textContent = 'Delete';
-  remove.addEventListener('click', () => deleteChat(session));
+  remove.addEventListener('click', () => { closeChatRowMenus(); deleteChat(session); });
 
-  row.append(open, rename, remove);
+  const actions = document.createElement('div');
+  actions.id = `chat-row-actions-${++rowActionsSeq}`;
+  actions.className = 'chat-row-actions';
+  actions.hidden = true;
+  actions.append(rename, remove);
+
+  const menu = document.createElement('button');
+  menu.type = 'button';
+  menu.className = 'chat-row-menu-btn';
+  menu.textContent = '+';
+  menu.title = 'Chat actions';
+  menu.setAttribute('aria-expanded', 'false');
+  menu.setAttribute('aria-controls', actions.id);
+  menu.setAttribute('aria-label', `Actions for ${session.title}`);
+  menu.addEventListener('click', () => {
+    const opening = actions.hidden;
+    closeChatRowMenus();
+    if (!opening) return;
+    actions.hidden = false;
+    menu.setAttribute('aria-expanded', 'true');
+    // Focus lands on Rename, so the keyboard path is Tab to the +, Enter, and
+    // you are on the first action rather than back at the top of the list.
+    rename.focus();
+  });
+
+  row.append(open, menu, actions);
   return row;
 }
 

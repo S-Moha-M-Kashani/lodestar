@@ -615,8 +615,9 @@ try:
                    opacity: getComputedStyle(el).opacity, tab: el.tabIndex };
         }""")
         # Measured without a hover, deliberately. The chat rows in this app
-        # collapse their controls to max-width: 0 until the pointer arrives and
-        # touch cannot reach them at all; this control must never do that.
+        # collapsed their controls to max-width: 0 until the pointer arrived and
+        # touch could not reach them at all; this control must never do that,
+        # and the chat rows now carry the same one (.chat-row-menu-btn).
         check("card menu: the + occupies layout and is tabbable without a hover",
               geom["w"] >= 22 and geom["h"] >= 22
               and geom["opacity"] == "1" and geom["tab"] >= 0)
@@ -2212,15 +2213,67 @@ try:
                               has_text="a chat that exists to be deleted").first
 
         # This is an end-to-end test.
+        # The defect this control was built for: rename and delete were two
+        # buttons collapsed to max-width: 0 until the row was hovered, so on a
+        # touch screen — which has no hover to give — neither could be reached at
+        # all. Measured with the pointer nowhere near the row, deliberately: a
+        # check that hovered first would pass against exactly that bug. The
+        # width the collapse bought has to survive the fix, so this asserts that
+        # too — one + at 24px where two buttons held 134px of a 298px row, and
+        # the folded actions occupying nothing until they are asked for.
+        page.mouse.move(0, 0)   # the pointer is provably not on the row
+        geom = doomed.evaluate("""row => {
+          const btn = row.querySelector('.chat-row-menu-btn');
+          const box = btn.getBoundingClientRect();
+          const wide = (sel) => row.querySelector(sel).getBoundingClientRect().width;
+          return { w: box.width, h: box.height, tab: btn.tabIndex,
+                   opacity: getComputedStyle(btn).opacity,
+                   expanded: btn.getAttribute('aria-expanded'),
+                   row: row.getBoundingClientRect().width,
+                   rowH: row.getBoundingClientRect().height,
+                   title: wide('.chat-history-title'),
+                   actions: wide('.chat-row-actions') };
+        }""")
+        check("chats: a row's + is hittable and tabbable with no pointer, at 24px of the row",
+              geom["w"] >= 22 and geom["h"] >= 22
+              and geom["opacity"] == "1" and geom["tab"] >= 0
+              and geom["expanded"] == "false"
+              # 24px of a 298px row against the 134px the pair held, the folded
+              # actions costing nothing, and the title left 190px of it.
+              and geom["w"] <= 40 and geom["actions"] == 0
+              and geom["title"] > geom["row"] * 0.55
+              # Still one line. The + wraps onto a line of its own the moment
+              # the title beside it keeps `flex-basis: auto` — measured, that
+              # took every folded row from 31px to 61px, and a width assertion
+              # passes happily against it because the title then has the line
+              # to itself.
+              and geom["rowH"] <= 40)
+
+        # This is an end-to-end test.
+        # The + is a panel like every other one here, one level further in: it
+        # opens from the keyboard alone, and Escape folds it and stops there —
+        # the list it was unfolded in stays open, or every action would cost the
+        # reader their place in the history.
+        doomed.locator(".chat-row-menu-btn").focus()
+        page.keyboard.press("Enter")
+        unfolded = wait_until(
+            lambda: doomed.locator(".chat-row-actions:not([hidden])").count() == 1)
+        on_rename = page.evaluate(
+            "document.activeElement?.classList.contains('chat-history-rename')")
+        page.keyboard.press("Escape")
+        folded = wait_until(
+            lambda: doomed.locator(".chat-row-actions:not([hidden])").count() == 0)
+        check("chats: the + opens from the keyboard and Escape folds it, not the list",
+              unfolded and on_rename and folded
+              and page.evaluate(
+                  "document.activeElement?.classList.contains('chat-row-menu-btn')")
+              and page.locator(".chat-history").count() == 1)
+
+        # This is an end-to-end test.
         # A derived title is a starting point, not a name. Renaming goes through
         # the in-app prompt dialog — never a native one, which the run-wide
         # no-native-dialogs check also covers.
-        # Hover the row first, the way the control is actually reached: it is
-        # collapsed to no width until its row is under the pointer or holds focus,
-        # so that a 320px panel spends its width on chat titles rather than on two
-        # buttons nobody can see. A click without the hover is a click on
-        # something invisible, which is not an interaction this app offers.
-        doomed.hover()
+        doomed.locator(".chat-row-menu-btn").click()
         doomed.locator(".chat-history-rename").click()
         page.wait_for_selector("#prompt-dialog[open]")
         page.fill("#prompt-input", "Doomed chat, renamed")
@@ -2238,7 +2291,7 @@ try:
         # the observable half of that; ChatStore.prune's own test owns the rest.
         renamed_row = page.locator(".chat-history-item",
                                    has_text="Doomed chat, renamed").first
-        renamed_row.hover()
+        renamed_row.locator(".chat-row-menu-btn").click()
         renamed_row.locator(".chat-history-delete").click()
         page.wait_for_selector("#confirm-dialog[open]")
         with page.expect_request("**/api/rag/chat/reindex*"):
