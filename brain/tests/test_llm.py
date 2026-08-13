@@ -85,7 +85,7 @@ def test_factory_gives_a_local_model_a_far_longer_timeout():
 
 # This is a unit test.
 def test_factory_honours_the_per_request_model_override_on_ollama():
-    # The lab names the judge's model per stage, and RAGAS binds it at
+    # A judged run names the judge's model per stage and binds it at
     # construction — so this override is the only way a judge slug reaches the
     # wire.
     llm = make_chat_model(_settings(llm_provider='ollama',

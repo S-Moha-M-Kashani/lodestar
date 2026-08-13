@@ -1,5 +1,5 @@
-"""Persian normalisation and tokenising, moved out of the lab because BM25, the
-lexical reranker and the time filter all build on it.
+"""Persian normalisation and tokenising, which BM25, the lexical reranker and
+the time filter all build on.
 
 One test per way this can break retrieval, each covering its own edge cases."""
 from lodestar_brain import textnorm
@@ -47,7 +47,7 @@ def test_a_half_spaced_compound_matches_the_spaced_spelling():
 
 # This is a unit test.
 def test_character_ngrams_share_a_stem_across_affixes():
-    # Only the lab's char-hash embedder uses these, but it is a caller.
+    # Only the char-hash embedder uses these, but it is a caller.
     assert set(textnorm.char_ngrams('میخواستم')) & set(textnorm.char_ngrams('نمیخواستم'))
     assert textnorm.char_ngrams('اب', 4) == ['اب']   # shorter than the window
     assert textnorm.char_ngrams('') == []

@@ -279,7 +279,7 @@ def test_time_language_resolves_to_a_date_range():
     def scope(question):
         return retrieval.resolve_time_scope(question, today)
 
-    # Farsi, ported from the lab verbatim: «آذر» means the آذر that has already
+    # Farsi: «آذر» means the آذر that has already
     # happened, and the Jalali month is mapped to its Gregorian window.
     assert (scope('آذر چی شد؟').from_int, scope('آذر چی شد؟').to_int) \
         == (20251122, 20251221)
@@ -350,8 +350,8 @@ def test_the_relevance_gate_asks_once_and_drops_what_the_model_rejects():
     assert [doc.id for doc in retrieval.relevance_gate(llm, 'مالیات', docs)] \
         == ['d1', 'd3']
     # One call for the whole batch, not one per candidate. Every candidate is in
-    # that one prompt — a gate that costs k calls per question is the row the
-    # lab's OpenRouter credit never reached.
+    # that one prompt — a gate that costs k calls per question is the row an
+    # OpenRouter credit never reaches.
     assert llm.calls == 1
     for doc in docs:
         assert doc.page_content[:15] in llm.seen

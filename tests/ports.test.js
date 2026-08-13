@@ -158,7 +158,7 @@ test("the brain's native BRAIN_CHROMA_URL default dials the port compose publish
 // This is a configuration invariant.
 test('npm run chroma delegates to the compose service instead of respelling it', () => {
   // The service definition carries the port and the bind mount; a second copy
-  // in package.json is the copy that drifts (the same rule as `npm run lab`).
+  // in package.json is the copy that drifts.
   assert.ok(scripts.chroma, 'package.json has no "chroma" script');
   assert.match(scripts.chroma, /docker compose up/);
   assert.match(scripts.chroma, /chroma/);
@@ -176,7 +176,7 @@ test('the paired test board and test brain point at each other', () => {
 
 // This is a configuration invariant.
 test('the brain launcher installs the backend its default embedder needs', () => {
-  // The same pairing as the lab above, for the same reason: the brain defaults
+  // The same shape of pairing as above, for the same reason: the brain defaults
   // to a Persian-tuned sentence-transformers model, and without the extra it
   // starts happily and fails on the first retrieval call. A script that names
   // its own BRAIN_EMBEDDER is taken at its word — that is the escape hatch for
@@ -236,9 +236,7 @@ test('the brain Dockerfile EXPOSEs the port it serves', () => {
 
 // Ollama is one more process, and unlike ours it is not ours: it is installed
 // system-wide and owns 11434 by convention. The brain reaches it as a client, so
-// the requirement is only that we never bind it. The RAG lab used to be checked
-// here too, against the same port for the same reason; it moved to its own
-// repository on 2026-08-11 and holds that default itself.
+// the requirement is only that we never bind it.
 const OLLAMA_PORT = 11434;
 
 // This is a configuration invariant.

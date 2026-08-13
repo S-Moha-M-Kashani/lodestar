@@ -145,6 +145,6 @@ generation); a greenfield pick would be ICU plus a fuzzy index
 and the requirement is a small *set* of plausible forms feeding BM25 —
 generation with bounded ambiguity, ~40 lines, no new dependency. What would
 change the decision: a measured recall gap on a labelled cross-script query
-set (the RAG lab can host it); if rule-generated variants miss real user
-spellings there, an ICU + fuzzy-matching pass earns its dependency.
+set; if rule-generated variants miss real user spellings there, an ICU +
+fuzzy-matching pass earns its dependency.
 """

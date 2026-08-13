@@ -1,11 +1,8 @@
 """Persian text normalisation and tokenisation.
 
 Retrieval's BM25 half, the lexical reranker and the time filter are all built on
-this tokeniser. The RAG lab used to import it for the same reason, so the
-configuration it measured and the one production ships could not drift apart; the
-lab moved to its own repository on 2026-08-11 and took a copy, so that guarantee
-is gone. A change here is a change to what this project retrieves with, and the
-lab will not notice it.
+this tokeniser. A change here is a change to what this project retrieves with,
+across all three at once.
 
 The text is colloquial Farsi typed by a human: Arabic ي/ك mixed with Persian
 ی/ک, half-spaces present or missing («می خوام» vs «می‌خوام»), Persian and ASCII
@@ -136,7 +133,7 @@ from LangChain in this codebase. This is not one of those seams.
 
 **Why they were not adopted.** Two reasons, and the first is decisive.
 
-1. Every BM25 score, IDF weight and lexical rerank in the lab's 31 runs was
+1. Every BM25 score, IDF weight and lexical rerank in the 31 recorded runs was
    produced by this tokeniser. Replacing it changes those numbers, so old rows
    stop being comparable to new ones — the failure this project guards hardest
    against. A tokeniser swap is an experiment to *measure*, not a refactor.
@@ -145,9 +142,9 @@ from LangChain in this codebase. This is not one of those seams.
    one and the other stops matching. That is a recall choice specific to this
    text, not a bug to standardise away.
 
-**What would change the decision.** A lab run with the tokeniser as the only
-varied knob, scored on recall and quote recall over
-`fixtures/diary_year_fa.json`. If `hazm`'s lemmatiser beats character 4-grams
-on morphological overlap, adopt it — and re-run the baseline so the leaderboard
-stays internally comparable rather than mixing two tokenisers.
+**What would change the decision.** A run with the tokeniser as the only varied
+knob, scored on recall and quote recall over a labelled Farsi corpus. If
+`hazm`'s lemmatiser beats character 4-grams on morphological overlap, adopt it —
+and re-score every earlier run so the comparison stays internally consistent
+rather than mixing two tokenisers.
 """
