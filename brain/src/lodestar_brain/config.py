@@ -104,6 +104,16 @@ class Settings:
     # call out anyway.
     tracing: str = 'off'
     langsmith_api_key: str = ''
+    # The agent's own working memory: LangGraph's checkpointer (one thread per
+    # chat, so reopening a conversation resumes it) and its long-term store,
+    # sharing one sqlite file. Never board.db and never assistant.db — those are
+    # the *record*, and losing this file costs resume, never a card or a turn.
+    #
+    # Inert in code and real from the environment, the same split url_safety,
+    # tracing and chroma_url use: a Settings built directly is a test, an eval or
+    # a script, and none of those may write into databases/real. ':memory:' is
+    # per-process and disappears with it.
+    checkpoint_db: str = ':memory:'
 
     def __post_init__(self):
         # An unknown provider gets the remote slug and is rejected by
@@ -163,6 +173,10 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         safe_browsing_key=env.get('GOOGLE_SAFE_BROWSING_KEY', ''),
         tracing=env.get('BRAIN_TRACING', 'langsmith'),
         langsmith_api_key=env.get('LANGSMITH_API_KEY', ''),
+        # Beside the other real databases, and covered by no backup: it is
+        # derived working memory, not a record.
+        checkpoint_db=env.get('BRAIN_CHECKPOINT_DB',
+                              'databases/real/brain-checkpoints.db'),
         parakeet_model=env.get('BRAIN_PARAKEET_MODEL',
                                'mlx-community/parakeet-tdt-0.6b-v3'),
     )

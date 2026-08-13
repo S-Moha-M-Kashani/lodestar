@@ -13,7 +13,7 @@ still lose a card even with every individual tool behaving.
 | change a card at all                        | **here** — the client has no write method  |
 | apply an edit without the user saving it    | `test_edit_suggestions.py` (a suggestion, not a write) |
 | write a habit history the user did not earn | `test_edit_suggestions.py` (no field reaches it) |
-| reach SQLite, or the board off its API     | **here** — nothing in the package imports it |
+| reach SQLite, or the board off its API     | **here** — one file opens one file, and it is not a board |
 | put a card on the board unconfirmed        | `test_board_tools.py` (proposal, not save)|
 | record a habit completion                  | `test_board_tools.py` (no ticking tool)   |
 | widen the confirmation gate                | `test_server.py` (PROPOSING/MUTATING sets)|
@@ -57,7 +57,7 @@ from langchain_core.messages import AIMessage
 import lodestar_brain
 from lodestar_brain import server
 from lodestar_brain.agent import SYSTEM_PROMPT, LodestarAgent
-from lodestar_brain.config import Settings
+from lodestar_brain.config import Settings, load_settings
 from lodestar_brain.llm import FakeChat
 from lodestar_brain.tools.board import BoardClient, make_board_tools
 
@@ -130,19 +130,38 @@ def test_the_brain_reaches_the_board_only_through_its_http_api():
 
     The durability promise — a card dies only via Trash → "Delete permanently" —
     holds because that route exists once, in `server.js`. It would stop holding
-    the moment anything in this package opened the file directly, and no
+    the moment anything in this package opened board.db or assistant.db, and no
     behavioural test would notice: a second write path is invisible until it is
     used. So this reads the source.
+
+    The brain does open one sqlite file now — the agent's checkpoints, which
+    hold conversation threads and no user record. That makes the claim narrower
+    and worth stating precisely rather than as a blanket ban on the word.
     """
     package = Path(lodestar_brain.__file__).parent
     imports_sqlite = [
         path.relative_to(package).as_posix()
         for path in package.rglob('*.py')
-        # Import lines only. `retrieval.py` discusses sqlite-vec in prose, and an
+        # Import lines only. `retrieval/` discusses sqlite-vec in prose, and an
         # alternatives note weighing a library is not a dependency on it.
         if re.search(r'^\s*(?:import|from)\s+\S*sqlite', path.read_text(),
                      re.MULTILINE)]
-    assert not imports_sqlite, f'the brain must not open the board: {imports_sqlite}'
+    # One file may, and what it opens is not a board. The agent's checkpointer
+    # and store are sqlite-backed, so the invariant is no longer "no sqlite" but
+    # "no sqlite the user's data lives in" — asserted by naming the only opener
+    # and then reading what it opens.
+    assert imports_sqlite == ['server.py'], (
+        f'only the composition root may open sqlite: {imports_sqlite}')
+    source = (package / 'server.py').read_text()
+    assert 'path = settings.checkpoint_db' in source
+    assert re.findall(r'from_conn_string\((\w+)\)', source) == ['path', 'path'], (
+        'the checkpointer and the store open the configured file and nothing else')
+    # And that setting can never name the record: board.db and assistant.db are
+    # the property of the Node server, in both the code and the env defaults.
+    for configured in (Settings().checkpoint_db,
+                       load_settings(env={}).checkpoint_db):
+        assert 'board.db' not in configured
+        assert 'assistant.db' not in configured
 
     # The board seam offers no way to destroy anything either — rejecting a
     # proposal soft-deletes through the same API, so there is no second path.

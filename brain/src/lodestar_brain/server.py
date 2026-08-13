@@ -4,11 +4,15 @@ import base64
 import binascii
 import json
 import logging
+from contextlib import asynccontextmanager
 from dataclasses import replace
+from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.store.sqlite import AsyncSqliteStore
 from pydantic import BaseModel, Field
 
 from .agent import AgentResult, AgentStep, LodestarAgent
@@ -200,7 +204,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                           max_steps=settings.max_agent_steps)
     transcriber = make_transcriber(settings)
 
-    app = FastAPI(title='lodestar-brain')
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        """Open the agent's durable state for as long as the service runs.
+
+        Here rather than in `create_app`'s body because both are live sqlite
+        connections: they belong to the *running* service, not to the object
+        graph, and a connection opened at import time is one nothing closes.
+        The checkpointer (one thread per chat) and the long-term store share a
+        single file — one place to look, one file to delete.
+
+        `assistant.db` and `board.db` are not touched. This file is derived
+        working memory: losing it costs the agent its resume, never a card and
+        never a recorded turn, which is why no backup covers it.
+
+        A test or an eval builds `Settings` directly and gets `:memory:`; only a
+        brain booted from the environment writes to disk.
+        """
+        path = settings.checkpoint_db
+        if path != ':memory:':
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+        async with AsyncSqliteSaver.from_conn_string(path) as checkpointer, \
+                AsyncSqliteStore.from_conn_string(path) as store:
+            await checkpointer.setup()
+            await store.setup()
+            agent.attach(checkpointer=checkpointer, store=store)
+            try:
+                yield
+            finally:
+                # Dropped before the connections close, so a late request
+                # cannot reach a checkpointer that is already shut.
+                agent.attach()
+
+    app = FastAPI(title='lodestar-brain', lifespan=lifespan)
 
     @app.get('/health')
     def health() -> dict:

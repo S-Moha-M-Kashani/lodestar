@@ -1,22 +1,25 @@
 """The agent: one compiled graph per model the picker can offer.
 
-LangChain owns the loop and the tool schemas. What is ours are the two mechanics
+LangChain owns the loop and the tool schemas. What is ours are the mechanics
 `create_agent` does not give for free — a graph cached per provider/model pair,
-and partial steps when the step limit is hit — plus the middleware order, which
-is load-bearing: the fence sits outside the error handler, so a tool's failure
-message is fenced too, and the two schemas in `state.py`: what the graph keeps
-and what the request carries.
+partial steps when the step limit is hit, and the reconciliation between a
+durable thread and a browser that re-sends its whole transcript every turn —
+plus the middleware order, which is load-bearing: the fence sits outside the
+error handler, so a tool's failure message is fenced too.
 """
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterable
 from typing import Any
+from uuid import uuid4
 
 from langchain.agents import create_agent
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import (AIMessage, BaseMessage, HumanMessage,
+                                     RemoveMessage)
 from langchain_core.tools import BaseTool
 from langgraph.errors import GraphRecursionError
+from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
 from ..config import Settings
 from ..llm import make_chat_model
@@ -28,6 +31,65 @@ from .result import (STEP_LIMIT_REPLY, AgentResult, _calls_in, _result_from,
 from .state import LodestarState, TurnContext
 
 
+def _spoken(messages: Iterable[BaseMessage]) -> list[tuple[str, str]]:
+    """A thread's messages as the browser's transcript would hold them.
+
+    The browser keeps what was *said*: the user's messages and the reply each
+    turn ended on. A tool call, a tool answer, and the commentary an AIMessage
+    may carry alongside a tool call are all chips in the Assistant rather than
+    lines in the transcript, so they are not part of what can be compared.
+    """
+    said: list[tuple[str, str]] = []
+    for message in messages:
+        if isinstance(message, HumanMessage):
+            said.append(('user', _text(message).strip()))
+        elif isinstance(message, AIMessage) and not message.tool_calls:
+            if text := _text(message).strip():
+                said.append(('assistant', text))
+    return said
+
+
+def _said(message: Any) -> tuple[str, str]:
+    """One incoming message as (role, text). Dicts are what the route sends;
+    BaseMessage is what an eval or a test may hand `run` directly."""
+    if isinstance(message, BaseMessage):
+        said = _spoken([message])
+        return said[0] if said else ('', '')
+    return (str(message.get('role', '')),
+            str(message.get('content', '')).strip())
+
+
+def _turn_input(prior: list[BaseMessage], incoming: list) -> tuple[dict, set]:
+    """What of `incoming` a thread that already holds `prior` has not heard.
+
+    The browser re-sends the entire conversation on every turn and cannot do
+    otherwise — that is the wire contract. A checkpointed thread already holds
+    those messages, and `add_messages` pairs on message id, which the browser's
+    messages do not carry: feeding the full list back appends a second copy of
+    every turn, and the turn after that a third. The token bill would grow with
+    the number of turns squared, which is the opposite of why the thread exists.
+
+    So the incoming list is reconciled against the thread by *prefix*, aligned on
+    role and text and never on position — the same rule `adoptRecordedIds` uses
+    in the frontend, for the same reason. When the two align, only the suffix is
+    fed. When they do not — history edited, a turn deleted, a step-limit reply
+    the thread never wrote — the thread's messages are dropped and replaced
+    wholesale, because appending onto a history that has moved is how you get a
+    conversation neither side ever had.
+
+    Returns the graph input and the ids the thread held *before* this turn, which
+    is what lets the caller report this turn's steps and spend rather than the
+    thread's whole life.
+    """
+    said = _spoken(prior)
+    aligned = (len(incoming) >= len(said)
+               and all(mine == _said(theirs)
+                       for mine, theirs in zip(said, incoming)))
+    if aligned:
+        return {'messages': incoming[len(said):]}, {m.id for m in prior}
+    return {'messages': [RemoveMessage(id=REMOVE_ALL_MESSAGES), *incoming]}, set()
+
+
 class LodestarAgent:
     def __init__(self, *, settings: Settings, tools: list[BaseTool],
                  system_prompt: str = SYSTEM_PROMPT, max_steps: int = 8,
@@ -37,12 +99,30 @@ class LodestarAgent:
         self.system_prompt = system_prompt
         self.max_steps = max_steps
         self._llm = llm            # tests inject a FakeChat; create_app never does
+        self._checkpointer = None  # attached by the app's lifespan, not at build
+        self._store = None
         self._graphs: dict[tuple[str, str], Any] = {}
         # Build the default graph now rather than on the first request: an
         # unknown BRAIN_LLM has to fail at boot (create_app builds the agent),
         # which is the no-auto-modes rule. Lazily, a typo would serve a healthy
         # /health and then 500 the first chat.
         self._graph(None)
+
+    def attach(self, *, checkpointer=None, store=None) -> None:
+        """Give the agent its durable state, or take it away again.
+
+        Not a constructor argument, because the two are open connections with a
+        lifetime: `create_app` builds the agent at import time and the FastAPI
+        lifespan opens the sqlite file when the service actually starts. The
+        graph cache is dropped, since a compiled graph binds its checkpointer —
+        including the one built in `__init__` purely to validate the backend.
+
+        The offline suites, the evals and any direct caller never attach, and
+        that path is unchanged: no thread, no reconciliation, no sqlite.
+        """
+        self._checkpointer = checkpointer
+        self._store = store
+        self._graphs.clear()
 
     def _graph(self, model: str | None, provider: str | None = None):
         """One compiled graph per provider/model pair.
@@ -66,7 +146,8 @@ class LodestarAgent:
                 model=llm, tools=self.tools, system_prompt=self.system_prompt,
                 middleware=[UntrustedToolOutput(),
                             ToolErrorMiddleware(_tool_error)],
-                state_schema=LodestarState, context_schema=TurnContext)
+                state_schema=LodestarState, context_schema=TurnContext,
+                checkpointer=self._checkpointer, store=self._store)
         return self._graphs[key]
 
     def _run_config(self, session_id: str | None = None,
@@ -74,44 +155,98 @@ class LodestarAgent:
         # A step is a model turn plus a tool turn, and the run ends on a model
         # turn: 2n+1 nodes for n tool calls.
         #
-        # `board_id` rides in `configurable` rather than in a tool argument:
-        # which board the user is looking at is not the model's decision, and a
-        # tool argument is something a model can get wrong or be talked into.
-        # Absent means the board API's own default board.
+        # One thread per chat, so reopening a conversation resumes the state the
+        # last turn left. A request that names no session gets a thread of its
+        # own, made fresh here: the unnamed batches — the evals, any curl, the
+        # tests — share Node's reserved 'adhoc' *record*, and treating that as
+        # one conversation would let a script read the last caller's context.
         #
-        # The *session* used to travel the same way and no longer does — it is
-        # `TurnContext`, passed to the run and read off `ToolRuntime.context`.
-        # Typed, so a misspelt key is an error rather than a silently absent
-        # session, and stripped from the tool schema by the framework rather
-        # than by `args_schema` merely happening not to mention it.
-        config: dict = {'recursion_limit': 2 * self.max_steps + 1}
+        # `board_id` rides in `configurable` because which board the user is
+        # looking at is not the model's decision, and a tool argument is
+        # something a model can get wrong or be talked into. Absent means the
+        # board API's own default board. The *session* deliberately no longer
+        # travels here: it is `TurnContext`, typed and out of the checkpoint.
+        config: dict = {'recursion_limit': 2 * self.max_steps + 1,
+                        'configurable': {'thread_id': session_id or
+                                         f'adhoc-{uuid4()}'}}
         if board_id:
-            config['configurable'] = {'board_id': board_id}
+            config['configurable']['board_id'] = board_id
         return config
 
-    def _run_context(self, session_id: str | None) -> TurnContext:
-        """Which conversation this turn belongs to, for the tools that need it.
+    def _run_kwargs(self, session_id: str | None) -> dict:
+        """What every one of the three run methods passes alongside the config.
 
-        Every run method builds it the same way, so there is one answer to "what
-        does a turn with no session look like" — the empty string, which
-        `recall_chat` reads as "exclude nothing".
+        `durability='async'` writes the checkpoint in the background: resume is
+        worth a write, but it is not worth making the user wait for one. Omitted
+        rather than passed when nothing is attached — LangGraph warns that it has
+        no effect without a checkpointer, and a warning on every offline turn is
+        a warning nobody reads.
         """
-        return TurnContext(session_id=session_id or '')
+        kwargs: dict = {'context': TurnContext(session_id=session_id or '')}
+        if self._checkpointer is not None:
+            kwargs['durability'] = 'async'
+        return kwargs
+
+    def _prepare(self, graph, config: dict, messages: list,
+                 session_id: str | None) -> tuple[dict, set]:
+        """The turn's input, reconciled against the thread if there is one.
+
+        Sync, so it is only ever the sync `run` that calls it — and `run` is for
+        callers that attach nothing (the evals, the offline tests). An async
+        checkpointer refuses a synchronous read, and loudly, which is the right
+        way round: the route is async and always was.
+        """
+        if self._checkpointer is None:
+            return self._whose({'messages': messages}, session_id), set()
+        prior = graph.get_state(config).values.get('messages', [])
+        payload, before = _turn_input(prior, messages)
+        return self._whose(payload, session_id), before
+
+    async def _aprepare(self, graph, config: dict, messages: list,
+                        session_id: str | None) -> tuple[dict, set]:
+        if self._checkpointer is None:
+            return self._whose({'messages': messages}, session_id), set()
+        state = await graph.aget_state(config)
+        payload, before = _turn_input(state.values.get('messages', []), messages)
+        return self._whose(payload, session_id), before
+
+    @staticmethod
+    def _whose(payload: dict, session_id: str | None) -> dict:
+        """Whose conversation this thread is, recorded in the thread itself.
+
+        The thread id already says it, but a thread id is a key and this is
+        state: it is what a middleware reading `LodestarState` can act on
+        without reaching into the run config for a string.
+        """
+        payload['session_id'] = session_id or ''
+        return payload
+
+    @staticmethod
+    def _fresh(messages: list[BaseMessage], before: set) -> list[BaseMessage]:
+        """This turn's messages, out of a state that may hold many turns.
+
+        A resumed thread streams its whole history back, and reading a result off
+        that would report the previous turn's tool calls as this turn's steps and
+        re-bill its tokens. Filtered by id rather than by count: a wholesale
+        replacement reorders nothing but renumbers everything.
+        """
+        return [m for m in messages if m.id not in before] if before else messages
 
     def run(self, messages: list[dict], model: str | None = None,
             provider: str | None = None,
             session_id: str | None = None,
             board_id: str | None = None) -> AgentResult:
+        graph = self._graph(model, provider)
+        config = self._run_config(session_id, board_id)
+        payload, before = self._prepare(graph, config, messages, session_id)
         seen: list[BaseMessage] = []
         try:
             # Streamed, not invoked: GraphRecursionError carries no messages,
             # so this is the only way to still report the steps taken.
-            for chunk in self._graph(model, provider).stream(
-                    {'messages': messages, 'session_id': session_id or ''},
-                    config=self._run_config(session_id, board_id),
-                    context=self._run_context(session_id),
-                    stream_mode='values'):
-                seen = chunk['messages']
+            for chunk in graph.stream(payload, config=config,
+                                      stream_mode='values',
+                                      **self._run_kwargs(session_id)):
+                seen = self._fresh(chunk['messages'], before)
         except GraphRecursionError:
             return _result_from(seen, STEP_LIMIT_REPLY)
         return _result_from(seen)
@@ -120,14 +255,16 @@ class LodestarAgent:
                    provider: str | None = None,
                    session_id: str | None = None,
                    board_id: str | None = None) -> AgentResult:
+        graph = self._graph(model, provider)
+        config = self._run_config(session_id, board_id)
+        payload, before = await self._aprepare(graph, config, messages,
+                                               session_id)
         seen: list[BaseMessage] = []
         try:
-            async for chunk in self._graph(model, provider).astream(
-                    {'messages': messages, 'session_id': session_id or ''},
-                    config=self._run_config(session_id, board_id),
-                    context=self._run_context(session_id),
-                    stream_mode='values'):
-                seen = chunk['messages']
+            async for chunk in graph.astream(payload, config=config,
+                                             stream_mode='values',
+                                             **self._run_kwargs(session_id)):
+                seen = self._fresh(chunk['messages'], before)
         except GraphRecursionError:
             return _result_from(seen, STEP_LIMIT_REPLY)
         return _result_from(seen)
@@ -156,17 +293,20 @@ class LodestarAgent:
         answer), and the step-limit path abandons the transcript entirely for
         STEP_LIMIT_REPLY.
         """
+        graph = self._graph(model, provider)
+        config = self._run_config(session_id, board_id)
+        payload, before = await self._aprepare(graph, config, messages,
+                                               session_id)
         seen: list[BaseMessage] = []
         sent = 0
         announced: set[str] = set()
         try:
-            async for mode, chunk in self._graph(model, provider).astream(
-                    {'messages': messages, 'session_id': session_id or ''},
-                    config=self._run_config(session_id, board_id),
-                    context=self._run_context(session_id),
-                    stream_mode=['values', 'messages']):
+            async for mode, chunk in graph.astream(
+                    payload, config=config,
+                    stream_mode=['values', 'messages'],
+                    **self._run_kwargs(session_id)):
                 if mode == 'values':
-                    seen = chunk['messages']
+                    seen = self._fresh(chunk['messages'], before)
                     for call in _calls_in(seen):
                         if call['id'] in announced:
                             continue
@@ -191,3 +331,51 @@ class LodestarAgent:
 
 
 __all__ = ['LodestarAgent']
+
+"""Alternatives considered
+
+## Why did you write your own transcript reconciliation?
+
+Because the two halves of this system disagree about who owns the conversation,
+and nothing in the framework arbitrates that. The browser holds the transcript
+and re-sends all of it every turn; the checkpointed thread holds the same turns
+plus the tool calls the browser never sees. `_turn_input` is the twenty lines
+that decide which of the incoming messages the thread has not already heard.
+
+**Why the obvious option fails.** The obvious option is to keep passing the whole
+list and let LangGraph sort it out. It cannot: `add_messages` deduplicates on
+message id, and messages built from `{'role', 'content'}` dicts are assigned a
+fresh uuid on every request. Turn two files a second copy of turn one, turn three
+a third, and the token bill grows with the square of the conversation — the exact
+cost the thread was added to remove, arriving silently, because nothing raises
+and the answers stay plausible. The mirror-image option — trust the thread and
+send only the last message — fails on the other side: this board lets a user
+delete a single turn, and a thread that never heard about the deletion would keep
+answering from a message the user has been shown is gone.
+
+**Why not the framework.** LangChain 1.3 ships middleware for the adjacent
+problem, not this one: `SummarizationMiddleware` and `ContextEditingMiddleware`
+bound how much context costs, and neither answers "which of these do I already
+have". The one piece that does exist is used rather than reimplemented —
+`RemoveMessage(REMOVE_ALL_MESSAGES)` is how the divergent case clears the thread,
+and `add_messages` still does the appending. What is ours is only the comparison.
+
+**The libraries that would do it.** `difflib.SequenceMatcher` over the two
+(role, text) lists would find the longest common prefix and more besides, and is
+in the standard library. `jsondiff` or `deepdiff` would diff the structures.
+Sending stable ids from the browser — `crypto.randomUUID()` at compose time,
+carried in the record and back on every turn — would delete this function
+outright and let `add_messages` do exactly what it was designed for; on a
+greenfield project that is the design, and it is not a library at all.
+
+**Why they were not adopted, and what would change it.** A fuzzy match is the
+wrong tool for a decision that must be exact: a near-alignment on a conversation
+is a conversation neither party had, so a prefix comparison that either matches
+or gives up is the honest shape, and `SequenceMatcher` would add a similarity
+score nobody should act on. Ids at the source are the better design and were
+ruled out by scope, not by merit — this change is drop-in, and `ChatBody`,
+`server.js` and the frontend transcript do not move. What would settle it is a
+count of wholesale replacements in real use: they are supposed to be rare (an
+edited or deleted history), and if they are not, the alignment is guessing where
+ids would know, and the wire contract should change instead.
+"""
