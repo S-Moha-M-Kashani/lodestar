@@ -17,6 +17,8 @@ too, so nothing was pooled before either.
 """
 import httpx
 
+from ..net import aretry
+
 
 class BoardClient:
     """The board API, one board at a time.
@@ -37,13 +39,21 @@ class BoardClient:
         return {'board': board_id} if board_id else {}
 
     async def _get(self, path: str, params: dict | None = None) -> dict:
-        async with httpx.AsyncClient(timeout=self.timeout) as http:
-            res = await http.get(f'{self.base_url}{path}', params=params or {})
-        res.raise_for_status()
-        return res.json()
+        # Reads are idempotent, so a transient failure gets one retry
+        # (net.aretry). raise_for_status sits inside the attempt: a 500 is a
+        # failure of the attempt, not of the call.
+        async def attempt() -> dict:
+            async with httpx.AsyncClient(timeout=self.timeout) as http:
+                res = await http.get(f'{self.base_url}{path}',
+                                     params=params or {})
+            res.raise_for_status()
+            return res.json()
+        return await aretry(attempt)
 
     async def _post(self, path: str, json: dict,
                     params: dict | None = None) -> dict:
+        # Never retried: every POST here writes (a chat row, a proposal, an
+        # edit), and a retried write is a duplicate.
         async with httpx.AsyncClient(timeout=self.timeout) as http:
             res = await http.post(f'{self.base_url}{path}', json=json,
                                   params=params or {})

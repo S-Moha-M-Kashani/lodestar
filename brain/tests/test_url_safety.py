@@ -23,6 +23,7 @@ the silent downgrade, not the loud stop.
 """
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from lodestar_brain.config import Settings
@@ -130,6 +131,36 @@ def test_the_off_backend_passes_everything_through():
         provider, safety=make_url_safety('off', Settings(llm_provider='fake')))
 
     assert len(tool.run({'query': 'morning routines'})) == 2
+
+
+# This is a unit test.
+def test_a_transient_lookup_failure_is_retried_before_failing_closed(monkeypatch):
+    """Fail-closed turns a network blip into a user-visible refusal, so the
+    lookup is the one POST worth retrying: it is an idempotent *question*, not a
+    write. Both directions pinned — a 500-then-200 lookup answers, and two 500s
+    still fail closed. The retry widens the window, never the verdict."""
+    import respx
+
+    from lodestar_brain import net
+    from lodestar_brain.safety import GoogleSafeBrowsing
+
+    monkeypatch.setattr(net, 'RETRY_BASE_DELAY', 0.0)
+    checker = GoogleSafeBrowsing('a-key')
+
+    with respx.mock:
+        route = respx.post(GoogleSafeBrowsing.ENDPOINT).mock(side_effect=[
+            httpx.Response(500),
+            httpx.Response(200, json={}),   # no matches → safe
+            httpx.Response(500),
+            httpx.Response(500),
+        ])
+
+        assert checker.check(f'https://{GOOD}/routines').safe is True
+
+        verdict = checker.check(f'https://{GOOD}/routines')
+        assert verdict.safe is False, 'both attempts down still fails closed'
+        assert 'could not be checked' in verdict.reason
+        assert route.call_count == 4, 'each lookup made exactly two attempts'
 
 
 # This is a unit test.
