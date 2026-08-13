@@ -77,3 +77,26 @@ def test_off_outranks_a_stale_langchain_tracing_v2_in_the_environment():
 
     assert utils.tracing_is_enabled() is False
     assert 'LANGCHAIN_TRACING_V2' not in os.environ
+
+
+# This is an integration test.
+def test_create_app_applies_the_tracing_seam_so_off_means_off():
+    """The wiring, not the function: `configure_tracing` passed every test above
+    while being called by nothing in production, so `BRAIN_TRACING=off`
+    configured nothing and a stale shell export kept tracing — the exact failure
+    this seam exists to stop. The composition root must apply it.
+
+    Side effect worth knowing: once wired, every `create_app` in the suite
+    mutates process-global tracing state (safe direction — off) and pops the
+    legacy env vars; this file's autouse fixture restores them."""
+    from lodestar_brain.server import create_app
+
+    os.environ['LANGCHAIN_TRACING_V2'] = 'true'
+    utils.get_env_var.cache_clear()
+    assert utils.tracing_is_enabled() is True, 'the stale shell, before boot'
+
+    create_app(Settings(tracing='off', llm_provider='fake', embedder='fake',
+                        transcriber='fake'))
+
+    assert utils.tracing_is_enabled() is False
+    assert 'LANGCHAIN_TRACING_V2' not in os.environ
