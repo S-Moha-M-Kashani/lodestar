@@ -13,12 +13,12 @@ def test_defaults():
     # actually running. The default is the *measured* embedder, because the
     # embedder is the architecture — hash embedding scored ~0.01 recall on the
     # Farsi corpus against 0.617 for this one, a ~60× effect, where no other
-    # sweep knob was worth 2%. It costs the 'local-embeddings' extra and a
+    # knob measured was worth 2%. It costs the 'local-embeddings' extra and a
     # ~2.2 GB download on first boot; 'fake' is the offline-test value.
     assert s.embedder == 'sentence-transformers'
     assert s.embed_model == ''        # '' = that backend's own default
-    # Candidate F's one change after retrieval, at the threshold the lab
-    # measured. It follows the main chat model, so it costs no second setting.
+    # The chosen architecture's one change after retrieval, at the measured
+    # threshold. It follows the main chat model, so it costs no second setting.
     assert s.grader == 'llm'
     assert s.grade_threshold == 0.4
     assert s.board_api_url == 'http://127.0.0.1:3000'
@@ -124,6 +124,30 @@ def test_url_safety_is_real_from_the_environment_and_inert_in_code():
     assert load_settings(env={'BRAIN_URL_SAFETY': 'off'}).url_safety == 'off'
     assert load_settings(
         env={'GOOGLE_SAFE_BROWSING_KEY': 'k'}).safe_browsing_key == 'k'
+
+
+# This is a configuration invariant: the product traces, and a Settings built in
+# code ships nothing anywhere — the same split url_safety and chroma_url use.
+def test_tracing_is_real_from_the_environment_and_inert_in_code():
+    assert load_settings(env={}).tracing == 'langsmith'
+    # Unit tests and evals build Settings directly; none of them may put a
+    # private board's conversations on a third party's server by default.
+    assert Settings().tracing == 'off'
+    assert load_settings(env={'BRAIN_TRACING': 'off'}).tracing == 'off'
+    assert load_settings(
+        env={'LANGSMITH_API_KEY': 'ls-k'}).langsmith_api_key == 'ls-k'
+
+
+# This is a configuration invariant: the product keeps the agent's threads on
+# disk, and a Settings built in code keeps them nowhere — the same split
+# url_safety, tracing and chroma_url use.
+def test_the_checkpoint_file_is_real_from_the_environment_and_inert_in_code():
+    assert load_settings(env={}).checkpoint_db == 'databases/real/brain-checkpoints.db'
+    # Unit tests, evals and scripts build Settings directly, and none of them may
+    # write a file into the folder that holds the user's real data.
+    assert Settings().checkpoint_db == ':memory:'
+    assert load_settings(
+        env={'BRAIN_CHECKPOINT_DB': '/tmp/cp.db'}).checkpoint_db == '/tmp/cp.db'
 
 
 # Real data and non-real data live in *different Chroma databases*, so all
@@ -263,8 +287,7 @@ def test_env_example_documents_every_variable_the_code_reads():
     environment on their own — the Node server, its scripts, the brain and the
     live evals. Not the unit tests: those set variables to exercise the readers
     above, and a value invented for one assertion is not configuration anyone
-    should be told about. The RAG lab was scanned here until 2026-08-11 and now
-    audits its own `.env.example` in its own repository.
+    should be told about.
     """
     root = Path(__file__).resolve().parents[2]
     sources = [root / 'server.js', *sorted((root / 'scripts').glob('*.mjs')),

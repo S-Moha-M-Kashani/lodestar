@@ -5,13 +5,21 @@ for the user, who applies them by saving the board themselves. So `BoardClient`
 carries no whole-board PUT at all, which is what retires the old rule here about
 never sending a partial card list: there is no list to send. The agent reads the
 board, and asks.
+
+The client itself lives in `board/client.py` and is imported here rather than
+re-exported for old times' sake: `make_board_tools` takes one, and the reads all
+go through a `BoardSnapshot` so that a turn reaching three tools fetches the
+board once.
 """
 from typing import Literal
 
-import httpx
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
+
+from ..board.client import BoardClient
+from ..board.snapshot import BoardSnapshot, board_of
+from .dual import with_sync_door
 
 COLUMNS = ['inbox', 'in-progress', 'answered']
 TYPES = ['question', 'problem', 'task', 'idea', 'plan', 'habit']
@@ -31,100 +39,6 @@ Column = Literal['inbox', 'in-progress', 'answered']
 CardType = Literal['question', 'problem', 'task', 'idea', 'plan', 'habit']
 Frequency = Literal['daily', 'weekly', 'monthly', 'yearly', '']
 Rank = Literal['high', 'low', '']
-
-
-class BoardClient:
-    """The board API, one board at a time.
-
-    Every call takes an optional `board_id`, and an empty one is *omitted*
-    rather than sent blank — the server has to be able to tell "no board named"
-    (answer with the default board, which is what every caller written before
-    boards existed relies on) from "a board named the empty string". The id
-    itself never comes from the model: it rides the agent's run config.
-    """
-
-    def __init__(self, base_url: str, timeout: float = 10.0):
-        self.base_url = base_url.rstrip('/')
-        self.timeout = timeout
-
-    @staticmethod
-    def _scope(board_id: str = '') -> dict:
-        return {'board': board_id} if board_id else {}
-
-    def list_cards(self, board_id: str = '') -> list[dict]:
-        res = httpx.get(f'{self.base_url}/api/state',
-                        params=self._scope(board_id), timeout=self.timeout)
-        res.raise_for_status()
-        return res.json()['cards']
-
-    def list_chat(self, board_id: str = '') -> list[dict]:
-        """The live chat record for one board, oldest first."""
-        res = httpx.get(f'{self.base_url}/api/chat/messages',
-                        params=self._scope(board_id), timeout=self.timeout)
-        res.raise_for_status()
-        return res.json()['messages']
-
-    def list_all_chat(self) -> list[dict]:
-        """Every board's live messages, for maintaining the chat index.
-
-        The index is one collection over the whole record and `prune` deletes
-        chunks whose message is no longer live — so syncing it from a single
-        board's messages would drop every other board out of recall. The only
-        caller is index maintenance; everything a person reads is scoped.
-        """
-        res = httpx.get(f'{self.base_url}/api/chat/messages/all',
-                        timeout=self.timeout)
-        res.raise_for_status()
-        return res.json()['messages']
-
-    def record_chat(self, messages: list[dict],
-                    session_id: str = '', board_id: str = '') -> list[dict]:
-        """Append to the durable chat record (assistant.db) — through the Node
-        API like every write, never SQLite directly. Returns the inserted rows
-        with their ids, which is what the Chroma index chunks are keyed on.
-
-        An empty `session_id` is omitted rather than sent as '': the server files
-        an unnamed batch under its reserved 'adhoc' chat, and it can only do that
-        if it can tell "no session named" from "a session named the empty
-        string"."""
-        payload: dict = {'messages': messages}
-        if session_id:
-            payload['sessionId'] = session_id
-        # In the body, not the query string: this is the one chat route the
-        # brain posts to, and the board travels beside the session it belongs
-        # with rather than in a different part of the request.
-        if board_id:
-            payload['boardId'] = board_id
-        res = httpx.post(f'{self.base_url}/api/chat/messages',
-                         json=payload, timeout=self.timeout)
-        res.raise_for_status()
-        return res.json()['messages']
-
-    def create_proposal(self, card: dict, board_id: str = '') -> dict:
-        """Offer one card for the user's approval.
-
-        On its own endpoint, never the whole-board PUT — which this client no
-        longer has at all. Removing it is the guardrail: the brain cannot write a
-        card even by mistake, so "never send a partial card list" stops being a
-        rule anyone has to remember here.
-        """
-        res = httpx.post(f'{self.base_url}/api/proposals', json=card,
-                         params=self._scope(board_id), timeout=self.timeout)
-        res.raise_for_status()
-        return res.json()
-
-    def create_edit(self, card_id: str, fields: dict) -> dict:
-        """Offer a change to an existing card, for the user to review and save.
-
-        The counterpart to create_proposal, and for the same reason: this cannot
-        reach the whole-board PUT, so an agent edit is a note about a card rather
-        than a write to one. Nothing on the board moves until the user saves.
-        """
-        res = httpx.post(f'{self.base_url}/api/edits',
-                         json={'cardId': card_id, 'fields': fields},
-                         timeout=self.timeout)
-        res.raise_for_status()
-        return res.json()
 
 
 def _brief(c: dict) -> dict:
@@ -167,19 +81,25 @@ class UpdateCardArgs(BaseModel):
     tags: list[str] | None = None
 
 
-def make_board_tools(client: BoardClient) -> list[BaseTool]:
-    # Which board these tools operate on. It comes from the run config, never
-    # from the model: the user chose a board in the picker, and that choice is
-    # not something a tool call should be able to name, mistype or be argued
-    # out of. '' means the board API's own default.
-    def board_of(config: RunnableConfig | None) -> str:
-        return (config or {}).get('configurable', {}).get('board_id') or ''
+def make_board_tools(board: BoardClient | BoardSnapshot) -> list[BaseTool]:
+    """The three board tools, reading through one snapshot.
+
+    `create_app` hands in the snapshot it shares with `find_related` and
+    `daily_recap`, which is what makes a turn's board one fetch. A caller with a
+    bare client gets a snapshot of its own and the fetch-per-call it always had.
+    """
+    # Which board these tools operate on comes from the run config, never from
+    # the model: the user chose a board in the picker, and that choice is not
+    # something a tool call should be able to name, mistype or be argued out of.
+    # '' means the board API's own default. See `board_of` in board/snapshot.py.
+    snapshot = BoardSnapshot.around(board)
+    client = snapshot.client
 
     @tool('list_cards', args_schema=ListCardsArgs)
-    def list_cards(column_id: str = '', search: str = '',
-                   config: RunnableConfig = None) -> list[dict]:
+    async def list_cards(column_id: str = '', search: str = '',
+                         config: RunnableConfig = None) -> list[dict]:
         """List cards on the board, optionally filtered by column or free text."""
-        cards = client.list_cards(board_of(config))
+        cards = await snapshot.cards(config)
         if column_id:
             cards = [c for c in cards if c['columnId'] == column_id]
         if search:
@@ -190,7 +110,7 @@ def make_board_tools(client: BoardClient) -> list[BaseTool]:
         return [_brief(c) for c in cards]
 
     @tool('create_card', args_schema=CreateCardArgs)
-    def create_card(title: str, notes: str = '', type: str = 'question',
+    async def create_card(title: str, notes: str = '', type: str = 'question',
                         category: str = '', column_id: str = 'inbox',
                         tags: list | None = None, frequency: str = '',
                         times_per_period: int = 1,
@@ -209,13 +129,13 @@ def make_board_tools(client: BoardClient) -> list[BaseTool]:
         if type == 'habit':
             card['habitFreq'] = frequency or 'daily'
             card['habitCount'] = times_per_period
-        proposal = client.create_proposal(card, board_of(config))
+        proposal = await client.create_proposal(card, board_of(config))
         # `pending` tells the model the card is not on the board yet, so it
         # reports a proposal instead of claiming it added something.
         return {**_brief(proposal), 'pending': True}
 
     @tool('update_card', args_schema=UpdateCardArgs)
-    def update_card(id: str, title: str | None = None, notes: str | None = None,
+    async def update_card(id: str, title: str | None = None, notes: str | None = None,
                         type: str | None = None, category: str | None = None,
                         column_id: str | None = None,
                         importance: str | None = None, urgency: str | None = None,
@@ -228,7 +148,10 @@ def make_board_tools(client: BoardClient) -> list[BaseTool]:
         adjust if they want, and save themselves — so say you have suggested an
         edit, and never that you made one.
         """
-        cards = client.list_cards(board_of(config))
+        # From the snapshot like every other read. A proposal or an edit filed
+        # earlier in this turn is invisible to a fresh fetch too — neither writes
+        # to `cards` — so there is nothing here a re-read could have found.
+        cards = await snapshot.cards(config)
         target = next((c for c in cards if c['id'] == id), None)
         if target is None:
             return {'error': f'no card with id {id!r} — use list_cards first'}
@@ -241,10 +164,11 @@ def make_board_tools(client: BoardClient) -> list[BaseTool]:
         fields = {key: value for key, value in named.items() if value is not None}
         if not fields:
             return {'error': 'name at least one field to change'}
-        suggestion = client.create_edit(id, fields)
+        suggestion = await client.create_edit(id, fields)
         # `pending` is the same signal create_card sends, so the model reports a
         # suggestion rather than claiming the board changed.
         return {'id': suggestion.get('id', ''), 'cardId': id, 'fields': fields,
                 'title': target['title'], 'pending': True}
 
-    return [list_cards, create_card, update_card]
+    # Both doors, because the sync one is how the evals and the tests call these.
+    return [with_sync_door(t) for t in (list_cards, create_card, update_card)]

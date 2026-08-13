@@ -1,16 +1,20 @@
 """The agent's two ways into the board's own memory.
 
-Thin on purpose: `retrieval.py` owns the pipeline, and these wrappers decide only
-what the model is told. Each rebuilds from `/api/state` before answering, so a
-card created a second ago is findable — the index fingerprint is what makes that
-free on an unchanged board.
+Thin on purpose: `retrieval/` owns the pipeline, and these wrappers decide only
+what the model is told. `find_related` rebuilds from `/api/state` before
+answering, so a card created a second ago is findable — the turn's snapshot is
+what makes the read free after the first tool has taken it, and the index
+fingerprint is what makes the rebuild free on an unchanged board.
 """
+from langchain.tools import ToolRuntime
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
+from ..board.client import BoardClient
+from ..board.snapshot import BoardSnapshot, board_of
 from ..retrieval import GRADE_THRESHOLD, CardIndex, ChatStore
-from .board import BoardClient
+from .dual import with_sync_door
 
 
 class FindRelatedArgs(BaseModel):
@@ -33,19 +37,22 @@ def _brief(card: dict) -> dict:
             'columnId': card.get('columnId', ''), 'tags': card.get('tags') or []}
 
 
-def make_retrieve_tool(index: CardIndex, client: BoardClient, llm=None,
-                       threshold: float = GRADE_THRESHOLD,
+def make_retrieve_tool(index: CardIndex, board: BoardClient | BoardSnapshot,
+                       llm=None, threshold: float = GRADE_THRESHOLD,
                        memory: ChatStore | None = None) -> BaseTool:
+    snapshot = BoardSnapshot.around(board)
+
     @tool('find_related', args_schema=FindRelatedArgs)
-    def find_related(text: str, k: int = 5,
-                     config: RunnableConfig = None) -> list[dict]:
+    async def find_related(text: str, k: int = 5,
+                           config: RunnableConfig = None) -> list[dict]:
         """Find board cards related to a text, best first. Use it to answer from
         what is already on the board and to avoid creating a duplicate."""
-        board = (config or {}).get('configurable', {}).get('board_id') or None
-        cards = client.list_cards(board or '')
-        index.build(cards)     # the board is small; rebuilding keeps it fresh
+        board_id = board_of(config) or None
+        # The board is small, and rebuilding keeps it fresh; within a turn the
+        # snapshot means neither the fetch nor the rebuild happens twice.
+        cards = await snapshot.indexed(index, config)
         by_id = {card['id']: card for card in cards}
-        hits = index.search(text, k=k, llm=llm, threshold=threshold)
+        hits = await index.asearch(text, k=k, llm=llm, threshold=threshold)
         # `rank`, not a score: RRF fuses ranks and exposes no fused score, and a
         # number invented from a position would look like a measurement. Card
         # and chat rows each rank from 1 — two indexes, two rankings; a merged
@@ -63,7 +70,7 @@ def make_retrieve_tool(index: CardIndex, client: BoardClient, llm=None,
                       'rank': rank}
                      for rank, hit in enumerate(
                          memory.search(text, k=k, evidence=False,
-                                       board_id=board), start=1)]
+                                       board_id=board_id), start=1)]
         return rows
 
     if memory is not None:
@@ -72,22 +79,26 @@ def make_retrieve_tool(index: CardIndex, client: BoardClient, llm=None,
         # this tool can never return.
         find_related.description += (
             ' Also returns snippets from past conversations on this board.')
-    return find_related
+    return with_sync_door(find_related)
 
 
 def make_recall_tool(store: ChatStore) -> BaseTool:
     @tool('recall_chat', args_schema=RecallChatArgs)
     def recall_chat(text: str, k: int = 5,
-                    config: RunnableConfig = None) -> list[dict]:
+                    runtime: ToolRuntime = None) -> list[dict]:
         """Recall relevant snippets from OTHER conversations on this board — the
         chat you are in now is already in front of you. Use it when the user
         refers to something discussed outside this conversation."""
-        # Which chat we are in arrives through the run config, never as an
-        # argument: the model must not be able to name — or spoof — it, and
-        # `config` is excluded from the schema the model sees because
-        # `args_schema` above declares the schema explicitly.
-        current = (config or {}).get('configurable', {}).get('session_id')
-        board = (config or {}).get('configurable', {}).get('board_id')
+        # Which chat we are in arrives through the run's typed context, never as
+        # an argument: the model must not be able to name — or spoof — it.
+        # `runtime` is a declared injection, so the framework strips it from the
+        # schema the model sees rather than `args_schema` merely happening not to
+        # mention it. Absent when a caller runs this tool on its own, which is
+        # not an error: a recall that excluded nothing beats a 500.
+        current = getattr(getattr(runtime, 'context', None), 'session_id', '')
+        # The board still rides in `configurable`, shared with find_related.
+        config = getattr(runtime, 'config', None) or {}
+        board = config.get('configurable', {}).get('board_id')
         hits = store.search(text, k=k, exclude_session=current or None,
                             board_id=board or None)
         # Dated, so a recalled line can be attributed instead of quoted as

@@ -135,8 +135,6 @@ def test_the_off_backend_passes_everything_through():
 # This is a unit test.
 def test_a_tool_built_without_a_checker_still_works():
     """`make_search_tool(provider)` keeps its one-argument form, so the eval
-    harness is not forced to construct a checker it has no opinion about. The RAG
-    lab was the other such caller until it became its own project in August
-    2026."""
+    harness is not forced to construct a checker it has no opinion about."""
     assert len(make_search_tool(StubSearch(_rows())).run(
         {'query': 'morning routines'})) == 2

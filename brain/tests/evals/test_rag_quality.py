@@ -72,8 +72,8 @@ def test_lexical_scoring_beats_dense_alone_on_a_rare_literal():
     So BM25 does **not** rescue the rare literal on its own, and neither does the
     fusion: BM25's length normalisation penalises the long note about as hard as
     cosine's dilution does. What puts the right card first is the IDF
-    term-coverage reranker — the one component LangChain has no equivalent of,
-    ported from the lab's `rerank.py`. Coverage asks what share of the query's
+    term-coverage reranker — the one component LangChain has no equivalent of.
+    Coverage asks what share of the query's
     IDF mass a card contains and does not care how much other text surrounds it,
     which is exactly the property the other two stages lack.
 
@@ -106,7 +106,7 @@ def test_lexical_scoring_beats_dense_alone_on_a_rare_literal():
 # This is an eval.
 @pytest.mark.eval
 def test_a_gate_that_rejects_everything_leaves_nothing_to_answer_from():
-    """Candidate F's one addition after retrieval, at the seam that ships.
+    """The chosen architecture's one addition after retrieval, at the seam that ships.
 
     An empty result is the honest answer when the board cannot support the
     question — without a gate every question gets contexts, including those. The

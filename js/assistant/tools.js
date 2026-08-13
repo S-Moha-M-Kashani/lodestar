@@ -374,8 +374,8 @@ export function renderChatDrift() {
   return strip;
 }
 
-// The rail's controls: one button out to the lab, and one menu holding what
-// you do to a transcript. Export and import were two buttons competing with
+// The rail's controls: one menu holding what you do to a transcript. Export
+// and import were two buttons competing with
 // the heading for the top of the sheet; they are the same shape of thing the
 // board's Menu already holds, so they are built from its parts — .menu-panel
 // and .menu-item — rather than as a second design for one job.

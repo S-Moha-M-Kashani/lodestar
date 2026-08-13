@@ -1521,19 +1521,15 @@ const server = createServer(async (req, res) => {
   }
 
   // The one upstream: the brain holds the LLM key, so the browser never talks to
-  // it directly. There used to be a second — the RAG lab on :9002, reported apart
-  // so "assistant unavailable" never sent anyone restarting a brain that was fine
-  // — and the lab moved to its own repository on 2026-08-11, where it is browsed
-  // directly.
+  // it directly.
   const upstream = path.startsWith('/api/agent/') || path.startsWith('/api/rag/')
     ? { url: AGENT_URL + path.slice('/api'.length), down: 'assistant unavailable',
         limited: true }
     : null;
   if (upstream) {
     // Metered before the body is read, so a flood costs nothing to refuse. The
-    // flag stays although there is only one upstream left to carry it: it says
-    // that metering is a property of *this* upstream and not of proxying, which
-    // is what kept the RAG lab unmetered while it was the second one.
+    // flag stays although there is only one upstream to carry it: it says that
+    // metering is a property of *this* upstream and not of proxying.
     if (upstream.limited) {
       const after = agentRetryAfter();
       if (after !== null) {

@@ -60,6 +60,15 @@ services:
       # BRAIN_URL_SAFETY=google-safe-browsing to turn the check on.
       BRAIN_URL_SAFETY: ${BRAIN_URL_SAFETY:-off}
       GOOGLE_SAFE_BROWSING_KEY: ${GOOGLE_SAFE_BROWSING_KEY:-}
+      # Tracing is the same shape of decision as the link check above: the *env*
+      # default is the real backend, which raises at boot without a key, so
+      # compose pins 'off' to keep `docker compose up --build` working for
+      # someone who has no LangSmith account. It is also the more careful
+      # default for a container — this board holds a private life, and turning
+      # it on ships every conversation to a third-party cloud. Set
+      # BRAIN_TRACING=langsmith with LANGSMITH_API_KEY to turn it on.
+      BRAIN_TRACING: ${BRAIN_TRACING:-off}
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

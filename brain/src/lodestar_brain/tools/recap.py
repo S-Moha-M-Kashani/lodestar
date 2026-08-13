@@ -14,8 +14,10 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel
 
+from ..board.client import BoardClient
+from ..board.snapshot import BoardSnapshot, board_of
 from ..retrieval import day_int
-from .board import BoardClient
+from .dual import with_sync_door
 
 
 class DailyRecapArgs(BaseModel):
@@ -31,16 +33,21 @@ def _content(message) -> str:
                    if isinstance(part, dict))
 
 
-def make_recap_tool(client: BoardClient, store=None, llm=None,
+def make_recap_tool(board: BoardClient | BoardSnapshot, store=None, llm=None,
                     today: date | None = None) -> BaseTool:
     """`store` is anything with chunks_on(day_int) — a ChatStore, or None when
     Chroma is off, which costs the chunk count and never the recap. `today` is
     a test seam like resolve_time_scope's: it anchors which date 'yesterday'
     names, so a test cannot flake across a UTC midnight."""
+    snapshot = BoardSnapshot.around(board)
+    # The chat record is a different endpoint and is read straight from the
+    # client: the snapshot is of the board, and this is the only tool that wants
+    # the record, so there is nothing for a second one to share.
+    client = snapshot.client
 
     @tool('daily_recap', args_schema=DailyRecapArgs)
-    def daily_recap(day: str = 'yesterday',
-                    config: RunnableConfig = None) -> dict:
+    async def daily_recap(day: str = 'yesterday',
+                          config: RunnableConfig = None) -> dict:
         """What one day actually held: the cards created, the messages sent to
         the assistant, what the conversations were about, and a summary of the
         user's own words. Use it when asked about the user's concerns, thoughts
@@ -50,8 +57,7 @@ def make_recap_tool(client: BoardClient, store=None, llm=None,
         # The same UTC day-int the chunk metadata carries — see day_int.
         wanted = target.year * 10000 + target.month * 100 + target.day
 
-        board = (config or {}).get('configurable', {}).get('board_id') or ''
-        cards = [c for c in client.list_cards(board)
+        cards = [c for c in await snapshot.cards(config)
                  if day_int(c.get('createdAt')) == wanted]
         titles = [c.get('title', '') for c in cards]
 
@@ -61,7 +67,7 @@ def make_recap_tool(client: BoardClient, store=None, llm=None,
         labels = [meta['label'] if 'label' in meta else meta['summary']
                   for meta in chunks if 'label' in meta or 'summary' in meta]
 
-        messages = [m for m in client.list_chat(board)
+        messages = [m for m in await client.list_chat(board_of(config))
                     if day_int(m.get('createdAt')) == wanted]
         user = [m for m in messages if m.get('role') == 'user']
         assistant = [m for m in messages if m.get('role') == 'assistant']
@@ -80,7 +86,7 @@ def make_recap_tool(client: BoardClient, store=None, llm=None,
             prompt = ("Summarize in a few sentences what was on the user's "
                       'mind in these messages, in their own terms:\n'
                       + '\n'.join('- ' + m.get('content', '') for m in user))
-            summary = _content(llm.invoke(prompt))
+            summary = _content(await llm.ainvoke(prompt))
 
         return {'day': target.isoformat(),
                 'cards': {'count': len(cards), 'titles': titles},
@@ -89,4 +95,4 @@ def make_recap_tool(client: BoardClient, store=None, llm=None,
                 'assistant_messages': len(assistant),
                 'text': text, 'summary': summary}
 
-    return daily_recap
+    return with_sync_door(daily_recap)

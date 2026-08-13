@@ -11,7 +11,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 
-from lodestar_brain import untrusted
+from lodestar_brain.middleware import untrusted
 from lodestar_brain.agent import (STEP_LIMIT_REPLY, SYSTEM_PROMPT, AgentStep,
                                   LodestarAgent, _steps_from, _usage_from)
 from lodestar_brain.config import Settings

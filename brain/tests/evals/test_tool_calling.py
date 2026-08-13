@@ -1,3 +1,4 @@
+import asyncio
 import os
 
 import pytest
@@ -25,7 +26,7 @@ def test_scenario_tool_calls_and_effect(path):
     if "reply_contains" in expect:
         assert expect["reply_contains"] in result.reply
 
-    cards = board.list_cards()
+    cards = asyncio.run(board.list_cards())
     if "board_size" in expect:
         assert len(cards) == expect["board_size"]
     if "board_titles_contain" in expect:

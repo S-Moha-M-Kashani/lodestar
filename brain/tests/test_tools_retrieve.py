@@ -6,10 +6,23 @@ these tests hold — the shape of a result, not the quality of a ranking.
 """
 import httpx
 import respx
+from langchain.tools import ToolRuntime
 
+from lodestar_brain.agent import TurnContext
 from lodestar_brain.retrieval import CardIndex, LexicalHashEmbeddings
 from lodestar_brain.tools.board import BoardClient
 from lodestar_brain.tools.retrieve import make_recall_tool, make_retrieve_tool
+
+
+def runtime(context, config=None):
+    """A `ToolRuntime` in the shape `ToolNode` builds one.
+
+    A unit test calls the tool directly, so there is no graph to inject it —
+    which is also the point: the tool must work when nothing injects anything.
+    """
+    return ToolRuntime(state={}, context=context, config=config or {},
+                       stream_writer=lambda _: None, tool_call_id='t1',
+                       store=None)
 
 
 def card(id, title, tags=None):
@@ -128,22 +141,28 @@ def test_recall_skips_the_chat_it_is_already_reading():
     Returning it back spends the model's attention re-reading what it can
     already see, and — worse — makes a fresh chat look like it has history the
     moment the model reaches for the tool. Which chat that is arrives through
-    the run config, not as a tool argument: the model must not be able to name
-    (or spoof) it, and the args schema below is the assertion of that.
+    the run's typed context, not as a tool argument: the model must not be able
+    to name (or spoof) it, and the args schema below is the assertion of that.
     """
     store = FakeStore()
     tool = make_recall_tool(store)
-    config = {'configurable': {'session_id': 's-current', 'board_id': 'b-work'}}
+    config = {'configurable': {'board_id': 'b-work'}}
 
-    matches = tool.run({'text': 'wifi password'}, config=config)
+    # Injected into the call's arguments, which is exactly what ToolNode does
+    # with a declared runtime — and the arguments the *model* supplied are
+    # stripped of it first, so nothing here can be forged from a tool call.
+    matches = tool.run({'text': 'wifi password',
+                        'runtime': runtime(TurnContext(session_id='s-current'),
+                                           config)})
     # The board travels the same way and for a stronger version of the same
     # reason: recall must not reach into another board's conversations, and
     # which board that is was the user's choice, not the model's.
     assert store.asked[-1] == ('wifi password', 5, 's-current', 'b-work')
-    assert 'board_id' not in tool.args_schema.model_json_schema()['properties'], (
-        'the board is injected, never offered to the model as an argument')
-    assert 'session_id' not in tool.args_schema.model_json_schema()['properties'], (
-        'the session is injected, never offered to the model as an argument')
+    # Exactly the two parameters, asserted as a set rather than as two absences:
+    # the session and the board are injected, and so is the runtime that carries
+    # them — none of the three may appear as something the model can fill in.
+    assert set(tool.args_schema.model_json_schema()['properties']) == {'text', 'k'}
+    assert set(tool.tool_call_schema.model_json_schema()['properties']) == {'text', 'k'}
 
     # Dated, so the model can say "you mentioned this on the 12th" instead of
     # quoting the past as though it were said now. The date is already in the
@@ -151,8 +170,38 @@ def test_recall_skips_the_chat_it_is_already_reading():
     # spec's Recall section for why a copied title goes stale on rename.
     assert matches[0]['day'] == 20260712
 
-    # Missing config is not an error: an eval or a curl runs without one, and a
+    # Missing runtime is not an error: an eval or a curl runs without one, and a
     # recall that excluded nothing is strictly better than a 500.
     assert tool.run({'text': 'wifi password'})
     assert store.asked[-1][2] is None
     assert store.asked[-1][3] is None
+
+
+# This is an integration test (the real agent graph, with a fake model and store).
+def test_the_agent_hands_recall_the_session_the_request_named():
+    """The test above injects the runtime by hand; this is the wiring that has to
+    put it there.
+
+    Which chat a turn belongs to reaches the tool through
+    `create_agent(context_schema=TurnContext)` and a declared `ToolRuntime`. Not
+    as a tool argument, which the model fills in — and no longer through
+    `configurable`, which is what a checkpoint records.
+    """
+    from langchain_core.messages import AIMessage
+
+    from lodestar_brain.agent import LodestarAgent
+    from lodestar_brain.config import Settings
+    from lodestar_brain.llm import FakeChat
+
+    store = FakeStore()
+    script = [AIMessage(content='', tool_calls=[
+        {'name': 'recall_chat', 'args': {'text': 'wifi'}, 'id': 'c1'}]),
+        AIMessage(content='you said it was hunter2')]
+    agent = LodestarAgent(settings=Settings(llm_provider='fake'),
+                          tools=[make_recall_tool(store)], system_prompt='sys',
+                          llm=FakeChat(script=script))
+    result = agent.run([{'role': 'user', 'content': 'what was the wifi password'}],
+                       session_id='s-current', board_id='b-work')
+    assert store.asked == [('wifi', 5, 's-current', 'b-work')]
+    assert result.steps[0].arguments == {'text': 'wifi'}, (
+        'the session is not among the arguments the model chose')

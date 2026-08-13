@@ -315,6 +315,18 @@ test('the composed brain can boot without a Safe Browsing key', () => {
 });
 
 // This is a configuration invariant.
+test('the composed brain can boot without a LangSmith key', () => {
+  // Same shape as the Safe Browsing pin above, and the same reason: BRAIN_TRACING's
+  // env default is 'langsmith', which raises at boot with no key. Unpinned, a
+  // keyless `docker compose up --build` would crash-loop. The pin also keeps a
+  // container from shipping conversations to a third-party cloud by default.
+  const pinned = brainEnvPin('BRAIN_TRACING');
+  assert.ok(pinned, 'the composed brain must pin BRAIN_TRACING, or it cannot boot keyless');
+  assert.match(pinned, /off|langsmith/,
+    `BRAIN_TRACING is ${pinned}, which is not a backend tracing.py knows`);
+});
+
+// This is a configuration invariant.
 test('the source mount targets exactly where the Dockerfile puts the source', () => {
   // A WORKDIR change would otherwise leave the tree mounted in a directory the
   // server does not run from, and :3000 would go back to serving stale assets
