@@ -31,7 +31,11 @@ PROVIDER_MODELS = {'openrouter': 'openai/gpt-5-nano',
 #
 # CLEAR_TOOLS_TOKENS is deliberately half of SUMMARY_TOKENS: dropping tool
 # output the model has already read back is cheap and reversible, and summarising
-# the conversation is neither, so the cheap one always gets first refusal.
+# the conversation is neither, so the cheap one gets first refusal on the
+# request. It does not get first refusal on the *trigger* — the summariser counts
+# the thread, which the clearing never edits, so half is not a stay of execution.
+# Measured 2026-08-13 in tests/evals/test_context_budget.py; the values are still
+# a judgement call, and summarize.py says what would settle them.
 SUMMARY_TOKENS = 8_000
 SUMMARY_KEEP = 20
 CLEAR_TOOLS_TOKENS = 4_000

@@ -69,5 +69,5 @@ packages = ["src/lodestar_brain"]
 markers = [
     "eval: behavioral/quality evals (deterministic, offline)",
     "live: evals that call the real LLM; require OPENROUTER_API_KEY and BRAIN_EVAL_LIVE=1",
-    "calibration: measures a number the code currently guesses; needs a real model, so it skips by default",
+    "calibration: measures a number the code currently guesses; the ones needing a real model or the embeddings extra skip themselves",
 ]
