@@ -829,6 +829,90 @@ body[data-view="board"] .cards { min-height: 0; }
 .prio-badge[data-prio="3"] { color: var(--ink-green); }
 .prio-badge[data-prio="4"] { color: var(--ink-soft); }
 
+/* The card's actions menu — a + at the end of the header row, dropping the
+   same panel the toolbar menus use.
+
+   Never hover-revealed, and never collapsed to opacity or max-width: 0. The
+   chat rows in this app hide their controls that way and the measured cost is
+   that touch cannot reach them at all. This one always occupies layout, always
+   answers Tab, and is a 24px target on a finger; hover and focus only ink it
+   in. */
+.card-menu {
+  position: relative;
+  display: inline-flex;
+  margin-left: 4px;
+}
+
+.card-menu-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  font-family: var(--mono);
+  font-size: 14px;
+  line-height: 1;
+  color: var(--ink-soft);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  transition: color 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+}
+
+.card-menu-btn:hover,
+.card-menu-btn:focus-visible,
+.card-menu-btn[aria-expanded="true"] {
+  color: var(--ink);
+  background: var(--paper);
+  border-color: var(--line);
+}
+
+.card-menu-panel {
+  min-width: 156px;
+  /* The height is set by card-menu.js, to whatever room the column leaves —
+     the category list is as long as the user's registry and no constant here
+     could be right in a column as tall as the window. This only says that a
+     list too long for that room scrolls, rather than escaping it. */
+  overflow-y: auto;
+  text-align: left;
+  cursor: default;
+}
+
+/* display:flex would otherwise defeat the [hidden] attribute — the same trap
+   as .assistant-tools and .board-switch, restated here because .menu-panel's
+   own rule is the only thing standing between this panel and always-on. */
+.card-menu-panel[hidden] { display: none; }
+
+/* Flipped above the + when the column's scroller has no room below it */
+.card-menu-panel.up { top: auto; bottom: calc(100% + 6px); }
+
+.card-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+.card-menu-item.is-danger { color: var(--danger); }
+
+/* Colour in this menu means what it means everywhere else: category */
+.card-menu-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--cat);
+}
+
+.card-menu-tick {
+  margin-left: auto;
+  padding-left: 8px;
+  color: var(--ink-soft);
+}
+
+/* A card tilts under the pointer; the menu hanging off it must not tilt too */
+.card.menu-open { transform: none; }
+
 .card-title {
   margin: 0;
   font-size: 13.5px;

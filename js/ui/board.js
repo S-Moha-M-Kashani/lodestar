@@ -5,6 +5,7 @@ import { isHabit } from '../core/habits.js';
 import { commit, short } from '../core/history.js';
 import { filters, nextNum, setDraggedId, state } from '../core/state.js';
 import { sortMenu } from './card-actions.js';
+import { cardMenu, fromCardMenu } from './card-menu.js';
 import { openCatsDialog } from './cats-dialog.js';
 import { clearDropIndicator, wireDropZone } from './dnd.js';
 import { $, announce, columnCards, columnTitle } from './dom.js';
@@ -184,6 +185,9 @@ function renderCard(card) {
   top.append(typeBadge(card));
   const prio = prioBadge(card);
   if (prio) top.append(prio);
+  // Last in the header row, after the badges: the card's actions belong beside
+  // its other labels rather than in a corner of their own.
+  top.append(cardMenu(card));
 
   const title = document.createElement('p');
   title.className = 'card-title';
@@ -212,10 +216,22 @@ function renderCard(card) {
 
   if (isHabit(card)) habitCardParts(card, el);
 
-  el.addEventListener('click', () => openDialog(card.id));
-  el.addEventListener('keydown', (e) => onCardKeydown(e, card.id));
+  // The whole card is one click target, and the actions menu now lives inside
+  // it: a click or a key the menu owns must not also do the card's thing.
+  // Without these three guards the + opens the edit dialog behind its own
+  // panel, Enter on the + does the same, and a press on a menu row drags the
+  // card out of its column.
+  el.addEventListener('click', (e) => {
+    if (fromCardMenu(e)) return;
+    openDialog(card.id);
+  });
+  el.addEventListener('keydown', (e) => {
+    if (fromCardMenu(e)) return;
+    onCardKeydown(e, card.id);
+  });
 
   el.addEventListener('dragstart', (e) => {
+    if (fromCardMenu(e)) { e.preventDefault(); return; }
     setDraggedId(card.id);
     e.dataTransfer.setData('text/plain', card.id);
     e.dataTransfer.effectAllowed = 'move';
