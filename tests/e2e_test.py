@@ -99,7 +99,7 @@ def open_meta(page):
 
 
 def open_extras(page):
-    """Open the Assistant's extras — the lab, the chat menu and the models.
+    """Open the Assistant's extras — the chat menu and the models.
 
     Shut, the conversation gets the whole sheet, so everything that drives one of
     those controls has to open this first."""
@@ -184,9 +184,7 @@ def check(name, cond):
 # behind by an earlier crashed run answers /api/state instantly, so the probe
 # green-lights it and the whole suite drives someone else's database. Measured
 # once as 22 phantom failures beginning at "seed: 6 cards on first run", with
-# nothing in the output pointing at the port. :8797 is included because the
-# suite deliberately never starts a lab there — a real one left running would
-# turn the "lab is not running" checks red for the person working on the lab.
+# nothing in the output pointing at the port.
 def require_free(port, what):
     try:
         socket.create_connection(("127.0.0.1", port), timeout=0.5).close()

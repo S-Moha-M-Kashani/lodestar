@@ -47,9 +47,9 @@ class Settings:
     # believing it had embeddings.
     #
     # The default is the *measured* winner, because the embedder is the
-    # architecture: hash embedding scored ~0.01 recall on the lab's Farsi corpus
+    # architecture: hash embedding scored ~0.01 recall on a Farsi diary corpus
     # against 0.617 for heydariAI/persian-embeddings — a ~60× effect, where no
-    # other knob in the sweep was worth 2%. It costs the 'local-embeddings'
+    # other knob measured was worth 2%. It costs the 'local-embeddings'
     # extra and a ~2.2 GB download on first boot. 'fake' is the offline-test
     # value: deterministic *lexical* hashing, never semantic.
     embedder: str = 'sentence-transformers'
@@ -57,9 +57,9 @@ class Settings:
     # explicitly named model is never replaced, or the configuration and the
     # model that answered would disagree.
     embed_model: str = ''
-    # 'llm' | 'none' — candidate F's relevance gate between retrieval and
-    # generation. It follows the main chat model, so it needs no model setting
-    # of its own; the threshold is the one the lab measured.
+    # 'llm' | 'none' — the chosen architecture's relevance gate between
+    # retrieval and generation. It follows the main chat model, so it needs no
+    # model setting of its own; the threshold is the measured one.
     grader: str = 'llm'
     grade_threshold: float = 0.4
     board_api_url: str = 'http://127.0.0.1:3000'

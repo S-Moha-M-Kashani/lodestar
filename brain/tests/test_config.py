@@ -13,12 +13,12 @@ def test_defaults():
     # actually running. The default is the *measured* embedder, because the
     # embedder is the architecture — hash embedding scored ~0.01 recall on the
     # Farsi corpus against 0.617 for this one, a ~60× effect, where no other
-    # sweep knob was worth 2%. It costs the 'local-embeddings' extra and a
+    # knob measured was worth 2%. It costs the 'local-embeddings' extra and a
     # ~2.2 GB download on first boot; 'fake' is the offline-test value.
     assert s.embedder == 'sentence-transformers'
     assert s.embed_model == ''        # '' = that backend's own default
-    # Candidate F's one change after retrieval, at the threshold the lab
-    # measured. It follows the main chat model, so it costs no second setting.
+    # The chosen architecture's one change after retrieval, at the measured
+    # threshold. It follows the main chat model, so it costs no second setting.
     assert s.grader == 'llm'
     assert s.grade_threshold == 0.4
     assert s.board_api_url == 'http://127.0.0.1:3000'

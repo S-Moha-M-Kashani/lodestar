@@ -2455,8 +2455,8 @@ body[data-view="assistant"] .app-footer { display: none; }
   max-height: 70vh;
   overflow-y: auto;
   /* Stacked, not wrapped: side by side in a 520px panel the two blocks left the
-     lab and the chat menu in a narrow column with the whole models fold beside
-     them, and half the panel empty under the buttons. */
+     chat menu in a narrow column with the whole models fold beside it, and half
+     the panel empty under the buttons. */
   display: flex;
   flex-direction: column;
   align-items: stretch;

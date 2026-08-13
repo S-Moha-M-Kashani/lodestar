@@ -1,14 +1,14 @@
 """Retrieval's foundation: what gets embedded, and how it is shaped for a store.
 
-This is the shipped half of candidate F (`docs/rag-chosen-architecture.md`) —
-the pieces every later stage stands on. Three things live here:
+This is the shipped half of the chosen retrieval architecture — the pieces every
+later stage stands on. Three things live here:
 
 **The embeddings seam.** `make_embeddings` names a backend and an unknown value
 raises, like every other seam in the brain. The default is a real Persian
-encoder, because the embedder *is* the architecture: on the lab's Farsi corpus
+encoder, because the embedder *is* the architecture: on a Farsi diary corpus
 hash embedding measured ~0.01 recall against 0.617 for
-`heydariAI/persian-embeddings`, a ~60× effect, while every other knob in the
-sweep was worth under 2%. `fake` is the offline-test value and is deliberately
+`heydariAI/persian-embeddings`, a ~60× effect, while every other knob measured
+was worth under 2%. `fake` is the offline-test value and is deliberately
 *lexical* — it ranks by shared letters, so an offline ranking assertion means
 something. It is never semantic: a paraphrase with no shared text is invisible
 to it.
@@ -98,7 +98,7 @@ class LexicalHashEmbeddings(Embeddings):
 
     Character n-grams rather than words because Persian inflects by affix
     (میخواستم / نمیخوام / بخوام share a stem no whitespace tokeniser finds), so
-    n-grams recover the overlap word tokens miss. The lab measured this at 0.386
+    n-grams recover the overlap word tokens miss. Measured at 0.386
     session recall where the ASCII token-bucket embedder it replaces scored
     0.014 — chance. Still lexical: it sees letters, never meaning.
     """
@@ -403,7 +403,7 @@ SEASONS = {
     'تابستون': ((6, 22), (9, 22)), 'پاییز': ((9, 23), (12, 21)),
     'زمستان': ((12, 22), (3, 20)), 'زمستون': ((12, 22), (3, 20)),
 }
-# The English half is new and unmeasured — the lab's corpus is Farsi — and it is
+# The English half is new and unmeasured — the measured corpus is Farsi — and it is
 # deliberately not a mirror. «پارسال تابستون» shifts a further year because the
 # Persian year turns at Nowruz, while "last summer" means the most recent one.
 ENGLISH_SEASONS = {'spring': ((3, 21), (6, 21)), 'summer': ((6, 22), (9, 22)),
@@ -705,7 +705,7 @@ def hybrid_retriever(dense: BaseRetriever, lexical: BaseRetriever,
 
     Scores never enter the formula — only ranks — so a cosine and a BM25 score
     combine without calibration, and a half returning nonsense degrades the
-    result instead of destroying it. Equal weights because the lab measured no
+    result instead of destroying it. Equal weights because no measurement gave a
     reason to prefer one: they fail on different questions, not by different
     amounts."""
     return EnsembleRetriever(retrievers=[dense, lexical],
@@ -753,8 +753,8 @@ def lexical_rerank(query: str, documents: list[Document], idf: dict,
     term coverage.
 
     Position stands in for relevance because `EnsembleRetriever` returns fused
-    order and discards the fused score. The lab blended the normalised score
-    instead; ranks are a monotone re-expression of it, so recall over the depth
+    order and discards the fused score. Blending the normalised score was the
+    alternative; ranks are a monotone re-expression of it, so recall over the depth
     is untouched and only the ordering inside the cut moves. Documents past
     `depth` are dropped rather than kept below the reranked ones: the reranker
     is the expensive stage, and a candidate it never read has no measured claim
@@ -773,7 +773,7 @@ def lexical_rerank(query: str, documents: list[Document], idf: dict,
 
 # --- the relevance gate -----------------------------------------------------
 
-# The measured threshold from the lab's candidate F. A context must be graded at
+# The measured threshold of the chosen architecture. A context must be graded at
 # least this useful to reach the answerer.
 GRADE_THRESHOLD = 0.4
 # Half marks means "the model expressed no opinion", and it deliberately clears
@@ -846,7 +846,7 @@ def relevance_scores(llm, query: str, texts: list[str],
 def relevance_gate(llm, query: str, documents: list[Document],
                    threshold: float = GRADE_THRESHOLD,
                    budget_s: float = GATE_BUDGET) -> list[Document]:
-    """Candidate F's one addition after retrieval: drop the contexts a model
+    """The chosen architecture's one addition after retrieval: drop the contexts a model
     says do not help. An empty result is the honest answer — without a gate every
     question gets an answer, including the ones the board cannot support."""
     scores = relevance_scores(llm, query, [doc.page_content for doc in documents],
@@ -1373,8 +1373,8 @@ board rather than for a corpus — is the first thing it should replace.
 the measured pipeline uses it.
 
 *Why the obvious option fails.* `CrossEncoderReranker` and Cohere's reranker
-score a (query, document) pair with a trained model — better, and the lab has
-`cross-encoder` as a switchable option precisely so that is measurable. The cost
+score a (query, document) pair with a trained model — better in principle, and
+worth measuring against this one. The cost
 is a download or an API bill on every query, and for the Persian half of this
 corpus the strongest cross-encoders available are English-only, which returns
 confident numbers that measure nothing. IDF term coverage is deterministic,
@@ -1386,14 +1386,15 @@ costs nothing, and is bounded to [0,1] so it can also be thresholded.
 callable, not to be a class. What the framework does not have is a
 deterministic lexical reranker to put inside it.
 
-*Why not adopted, and what would change it.* A measurement: a lab run varying
+*Why not adopted, and what would change it.* A measurement: a run varying
 only the reranker, with a Persian-capable cross-encoder against `lexical`, on the
 same 30 questions. If it wins on LLM context precision, the compressor seam is
-already the place to put it. Recorded honestly: at candidate F's depth of 20 the
+already the place to put it. Recorded honestly: at the shipped depth of 20 the
 50/50 blend of position and coverage cannot promote a last-placed candidate past
 a first-placed one, because min-max normalisation puts both extremes at 0 and 1
-on each axis. That is inherited from the lab rather than chosen here, and it is
-the reason the reranker moves the middle of the list and not its ends.
+on each axis. That is inherited from the measured configuration rather than
+chosen here, and it is the reason the reranker moves the middle of the list and
+not its ends.
 
 **6. "Why is the relevance gate yours? LangChain has document compressors for
 exactly this."**
@@ -1404,7 +1405,7 @@ open.
 
 *Why the obvious option fails.* `LLMChainFilter` asks the model, per document,
 whether it is relevant. At k=8 that is eight requests for one question — the
-cost that kept an LLM gate out of the lab's sweep until it could be run against
+cost that kept an LLM gate out of the sweep until it could be run against
 a local model, and it is per *question*, so it multiplies through every eval. The
 second problem is the default direction of failure: its boolean output parser
 treats an unparseable answer as "not relevant", so a model that replies in prose
@@ -1429,7 +1430,7 @@ local cross-encoder, small and fast, English.
 default. Two things would change it: a provider where per-document calls are
 cheap enough to stop mattering, or — more usefully — a measurement, because the
 batched listing's accuracy cost against per-document grading has never been
-measured. The lab can run both over the same 30 questions with the same judge;
+measured. Both can be run over the same 30 questions with the same judge;
 if per-document wins by more than the decision score's spread, the cost argument
 has to be re-made rather than assumed.
 
