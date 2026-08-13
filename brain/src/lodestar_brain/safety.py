@@ -27,6 +27,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from .net import retry
+
 log = logging.getLogger(__name__)
 
 # Anything with a scheme, or a bare host with a plausible TLD. Deliberately
@@ -115,11 +117,17 @@ class GoogleSafeBrowsing:
                 'platformTypes': ['ANY_PLATFORM'],
                 'threatEntryTypes': ['URL'],
                 'threatEntries': [{'url': url}]}}
-        try:
+        # A POST, but an idempotent *question* — so it gets net.retry's one
+        # bounded retry. Fail-closed turns a transient blip into a user-visible
+        # refusal, which makes this the lookup most worth a second attempt.
+        def lookup() -> dict:
             res = httpx.post(self.ENDPOINT, params={'key': self._key},
                              json=body, timeout=self._timeout)
             res.raise_for_status()
-            matches = res.json().get('matches') or []
+            return res.json()
+
+        try:
+            matches = retry(lookup).get('matches') or []
         except Exception as exc:
             # Fail closed, and say why: a swallowed lookup would present an
             # unchecked link as a checked one.
