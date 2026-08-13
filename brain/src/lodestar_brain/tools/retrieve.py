@@ -1,17 +1,19 @@
 """The agent's two ways into the board's own memory.
 
-Thin on purpose: `retrieval.py` owns the pipeline, and these wrappers decide only
-what the model is told. Each rebuilds from `/api/state` before answering, so a
-card created a second ago is findable — the index fingerprint is what makes that
-free on an unchanged board.
+Thin on purpose: `retrieval/` owns the pipeline, and these wrappers decide only
+what the model is told. `find_related` rebuilds from `/api/state` before
+answering, so a card created a second ago is findable — the turn's snapshot is
+what makes the read free after the first tool has taken it, and the index
+fingerprint is what makes the rebuild free on an unchanged board.
 """
 from langchain.tools import ToolRuntime
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
+from ..board.client import BoardClient
+from ..board.snapshot import BoardSnapshot, board_of
 from ..retrieval import GRADE_THRESHOLD, CardIndex, ChatStore
-from .board import BoardClient
 
 
 class FindRelatedArgs(BaseModel):
@@ -34,17 +36,20 @@ def _brief(card: dict) -> dict:
             'columnId': card.get('columnId', ''), 'tags': card.get('tags') or []}
 
 
-def make_retrieve_tool(index: CardIndex, client: BoardClient, llm=None,
-                       threshold: float = GRADE_THRESHOLD,
+def make_retrieve_tool(index: CardIndex, board: BoardClient | BoardSnapshot,
+                       llm=None, threshold: float = GRADE_THRESHOLD,
                        memory: ChatStore | None = None) -> BaseTool:
+    snapshot = BoardSnapshot.around(board)
+
     @tool('find_related', args_schema=FindRelatedArgs)
     def find_related(text: str, k: int = 5,
                      config: RunnableConfig = None) -> list[dict]:
         """Find board cards related to a text, best first. Use it to answer from
         what is already on the board and to avoid creating a duplicate."""
-        board = (config or {}).get('configurable', {}).get('board_id') or None
-        cards = client.list_cards(board or '')
-        index.build(cards)     # the board is small; rebuilding keeps it fresh
+        board_id = board_of(config) or None
+        # The board is small, and rebuilding keeps it fresh; within a turn the
+        # snapshot means neither the fetch nor the rebuild happens twice.
+        cards = snapshot.indexed(index, config)
         by_id = {card['id']: card for card in cards}
         hits = index.search(text, k=k, llm=llm, threshold=threshold)
         # `rank`, not a score: RRF fuses ranks and exposes no fused score, and a
@@ -64,7 +69,7 @@ def make_retrieve_tool(index: CardIndex, client: BoardClient, llm=None,
                       'rank': rank}
                      for rank, hit in enumerate(
                          memory.search(text, k=k, evidence=False,
-                                       board_id=board), start=1)]
+                                       board_id=board_id), start=1)]
         return rows
 
     if memory is not None:

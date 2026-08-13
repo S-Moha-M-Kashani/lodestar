@@ -267,11 +267,18 @@ class LodestarAgent:
         # something a model can get wrong or be talked into. Absent means the
         # board API's own default board. The *session* deliberately no longer
         # travels here: it is `TurnContext`, typed and out of the checkpoint.
+        #
+        # `turn_id` is minted here because here is the one place that runs once
+        # per turn: every tool call the model makes while answering one question
+        # carries it, and that is what lets `BoardSnapshot` know two reads belong
+        # to the same question. A uuid rather than a counter — nothing owns a
+        # counter, and a thread that resumes would have to carry one.
         config: dict = {'recursion_limit': self._per_run
                         + self.max_steps * self._per_step
                         + (self._per_step - 1),
                         'configurable': {'thread_id': session_id or
-                                         f'adhoc-{uuid4()}'}}
+                                         f'adhoc-{uuid4()}',
+                                         'turn_id': uuid4().hex}}
         if board_id:
             config['configurable']['board_id'] = board_id
         return config

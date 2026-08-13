@@ -16,6 +16,7 @@ from langgraph.store.sqlite import AsyncSqliteStore
 from pydantic import BaseModel, Field
 
 from .agent import AgentResult, AgentStep, LodestarAgent
+from .board import BoardClient, BoardSnapshot
 from .config import Settings, load_settings
 from .llm import make_chat_model, served_models
 from .pricing import model_prices, turn_cost
@@ -23,7 +24,7 @@ from .safety import make_url_safety
 from .retrieval import (CardIndex, ChatStore, coverage, expand_queries,
                         gate_llm, make_embeddings)
 from .topics import detect_drift
-from .tools.board import BoardClient, make_board_tools
+from .tools.board import make_board_tools
 from .tools.memory import make_memory_tool
 from .tools.recap import make_recap_tool
 from .tools.retrieve import make_recall_tool, make_retrieve_tool
@@ -143,6 +144,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or load_settings()
 
     board = BoardClient(settings.board_api_url)
+    # One snapshot behind all three board-reading tools, which is what makes a
+    # turn that reaches for three of them fetch `/api/state` once. The routes
+    # below deliberately keep the bare client: they are not a turn, and nothing
+    # bounds how stale an answer of theirs would be allowed to get.
+    snapshot = BoardSnapshot(board)
     embeddings = make_embeddings(settings.embedder, settings,
                                  settings.embed_model)
     index = CardIndex(embeddings)
@@ -167,19 +173,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             logging.getLogger(__name__).warning(
                 'chat memory disabled: Chroma at %s is unreachable (%s)',
                 settings.chroma_url, exc)
-    tools = [*make_board_tools(board),
+    tools = [*make_board_tools(snapshot),
              # Built here, not inside the tool: an unconfigured checker must stop
              # the boot, not be discovered on the first search.
              make_search_tool(DdgsSearch(),
                               safety=make_url_safety(settings.url_safety, settings)),
              # find_related is the agent's one search over everything the user
              # has: the board, and — when Chroma is up — the chat record too.
-             make_retrieve_tool(index, board, llm=grader,
+             make_retrieve_tool(index, snapshot, llm=grader,
                                 threshold=settings.grade_threshold,
                                 memory=memory),
              # daily_recap answers "what were my concerns?" from the records —
              # a missing Chroma costs it the chunk count, never the recap.
-             make_recap_tool(board, store=memory, llm=chat_model),
+             make_recap_tool(snapshot, store=memory, llm=chat_model),
              # The agent's own notes across conversations. It needs no client:
              # the store is attached to the graph by the lifespan and reaches the
              # tool through ToolRuntime, so a brain with no durable state simply
