@@ -595,6 +595,110 @@ try:
         check("sort: menu snaps back to its placeholder after sorting",
               page.input_value('[data-col="in-progress"] .sort-select') == "")
 
+        # ---- Card actions menu ----------------------------------------------
+        # This is an end-to-end test. Every card carries a + beside its badges
+        # that drops the card's own menu: Edit opens the ordinary dialog, the
+        # four middle entries are quick-edits that change one field in place,
+        # and Delete is the ordinary soft delete. It runs on a card of its own
+        # and ends by deleting it, so the board it hands on is the one it found.
+        page.fill(".quick-add input", "Menu probe card")
+        page.press(".quick-add input", "Enter")
+        probe = lambda: page.locator(".card", has_text="Menu probe card").first
+        # Only ever one panel is open, so every menu locator is scoped to the
+        # visible one rather than to a card that may have moved column.
+        item = lambda label: page.locator(
+            ".card-menu-panel:not([hidden]) .menu-item", has_text=label)
+
+        geom = probe().locator(".card-menu-btn").evaluate("""el => {
+          const r = el.getBoundingClientRect();
+          return { w: r.width, h: r.height,
+                   opacity: getComputedStyle(el).opacity, tab: el.tabIndex };
+        }""")
+        # Measured without a hover, deliberately. The chat rows in this app
+        # collapse their controls to max-width: 0 until the pointer arrives and
+        # touch cannot reach them at all; this control must never do that.
+        check("card menu: the + occupies layout and is tabbable without a hover",
+              geom["w"] >= 22 and geom["h"] >= 22
+              and geom["opacity"] == "1" and geom["tab"] >= 0)
+
+        probe().locator(".card-menu-btn").click()
+        check("card menu: the + opens the six actions, and not the card dialog",
+              [t.strip() for t in page.locator(
+                  ".card-menu-panel:not([hidden]) .menu-item").all_inner_texts()]
+              == ["Edit…", "Category ▸", "Type ▸", "Deadline ▸", "Move to ▸", "Delete"]
+              and page.locator("#card-dialog[open]").count() == 0)
+
+        page.keyboard.press("Escape")
+        escaped = (page.locator(".card-menu-panel:not([hidden])").count() == 0
+                   and page.evaluate(
+                       "document.activeElement?.classList.contains('card-menu-btn')"))
+        probe().locator(".card-menu-btn").click()
+        page.locator('[data-col="inbox"] .column-title').click()
+        check("card menu: Escape (focus back on the +) and an outside click both dismiss it",
+              escaped and page.locator(".card-menu-panel:not([hidden])").count() == 0)
+
+        probe().locator(".card-menu-btn").click()
+        item("Category").click()
+        item("Health").click()
+        page.wait_for_timeout(120)
+        check("card menu: Category re-inks the card in place, with no dialog",
+              probe().locator(".card-cat").inner_text() == "Health"
+              and probe().evaluate("el => el.classList.contains('categorized')")
+              and page.locator("#card-dialog[open]").count() == 0)
+
+        probe().locator(".card-menu-btn").click()
+        item("Type").click()
+        item("idea").click()
+        page.wait_for_timeout(120)
+        check("card menu: Type restamps the card in place",
+              probe().locator(".badge.type-idea").count() == 1)
+
+        probe().locator(".card-menu-btn").click()
+        item("Deadline").click()
+        item("Today").click()
+        page.wait_for_timeout(120)
+        today = time.strftime("%Y-%m-%d")
+        check("card menu: Deadline dates the card in place",
+              probe().locator(".card-deadline").inner_text() == today)
+
+        probe().locator(".card-menu-btn").click()
+        item("Move to").click()
+        item("Done").click()
+        page.wait_for_timeout(150)
+        check("card menu: Move to carries the card to another column",
+              page.locator('[data-col="answered"] .card',
+                           has_text="Menu probe card").count() == 1)
+
+        page.wait_for_timeout(500)  # debounced push
+        saved = [c for c in api_state()["cards"] if c["title"] == "Menu probe card"]
+        check("card menu: every quick-edit reached the database",
+              len(saved) == 1 and saved[0]["category"] == "health"
+              and saved[0]["type"] == "idea" and saved[0]["deadline"] == today
+              and saved[0]["columnId"] == "answered")
+
+        # The regression this control most easily causes: the whole card is one
+        # click target, and a menu inside it must not swallow that or fire it.
+        probe().locator(".card-title").click()
+        page.wait_for_selector("#card-dialog[open]")
+        by_body = page.input_value("#card-title") == "Menu probe card"
+        page.click("#cancel-dialog")
+        page.wait_for_timeout(100)
+        probe().locator(".card-menu-btn").click()
+        item("Edit").click()
+        page.wait_for_selector("#card-dialog[open]")
+        check("card menu: Edit and the card body open the same dialog",
+              by_body and page.input_value("#card-title") == "Menu probe card")
+        page.click("#cancel-dialog")
+        page.wait_for_timeout(100)
+
+        probe().locator(".card-menu-btn").click()
+        item("Delete").click()
+        page.wait_for_selector("#confirm-dialog[open]")
+        page.click("#confirm-ok")
+        page.wait_for_timeout(150)
+        check("card menu: Delete goes through the in-app confirm and clears the board",
+              page.locator(".card", has_text="Menu probe card").count() == 0)
+
         # ---- Filters --------------------------------------------------------
         page.fill("#search", "stoic")
         page.wait_for_timeout(100)
@@ -3382,6 +3486,33 @@ try:
         check("habit: today's cell carries the number punched into it",
               habit_card.locator(".habit-tape .tape-cell.today").inner_text() == "1")
         page.screenshot(path=shot("habits.png"))
+
+        # This is an end-to-end test. The card menu's Type quick-edit restamps a
+        # card without opening the dialog, which makes it the fastest way in the
+        # app to mis-stamp a habit — and a mis-stamp must not cost a year of
+        # completions. Out to task and back to habit, with a repetition already
+        # recorded today: the tally and the database have to survive the trip.
+        item = lambda label: page.locator(
+            ".card-menu-panel:not([hidden]) .menu-item", has_text=label)
+        meditate = lambda: page.locator(
+            '[data-col="inbox"] .card', has_text="Meditate").first
+        meditate().locator(".card-menu-btn").click()
+        item("Type").click()
+        item("task").click()
+        page.wait_for_timeout(150)
+        as_task = (meditate().locator(".badge.type-task").count() == 1
+                   and meditate().locator(".habit-punch").count() == 0)
+        meditate().locator(".card-menu-btn").click()
+        item("Type").click()
+        item("habit").click()
+        page.wait_for_timeout(500)
+        check("card menu: restamping a habit out and back keeps its history",
+              as_task
+              and meditate().locator(".badge.type-habit").count() == 1
+              and meditate().locator(".habit-punch .punch-box.done").count() == 1
+              and any(sum(len(v) for v in c.get("habitHistory", {}).values()) == 1
+                      and c.get("habitFreq") == "daily" and c.get("habitCount") == 2
+                      for c in api_state()["cards"] if c["title"] == "Meditate"))
 
         # The reminder is the thing that makes a habit a habit.
         page.reload()
