@@ -47,6 +47,7 @@ their input reaches the instruction channel unfenced and unfiltered by design.
 """
 from __future__ import annotations
 
+import asyncio
 import re
 from pathlib import Path
 
@@ -261,7 +262,7 @@ def test_asking_the_agent_to_delete_a_card_gets_nowhere_harmlessly():
     # The framework's own unknown-tool reply, fenced like any other tool output.
     assert 'delete_card' in str(result.steps[0].result)
     # And the board was never written to. Both cards are still listed.
-    assert [c['id'] for c in client.list_cards()] == ['a', 'b']
+    assert [c['id'] for c in asyncio.run(client.list_cards())] == ['a', 'b']
 
 
 # This is a configuration invariant: the seam to the board is a closed surface,

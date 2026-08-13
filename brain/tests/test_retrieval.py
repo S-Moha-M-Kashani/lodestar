@@ -5,6 +5,7 @@ download, no socket — because the brain suite has to stay that way. The two
 model-backed embedders are exercised through their `factory` seam, so the
 prefix behaviour is tested without a 2 GB checkpoint.
 """
+import asyncio
 import re
 import time
 from datetime import date, datetime, timezone
@@ -345,10 +346,14 @@ def test_expansion_reaches_the_words_the_corpus_actually_uses():
 
 # This is a unit test.
 def test_the_relevance_gate_asks_once_and_drops_what_the_model_rejects():
+    # The gate is the one retrieval stage that calls a model, so it is a
+    # coroutine: awaited, the loop keeps serving while the grader thinks.
+    def gate(*args, **kwargs):
+        return asyncio.run(retrieval.relevance_gate(*args, **kwargs))
+
     docs = [BY_ID['d1'], BY_ID['d2'], BY_ID['d3']]
     llm = ScriptedChat(reply='1: 9\n2: 0\n3: 8')
-    assert [doc.id for doc in retrieval.relevance_gate(llm, 'مالیات', docs)] \
-        == ['d1', 'd3']
+    assert [doc.id for doc in gate(llm, 'مالیات', docs)] == ['d1', 'd3']
     # One call for the whole batch, not one per candidate. Every candidate is in
     # that one prompt — a gate that costs k calls per question is the row the
     # lab's OpenRouter credit never reached.
@@ -358,11 +363,10 @@ def test_the_relevance_gate_asks_once_and_drops_what_the_model_rejects():
     # Every failure mode is a no-op rather than an empty context: an unparsed
     # line means "no opinion" (0.5), which clears the 0.4 threshold. A malformed
     # reply must not be able to silently delete the evidence.
-    assert len(retrieval.relevance_gate(ScriptedChat(reply='I cannot help'),
-                                        'مالیات', docs)) == 3
-    assert len(retrieval.relevance_gate(ScriptedChat(fail=True), 'مالیات', docs)) == 3
+    assert len(gate(ScriptedChat(reply='I cannot help'), 'مالیات', docs)) == 3
+    assert len(gate(ScriptedChat(fail=True), 'مالیات', docs)) == 3
     idle = ScriptedChat(reply='1: 9')
-    assert retrieval.relevance_gate(idle, 'مالیات', []) == []
+    assert gate(idle, 'مالیات', []) == []
     assert idle.calls == 0
     # The gate is a named seam like every other in the brain: 'none' turns it
     # off, and an unknown value raises rather than silently disabling it.
@@ -376,11 +380,25 @@ def test_the_relevance_gate_asks_once_and_drops_what_the_model_rejects():
 def test_the_gate_abandons_a_call_that_blows_its_latency_budget():
     docs = [BY_ID['d1'], BY_ID['d2']]
     slow = ScriptedChat(reply='1: 0\n2: 0', delay=2.0)
-    start = time.perf_counter()
-    kept = retrieval.relevance_gate(slow, 'مالیات', docs, budget_s=0.05)
+
+    async def timed():
+        """Timed inside the loop, which is where the guarantee is.
+
+        `asyncio.timeout` cancels the *await*, so the caller is released on the
+        budget while the abandoned call finishes wherever it was running — for a
+        model with no async of its own, a worker thread, exactly as with the
+        daemon thread this replaced. Timing `asyncio.run` instead would measure
+        the loop joining that thread on the way out, which no route ever does.
+        """
+        start = time.perf_counter()
+        kept = await retrieval.relevance_gate(slow, 'مالیات', docs,
+                                              budget_s=0.05)
+        return kept, time.perf_counter() - start
+
+    kept, waited = asyncio.run(timed())
     # The gate is an optimisation that measured a *tie* with no gate at all, so
     # a slow model costs the gate, never the answer.
-    assert time.perf_counter() - start < 1.0
+    assert waited < 1.0
     assert [doc.id for doc in kept] == ['d1', 'd2']
 
 
@@ -416,7 +434,10 @@ def test_the_card_index_search_runs_the_whole_pipeline():
     assert {doc.id for doc in scoped} == {'c3'}
     # The gate only runs when a model is handed over, and when it rejects
     # everything the caller gets nothing — which is how an honest "no" happens.
-    assert index.search('visa', llm=ScriptedChat(reply='1: 0\n2: 0\n3: 0')) == []
+    # It lives on `asearch`: `search` is local and CPU-bound and stays
+    # synchronous, and the gate is the one stage that waits on a model.
+    assert asyncio.run(index.asearch(
+        'visa', llm=ScriptedChat(reply='1: 0\n2: 0\n3: 0'))) == []
 
 
 # This is an integration test: it runs a real Chroma client, in process.

@@ -67,11 +67,14 @@ class CardIndex:
         return True
 
     def search(self, query: str, k: int = TOP_K, today: date | None = None,
-               llm=None, threshold: float = GRADE_THRESHOLD,
                time_filter: bool = True) -> list[Document]:
-        """The chosen architecture, end to end: resolve the time language,
-        expand the query, retrieve both ways, fuse, rerank, and — when a model is
-        given — gate."""
+        """The chosen architecture up to the gate: resolve the time language,
+        expand the query, retrieve both ways, fuse and rerank.
+
+        Everything here is local and CPU-bound, so it stays synchronous. The gate
+        is the one stage that calls a model, and it is `asearch` — a caller that
+        wants it has to be somewhere it can wait.
+        """
         if not self.documents or self.store is None:
             return []
         scope = resolve_time_scope(query, today) if time_filter else None
@@ -85,10 +88,22 @@ class CardIndex:
         fused = rrf_fuse([hybrid.invoke(variant) for variant in queries])
         # The reranker reads the expanded query: a card matched through a
         # synonym or another script must not be scored as covering nothing.
-        ranked = lexical_rerank(' '.join(queries), fused, self.bm25.idf, k=k)
+        return lexical_rerank(' '.join(queries), fused, self.bm25.idf, k=k)
+
+    async def asearch(self, query: str, k: int = TOP_K, today: date | None = None,
+                      llm=None, threshold: float = GRADE_THRESHOLD,
+                      time_filter: bool = True) -> list[Document]:
+        """`search`, and — when a model is given — the gate after it.
+
+        The whole pipeline in one call for the one caller that has a model to
+        spend: `find_related`, answering inside a turn. The search box
+        (`/rag/recall`) passes no model deliberately, so it takes the sync door
+        and waits for nothing.
+        """
+        ranked = self.search(query, k=k, today=today, time_filter=time_filter)
         if llm is None:
             return ranked
-        return relevance_gate(llm, query, ranked, threshold)
+        return await relevance_gate(llm, query, ranked, threshold)
 
 
 """Alternatives considered

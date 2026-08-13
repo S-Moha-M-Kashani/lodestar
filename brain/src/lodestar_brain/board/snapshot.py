@@ -89,27 +89,32 @@ class BoardSnapshot:
         """
         return board if isinstance(board, cls) else cls(board)
 
-    def cards(self, config: Any = None) -> list[dict]:
+    async def cards(self, config: Any = None) -> list[dict]:
         """Every card on the board this turn is about, fetched at most once.
 
         The *same list object* each time within a turn, which is what lets
         `CardIndex.build` recognise an unchanged board by fingerprint instead of
         being handed a fresh copy that only looks the same.
+
+        Deliberately no lock around the fetch. Two tools in one turn are run one
+        after another by the graph, so the race needs two turns arriving at once
+        on the same board — and what it costs is the fetch this exists to save,
+        not a wrong answer.
         """
         turn, board = turn_of(config), board_of(config)
         if not turn:
-            return self.client.list_cards(board)
+            return await self.client.list_cards(board)
         key = (turn, board)
         if key in self._cards:
             self._cards.move_to_end(key)
             return self._cards[key]
-        cards = self.client.list_cards(board)
+        cards = await self.client.list_cards(board)
         self._cards[key] = cards
         while len(self._cards) > self.max_turns:
             self._cards.popitem(last=False)
         return cards
 
-    def indexed(self, index: Any, config: Any = None) -> list[dict]:
+    async def indexed(self, index: Any, config: Any = None) -> list[dict]:
         """This turn's cards, with `index` built over them — once per turn.
 
         `index` is anything with `build(cards)`; `CardIndex` is the only one, and
@@ -119,7 +124,7 @@ class BoardSnapshot:
         re-derived and the digest is not recomputed, because the board they would
         be derived from is the one already indexed.
         """
-        cards = self.cards(config)
+        cards = await self.cards(config)
         turn, board = turn_of(config), board_of(config)
         if turn and self._built.get(id(index)) == (turn, board):
             return cards

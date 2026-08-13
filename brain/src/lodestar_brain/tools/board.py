@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from ..board.client import BoardClient
 from ..board.snapshot import BoardSnapshot, board_of
+from .dual import with_sync_door
 
 COLUMNS = ['inbox', 'in-progress', 'answered']
 TYPES = ['question', 'problem', 'task', 'idea', 'plan', 'habit']
@@ -95,10 +96,10 @@ def make_board_tools(board: BoardClient | BoardSnapshot) -> list[BaseTool]:
     client = snapshot.client
 
     @tool('list_cards', args_schema=ListCardsArgs)
-    def list_cards(column_id: str = '', search: str = '',
-                   config: RunnableConfig = None) -> list[dict]:
+    async def list_cards(column_id: str = '', search: str = '',
+                         config: RunnableConfig = None) -> list[dict]:
         """List cards on the board, optionally filtered by column or free text."""
-        cards = snapshot.cards(config)
+        cards = await snapshot.cards(config)
         if column_id:
             cards = [c for c in cards if c['columnId'] == column_id]
         if search:
@@ -109,7 +110,7 @@ def make_board_tools(board: BoardClient | BoardSnapshot) -> list[BaseTool]:
         return [_brief(c) for c in cards]
 
     @tool('create_card', args_schema=CreateCardArgs)
-    def create_card(title: str, notes: str = '', type: str = 'question',
+    async def create_card(title: str, notes: str = '', type: str = 'question',
                         category: str = '', column_id: str = 'inbox',
                         tags: list | None = None, frequency: str = '',
                         times_per_period: int = 1,
@@ -128,13 +129,13 @@ def make_board_tools(board: BoardClient | BoardSnapshot) -> list[BaseTool]:
         if type == 'habit':
             card['habitFreq'] = frequency or 'daily'
             card['habitCount'] = times_per_period
-        proposal = client.create_proposal(card, board_of(config))
+        proposal = await client.create_proposal(card, board_of(config))
         # `pending` tells the model the card is not on the board yet, so it
         # reports a proposal instead of claiming it added something.
         return {**_brief(proposal), 'pending': True}
 
     @tool('update_card', args_schema=UpdateCardArgs)
-    def update_card(id: str, title: str | None = None, notes: str | None = None,
+    async def update_card(id: str, title: str | None = None, notes: str | None = None,
                         type: str | None = None, category: str | None = None,
                         column_id: str | None = None,
                         importance: str | None = None, urgency: str | None = None,
@@ -150,7 +151,7 @@ def make_board_tools(board: BoardClient | BoardSnapshot) -> list[BaseTool]:
         # From the snapshot like every other read. A proposal or an edit filed
         # earlier in this turn is invisible to a fresh fetch too — neither writes
         # to `cards` — so there is nothing here a re-read could have found.
-        cards = snapshot.cards(config)
+        cards = await snapshot.cards(config)
         target = next((c for c in cards if c['id'] == id), None)
         if target is None:
             return {'error': f'no card with id {id!r} — use list_cards first'}
@@ -163,10 +164,11 @@ def make_board_tools(board: BoardClient | BoardSnapshot) -> list[BaseTool]:
         fields = {key: value for key, value in named.items() if value is not None}
         if not fields:
             return {'error': 'name at least one field to change'}
-        suggestion = client.create_edit(id, fields)
+        suggestion = await client.create_edit(id, fields)
         # `pending` is the same signal create_card sends, so the model reports a
         # suggestion rather than claiming the board changed.
         return {'id': suggestion.get('id', ''), 'cardId': id, 'fields': fields,
                 'title': target['title'], 'pending': True}
 
-    return [list_cards, create_card, update_card]
+    # Both doors, because the sync one is how the evals and the tests call these.
+    return [with_sync_door(t) for t in (list_cards, create_card, update_card)]

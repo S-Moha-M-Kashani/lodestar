@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from ..board.client import BoardClient
 from ..board.snapshot import BoardSnapshot, board_of
 from ..retrieval import GRADE_THRESHOLD, CardIndex, ChatStore
+from .dual import with_sync_door
 
 
 class FindRelatedArgs(BaseModel):
@@ -42,16 +43,16 @@ def make_retrieve_tool(index: CardIndex, board: BoardClient | BoardSnapshot,
     snapshot = BoardSnapshot.around(board)
 
     @tool('find_related', args_schema=FindRelatedArgs)
-    def find_related(text: str, k: int = 5,
-                     config: RunnableConfig = None) -> list[dict]:
+    async def find_related(text: str, k: int = 5,
+                           config: RunnableConfig = None) -> list[dict]:
         """Find board cards related to a text, best first. Use it to answer from
         what is already on the board and to avoid creating a duplicate."""
         board_id = board_of(config) or None
         # The board is small, and rebuilding keeps it fresh; within a turn the
         # snapshot means neither the fetch nor the rebuild happens twice.
-        cards = snapshot.indexed(index, config)
+        cards = await snapshot.indexed(index, config)
         by_id = {card['id']: card for card in cards}
-        hits = index.search(text, k=k, llm=llm, threshold=threshold)
+        hits = await index.asearch(text, k=k, llm=llm, threshold=threshold)
         # `rank`, not a score: RRF fuses ranks and exposes no fused score, and a
         # number invented from a position would look like a measurement. Card
         # and chat rows each rank from 1 — two indexes, two rankings; a merged
@@ -78,7 +79,7 @@ def make_retrieve_tool(index: CardIndex, board: BoardClient | BoardSnapshot,
         # this tool can never return.
         find_related.description += (
             ' Also returns snippets from past conversations on this board.')
-    return find_related
+    return with_sync_door(find_related)
 
 
 def make_recall_tool(store: ChatStore) -> BaseTool:

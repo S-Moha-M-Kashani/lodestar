@@ -77,21 +77,25 @@ def test_board_client_records_and_lists_chat():
         return_value=httpx.Response(200, json={'messages': echoed}))
 
     client = BoardClient(BOARD)
-    assert client.record_chat(sent) == echoed
+    # Every call is a coroutine — the brain answers on an async route and a
+    # board read is almost all waiting. Driven with asyncio.run here because a
+    # unit test is one of the callers that has no loop of its own.
+    run = asyncio.run
+    assert run(client.record_chat(sent)) == echoed
     assert json.loads(post.calls.last.request.content) == {'messages': sent}
-    assert client.list_chat() == echoed
+    assert run(client.list_chat()) == echoed
     # An empty board is omitted, never sent as '': the server files an unnamed
     # batch under its default board, and it can only do that if it can tell the
     # two apart. Named, it travels as a query parameter on the read and in the
     # body on the write, beside the session it belongs with.
     assert 'board' not in scoped.calls.last.request.url.params
-    assert client.record_chat(sent, board_id='b-home') == echoed
+    assert run(client.record_chat(sent, board_id='b-home')) == echoed
     assert json.loads(post.calls.last.request.content)['boardId'] == 'b-home'
-    assert client.list_chat('b-home') == echoed
+    assert run(client.list_chat('b-home')) == echoed
     assert 'board=b-home' in str(scoped.calls.last.request.url)
     # The index reads every board at once — pruning from one board's messages
     # would drop all the others out of recall.
-    assert client.list_all_chat() == echoed
+    assert run(client.list_all_chat()) == echoed
     assert every.called
 
 
@@ -205,11 +209,14 @@ def test_boot_syncs_the_index_from_the_record():
             row(1, 'the wifi password is hunter2')]}))
     respx.post(f'{BOARD}/api/chat/messages').mock(
         return_value=httpx.Response(200, json={'messages': []}))
-    client = TestClient(create_app(Settings(
-        llm_provider='fake', embedder='fake', board_api_url=BOARD,
-        chroma_url=MEMORY_URL, chat_collection='chat-boot-sync')))
-
-    res = client.post('/rag/recall', json={'text': 'wifi password'})
+    # `with`, so the lifespan runs — the boot sync happens when the *service*
+    # starts, which is what "at boot" has meant since the board client became a
+    # coroutine and create_app stayed synchronous (see `sync_chat_index`).
+    with TestClient(create_app(Settings(
+            llm_provider='fake', embedder='fake', board_api_url=BOARD,
+            chroma_url=MEMORY_URL,
+            chat_collection='chat-boot-sync'))) as client:
+        res = client.post('/rag/recall', json={'text': 'wifi password'})
     assert res.status_code == 200
     body = res.json()
     assert body['memory'] is True
@@ -376,7 +383,10 @@ def test_a_board_down_at_boot_does_not_take_the_brain_down():
     # not up yet (compose starts them together, in no promised order).
     respx.get(f'{BOARD}/api/chat/messages/all').mock(
         side_effect=httpx.ConnectError('board is down'))
-    client = TestClient(create_app(Settings(
-        llm_provider='fake', embedder='fake', board_api_url=BOARD,
-        chroma_url=MEMORY_URL, chat_collection='chat-board-down')))
-    assert client.get('/health').json()['ok'] is True
+    # Inside the lifespan, which is where the sync now happens: without the
+    # `with` this asserts nothing, because nothing would have called the board.
+    with TestClient(create_app(Settings(
+            llm_provider='fake', embedder='fake', board_api_url=BOARD,
+            chroma_url=MEMORY_URL,
+            chat_collection='chat-board-down'))) as client:
+        assert client.get('/health').json()['ok'] is True

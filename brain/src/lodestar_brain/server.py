@@ -194,17 +194,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
              make_memory_tool()]
     if memory is not None:
         tools.append(make_recall_tool(memory))
-    if memory is not None:
-        # Chroma is a derived index over assistant.db: rebuild what it missed
-        # (turns recorded while it was down). Best-effort — compose starts the
-        # board and the brain in no promised order, so a board that is not up
-        # yet is logged, never fatal.
+    async def sync_chat_index() -> None:
+        """Rebuild what the derived Chroma index missed while it was down.
+
+        Chroma is derived from assistant.db, so a turn recorded while it was
+        stopped is indexed here — and a chat deleted meanwhile is pruned here,
+        because `sync` only ever adds and a deleted conversation resurfacing in
+        an answer is the worst version of this feature.
+
+        Best-effort: compose starts the board and the brain in no promised
+        order, so a board that is not up yet is logged and never fatal.
+
+        In the lifespan rather than in `create_app`'s body, which is where it
+        used to be, because the board client is a coroutine now and
+        `create_app` is not. It cannot become one either: `uvicorn
+        lodestar_brain.server:app` imports the module — and therefore builds the
+        app — from inside `Server.serve()`, which is already running an event
+        loop, so an `asyncio.run` here would raise at boot in production and
+        nowhere else. The lifespan is the honest home anyway: this is something
+        the *service* does when it starts, not something the object graph is.
+        """
+        if memory is None:
+            return
         try:
-            recorded = board.list_all_chat()
+            recorded = await board.list_all_chat()
             added = memory.sync(recorded)
-            # And the other direction: a chat deleted while this brain was down
-            # must stop answering recall. sync only ever adds, so without the
-            # prune a deleted conversation would resurface in an answer.
             dropped = memory.prune(recorded)
             if added or dropped:
                 logging.getLogger(__name__).info(
@@ -213,6 +227,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except Exception as exc:
             logging.getLogger(__name__).warning(
                 'chat index not synced from the record: %s', exc)
+
     agent = LodestarAgent(settings=settings, tools=tools,
                           max_steps=settings.max_agent_steps)
     transcriber = make_transcriber(settings)
@@ -225,7 +240,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         connections: they belong to the *running* service, not to the object
         graph, and a connection opened at import time is one nothing closes.
         The checkpointer (one thread per chat) and the long-term store share a
-        single file — one place to look, one file to delete.
+        single file — one place to look, one file to delete. The chat index's
+        boot sync happens here too, for a reason of its own: see
+        `sync_chat_index`.
 
         `assistant.db` and `board.db` are not touched. This file is derived
         working memory: losing it costs the agent its resume, never a card and
@@ -242,6 +259,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await checkpointer.setup()
             await store.setup()
             agent.attach(checkpointer=checkpointer, store=store)
+            await sync_chat_index()
             try:
                 yield
             finally:
@@ -277,8 +295,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             settings_for_turn = replace(settings, llm_provider=body.provider)
         return turn_cost(result.usage, model_prices(settings_for_turn, body.model))
 
-    def remember(body: ChatBody, result: AgentResult,
-                 cost: float | None) -> None:
+    async def remember(body: ChatBody, result: AgentResult,
+                       cost: float | None) -> None:
         """Record both sides of the exchange — durably first (assistant.db,
         through the Node API like every write), then into the derived Chroma
         index. Every chat route must call this: a second route is a second
@@ -315,8 +333,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not turn:
             return
         try:
-            rows = board.record_chat(turn, session_id=body.session_id,
-                                     board_id=body.board_id)
+            rows = await board.record_chat(turn, session_id=body.session_id,
+                                           board_id=body.board_id)
         except Exception:
             logging.getLogger(__name__).exception(
                 'chat record unreachable — this turn is NOT in assistant.db')
@@ -388,7 +406,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 logging.getLogger(__name__).exception('chat stream failed')
                 yield _sse('error', {'message': str(exc)})
 
-        def record() -> None:
+        async def record() -> None:
             """The turn, recorded once the browser has the whole stream.
 
             Here rather than beside the `done` frame it belongs to: recording
@@ -397,7 +415,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             filing it. Starlette awaits this after the final chunk.
             """
             for result, cost in finished:
-                remember(body, result, cost)
+                await remember(body, result, cost)
 
         # no-cache and no buffering: an intermediary holding the frames back
         # would deliver a correct transcript and none of the progress.
@@ -448,14 +466,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {'text': text}
 
     @app.post('/rag/reindex')
-    def reindex() -> dict:
+    async def reindex() -> dict:
         """Rebuild the card index. `rebuilt` is false when the board has not
-        changed since the last one — the fingerprint, made observable."""
-        cards = board.list_cards()
+        changed since the last one — the fingerprint, made observable.
+
+        Off the client and not the snapshot: this is not a turn, and an answer
+        about whether the board changed must not come from a copy of it."""
+        cards = await board.list_cards()
         return {'cards': len(cards), 'rebuilt': index.build(cards)}
 
     @app.post('/rag/chat/reindex')
-    def chat_reindex() -> dict:
+    async def chat_reindex() -> dict:
         """The boot sync on demand — an import appends to the record while the
         brain is already running, and deleting a chat removes rows from it while
         the brain is already running. `memory: false` is the honest answer rather
@@ -466,12 +487,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         delete reach Chroma at once instead of at the next boot."""
         if memory is None:
             return {'indexed': 0, 'memory': False}
-        recorded = board.list_all_chat()
+        recorded = await board.list_all_chat()
         return {'indexed': memory.sync(recorded),
                 'pruned': memory.prune(recorded), 'memory': True}
 
     @app.post('/rag/recall')
-    def recall(body: RecallBody, board_id: str = Query('', alias='board')) -> dict:
+    async def recall(body: RecallBody,
+                     board_id: str = Query('', alias='board')) -> dict:
         """Searches the chat record AND the board's cards; every match says
         which with `source`. `memory` says whether the chat side had anywhere
         to look.
@@ -491,10 +513,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         which forwards the query string as it is."""
         cards: list[dict] = []
         try:
-            index.build(board.list_cards(board_id))
-            # llm=None: the search box answers directly, so it gets the fast
-            # ungated pipeline — the gate exists for contexts a model reads.
-            hits = index.search(body.text, k=body.k, llm=None)
+            index.build(await board.list_cards(board_id))
+            # The ungated `search`: the box answers a person directly, and the
+            # gate exists for contexts a model reads. It is also why this route
+            # never has to wait on a model.
+            hits = index.search(body.text, k=body.k)
             # Coverage over the expanded query (synonyms, other scripts) is
             # both the displayed score and the floor: a card sharing no term
             # with any spelling of the query is dense noise, not a match.

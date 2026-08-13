@@ -5,8 +5,8 @@ open — a blown budget, a raised exception, an unparseable line all mean "no
 opinion", which clears the threshold. The worst a broken gate can do is nothing,
 and "nothing" is the ungated pipeline that measured a tie with this one.
 """
+import asyncio
 import re
-import threading
 
 from langchain_core.documents import Document
 
@@ -34,29 +34,28 @@ GATE_PROMPT = (
     'directly contains the answer.')
 
 
-def _within_budget(budget_s: float, work):
-    """Run `work`, and give up waiting for it after `budget_s`.
+async def _within_budget(budget_s: float, work):
+    """Await `work`, and give up on it after `budget_s`.
 
-    The thread is a daemon and is never joined: an abandoned provider call must
-    not hold up process exit, and the model's own timeout is what actually ends
-    it. Returns None if the budget was blown or the call raised — both of which
-    the caller reads as "no opinion"."""
-    box: dict = {}
+    Returns None if the budget was blown or the call raised — both of which the
+    caller reads as "no opinion". This was a daemon thread joined with a
+    timeout, which cost a thread per question and blocked the one running it;
+    `asyncio.timeout` cancels at the await instead and the loop keeps serving.
+    What does not change is what an abandoned call leaves behind: the provider
+    request is cancelled where it can be and the model's own timeout ends it
+    where it cannot, and either way nobody is waiting for the answer.
+    """
+    try:
+        async with asyncio.timeout(budget_s):
+            return await work()
+    except TimeoutError:      # the budget — the case this function exists for
+        return None
+    except Exception:         # and a failed gate is a no-op gate
+        return None
 
-    def run():
-        try:
-            box['value'] = work()
-        except Exception:
-            pass   # a failed gate is a no-op gate; the caller defaults to 0.5
 
-    thread = threading.Thread(target=run, daemon=True)
-    thread.start()
-    thread.join(budget_s)
-    return box.get('value')
-
-
-def relevance_scores(llm, query: str, texts: list[str],
-                     budget_s: float = GATE_BUDGET) -> list[float]:
+async def relevance_scores(llm, query: str, texts: list[str],
+                           budget_s: float = GATE_BUDGET) -> list[float]:
     """Grade every candidate in **one** call.
 
     One call per candidate would be more accurate and would also multiply a
@@ -67,7 +66,7 @@ def relevance_scores(llm, query: str, texts: list[str],
         return []
     listing = '\n\n'.join(f'[{i + 1}] {text[:GATE_MAX_CHARS]}'
                           for i, text in enumerate(texts))
-    reply = _within_budget(budget_s, lambda: llm.invoke(
+    reply = await _within_budget(budget_s, lambda: llm.ainvoke(
         [('system', GATE_PROMPT),
          ('user', f'Question: {query}\n\n{listing}')]))
     scores = [NO_OPINION] * len(texts)
@@ -80,14 +79,14 @@ def relevance_scores(llm, query: str, texts: list[str],
     return scores
 
 
-def relevance_gate(llm, query: str, documents: list[Document],
-                   threshold: float = GRADE_THRESHOLD,
-                   budget_s: float = GATE_BUDGET) -> list[Document]:
+async def relevance_gate(llm, query: str, documents: list[Document],
+                         threshold: float = GRADE_THRESHOLD,
+                         budget_s: float = GATE_BUDGET) -> list[Document]:
     """Candidate F's one addition after retrieval: drop the contexts a model
     says do not help. An empty result is the honest answer — without a gate every
     question gets an answer, including the ones the board cannot support."""
-    scores = relevance_scores(llm, query, [doc.page_content for doc in documents],
-                              budget_s)
+    scores = await relevance_scores(
+        llm, query, [doc.page_content for doc in documents], budget_s)
     return [doc for doc, score in zip(documents, scores) if score >= threshold]
 
 

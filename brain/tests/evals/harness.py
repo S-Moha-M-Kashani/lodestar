@@ -38,6 +38,10 @@ PIANO_CARD = {'id': 'c-piano', 'num': 12, 'columnId': 'in-progress',
 class InMemoryBoard:
     """Duck-typed BoardClient: reads, and two kinds of suggestion. No HTTP.
 
+    The three methods the tools reach for are coroutines, because the client
+    they stand in for is one; `list_proposals`/`list_edits` are how a test looks
+    at what happened and mirror no route at all.
+
     It has no way to write a card, because the real client has none either — the
     agent proposes cards and suggests edits, and only the user's own save applies
     either. A fake that could still write would let a test pass on a path
@@ -52,10 +56,10 @@ class InMemoryBoard:
         self._proposals = []
         self._edits = []
 
-    def list_cards(self, board_id=''):
+    async def list_cards(self, board_id=''):
         return [dict(c) for c in self._cards]
 
-    def create_proposal(self, card, board_id=''):
+    async def create_proposal(self, card, board_id=''):
         """Mirrors POST /api/proposals: the card is stored but stays OFF the
         board until the user confirms it, so list_cards must not show it."""
         proposal = dict(card)
@@ -67,7 +71,7 @@ class InMemoryBoard:
     def list_proposals(self):
         return [dict(c) for c in self._proposals]
 
-    def create_edit(self, card_id, fields):
+    async def create_edit(self, card_id, fields):
         """Mirrors POST /api/edits: stored for the user to review, and the card
         itself is untouched — list_cards must show it exactly as it was."""
         suggestion = {'id': f'edit-{next(_id_counter)}', 'cardId': card_id,
