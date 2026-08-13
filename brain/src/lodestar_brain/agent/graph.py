@@ -24,6 +24,7 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
 from ..config import Settings
 from ..llm import make_chat_model
+from ..middleware.cache import ToolResultCache
 from ..middleware.errors import ToolErrorMiddleware, _tool_error
 from ..middleware.summarize import make_context_editor, make_summarizer
 from ..middleware.untrusted import UntrustedToolOutput
@@ -199,13 +200,17 @@ class LodestarAgent:
     def _middleware(self, llm: BaseChatModel) -> list:
         """Everything the graph wears, in the one order that is load-bearing.
 
-        The two that wrap a *tool call* nest outside-in as listed, and that
+        The three that wrap a *tool call* nest outside-in as listed, and that
         nesting is the rule:
 
         - `UntrustedToolOutput` is outermost, so a tool's failure message is
           fenced too — the text in "board unreachable at …" is not ours either.
         - `ToolErrorMiddleware` sits inside it, turning a raising tool into
           something the model can read.
+        - `ToolResultCache` is innermost, and that is deliberate: an exception
+          reaches it before the error handler has turned it into a value, so it
+          simply never stores one. A cache one place further out would remember
+          a transient board outage for the rest of the turn.
 
         The rest touch the *model* call and cannot disturb that: the summariser
         and the tool-call limit are state hooks, the context editor wraps the
@@ -224,6 +229,7 @@ class LodestarAgent:
                                         exit_behavior='continue')
         middleware = [m for m in (UntrustedToolOutput(),
                                   ToolErrorMiddleware(_tool_error),
+                                  ToolResultCache(),
                                   make_summarizer(self.settings, llm),
                                   make_context_editor(self.settings),
                                   limit) if m is not None]
