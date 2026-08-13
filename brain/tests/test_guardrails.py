@@ -66,8 +66,16 @@ BOARD = 'http://board.test'
 # What create_app is allowed to hand the agent. Nothing here can delete a card,
 # write a habit completion, or reach the database. daily_recap reads the board
 # and the chat record and writes nothing.
+#
+# `remember_fact` is the one tool that writes anywhere, and the boundary is worth
+# drawing precisely: it writes a sentence into the agent's *own* store — the
+# checkpoint file, which holds threads and notes and no user record. It cannot
+# reach a card, the chat record, or SQLite through any other door, and every one
+# of its writes is a step the user sees, which is the same rule that keeps the
+# agent from ticking a habit. The durability promise is about board.db and
+# assistant.db and is untouched: losing the whole store costs the agent a note.
 CORE_TOOLS = {'list_cards', 'create_card', 'update_card', 'web_search',
-              'find_related', 'daily_recap'}
+              'find_related', 'daily_recap', 'remember_fact'}
 # The one conditional tool: appended only when Chroma answers, since chat memory
 # is optional infrastructure.
 OPTIONAL_TOOLS = {'recall_chat'}

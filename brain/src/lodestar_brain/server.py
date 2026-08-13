@@ -24,6 +24,7 @@ from .retrieval import (CardIndex, ChatStore, coverage, expand_queries,
                         gate_llm, make_embeddings)
 from .topics import detect_drift
 from .tools.board import BoardClient, make_board_tools
+from .tools.memory import make_memory_tool
 from .tools.recap import make_recap_tool
 from .tools.retrieve import make_recall_tool, make_retrieve_tool
 from .tools.websearch import DdgsSearch, make_search_tool
@@ -178,7 +179,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 memory=memory),
              # daily_recap answers "what were my concerns?" from the records —
              # a missing Chroma costs it the chunk count, never the recap.
-             make_recap_tool(board, store=memory, llm=chat_model)]
+             make_recap_tool(board, store=memory, llm=chat_model),
+             # The agent's own notes across conversations. It needs no client:
+             # the store is attached to the graph by the lifespan and reaches the
+             # tool through ToolRuntime, so a brain with no durable state simply
+             # has a tool that says so.
+             make_memory_tool()]
     if memory is not None:
         tools.append(make_recall_tool(memory))
     if memory is not None:

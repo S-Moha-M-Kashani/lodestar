@@ -26,6 +26,7 @@ from ..config import Settings
 from ..llm import make_chat_model
 from ..middleware.cache import ToolResultCache
 from ..middleware.errors import ToolErrorMiddleware, _tool_error
+from ..middleware.memory import LongTermMemory
 from ..middleware.summarize import make_context_editor, make_summarizer
 from ..middleware.untrusted import UntrustedToolOutput
 from .prompt import SYSTEM_PROMPT
@@ -213,10 +214,10 @@ class LodestarAgent:
           a transient board outage for the rest of the turn.
 
         The rest touch the *model* call and cannot disturb that: the summariser
-        and the tool-call limit are state hooks, the context editor wraps the
-        request. Either summarisation knob set to 0 returns None from its
-        factory and drops out here, so switching it off leaves no middleware to
-        ask.
+        and the tool-call limit are state hooks, the context editor and the
+        memory injection wrap the request. Either summarisation knob set to 0
+        returns None from its factory and drops out here, so switching it off
+        leaves no middleware to ask.
         """
         # The runaway guard `recursion_limit` cannot be. It counts *nodes*, and
         # a model that requests six tool calls in one message spends one node
@@ -232,6 +233,7 @@ class LodestarAgent:
                                   ToolResultCache(),
                                   make_summarizer(self.settings, llm),
                                   make_context_editor(self.settings),
+                                  LongTermMemory(),
                                   limit) if m is not None]
         # `create_agent` compiles each before_model/after_model hook into its own
         # graph node, and `recursion_limit` counts nodes. So a middleware with a
