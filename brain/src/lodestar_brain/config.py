@@ -75,6 +75,22 @@ class Settings:
     # explicitly named model is never replaced, or the configuration and the
     # model that answered would disagree.
     embed_model: str = ''
+    # 'lexical' | 'openrouter' | 'fake' — how the fused candidates are re-ordered
+    # before anything reads them (`retrieval/rerank.py`). No 'auto', like every
+    # other seam.
+    #
+    # The default is the *cheap* one, which is the opposite of the embedder's
+    # default and for a reason the embedder does not have: that choice was
+    # measured (~60× recall) and this one has not been measured at all. Until it
+    # is, 'lexical' is what the shipped precision numbers were taken with, and
+    # 'openrouter' bills a search per question — including the /rag/recall box,
+    # which is built to wait for nothing — and sends a private board's card text
+    # to a third party. rerank.py says exactly which run would move this.
+    reranker: str = 'lexical'
+    # '' = that backend's own default (retrieval.RERANK_MODEL_DEFAULTS ->
+    # cohere/rerank-4-fast). Only the hosted backend has a model at all; an
+    # explicitly named one is never replaced, as with embed_model.
+    rerank_model: str = ''
     # 'llm' | 'none' — the chosen architecture's relevance gate between
     # retrieval and generation. It follows the main chat model, so it needs no
     # model setting of its own; the threshold is the measured one.
@@ -183,6 +199,12 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
                                 'http://localhost:11434/v1'),
         embedder=env.get('BRAIN_EMBEDDER', 'sentence-transformers'),
         embed_model=env.get('BRAIN_EMBED_MODEL', ''),
+        # Real in code as well as from the environment, unlike url_safety or
+        # tracing: the reranker changes what the *answerer is given*, so an eval
+        # or a test running a different one from the product would be measuring
+        # a different pipeline — the same rule the context budget follows.
+        reranker=env.get('BRAIN_RERANKER', 'lexical'),
+        rerank_model=env.get('BRAIN_RERANK_MODEL', ''),
         grader=env.get('BRAIN_GRADER', 'llm'),
         grade_threshold=float(env.get('BRAIN_GRADE_THRESHOLD', '0.4')),
         board_api_url=board_api_url,

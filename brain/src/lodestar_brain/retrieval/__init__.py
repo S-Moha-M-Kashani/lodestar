@@ -14,7 +14,7 @@ The shipped half of the chosen retrieval architecture, bottom up:
 | `timescope.py` | the time language in a question, as a date range |
 | `expand.py` | one question in, several searches out |
 | `fusion.py` | BM25, and the RRF that combines the two halves |
-| `rerank.py` | re-ordering by IDF term coverage, without a model |
+| `rerank.py` | the reranker seam: IDF term coverage by default, a model by config |
 | `gate.py` | asking a model which contexts actually help |
 | `cards.py` | `CardIndex` — the board, embedded in this process |
 | `chat.py` | `ChatStore` — chat memory in Chroma |
@@ -47,7 +47,10 @@ from .fusion import (CANDIDATES, RECALL_WEIGHTS, RERANK_DEPTH, RRF_K, TOP_K,
 from .gate import (GATE_BUDGET, GATE_MAX_CHARS, GATE_PROMPT, GRADE_THRESHOLD,
                    GRADERS, NO_OPINION, gate_llm, relevance_gate,
                    relevance_scores)
-from .rerank import MIN_TERM_WEIGHT, coverage, lexical_rerank
+from .rerank import (FAKE_NGRAM, MIN_TERM_WEIGHT, RERANK_BACKENDS,
+                     RERANK_BUDGET, RERANK_MODEL_DEFAULTS, FakeReranker,
+                     OpenRouterReranker, Reranker, coverage, lexical_rerank,
+                     make_reranker, resolve_rerank_model)
 from .timescope import (DATE_FIELDS, ENGLISH_SEASONS, JALALI_MONTHS, LAST_YEAR,
                         SEASONS, TimeScope, resolve_time_scope, where_clause)
 
@@ -70,7 +73,9 @@ __all__ = [
     'CANDIDATES', 'RECALL_WEIGHTS', 'RERANK_DEPTH', 'RRF_K', 'TOP_K',
     'RankBM25Retriever', 'hybrid_retriever', 'rrf_fuse',
     # reranking
-    'MIN_TERM_WEIGHT', 'coverage', 'lexical_rerank',
+    'FAKE_NGRAM', 'MIN_TERM_WEIGHT', 'RERANK_BACKENDS', 'RERANK_BUDGET',
+    'RERANK_MODEL_DEFAULTS', 'FakeReranker', 'OpenRouterReranker', 'Reranker',
+    'coverage', 'lexical_rerank', 'make_reranker', 'resolve_rerank_model',
     # the relevance gate
     'GATE_BUDGET', 'GATE_MAX_CHARS', 'GATE_PROMPT', 'GRADERS',
     'GRADE_THRESHOLD', 'NO_OPINION', 'gate_llm', 'relevance_gate',

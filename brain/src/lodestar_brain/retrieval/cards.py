@@ -17,7 +17,7 @@ from .expand import expand_queries
 from .fusion import (CANDIDATES, TOP_K, RankBM25Retriever, hybrid_retriever,
                      rrf_fuse)
 from .gate import GRADE_THRESHOLD, relevance_gate
-from .rerank import lexical_rerank
+from .rerank import Reranker, lexical_rerank
 from .timescope import resolve_time_scope
 
 
@@ -43,8 +43,16 @@ class CardIndex:
     board would be re-embedded on every question, which is free with hashing and
     very much not free with a real encoder."""
 
-    def __init__(self, embeddings: Embeddings):
+    def __init__(self, embeddings: Embeddings,
+                 rerank: Reranker = lexical_rerank):
         self.embeddings = embeddings
+        # The reranker arrives already chosen (`make_reranker`, from
+        # BRAIN_RERANKER in create_app), so a misconfigured one stops the boot
+        # rather than being discovered on the first question. It defaults to the
+        # shipped lexical one, which is what keeps every eval, tool test and
+        # script that builds a CardIndex by hand on the measured pipeline — and
+        # what makes varying only the reranker a one-argument experiment.
+        self.rerank = rerank
         self.documents: list[Document] = []
         self.store: InMemoryVectorStore | None = None
         self.bm25 = RankBM25Retriever.from_documents([], k=CANDIDATES)
@@ -71,9 +79,17 @@ class CardIndex:
         """The chosen architecture up to the gate: resolve the time language,
         expand the query, retrieve both ways, fuse and rerank.
 
-        Everything here is local and CPU-bound, so it stays synchronous. The gate
-        is the one stage that calls a model, and it is `asearch` — a caller that
-        wants it has to be somewhere it can wait.
+        Everything here is local and CPU-bound with the default reranker, so it
+        stays synchronous. The gate is the one stage that always calls a model,
+        and it is `asearch` — a caller that wants it has to be somewhere it can
+        wait.
+
+        `BRAIN_RERANKER=openrouter` is the exception, and it is worth naming
+        rather than discovering: the rerank is a blocking request inside this
+        synchronous call, so `/rag/recall` — which passes no model precisely so
+        it never waits on one — starts waiting up to RERANK_BUDGET. Bounded and
+        fail-open, but real, and one more reason the hosted backend is not the
+        default.
         """
         if not self.documents or self.store is None:
             return []
@@ -88,7 +104,7 @@ class CardIndex:
         fused = rrf_fuse([hybrid.invoke(variant) for variant in queries])
         # The reranker reads the expanded query: a card matched through a
         # synonym or another script must not be scored as covering nothing.
-        return lexical_rerank(' '.join(queries), fused, self.bm25.idf, k=k)
+        return self.rerank(' '.join(queries), fused, self.bm25.idf, k=k)
 
     async def asearch(self, query: str, k: int = TOP_K, today: date | None = None,
                       llm=None, threshold: float = GRADE_THRESHOLD,
