@@ -9,8 +9,9 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from starlette.background import BackgroundTask
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.store.sqlite import AsyncSqliteStore
 from pydantic import BaseModel, Field
@@ -286,6 +287,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         turn the record missed is still picked up by the next boot's sync
         only if it was recorded, so the log line is the whole trace.
 
+        **Both routes run this after the response, as a background task.** It is
+        one HTTP round trip to Node plus an embedding pass over the turn, and
+        none of it is anything the user is waiting to be told — they are reading
+        the reply while it happens. "Never raised" is what makes that safe to
+        move: a background task has no status code left to fail with, so a
+        failure that could reach the caller would arrive as a broken connection
+        after a delivered answer. This one cannot.
+
         The assistant row carries the turn's receipt: its tool steps, so a
         reopened chat shows the evidence and not only the prose, and its usage
         and price. The brain is the only place all three are known at once, and
@@ -321,7 +330,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             logging.getLogger(__name__).exception('chat index write failed')
 
     @app.post('/agent/chat')
-    async def chat(body: ChatBody) -> dict:
+    async def chat(body: ChatBody, background: BackgroundTasks) -> dict:
         # Async because cycle 2's MCP tools are coroutine-only. Safe today: the
         # sync tools (board HTTP, ddgs, Chroma) run in LangChain's thread
         # executor, so nothing here blocks the event loop.
@@ -331,7 +340,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                   session_id=body.session_id,
                                   board_id=body.board_id)
         cost = priced(result, body)
-        remember(body, result, cost)
+        # After the answer is sent, not before it. Starlette awaits this once
+        # the body is on the wire, so the record is written while the user is
+        # already reading — the turn still always lands, it just stops being
+        # something they wait for.
+        background.add_task(remember, body, result, cost)
         return _turn_json(result, cost)
 
     @app.post('/agent/chat/stream')
@@ -347,6 +360,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # 413 the browser can read. Raised from inside the generator it would be
         # a 200 that dies mid-stream.
         _refuse_if_oversized(body.messages)
+        # What the turn ended on, filled in by the generator and read by the
+        # background task once the last frame is sent. A list rather than a
+        # flag: a stream that died before `done` has no turn to record, which is
+        # the same thing as before — a reply that was never delivered.
+        finished: list[tuple[AgentResult, float | None]] = []
 
         async def events():
             try:
@@ -361,7 +379,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         yield _sse('token', {'text': payload})
                     else:
                         cost = priced(payload, body)
-                        remember(body, payload, cost)
+                        finished.append((payload, cost))
                         yield _sse('done', _turn_json(payload, cost))
             except Exception as exc:
                 # The headers left long ago, so there is no status code to fail
@@ -370,11 +388,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 logging.getLogger(__name__).exception('chat stream failed')
                 yield _sse('error', {'message': str(exc)})
 
+        def record() -> None:
+            """The turn, recorded once the browser has the whole stream.
+
+            Here rather than beside the `done` frame it belongs to: recording
+            there held the last event back for a Node round trip and an
+            embedding pass, so the answer finished arriving after the work of
+            filing it. Starlette awaits this after the final chunk.
+            """
+            for result, cost in finished:
+                remember(body, result, cost)
+
         # no-cache and no buffering: an intermediary holding the frames back
         # would deliver a correct transcript and none of the progress.
         return StreamingResponse(events(), media_type='text/event-stream',
                                  headers={'Cache-Control': 'no-cache',
-                                          'X-Accel-Buffering': 'no'})
+                                          'X-Accel-Buffering': 'no'},
+                                 background=BackgroundTask(record))
 
     @app.post('/agent/topic-check')
     def topic_check(body: TopicCheckBody) -> dict:

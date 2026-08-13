@@ -28,7 +28,10 @@ Contract under test:
 - `ChatStore.prune(rows)` removes chunks for messages the live record no longer
   returns, which is what makes deleting a chat reach the index instead of
   leaving it answering `recall_chat` forever.
+- Both chat routes record *after* the response, as a background task — and the
+  turn still always lands, including with Chroma down.
 """
+import asyncio
 from datetime import datetime, timezone
 
 import httpx
@@ -38,7 +41,7 @@ from fastapi.testclient import TestClient
 
 from lodestar_brain.config import Settings
 from lodestar_brain.retrieval import ChatStore, LexicalHashEmbeddings, MEMORY_URL
-from lodestar_brain.server import create_app
+from lodestar_brain.server import ChatBody, create_app
 from lodestar_brain.tools.board import BoardClient
 
 BOARD = 'http://board.test'
@@ -151,6 +154,47 @@ def test_every_turn_lands_in_the_record_even_without_chroma():
     res = client.post('/agent/chat', json={'messages': [
         {'role': 'user', 'content': 'still answers'}]})
     assert res.status_code == 200
+
+
+# This is an integration test.
+@respx.mock
+def test_the_stream_records_its_turn_after_the_last_event():
+    """Bookkeeping is not something the user waits for — and is never skipped.
+
+    Recording used to happen beside the `done` frame, so the last event of every
+    turn was held back for a round trip to Node and an embedding pass: the answer
+    finished arriving after the work of filing it. It is a background task now,
+    which Starlette awaits once the final chunk is sent.
+
+    Both halves are asserted, because moving it is only safe if it still always
+    happens. The route is driven directly rather than through TestClient for
+    exactly that reason: TestClient runs the whole app — background tasks
+    included — before a single byte is readable, so it can prove the turn lands
+    and can never prove it landed *after*. Chroma is off, which is the
+    configuration that used to lose turns outright.
+    """
+    record = respx.post(f'{BOARD}/api/chat/messages').mock(
+        return_value=httpx.Response(200, json={'messages': []}))
+    app = create_app(Settings(llm_provider='fake', embedder='fake',
+                              board_api_url=BOARD, chroma_url=''))
+    stream = next(route.endpoint for route in app.routes
+                  if getattr(route, 'path', '') == '/agent/chat/stream')
+
+    async def drive():
+        response = await stream(ChatBody(messages=[
+            {'role': 'user', 'content': 'the wifi password is hunter2'}]))
+        frames = [chunk async for chunk in response.body_iterator]
+        return response, frames
+
+    response, frames = asyncio.run(drive())
+    assert any('event: done' in str(frame) for frame in frames)
+    assert not record.called, (
+        'the turn was recorded before the browser had the whole stream')
+
+    asyncio.run(response.background())   # what Starlette does after the last chunk
+    assert record.called, 'a turn must reach the record even with Chroma down'
+    sent = json.loads(record.calls.last.request.content)['messages']
+    assert [m['role'] for m in sent] == ['user', 'assistant']
 
 
 # This is an integration test.
