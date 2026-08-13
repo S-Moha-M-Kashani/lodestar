@@ -4,7 +4,8 @@ LangChain owns the loop and the tool schemas. What is ours are the two mechanics
 `create_agent` does not give for free — a graph cached per provider/model pair,
 and partial steps when the step limit is hit — plus the middleware order, which
 is load-bearing: the fence sits outside the error handler, so a tool's failure
-message is fenced too.
+message is fenced too, and the two schemas in `state.py`: what the graph keeps
+and what the request carries.
 """
 from __future__ import annotations
 
@@ -24,6 +25,7 @@ from ..middleware.untrusted import UntrustedToolOutput
 from .prompt import SYSTEM_PROMPT
 from .result import (STEP_LIMIT_REPLY, AgentResult, _calls_in, _result_from,
                      _steps_from, _text)
+from .state import LodestarState, TurnContext
 
 
 class LodestarAgent:
@@ -63,7 +65,8 @@ class LodestarAgent:
             self._graphs[key] = create_agent(
                 model=llm, tools=self.tools, system_prompt=self.system_prompt,
                 middleware=[UntrustedToolOutput(),
-                            ToolErrorMiddleware(_tool_error)])
+                            ToolErrorMiddleware(_tool_error)],
+                state_schema=LodestarState, context_schema=TurnContext)
         return self._graphs[key]
 
     def _run_config(self, session_id: str | None = None,
@@ -71,25 +74,29 @@ class LodestarAgent:
         # A step is a model turn plus a tool turn, and the run ends on a model
         # turn: 2n+1 nodes for n tool calls.
         #
-        # `session_id` rides in `configurable` rather than in a tool argument so
-        # a tool can know which conversation it is serving without the model
-        # being able to name it — recall_chat uses it to skip the chat already in
-        # front of the model. Absent when there is none, so a caller that names
-        # no session behaves exactly as before sessions existed.
+        # `board_id` rides in `configurable` rather than in a tool argument:
+        # which board the user is looking at is not the model's decision, and a
+        # tool argument is something a model can get wrong or be talked into.
+        # Absent means the board API's own default board.
         #
-        # `board_id` travels the same way and for a stronger version of the same
-        # reason: which board the user is looking at is not the model's decision,
-        # and a tool argument is something a model can get wrong or be talked
-        # into. Absent means the board API's own default board.
+        # The *session* used to travel the same way and no longer does — it is
+        # `TurnContext`, passed to the run and read off `ToolRuntime.context`.
+        # Typed, so a misspelt key is an error rather than a silently absent
+        # session, and stripped from the tool schema by the framework rather
+        # than by `args_schema` merely happening not to mention it.
         config: dict = {'recursion_limit': 2 * self.max_steps + 1}
-        configurable = {}
-        if session_id:
-            configurable['session_id'] = session_id
         if board_id:
-            configurable['board_id'] = board_id
-        if configurable:
-            config['configurable'] = configurable
+            config['configurable'] = {'board_id': board_id}
         return config
+
+    def _run_context(self, session_id: str | None) -> TurnContext:
+        """Which conversation this turn belongs to, for the tools that need it.
+
+        Every run method builds it the same way, so there is one answer to "what
+        does a turn with no session look like" — the empty string, which
+        `recall_chat` reads as "exclude nothing".
+        """
+        return TurnContext(session_id=session_id or '')
 
     def run(self, messages: list[dict], model: str | None = None,
             provider: str | None = None,
@@ -100,7 +107,9 @@ class LodestarAgent:
             # Streamed, not invoked: GraphRecursionError carries no messages,
             # so this is the only way to still report the steps taken.
             for chunk in self._graph(model, provider).stream(
-                    {'messages': messages}, config=self._run_config(session_id, board_id),
+                    {'messages': messages, 'session_id': session_id or ''},
+                    config=self._run_config(session_id, board_id),
+                    context=self._run_context(session_id),
                     stream_mode='values'):
                 seen = chunk['messages']
         except GraphRecursionError:
@@ -114,7 +123,9 @@ class LodestarAgent:
         seen: list[BaseMessage] = []
         try:
             async for chunk in self._graph(model, provider).astream(
-                    {'messages': messages}, config=self._run_config(session_id, board_id),
+                    {'messages': messages, 'session_id': session_id or ''},
+                    config=self._run_config(session_id, board_id),
+                    context=self._run_context(session_id),
                     stream_mode='values'):
                 seen = chunk['messages']
         except GraphRecursionError:
@@ -150,7 +161,9 @@ class LodestarAgent:
         announced: set[str] = set()
         try:
             async for mode, chunk in self._graph(model, provider).astream(
-                    {'messages': messages}, config=self._run_config(session_id, board_id),
+                    {'messages': messages, 'session_id': session_id or ''},
+                    config=self._run_config(session_id, board_id),
+                    context=self._run_context(session_id),
                     stream_mode=['values', 'messages']):
                 if mode == 'values':
                     seen = chunk['messages']

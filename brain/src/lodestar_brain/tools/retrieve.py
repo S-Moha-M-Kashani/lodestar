@@ -5,6 +5,7 @@ what the model is told. Each rebuilds from `/api/state` before answering, so a
 card created a second ago is findable — the index fingerprint is what makes that
 free on an unchanged board.
 """
+from langchain.tools import ToolRuntime
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
@@ -78,16 +79,20 @@ def make_retrieve_tool(index: CardIndex, client: BoardClient, llm=None,
 def make_recall_tool(store: ChatStore) -> BaseTool:
     @tool('recall_chat', args_schema=RecallChatArgs)
     def recall_chat(text: str, k: int = 5,
-                    config: RunnableConfig = None) -> list[dict]:
+                    runtime: ToolRuntime = None) -> list[dict]:
         """Recall relevant snippets from OTHER conversations on this board — the
         chat you are in now is already in front of you. Use it when the user
         refers to something discussed outside this conversation."""
-        # Which chat we are in arrives through the run config, never as an
-        # argument: the model must not be able to name — or spoof — it, and
-        # `config` is excluded from the schema the model sees because
-        # `args_schema` above declares the schema explicitly.
-        current = (config or {}).get('configurable', {}).get('session_id')
-        board = (config or {}).get('configurable', {}).get('board_id')
+        # Which chat we are in arrives through the run's typed context, never as
+        # an argument: the model must not be able to name — or spoof — it.
+        # `runtime` is a declared injection, so the framework strips it from the
+        # schema the model sees rather than `args_schema` merely happening not to
+        # mention it. Absent when a caller runs this tool on its own, which is
+        # not an error: a recall that excluded nothing beats a 500.
+        current = getattr(getattr(runtime, 'context', None), 'session_id', '')
+        # The board still rides in `configurable`, shared with find_related.
+        config = getattr(runtime, 'config', None) or {}
+        board = config.get('configurable', {}).get('board_id')
         hits = store.search(text, k=k, exclude_session=current or None,
                             board_id=board or None)
         # Dated, so a recalled line can be attributed instead of quoted as
