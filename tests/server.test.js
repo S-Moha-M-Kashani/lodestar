@@ -324,10 +324,8 @@ test('an SSE upstream reaches the browser frame by frame, not all at the end', a
 });
 
 // ---- What the proxy does with an upstream's answer -----------------------
-// These two behaviours used to be tested through the RAG lab, which was a second
-// upstream until it moved to its own repository on 2026-08-11. Neither is about
-// having two upstreams — they are about not mangling the one there is — so they
-// are retargeted at the brain rather than deleted with the lab's own tests.
+// Neither of these two is about how many upstreams there are — they are about
+// not mangling the one there is — so both are aimed at the brain.
 
 // This is an integration test.
 test('the proxy forwards POST bodies and query strings unchanged', async () => {

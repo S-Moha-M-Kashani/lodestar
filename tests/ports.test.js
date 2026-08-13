@@ -236,9 +236,7 @@ test('the brain Dockerfile EXPOSEs the port it serves', () => {
 
 // Ollama is one more process, and unlike ours it is not ours: it is installed
 // system-wide and owns 11434 by convention. The brain reaches it as a client, so
-// the requirement is only that we never bind it. The RAG lab used to be checked
-// here too, against the same port for the same reason; it moved to its own
-// repository on 2026-08-11 and holds that default itself.
+// the requirement is only that we never bind it.
 const OLLAMA_PORT = 11434;
 
 // This is a configuration invariant.

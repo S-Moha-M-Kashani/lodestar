@@ -1236,8 +1236,8 @@ serve the sentence-transformers backend and is close to what is written here.
 The gap is the prefixes: its `embed_query` differs from `embed_documents` only
 in batching, with no notion of a per-model query string. The E5 model cards
 require `query: ` / `passage: ` and Qwen3's require a task instruction; omitting
-them is a measurable accuracy loss that raises nothing, which is the exact class
-of failure the RAG lab exists to catch. `langchain-community`'s
+them is a measurable accuracy loss that raises nothing — the worst class of
+retrieval failure, because it is silent. `langchain-community`'s
 `FastEmbedEmbeddings` has the same gap and additionally prints a
 sunset/unmaintained warning on import. Elsewhere in this module the framework is
 taken as it comes: `RecursiveCharacterTextSplitter`, `Document`, `Embeddings`,
