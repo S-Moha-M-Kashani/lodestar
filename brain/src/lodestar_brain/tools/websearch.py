@@ -18,10 +18,16 @@ class SearchProvider(Protocol):
     def search(self, query: str, max_results: int = 5) -> list[dict]: ...
 
 
+# The ddgs library happens to default to 5s today; passing it explicitly makes
+# the bound ours, so a library upgrade cannot silently let a slow engine hang a
+# chat turn. Not env-tunable: env seams name backends, not numbers.
+DDGS_TIMEOUT = 5.0
+
+
 class DdgsSearch:
     def search(self, query: str, max_results: int = 5) -> list[dict]:
         from ddgs import DDGS  # imported lazily so offline tests never touch it
-        with DDGS() as ddgs:
+        with DDGS(timeout=DDGS_TIMEOUT) as ddgs:
             return [{'title': r.get('title', ''), 'url': r.get('href', ''),
                      'snippet': r.get('body', '')}
                     for r in ddgs.text(query, max_results=max_results)]
