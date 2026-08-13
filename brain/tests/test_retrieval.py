@@ -6,12 +6,15 @@ model-backed embedders are exercised through their `factory` seam, so the
 prefix behaviour is tested without a 2 GB checkpoint.
 """
 import asyncio
+import json
 import re
 import time
 from datetime import date, datetime, timezone
 from uuid import uuid4
 
+import httpx
 import pytest
+import respx
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models import BaseChatModel
@@ -20,6 +23,7 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.retrievers import BaseRetriever
 
 from lodestar_brain import retrieval
+from lodestar_brain.config import Settings
 from lodestar_brain.llm import FakeChat
 
 # Fixed instants, so the expected date ints are readable rather than arithmetic.
@@ -271,6 +275,121 @@ def test_the_lexical_rerank_promotes_the_document_that_covers_the_question():
                for i in range(retrieval.RERANK_DEPTH)]
     deep = retrieval.lexical_rerank(question, padding + [BY_ID['d1']], idf, k=3)
     assert 'd1' not in {doc.id for doc in deep}
+
+
+# This is a unit test.
+def test_the_reranker_seam_names_a_backend_and_an_unknown_one_raises():
+    """No 'auto' here either: BRAIN_RERANKER names one, and anything else is a
+    boot error rather than a silent downgrade to the free one. The hosted
+    backend refuses to build keyless for the reason `make_url_safety` does — a
+    keyless reranker would fail open on every question while the configuration
+    claimed a cross-encoder."""
+    # The shipped backend is the function itself: the seam wraps nothing.
+    assert retrieval.make_reranker('lexical') is retrieval.lexical_rerank
+    assert isinstance(retrieval.make_reranker('fake'), retrieval.FakeReranker)
+    with pytest.raises(ValueError, match='unknown reranker'):
+        retrieval.make_reranker('auto')
+    with pytest.raises(ValueError, match='OPENROUTER_API_KEY'):
+        retrieval.make_reranker('openrouter', Settings())
+    # The roadmap's model is the hosted backend's own default, not the pipeline's
+    # default backend; an explicitly pinned one is never replaced.
+    keyed = Settings(openrouter_api_key='sk-test')
+    assert retrieval.make_reranker('openrouter', keyed).model \
+        == 'cohere/rerank-4-fast'
+    assert retrieval.make_reranker(
+        'openrouter', Settings(openrouter_api_key='sk-test',
+                               rerank_model='cohere/rerank-4-pro')).model \
+        == 'cohere/rerank-4-pro'
+
+
+# This is a unit test.
+def test_the_fake_reranker_reorders_by_relevance_rather_than_by_position():
+    """The offline backend has to move documents, or every test written against
+    it asserts nothing.
+
+    It also has to move them the way a *cross-encoder* would, which is the one
+    thing `lexical_rerank` cannot do: at the shipped depth its 50/50 blend of
+    position and coverage cannot promote a last-placed candidate past a
+    first-placed one. The same input is run through both to pin that difference,
+    since a fake that merely re-derived the lexical order would hide it.
+    """
+    fake = retrieval.FakeReranker()
+    question = 'جریمه مالیات چقدر شد؟'
+    idf = retrieval.RankBM25Retriever.from_documents(FA_DOCS).idf
+    # Not a pass-through: the answer differs from the order it was handed.
+    order = ['d3', 'd4', 'd2', 'd1']
+    ranked = [doc.id for doc in fake(question, [BY_ID[id] for id in order],
+                                     idf={}, k=4)]
+    assert ranked != order
+    assert ranked[0] == 'd1'      # the only card the question is about
+    # `idf={}` above is the point of the empty dict: corpus statistics are on the
+    # interface for the lexical backend's sake, and a model-scored one ignores
+    # them. This backend must never need them to rank.
+    buried = [Document(id=f'x{i}', page_content='حالم خوب بود')
+              for i in range(retrieval.RERANK_DEPTH - 1)] + [BY_ID['d1']]
+    assert fake(question, buried, idf={}, k=3)[0].id == 'd1'
+    assert retrieval.lexical_rerank(question, buried, idf, k=3)[0].id != 'd1'
+
+
+# This is a unit test.
+@respx.mock
+def test_the_hosted_reranker_orders_by_the_score_it_is_given_and_fails_open():
+    """One POST to OpenRouter's own /rerank — no SDK, no second credential.
+
+    Two properties beyond the wire format. The ranking is rebuilt from
+    `relevance_score` here rather than trusted from the response order, because
+    the order handed to the answerer is this pipeline's to guarantee. And a
+    reranker that cannot be reached returns the *fused* order: never a 500 in the
+    middle of a search, and never a quiet fallback to `lexical_rerank`, which
+    would be one backend serving another's configuration.
+    """
+    reranker = retrieval.make_reranker(
+        'openrouter', Settings(openrouter_api_key='sk-test'))
+    # Deliberately worst-score-first, so passing the response through unchanged
+    # fails this test.
+    route = respx.post('https://openrouter.ai/api/v1/rerank').mock(
+        return_value=httpx.Response(200, json={'results': [
+            {'index': 0, 'relevance_score': 0.11},
+            {'index': 3, 'relevance_score': 0.98}]}))
+    ranked = reranker('مالیات', FA_DOCS, idf={}, k=2)
+    assert [doc.id for doc in ranked] == ['d4', 'd1']
+    sent = json.loads(route.calls.last.request.content)
+    assert sent['model'] == 'cohere/rerank-4-fast'
+    assert sent['query'] == 'مالیات'
+    assert sent['documents'] == [doc.page_content for doc in FA_DOCS]
+    assert sent['top_n'] == 2
+    assert route.calls.last.request.headers['authorization'] == 'Bearer sk-test'
+
+    respx.post('https://openrouter.ai/api/v1/rerank').mock(
+        side_effect=httpx.ConnectError('rerank is down'))
+    assert [doc.id for doc in reranker('مالیات', FA_DOCS, idf={}, k=2)] \
+        == ['d1', 'd2']
+
+
+# This is a unit test.
+def test_the_card_index_reranks_with_the_reranker_it_was_given():
+    """The seam has to reach the pipeline, not just exist beside it: create_app
+    chooses a reranker and the index is where it has to be used. The spy also
+    pins what the stage is handed — the *expanded* query, and the idf of the very
+    retrieval being reranked, so BM25 and the reranker cannot disagree about
+    what a rare word is."""
+    seen: dict = {}
+
+    def spy(query, documents, idf, k=retrieval.TOP_K,
+            depth=retrieval.RERANK_DEPTH):
+        seen.update(query=query, idf=idf, count=len(documents))
+        return list(documents)[:1]
+
+    index = retrieval.CardIndex(retrieval.LexicalHashEmbeddings(), rerank=spy)
+    index.build([card('c1', 'رفتم اداره مالیات', notes='جریمه رو دادم'),
+                 card('c2', 'صبح دویدم')])
+    hits = index.search('مالیات', k=3)
+    assert len(hits) == 1                  # the seam decided the cut, not search
+    assert 'مالیات' in seen['query'] and seen['count'] >= 1
+    assert seen['idf'], 'the reranker got no corpus statistics to weigh terms by'
+    # And an index built without one stays on the measured pipeline.
+    assert retrieval.CardIndex(retrieval.LexicalHashEmbeddings()).rerank \
+        is retrieval.lexical_rerank
 
 
 # This is a unit test.

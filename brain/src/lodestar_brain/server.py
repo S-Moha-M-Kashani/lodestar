@@ -23,7 +23,7 @@ from .llm import make_chat_model, served_models
 from .pricing import model_prices, turn_cost
 from .safety import make_url_safety
 from .retrieval import (CardIndex, ChatStore, coverage, expand_queries,
-                        gate_llm, make_embeddings)
+                        gate_llm, make_embeddings, make_reranker)
 from .topics import detect_drift
 from .tools.board import make_board_tools
 from .tools.memory import make_memory_tool
@@ -152,7 +152,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     snapshot = BoardSnapshot(board)
     embeddings = make_embeddings(settings.embedder, settings,
                                  settings.embed_model)
-    index = CardIndex(embeddings)
+    # Built here and not inside the index, like the url-safety checker: an
+    # unknown BRAIN_RERANKER, or a hosted one with no key, must stop the boot
+    # rather than be discovered on somebody's first question.
+    index = CardIndex(embeddings, rerank=make_reranker(settings.reranker,
+                                                       settings,
+                                                       settings.rerank_model))
     # One chat model serves the gate and the recap summary — the same model
     # that answers, so neither needs a model of its own. `gate_llm` is where
     # BRAIN_GRADER is validated: an unknown value raises at boot rather than

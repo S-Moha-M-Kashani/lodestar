@@ -829,6 +829,90 @@ body[data-view="board"] .cards { min-height: 0; }
 .prio-badge[data-prio="3"] { color: var(--ink-green); }
 .prio-badge[data-prio="4"] { color: var(--ink-soft); }
 
+/* The card's actions menu — a + at the end of the header row, dropping the
+   same panel the toolbar menus use.
+
+   Never hover-revealed, and never collapsed to opacity or max-width: 0. The
+   chat rows in this app hid their controls that way and the measured cost was
+   that touch could not reach them at all — .chat-row-menu-btn is this control
+   carried back to them. This one always occupies layout, always answers Tab,
+   and is a 24px target on a finger; hover and focus only ink it in. */
+.card-menu {
+  position: relative;
+  display: inline-flex;
+  margin-left: 4px;
+}
+
+.card-menu-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  font-family: var(--mono);
+  font-size: 14px;
+  line-height: 1;
+  color: var(--ink-soft);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  transition: color 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+}
+
+.card-menu-btn:hover,
+.card-menu-btn:focus-visible,
+.card-menu-btn[aria-expanded="true"] {
+  color: var(--ink);
+  background: var(--paper);
+  border-color: var(--line);
+}
+
+.card-menu-panel {
+  min-width: 156px;
+  /* The height is set by card-menu.js, to whatever room the column leaves —
+     the category list is as long as the user's registry and no constant here
+     could be right in a column as tall as the window. This only says that a
+     list too long for that room scrolls, rather than escaping it. */
+  overflow-y: auto;
+  text-align: left;
+  cursor: default;
+}
+
+/* display:flex would otherwise defeat the [hidden] attribute — the same trap
+   as .assistant-tools and .board-switch, restated here because .menu-panel's
+   own rule is the only thing standing between this panel and always-on. */
+.card-menu-panel[hidden] { display: none; }
+
+/* Flipped above the + when the column's scroller has no room below it */
+.card-menu-panel.up { top: auto; bottom: calc(100% + 6px); }
+
+.card-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+.card-menu-item.is-danger { color: var(--danger); }
+
+/* Colour in this menu means what it means everywhere else: category */
+.card-menu-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--cat);
+}
+
+.card-menu-tick {
+  margin-left: auto;
+  padding-left: 8px;
+  color: var(--ink-soft);
+}
+
+/* A card tilts under the pointer; the menu hanging off it must not tilt too */
+.card.menu-open { transform: none; }
+
 .card-title {
   margin: 0;
   font-size: 13.5px;
@@ -2714,8 +2798,10 @@ body[data-view="assistant"] .app-footer { display: none; }
 /* Strike one turn out of the record. Quiet until the turn is under the pointer
    or the button is tabbed to: a delete control standing over every sentence
    would make the transcript read as a list of things to remove. Transparent
-   rather than collapsed — unlike the chat-history rows, nothing here is
-   competing for the width, and the bubble's own corner is where it belongs. */
+   rather than collapsed — unlike the chat-history rows once were, nothing here
+   is competing for the width, and the bubble's own corner is where it belongs.
+   Out of a finger's reach all the same: this one is still owed the treatment
+   .chat-row-menu-btn gave those rows. */
 .chat-msg-delete {
   position: absolute;
   top: 2px;
@@ -2949,6 +3035,10 @@ body[data-view="assistant"] .app-footer { display: none; }
 .chat-history-day:first-child { padding-top: 0; }
 .chat-history-item {
   display: flex;
+  /* Wrapping is what lets a row's actions unfold onto a second line inside it
+     instead of squeezing the title; with them folded the row is one line, the
+     way it always was. */
+  flex-wrap: wrap;
   align-items: baseline;
   gap: 6px;
   border-radius: var(--radius);
@@ -2984,34 +3074,76 @@ body[data-view="assistant"] .app-footer { display: none; }
   font-variant-numeric: tabular-nums;
   color: var(--ink-soft);
 }
-/* The per-row controls stay out of the way until the row is under the pointer:
-   a list of chats should read as a list, not as a row of buttons.
-   Collapsed rather than merely transparent — at `opacity: 0` alone they still
-   held 134px of a 298px row, which left "Earlier conversations" 52px to render
-   132px of text once this list moved into the dock's narrower panel. Width, not
-   `display: none`: a button nobody can tab to is not a hidden button, it is a
-   missing one. */
+/* One control per row, always painted, holding both things you can do to a
+   chat. It replaces two buttons that were collapsed to `max-width: 0` until the
+   row was hovered — which spent the width well and left rename and delete
+   unreachable on a touch screen, where there is no hover to give.
+
+   The width reasoning that produced the collapse still holds and is what this
+   keeps: at `opacity: 0` alone the pair still held 134px of a 298px row, so
+   "Earlier conversations" had 52px to render 132px of text. Two permanent
+   buttons cost 134px; one permanent + costs 24px. Nothing is hidden by
+   transparency and nothing by `display: none` on a control — a button nobody
+   can tab to is not a hidden button, it is a missing one — so the + occupies
+   layout, answers Tab and is a 24px finger target, exactly like .card-menu-btn,
+   and hover and focus only ink it in. */
+.chat-row-menu-btn {
+  flex: 0 0 auto;
+  /* Centred against the title rather than sat on its baseline: a 24px box and a
+     one-line label have no baseline worth sharing. */
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  font-family: var(--mono);
+  font-size: 14px;
+  line-height: 1;
+  color: var(--ink-soft);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  transition: color 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+}
+.chat-row-menu-btn:hover,
+.chat-row-menu-btn:focus-visible,
+.chat-row-menu-btn[aria-expanded="true"] {
+  color: var(--ink);
+  background: var(--paper);
+  border-color: var(--line);
+}
+/* Only the actions may take the second line. flex-wrap decides by an item's
+   *base* width, and .chat-history-open's is `auto` — the whole width of the
+   title — so with wrapping on it claimed the line by itself and pushed the +
+   onto one of its own: measured, every folded row went from 31px to 61px, twice
+   the height for a list that is read by scanning it. A base of 0 puts them back
+   on one line, where min-width: 0 already lets the title shrink and ellipsise.
+   Scoped off the trash rows, which are a column and size on this the other
+   way. */
+.chat-history-item:not(.chat-trash-item) > .chat-history-open { flex-basis: 0; }
+/* The actions unfold on a line of their own inside the row — `flex: 1 0 100%`
+   against the row's flex-wrap — rather than dropping a panel over it. This list
+   is itself a 320px dropdown with `overflow-y: auto`, which clips on both axes,
+   so an absolutely positioned panel inside a row would be cut off by the
+   scroller holding it. Unfolded here, the title keeps the full width it had and
+   the row is simply a line taller while it is open. */
+.chat-row-actions {
+  display: flex;
+  flex: 1 0 100%;
+  justify-content: flex-end;
+  gap: 6px;
+  padding-bottom: 2px;
+}
+/* `display: flex` outranks the UA's [hidden] rule — the same trap as
+   .assistant-tools, .board-switch and .card-menu-panel. */
+.chat-row-actions[hidden] { display: none; }
 .chat-history-rename,
 .chat-history-delete {
   flex: 0 0 auto;
   font-size: 0.68rem;
-  opacity: 0;
-  max-width: 0;
-  overflow: hidden;
-  transition: max-width 120ms ease, opacity 120ms ease;
 }
-@media (prefers-reduced-motion: reduce) {
-  .chat-history-rename,
-  .chat-history-delete { transition: none; }
-}
-/* focus-within as well as hover: tabbing into a collapsed control has to open
-   it, or the keyboard path leads to a button with no box to draw. */
-.chat-history-item:hover .chat-history-rename,
-.chat-history-item:hover .chat-history-delete,
-.chat-history-item:focus-within .chat-history-rename,
-.chat-history-item:focus-within .chat-history-delete,
-.chat-history-rename:focus-visible,
-.chat-history-delete:focus-visible { opacity: 1; max-width: 7rem; }
 
 /* Deleted messages — the assistant's Trash, at the foot of the same panel the
    chats are read in. Its controls do NOT hide on hover like the rows above:
