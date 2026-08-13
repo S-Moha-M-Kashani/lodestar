@@ -17,6 +17,14 @@ def test_defaults():
     # ~2.2 GB download on first boot; 'fake' is the offline-test value.
     assert s.embedder == 'sentence-transformers'
     assert s.embed_model == ''        # '' = that backend's own default
+    # The reranker defaults the *other* way round from the embedder, and the
+    # asymmetry is the point: the embedder's expensive default is measured, this
+    # one is not measured at all yet. 'lexical' is free, offline, deterministic
+    # and what the shipped precision numbers were taken with, where 'openrouter'
+    # bills a search per question and exports card text. rerank.py names the run
+    # that would move it; until then the cheap one holds.
+    assert s.reranker == 'lexical'
+    assert s.rerank_model == ''       # '' = cohere/rerank-4-fast, hosted only
     # The chosen architecture's one change after retrieval, at the measured
     # threshold. It follows the main chat model, so it costs no second setting.
     assert s.grader == 'llm'
@@ -66,6 +74,8 @@ def test_env_overrides():
         'BRAIN_LLM': 'fake',
         'BRAIN_EMBEDDER': 'fake',
         'BRAIN_EMBED_MODEL': 'intfloat/multilingual-e5-small',
+        'BRAIN_RERANKER': 'fake',
+        'BRAIN_RERANK_MODEL': 'cohere/rerank-4-pro',
         'BRAIN_GRADER': 'none',
         'BRAIN_GRADE_THRESHOLD': '0.6',
         'BOARD_API_URL': 'http://board.test',
@@ -81,6 +91,8 @@ def test_env_overrides():
     assert s.llm_provider == 'fake'
     assert s.embedder == 'fake'
     assert s.embed_model == 'intfloat/multilingual-e5-small'
+    assert s.reranker == 'fake'
+    assert s.rerank_model == 'cohere/rerank-4-pro'
     assert s.grader == 'none'
     assert s.grade_threshold == 0.6
     assert s.board_api_url == 'http://board.test'
