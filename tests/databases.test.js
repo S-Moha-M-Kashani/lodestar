@@ -255,6 +255,10 @@ test('server boot migrates a legacy board.db and still serves its cards', async 
       LODESTAR_BACKUP_ON_WRITE: '0', ...safeEnv(tmpRoot),
       BOARD_DB: '', // empty means unset here: the default path must apply
       ASSISTANT_DB: '', // same — the default real/ path must apply
+      // This is the one test in the repo that deliberately wants the default
+      // resolution, so it must be immune to whatever the developer exported:
+      // an inherited LODESTAR_REFUSE_REAL_DB would refuse this boot outright.
+      LODESTAR_REFUSE_REAL_DB: '',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
