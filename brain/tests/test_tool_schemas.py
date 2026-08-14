@@ -150,3 +150,15 @@ def test_category_stays_a_free_string_with_guidance():
     assert category['type'] == 'string'
     assert 'enum' not in category
     assert 'registry' in category['description']
+
+
+# This is a unit test.
+def test_daily_recap_reaches_a_bounded_multi_day_window():
+    """'Recap the last 3 days' used to be structurally impossible — `day` was a
+    two-value enum, so the tool topped out at two days across two calls and the
+    model narrated the gap. `days` (1..7, default 1) is the reach; `day` stays
+    the window's end anchor."""
+    recap = tools_by_name()['daily_recap']
+    assert _enum(recap, 'day') == ['yesterday', 'today']
+    days = _schema(recap)['properties']['days']
+    assert (days['minimum'], days['maximum'], days['default']) == (1, 7, 1)

@@ -140,6 +140,19 @@ def test_daily_recap_reports_yesterday_from_board_chroma_and_chat():
     assert today['cards']['titles'] == ['Book the flights to Shiraz']
     assert today['user_messages'] == 1
 
+    # A wider window is one call, not a narration stitched from several:
+    # days=2 ending today covers yesterday and today together. The 30-day-old
+    # card stays excluded — the window has a start, not just an end.
+    window = tool.run({'day': 'today', 'days': 2})
+    assert window['cards']['count'] == 3
+    assert 'Book the flights to Shiraz' in window['cards']['titles']
+    assert window['user_messages'] == 3
+    assert window['from'] == YESTERDAY.date().isoformat()
+    assert window['to'] == ANCHOR.date().isoformat()
+    # The whole window's user messages reach the summary — the Shiraz message
+    # was outside a single-day recap and must be inside this one.
+    assert 'Shiraz' in window['summary']
+
 
 class LabelledStore:
     """A chunk index whose chunks carry labels — the branch Chroma data can't
