@@ -200,3 +200,35 @@ test('prune keeps only the newest N backups', () => {
   // The three newest (minutes 02,03,04) survive.
   assert.ok(files.every((f) => /10-0[234]/.test(f)));
 });
+
+// This is an integration test: real files on disk and a stub rclone binary.
+test('a burst of snapshots cannot evict last month\'s', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lodestar-retention-'));
+  const dbDir = mkdtempSync(join(tmpdir(), 'lodestar-retention-db-'));
+  const dbPath = join(dbDir, 'board.db');
+  new DatabaseSync(dbPath).exec('CREATE TABLE cards (id TEXT)');
+
+  // One snapshot a day for 40 days, then 30 in a single day — the shape of an
+  // agent session. With keep=20 and no age floor, every one of the 40 dies.
+  const day = (n) => new Date(Date.UTC(2026, 5, 1 + n));
+  for (let n = 0; n < 40; n += 1) {
+    runBackup({ dbPath, backupsDir: dir, keep: 20, keepDays: 90, now: day(n),
+                rcloneBin: '/nonexistent' });
+  }
+  for (let i = 0; i < 30; i += 1) {
+    runBackup({ dbPath, backupsDir: dir, keep: 20, keepDays: 90,
+                now: new Date(Date.UTC(2026, 6, 11, 0, 0, i)),
+                rcloneBin: '/nonexistent' });
+  }
+
+  const kept = readdirSync(dir).filter((f) => f.startsWith('board-'));
+  assert.equal(kept.length, 70, 'nothing inside the age floor may be pruned');
+  assert.ok(kept.some((f) => f.includes('2026-06-01')),
+    'the oldest day inside the floor survived a 30-snapshot burst');
+
+  // And the floor is a floor, not an amnesty: past it, the count still rules.
+  runBackup({ dbPath, backupsDir: dir, keep: 20, keepDays: 90,
+              now: new Date(Date.UTC(2026, 11, 31)), rcloneBin: '/nonexistent' });
+  const after = readdirSync(dir).filter((f) => f.startsWith('board-'));
+  assert.equal(after.length, 20, 'everything past the floor prunes to keep');
+});
