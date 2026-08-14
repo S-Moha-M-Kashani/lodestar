@@ -52,13 +52,12 @@ SEASONS = {
 # 30 days", "two weeks ago", "a couple of weeks ago", "the last few weeks"),
 # weekdays ("last Tuesday"), "in the past year" and "last night".
 #
-# Precision is the weaker half and is not counted in that fraction: bare season
-# nouns match anywhere, so 3 of 5 control phrases with no time language at all
-# ("buy a winter coat", "spring cleaning the flat", "did the summer camp invoice
-# arrive") filter the board to a season. Only 'fall' carries the determiner
-# guard. A false positive *removes* good candidates, so this is the worse half to
-# be weak in — see the note at the foot of the file for why it is not a
-# one-liner.
+# Precision was the weaker half and is now guarded: bare season nouns used to
+# match anywhere, so 3 of 5 control phrases with no time language at all ("buy a
+# winter coat", "spring cleaning the flat", "did the summer camp invoice arrive")
+# filtered the board to a season. Every season now needs a determiner or
+# preposition, the guard 'fall' already carried, and the controls measure 0 of 5
+# with coverage unmoved at 14 of 31.
 #
 # The half is deliberately not a mirror of the Farsi one. «پارسال تابستون»
 # shifts a further year because the Persian year turns at Nowruz, while "last
@@ -194,12 +193,22 @@ def resolve_time_scope(question: str, today: date | None = None) -> TimeScope | 
 
 def _english_scope(text: str, anchor: date) -> TimeScope | None:
     """The English half. Same rule as the Farsi one — the most recent window
-    that has already happened — with one guard: bare 'fall' is a verb often
-    enough that it needs a determiner, and a false positive on a time filter
-    *removes* good candidates, which is worse than missing the filter."""
+    that has already happened — with one guard: a season noun needs a
+    determiner or a preposition in front of it, because a false positive on a
+    time filter *removes* good candidates, which is worse than missing the
+    filter."""
     for name, (start, end) in ENGLISH_SEASONS.items():
-        pattern = (r'\b(?:last|this|in|during)\s+(?:the\s+)?fall\b'
-                   if name == 'fall' else rf'\b{name}\b')
+        # Every season noun needs a determiner or a preposition, not just
+        # 'fall'. A bare noun matches "buy a winter coat" and "spring cleaning
+        # the flat", and this filter removes candidates: a false positive hides
+        # answers that exist, where a miss merely fails to narrow. Measured
+        # 2026-08-13 at 3 of 5 control questions firing; the guard 'fall'
+        # already carried for being a verb is the right shape for the reason,
+        # not for the word. Every alternative here was earned by a row of the
+        # measured table — 'over' by "over the summer" and 'from' by "anything
+        # from the autumn", which is the row that catches an alternation
+        # trimmed on taste: drop 'from' and coverage falls from 14 to 13.
+        pattern = rf'\b(?:last|this|in|during|over|since|from)\s+(?:the\s+)?{name}\b'
         if re.search(pattern, text):
             first, last = _window(anchor, start, end)
             # "last summer" asked in August is not the summer we are standing
@@ -303,12 +312,27 @@ the other 16 return nothing, which costs selectivity and no correctness.
 
 *What that says about which library to reach for.* The 16 misses are recall, and
 recall here is cheap to buy by hand — each is one branch, and `dateparser` would
-close most of them tomorrow for a dependency. The controls are the argument for
-`duckling`: 3 of the 5 fired, because bare season nouns match anywhere and "buy a
-winter coat" is a noun phrase, not a date. Requiring a determiner (the guard
-'fall' already carries) is not the fix — «over the summer» and «notes from the
-autumn» need one list of prepositions and «summer 2025» needs none — and a
-keyword screen cannot tell a season used as a time from a season used as an
-adjective. A grain-aware parse can. What would change the decision is a board
-that types English as often as it types Farsi: today it does not, and the cost of
-these false positives is paid on the English half of a mostly-Persian corpus."""
+close most of them tomorrow for a dependency. The controls looked like the
+argument for `duckling`: 3 of the 5 fired, because bare season nouns match
+anywhere and "buy a winter coat" is a noun phrase, not a date. **This paragraph
+used to say that requiring a determiner was not the fix, and that was wrong.**
+Its objection was that «over the summer» and «notes from the autumn» would each
+need a preposition in the alternation — which is true, and is the entire cost.
+Measured 2026-08-14: seven words in front of the noun
+(`last|this|in|during|over|since|from`) take the controls from 3 of 5 to **0 of 5
+with coverage unmoved at 14 of 31**. The preposition list is the part the old
+argument read as a defeat and is in fact the mechanism, and the list is short
+because the constructions are few, not because the table is.
+
+*What survives of that objection* is narrower and still real. «summer 2025» needs
+no preposition and this guard misses it — no row of the table writes it, so that
+is untested rather than known-broken. And a determiner is a proxy for
+grammatical role rather than a reading of it: a season in an adjective slot
+behind a preposition ("in winter coat season") still fires, which is the original
+failure with one more word in front of it. A grain-aware parse decides that
+properly and a keyword screen never will. But it is now a claim about two
+constructions this board does not type, rather than a false-positive rate on
+ordinary questions — a much smaller reason to take a JVM service. What would
+change the decision is a board that types English as often as it types Farsi:
+today it does not, and the cost of what these branches still miss is paid on the
+English half of a mostly-Persian corpus."""

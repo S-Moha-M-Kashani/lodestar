@@ -172,13 +172,11 @@ def test_the_english_half_resolves_fourteen_of_thirty_one_phrases():
         f'{len(fired)} of {len(CONTROLS)} questions with no time language got '
         f'a filter anyway: {", ".join(fired)}; measured 2026-08-13: '
         + ', '.join(phrase for phrase, spurious in CONTROLS if spurious))
-
-    # And narrowing precision must not have cost coverage — every phrase that
-    # resolved before still resolves. Pinned again here, beside the assertion
-    # that motivates the edit, because the tempting way to pass the line above
-    # is an alternation too narrow for "anything from the autumn".
-    assert tally['exact'] == 14, (
-        f'coverage moved: {tally["exact"]} of {len(PHRASES)} now exact')
+    # Coverage is not re-asserted here: the tempting way to pass the line above
+    # is an alternation too narrow for "anything from the autumn", and the
+    # headline above already fails on exactly that — by name, via the drifted
+    # rows. A second assert that can only fail with an existing one earns
+    # nothing.
 
 
 if __name__ == '__main__':
