@@ -79,6 +79,18 @@ def test_off_outranks_a_stale_langchain_tracing_v2_in_the_environment():
     assert 'LANGCHAIN_TRACING_V2' not in os.environ
 
 
+# This is a configuration invariant: tracing ships a private journal's
+# metadata to a third party, so it is opt-in by name — never a default. This
+# machine's untracked .env once turned it on with a live key; an untracked
+# file cannot be asserted, but the shipped default can.
+def test_the_shipped_default_sends_no_trace_anywhere():
+    from lodestar_brain.config import load_settings
+
+    assert load_settings({}).tracing == 'off', (
+        'BRAIN_TRACING defaults to something other than off; a conversation '
+        'must never leave this machine unless someone chose that by name')
+
+
 # This is an integration test.
 def test_create_app_applies_the_tracing_seam_so_off_means_off():
     """The wiring, not the function: `configure_tracing` passed every test above
