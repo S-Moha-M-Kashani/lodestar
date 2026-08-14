@@ -73,9 +73,13 @@ test('a databases/ run snapshots every real .db, skipping chroma-data and test d
 
   // Prune applies per database name: board's snapshots must not be able to
   // evict assistant's (lexically, assistant-* sorts before every board-*).
+  // keepDays: 0 switches the age floor off — this test and the two other prune
+  // tests pin the count ceiling, which is only observable in isolation: with
+  // the 90-day default every snapshot here is younger than the floor and
+  // nothing prunes at all. The floor itself has its own test.
   for (let i = 2; i <= 5; i++) {
     runBackup({ databasesDir, backupsDir, rcloneBin: missingRclone, keep: 3,
-                now: new Date(`2026-08-02T10:0${i}:00Z`) });
+                keepDays: 0, now: new Date(`2026-08-02T10:0${i}:00Z`) });
   }
   files = readdirSync(backupsDir).filter((f) => f.endsWith('.db'));
   assert.equal(files.filter((f) => f.startsWith('board-')).length, 3);
@@ -144,7 +148,7 @@ test('keep defaults to 100 backups', () => {
   for (let i = 0; i < 101; i++) {
     const mm = String(Math.floor(i / 60)).padStart(2, '0');
     const ss = String(i % 60).padStart(2, '0');
-    runBackup({ dbPath, backupsDir, rcloneBin: missingRclone,
+    runBackup({ dbPath, backupsDir, rcloneBin: missingRclone, keepDays: 0,
                 now: new Date(`2026-07-28T10:${mm}:${ss}Z`) });
   }
   const files = readdirSync(backupsDir).filter((f) => f.endsWith('.db'));
@@ -192,7 +196,7 @@ test('prune keeps only the newest N backups', () => {
   const { bin } = makeStubRclone(dir);
   // Run 5 backups with keep=3, distinct timestamps.
   for (let i = 0; i < 5; i++) {
-    runBackup({ dbPath, backupsDir, rcloneBin: bin, keep: 3,
+    runBackup({ dbPath, backupsDir, rcloneBin: bin, keep: 3, keepDays: 0,
                 now: new Date(`2026-07-24T10:0${i}:00Z`) });
   }
   const files = readdirSync(backupsDir).filter((f) => f.endsWith('.db'));

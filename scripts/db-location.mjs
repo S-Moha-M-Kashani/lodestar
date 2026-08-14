@@ -19,6 +19,7 @@ function migrate({ legacy, target, root, env }) {
     backupsDir: env.LODESTAR_BACKUP_DIR || join(root, 'backups'),
     remote: env.LODESTAR_RCLONE_REMOTE || 'gdrive',
     keep: Number(env.LODESTAR_BACKUP_KEEP) || 100,
+    keepDays: Number(env.LODESTAR_BACKUP_KEEP_DAYS) || 90,
     rcloneBin: env.LODESTAR_RCLONE_BIN || 'rclone',
   });
   mkdirSync(dirname(target), { recursive: true });
