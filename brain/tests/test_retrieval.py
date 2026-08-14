@@ -505,7 +505,7 @@ def test_the_relevance_gate_asks_once_and_drops_what_the_model_rejects():
 
 
 # This is a unit test.
-def test_the_gate_abandons_a_call_that_blows_its_latency_budget():
+def test_the_gate_abandons_a_call_that_blows_its_latency_budget(caplog):
     docs = [BY_ID['d1'], BY_ID['d2']]
     slow = ScriptedChat(reply='1: 0\n2: 0', delay=2.0)
 
@@ -523,11 +523,44 @@ def test_the_gate_abandons_a_call_that_blows_its_latency_budget():
                                               budget_s=0.05)
         return kept, time.perf_counter() - start
 
-    kept, waited = asyncio.run(timed())
+    with caplog.at_level('WARNING', logger='lodestar_brain.retrieval.gate'):
+        kept, waited = asyncio.run(timed())
     # The gate is an optimisation that measured a *tie* with no gate at all, so
     # a slow model costs the gate, never the answer.
     assert waited < 1.0
     assert [doc.id for doc in kept] == ['d1', 'd2']
+    # But abandoning it must say so: a gate that times out on every call is
+    # operationally a gate switched off, and until now the log could not tell
+    # the difference. The timeout names the budget the user just waited out.
+    assert 'abandoned' in caplog.text
+
+
+# This is a unit test.
+def test_a_broken_or_format_drifted_gate_is_visible_in_the_log(caplog):
+    """Fail-open stays — every branch still keeps all candidates — but each
+    silent branch now leaves a line. Three cases, distinguishable: a *crashed*
+    gate says failed (instant), a *timed-out* gate says abandoned (costs the
+    budget), and a reply that parsed to **zero** scores warns of format drift.
+    A partial parse logs nothing: a terse model is normal, not a failure."""
+    def gate(*args, **kwargs):
+        return asyncio.run(retrieval.relevance_gate(*args, **kwargs))
+
+    docs = [BY_ID['d1'], BY_ID['d2'], BY_ID['d3']]
+
+    with caplog.at_level('WARNING', logger='lodestar_brain.retrieval.gate'):
+        assert len(gate(ScriptedChat(fail=True), 'مالیات', docs)) == 3
+    assert 'failed' in caplog.text
+    assert 'abandoned' not in caplog.text, 'a crash is not a timeout'
+
+    caplog.clear()
+    with caplog.at_level('WARNING', logger='lodestar_brain.retrieval.gate'):
+        assert len(gate(ScriptedChat(reply='I cannot help'), 'مالیات', docs)) == 3
+    assert 'zero of 3' in caplog.text, 'a model that changed format shows up as a number'
+
+    caplog.clear()
+    with caplog.at_level('WARNING', logger='lodestar_brain.retrieval.gate'):
+        assert len(gate(ScriptedChat(reply='1: 9'), 'مالیات', docs)) == 3
+    assert caplog.text == '', 'a partial parse is a terse model, not a failure'
 
 
 # This is a unit test.
