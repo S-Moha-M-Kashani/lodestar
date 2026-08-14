@@ -5,6 +5,7 @@ language, expand the query, retrieve both ways, fuse, rerank, and gate — over 
 `InMemoryVectorStore` rather than a service, because the cards live in SQLite
 and this index is derived from `/api/state`.
 """
+import asyncio
 import hashlib
 from datetime import date
 
@@ -86,25 +87,37 @@ class CardIndex:
 
         `BRAIN_RERANKER=openrouter` is the exception, and it is worth naming
         rather than discovering: the rerank is a blocking request inside this
-        synchronous call, so `/rag/recall` — which passes no model precisely so
-        it never waits on one — starts waiting up to RERANK_BUDGET. Bounded and
-        fail-open, but real, and one more reason the hosted backend is not the
-        default.
+        synchronous call. `asearch` therefore runs the whole of this method in a
+        worker thread, so a `find_related` call under the hosted backend is
+        *slow* — up to RERANK_BUDGET, bounded and fail-open — rather than
+        stalling every other request in the process. Callers that reach this
+        method directly from a coroutine still block the loop; `/rag/recall` is
+        the one that does, and it is one more reason the hosted backend is not
+        the default.
         """
-        if not self.documents or self.store is None:
+        # Read the index once. `search` now runs in a worker thread while
+        # `build` rebinds these three attributes from the event loop, and it
+        # does so in more than one statement — so a search that re-read them as
+        # it went could pair the new documents with the old `bm25.idf`. That is
+        # an incoherent ranking, and it raises nothing. Bound here, a search
+        # runs against one generation of the index and a concurrent rebuild
+        # affects only the next one. No lock: serialising a search against a
+        # rebuild that is itself doing embedder work costs more than the hazard.
+        documents, store, bm25 = self.documents, self.store, self.bm25
+        if not documents or store is None:
             return []
         scope = resolve_time_scope(query, today) if time_filter else None
         search_kwargs: dict = {'k': CANDIDATES}
         if scope is not None:
             search_kwargs['filter'] = lambda doc: scope.matches(doc.metadata)
         hybrid = hybrid_retriever(
-            self.store.as_retriever(search_kwargs=search_kwargs),
-            self.bm25.model_copy(update={'scope': scope}))
+            store.as_retriever(search_kwargs=search_kwargs),
+            bm25.model_copy(update={'scope': scope}))
         queries = expand_queries(query)
         fused = rrf_fuse([hybrid.invoke(variant) for variant in queries])
         # The reranker reads the expanded query: a card matched through a
         # synonym or another script must not be scored as covering nothing.
-        return self.rerank(' '.join(queries), fused, self.bm25.idf, k=k)
+        return self.rerank(' '.join(queries), fused, bm25.idf, k=k)
 
     async def asearch(self, query: str, k: int = TOP_K, today: date | None = None,
                       llm=None, threshold: float = GRADE_THRESHOLD,
@@ -112,11 +125,30 @@ class CardIndex:
         """`search`, and — when a model is given — the gate after it.
 
         The whole pipeline in one call for the one caller that has a model to
-        spend: `find_related`, answering inside a turn. The search box
-        (`/rag/recall`) passes no model deliberately, so it takes the sync door
-        and waits for nothing.
+        spend: `find_related`, answering inside a turn, and the only caller of
+        this method. The search box (`/rag/recall`) passes no model
+        deliberately, so it takes the sync door and never waits on one — which
+        is not the same as waiting for nothing, since it calls `search` inline
+        from a coroutine and so keeps the blocking-reranker problem this method
+        no longer has.
+
+        The sync half runs in a worker thread rather than inline. With
+        BRAIN_RERANKER=openrouter the rerank stage is a blocking HTTP call, and
+        one turn's re-ranking must not stop the process answering anything else
+        for up to RERANK_BUDGET. `search` itself stays synchronous on purpose —
+        the evals, `/rag/recall` and a dozen unit tests call it, and a
+        coroutine-only version would break the tools quietly, as a fenced
+        `{'error': …}` the model reads as a broken board.
+
+        What this does *not* establish: whether
+        `SentenceTransformerEmbeddings.embed_query` is safe under concurrent
+        calls from several worker threads. `search` embeds the query, so two
+        overlapping turns now reach the encoder from two threads. It is
+        unmeasured here, not shown to be fine. The gate stays on the loop —
+        `relevance_gate` is already awaited I/O and gains nothing from a thread.
         """
-        ranked = self.search(query, k=k, today=today, time_filter=time_filter)
+        ranked = await asyncio.to_thread(self.search, query, k, today,
+                                         time_filter)
         if llm is None:
             return ranked
         return await relevance_gate(llm, query, ranked, threshold)

@@ -603,10 +603,13 @@ def test_the_card_index_search_runs_the_whole_pipeline():
 
 # This is a unit test.
 def test_asearch_does_not_block_the_event_loop_on_a_slow_reranker():
-    """`/rag/recall` is an async route built to wait for nothing. With the
-    hosted reranker its work is a blocking HTTP call, so if `asearch` runs it
-    inline the whole process stalls for up to RERANK_BUDGET. The assertion is
-    that the loop stayed responsive, not that the answer changed."""
+    """`asearch` is the async door, and `find_related` (`tools/retrieve.py`)
+    awaits it inside an agent turn while the process is serving everything
+    else. With BRAIN_RERANKER=openrouter the rerank stage is a blocking HTTP
+    call, so running it inline stalls the whole loop for up to RERANK_BUDGET —
+    every other request in the process waits on one turn's re-ranking. The
+    assertion is that the loop stayed responsive, not that the answer
+    changed."""
     calls = 0
 
     def slow_rerank(query, documents, idf, k=retrieval.TOP_K,
@@ -641,7 +644,8 @@ def test_asearch_does_not_block_the_event_loop_on_a_slow_reranker():
     assert calls == 1, f'the slow reranker ran {calls} times, not once'
     assert ticks >= 3, (
         f'the loop ticked {ticks} times during a 0.4s rerank — asearch ran the '
-        'blocking reranker inline, so /rag/recall stalls every other request'
+        'blocking reranker inline, so one find_related call stalls every other '
+        'request in the process'
     )
 
 
