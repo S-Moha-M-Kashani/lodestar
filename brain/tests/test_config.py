@@ -138,14 +138,20 @@ def test_url_safety_is_real_from_the_environment_and_inert_in_code():
         env={'GOOGLE_SAFE_BROWSING_KEY': 'k'}).safe_browsing_key == 'k'
 
 
-# This is a configuration invariant: the product traces, and a Settings built in
-# code ships nothing anywhere — the same split url_safety and chroma_url use.
-def test_tracing_is_real_from_the_environment_and_inert_in_code():
-    assert load_settings(env={}).tracing == 'langsmith'
+# This is a configuration invariant: tracing is the one seam with no "real from
+# the environment" half. url_safety and chroma_url default to the product's
+# backend because checking a link and storing a chat serve the user; shipping a
+# private journal's metadata to a third party serves someone else, so both
+# halves default to off and 'langsmith' is reached only by naming it.
+def test_tracing_is_off_by_default_from_every_direction():
+    assert load_settings(env={}).tracing == 'off'
     # Unit tests and evals build Settings directly; none of them may put a
     # private board's conversations on a third party's server by default.
     assert Settings().tracing == 'off'
     assert load_settings(env={'BRAIN_TRACING': 'off'}).tracing == 'off'
+    # Opting *in* is the named choice here — the inverse of every other seam.
+    assert load_settings(
+        env={'BRAIN_TRACING': 'langsmith'}).tracing == 'langsmith'
     assert load_settings(
         env={'LANGSMITH_API_KEY': 'ls-k'}).langsmith_api_key == 'ls-k'
 

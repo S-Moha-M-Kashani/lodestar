@@ -23,6 +23,7 @@ Fail open, always: an embedder that is missing, downloading or broken returns
 """
 from __future__ import annotations
 
+import logging
 import math
 import re
 from dataclasses import dataclass
@@ -32,6 +33,11 @@ from dataclasses import dataclass
 # out at 0.639, new-subject pairs start at 0.778, so this is the midpoint of
 # the gap. Cosine *distance* (1 - similarity), so bigger is further apart.
 DRIFT_DISTANCE = 0.708
+
+log = logging.getLogger(__name__)
+# One warning per process: a cold 2.2 GB embedder is a normal state of a
+# working install, and a detector must not flood the log while it downloads.
+_failure_logged = False
 
 # A greeting and nothing else. Tight and anchored at both ends on purpose: the
 # same trade the transcriber's `signals_no_audio` makes, for the same reason. A
@@ -103,11 +109,18 @@ def detect_drift(recent: list[str], incoming: str, embeddings) -> DriftVerdict:
         centroid = _centroid(embeddings.embed_documents(prior))
         vector = embeddings.embed_query(text)
         score = _cosine_distance(centroid, vector)
-    except Exception:
+    except Exception as exc:
         # Deliberately every exception. The embedding model downloads on first
         # use and weighs ~2.2 GB, so "not fetched yet" is a normal state of a
         # working install, and a detector that blocks a turn is worse than no
         # detector at all.
+        global _failure_logged
+        if not _failure_logged:
+            _failure_logged = True
+            log.warning('drift detection unavailable (%s) — the embedder may '
+                        'still be downloading; later failures log at debug', exc)
+        else:
+            log.debug('drift detection unavailable (%s)', exc)
         return DriftVerdict(False, 0.0, 'unavailable')
     changed = score >= DRIFT_DISTANCE
     return DriftVerdict(changed, score, 'distance' if changed else 'same-topic')

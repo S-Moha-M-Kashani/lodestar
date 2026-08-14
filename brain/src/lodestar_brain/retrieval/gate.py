@@ -7,9 +7,12 @@ opinion", which clears the threshold. The worst a broken gate can do is nothing,
 and "nothing" is the ungated pipeline that measured a tie with this one.
 """
 import asyncio
+import logging
 import re
 
 from langchain_core.documents import Document
+
+log = logging.getLogger(__name__)
 
 # The measured threshold of the chosen architecture. A context must be graded at
 # least this useful to reach the answerer.
@@ -50,8 +53,12 @@ async def _within_budget(budget_s: float, work):
         async with asyncio.timeout(budget_s):
             return await work()
     except TimeoutError:      # the budget — the case this function exists for
+        log.warning('relevance gate abandoned after %.0fs; '
+                    'grading all candidates as no-opinion', budget_s)
         return None
-    except Exception:         # and a failed gate is a no-op gate
+    except Exception as exc:  # and a failed gate is a no-op gate
+        log.warning('relevance gate failed (%s); '
+                    'grading all candidates as no-opinion', exc)
         return None
 
 
@@ -71,12 +78,19 @@ async def relevance_scores(llm, query: str, texts: list[str],
         [('system', GATE_PROMPT),
          ('user', f'Question: {query}\n\n{listing}')]))
     scores = [NO_OPINION] * len(texts)
+    parsed = 0
     for line in str(getattr(reply, 'content', '') or '').splitlines():
         match = re.match(r'\s*\[?(\d+)\]?\s*[:.\-]\s*(\d+(?:\.\d+)?)', line)
         if match:
             index, value = int(match.group(1)) - 1, float(match.group(2))
             if 0 <= index < len(texts):
                 scores[index] = min(10.0, value) / 10.0
+                parsed += 1
+    if reply is not None and parsed == 0:
+        # Format drift shows up as a number: a model that stopped speaking
+        # "<n>: <score>" is behaviourally a gate switched off.
+        log.warning('gate reply parsed to zero of %d scores; '
+                    'every candidate kept at no-opinion', len(texts))
     return scores
 
 
