@@ -601,6 +601,50 @@ def test_the_card_index_search_runs_the_whole_pipeline():
         'visa', llm=ScriptedChat(reply='1: 0\n2: 0\n3: 0'))) == []
 
 
+# This is a unit test.
+def test_asearch_does_not_block_the_event_loop_on_a_slow_reranker():
+    """`/rag/recall` is an async route built to wait for nothing. With the
+    hosted reranker its work is a blocking HTTP call, so if `asearch` runs it
+    inline the whole process stalls for up to RERANK_BUDGET. The assertion is
+    that the loop stayed responsive, not that the answer changed."""
+    calls = 0
+
+    def slow_rerank(query, documents, idf, k=retrieval.TOP_K,
+                    depth=retrieval.RERANK_DEPTH):
+        nonlocal calls
+        calls += 1
+        time.sleep(0.4)          # a blocking call, exactly like httpx.post
+        return list(documents)[:k]
+
+    index = retrieval.CardIndex(retrieval.LexicalHashEmbeddings(),
+                                rerank=slow_rerank)
+    index.build([card('c1', 'piano practice')])
+
+    async def scenario():
+        ticks = 0
+
+        async def heartbeat():
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.05)
+                ticks += 1
+
+        beat = asyncio.create_task(heartbeat())
+        await asyncio.sleep(0)   # let the heartbeat reach its first await
+        await index.asearch('piano')
+        beat.cancel()
+        return ticks
+
+    ticks = asyncio.run(scenario())
+    # Without this the test could pass by never reranking at all — an empty
+    # index or a short-circuit before the stage would leave the loop free.
+    assert calls == 1, f'the slow reranker ran {calls} times, not once'
+    assert ticks >= 3, (
+        f'the loop ticked {ticks} times during a 0.4s rerank — asearch ran the '
+        'blocking reranker inline, so /rag/recall stalls every other request'
+    )
+
+
 # This is an integration test: it runs a real Chroma client, in process.
 def test_the_chat_store_records_a_snippet_and_recalls_it():
     store = retrieval.ChatStore(retrieval.MEMORY_URL,
