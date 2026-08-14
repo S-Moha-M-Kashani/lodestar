@@ -147,6 +147,8 @@ def test_daily_recap_reports_yesterday_from_board_chroma_and_chat():
     assert window['cards']['count'] == 3
     assert 'Book the flights to Shiraz' in window['cards']['titles']
     assert window['user_messages'] == 3
+    assert window['chunks'] == sum(len(split_text(m['content']))
+                                   for m in MESSAGES)
     assert window['from'] == YESTERDAY.date().isoformat()
     assert window['to'] == ANCHOR.date().isoformat()
     # The whole window's user messages reach the summary — the Shiraz message
@@ -179,3 +181,8 @@ def test_recap_gives_labels_and_summaries_when_the_chunks_carry_them():
     # in the sentence; the counts stay in the structured result regardless.
     assert 'lease worries' in recap['text']
     assert recap['assistant_messages'] == 2
+
+    # A window concatenates each day's chunks, and this fake returns a fixed
+    # three per day — so two days is six, not three. Deliberate: the alternative
+    # is a window that reports only its last day's conversations.
+    assert tool.run({'day': 'today', 'days': 2})['chunks'] == 6

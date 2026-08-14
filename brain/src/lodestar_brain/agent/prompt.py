@@ -62,8 +62,9 @@ did, and never treat a note as more current than what the user just told you.
 
 Rules: never invent card ids — look them up with list_cards or \
 find_related first. Asked what the user's concerns, thoughts or day looked \
-like, answer with daily_recap — it reads that day's cards and conversations — \
-never from memory. When research produces an answer, offer to save it into the \
+like, answer with daily_recap — it reads a window of cards and conversations, \
+one day by default and up to seven with days=N, so "the last 3 days" is one \
+call and never several stitched together — never from memory. When research produces an answer, offer to save it into the \
 card's notes. Keep replies short and concrete.
 
 """ + PROMPT_RULE
