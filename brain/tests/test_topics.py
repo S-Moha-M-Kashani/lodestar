@@ -149,6 +149,25 @@ def test_a_broken_embedder_lets_the_turn_through():
     assert verdict.reason == 'unavailable'
 
 
+# This is a unit test.
+def test_a_broken_embedder_warns_once_and_then_stays_quiet(caplog, monkeypatch):
+    """Fail-open used to mean fail-silent: a *permanently* broken embedder was
+    indistinguishable from a cold one, forever. One warning per process names
+    the failure; repeats drop to debug, because a cold 2.2 GB download is a
+    normal state of a working install and must not flood the log."""
+    import lodestar_brain.topics as topics
+
+    monkeypatch.setattr(topics, '_failure_logged', False, raising=False)
+    with caplog.at_level('DEBUG', logger='lodestar_brain.topics'):
+        detect_drift(TRIP, TAXES, BrokenEmbeddings())
+        detect_drift(TRIP, TAXES, BrokenEmbeddings())
+
+    warnings = [r for r in caplog.records if r.levelname == 'WARNING']
+    assert len(warnings) == 1, 'exactly one warning across two failures'
+    assert 'drift' in warnings[0].getMessage()
+    assert len([r for r in caplog.records if r.levelname == 'DEBUG']) == 1
+
+
 # This is an integration test.
 def test_the_route_answers_the_browser_and_never_raises():
     client = TestClient(create_app(Settings(

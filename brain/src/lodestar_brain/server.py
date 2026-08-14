@@ -20,6 +20,7 @@ from .agent import AgentResult, AgentStep, LodestarAgent
 from .board import BoardClient, BoardSnapshot
 from .config import Settings, load_settings
 from .llm import make_chat_model, served_models
+from .middleware import configure_tracing
 from .pricing import model_prices, turn_cost
 from .safety import make_url_safety
 from .retrieval import (CardIndex, ChatStore, coverage, expand_queries,
@@ -143,6 +144,12 @@ def _sse(event: str, data: dict) -> str:
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or load_settings()
+
+    # Egress-affecting and sync, so it runs before anything that could emit a
+    # trace — not in the async lifespan. 'off' must actually call langsmith's
+    # configure(enabled=False): a stale LANGCHAIN_TRACING_V2=true in the shell
+    # otherwise keeps shipping traces (middleware/tracing.py).
+    configure_tracing(settings)
 
     board = BoardClient(settings.board_api_url)
     # One snapshot behind all three board-reading tools, which is what makes a

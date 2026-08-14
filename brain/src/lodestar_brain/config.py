@@ -220,7 +220,9 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         omni_model=env.get('BRAIN_OMNI_MODEL', 'google/gemini-2.5-flash-lite'),
         url_safety=env.get('BRAIN_URL_SAFETY', 'google-safe-browsing'),
         safe_browsing_key=env.get('GOOGLE_SAFE_BROWSING_KEY', ''),
-        tracing=env.get('BRAIN_TRACING', 'langsmith'),
+        # Opt-in by name, never a default: tracing ships a private journal's
+        # metadata to a third party.
+        tracing=env.get('BRAIN_TRACING', 'off'),
         langsmith_api_key=env.get('LANGSMITH_API_KEY', ''),
         # Beside the other real databases, and covered by no backup: it is
         # derived working memory, not a record.

@@ -178,6 +178,34 @@ test('resolveAssistantDb mirrors the board rules for assistant.db', () => {
   assert.equal(readdirSync(env.LODESTAR_BACKUP_DIR).length, 1);
 });
 
+// This is a unit test: an empty temp root, so nothing on disk is read, moved
+// or created — only what the resolvers return (or throw) is asserted.
+test('LODESTAR_REFUSE_REAL_DB turns a forgotten env var into an error', () => {
+  const root = mkdtempSync(join(tmpdir(), 'lodestar-refuse-'));
+
+  // The incident: a script sets the wrong variable name, so nothing overrides
+  // the default and resolution lands on the real board.
+  const wrong = { LODESTAR_DB: '/tmp/scratch.db' };
+  assert.match(resolveBoardDb({ root, env: wrong }), /databases\/real\/board\.db$/,
+    'without the guard, a typo still resolves to real data');
+
+  // With the guard, the same mistake is loud instead of silent.
+  assert.throws(
+    () => resolveBoardDb({ root, env: { ...wrong, LODESTAR_REFUSE_REAL_DB: '1' } }),
+    /refusing to open databases\/real/,
+    'the guard must name what it refused and what to set instead');
+  assert.throws(
+    () => resolveAssistantDb({ root, env: { LODESTAR_REFUSE_REAL_DB: '1' } }),
+    /refusing to open databases\/real/,
+    'the chat record needs the same guard as the board');
+
+  // And the guard never blocks an explicit path — that is the whole point of
+  // setting one, and the test harnesses all do.
+  assert.equal(
+    resolveBoardDb({ root, env: { BOARD_DB: '/tmp/x.db', LODESTAR_REFUSE_REAL_DB: '1' } }),
+    '/tmp/x.db');
+});
+
 // This is a configuration invariant.
 test('the :3001 stack keeps its databases under databases/test/', () => {
   // The pairing itself (ports, AGENT_URL) is covered in server.test.js and
@@ -227,6 +255,10 @@ test('server boot migrates a legacy board.db and still serves its cards', async 
       LODESTAR_BACKUP_ON_WRITE: '0', ...safeEnv(tmpRoot),
       BOARD_DB: '', // empty means unset here: the default path must apply
       ASSISTANT_DB: '', // same — the default real/ path must apply
+      // This is the one test in the repo that deliberately wants the default
+      // resolution, so it must be immune to whatever the developer exported:
+      // an inherited LODESTAR_REFUSE_REAL_DB would refuse this boot outright.
+      LODESTAR_REFUSE_REAL_DB: '',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });

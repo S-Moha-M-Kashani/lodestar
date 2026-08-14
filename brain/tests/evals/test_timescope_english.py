@@ -161,9 +161,22 @@ def test_the_english_half_resolves_fourteen_of_thirty_one_phrases():
         'a phrase now resolves to a window it does not mean, which deletes '
         'evidence before ranking — the worst failure this table can show')
 
-    # And the precision gap, pinned so that closing it is a deliberate act with
-    # a re-measurement attached rather than a quiet regex edit.
-    assert set(fired) == {phrase for phrase, spurious in CONTROLS if spurious}
+    # And the precision gap, closed. A false positive on a filter that
+    # *removes* candidates costs more than a miss: "buy a winter coat"
+    # narrowing the board to December-March hides answers that exist, where an
+    # unresolved phrase merely fails to narrow. The three flagged True above
+    # are what fired when this was first measured, kept as the record of what
+    # the guard fixed; the determiner guard 'fall' already carried belongs on
+    # all five seasons, so the number asserted here is zero.
+    assert not fired, (
+        f'{len(fired)} of {len(CONTROLS)} questions with no time language got '
+        f'a filter anyway: {", ".join(fired)}; measured 2026-08-13: '
+        + ', '.join(phrase for phrase, spurious in CONTROLS if spurious))
+    # Coverage is not re-asserted here: the tempting way to pass the line above
+    # is an alternation too narrow for "anything from the autumn", and the
+    # headline above already fails on exactly that — by name, via the drifted
+    # rows. A second assert that can only fail with an existing one earns
+    # nothing.
 
 
 if __name__ == '__main__':

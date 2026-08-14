@@ -5,13 +5,15 @@ replaces those 29 lines, and its wire format is langchain-openai's problem to
 test, not ours. What is ours is the dispatch, the no-auto-modes rule, and every
 string FakeChat is contractually obliged to produce.
 """
+import httpx
 import pytest
+import respx
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 
 from lodestar_brain.config import Settings
 from lodestar_brain.llm import (LOCAL_TIMEOUT, REMOTE_TIMEOUT, FakeChat,
-                                make_chat_model)
+                                make_chat_model, served_models)
 
 
 def _settings(**over) -> Settings:
@@ -197,3 +199,21 @@ def test_fake_chat_accepts_bind_tools():
     # implementation raises, which would break every offline test.
     llm = FakeChat()
     assert llm.bind_tools([]) is llm
+
+
+# This is a unit test.
+@respx.mock
+def test_an_unreachable_ollama_daemon_is_logged_not_silent(caplog):
+    """`served_models` fails open by design — a daemon that is down empties
+    nothing — but it used to fail silently, so a misconfigured base URL and a
+    stopped daemon produced identical output with nothing in the log. The
+    degradation stays; it now leaves one warning naming the root it tried."""
+    respx.get('http://ollama.invalid/api/tags').mock(
+        return_value=httpx.Response(500))
+
+    with caplog.at_level('WARNING', logger='lodestar_brain.llm'):
+        out = served_models(_settings(
+            llm_provider='ollama', ollama_base_url='http://ollama.invalid/v1'))
+
+    assert out['verified'] is False and out['models'] == []
+    assert 'ollama.invalid' in caplog.text, 'the warning names the root it tried'

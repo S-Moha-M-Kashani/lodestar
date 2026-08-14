@@ -114,9 +114,13 @@ def served_models(settings: Settings) -> dict:
         res.raise_for_status()
         tags = sorted(m['name'] for m in res.json().get('models', [])
                       if m.get('name'))
-    except Exception:
+    except Exception as exc:
         # A daemon that is down is a normal state, not an error: say "cannot
         # verify" rather than "serves nothing", which would empty the picker.
+        import logging
+        logging.getLogger(__name__).warning(
+            'ollama tags unreachable at %s (%s); the picker gets no verified '
+            'list', root, exc)
         return {'provider': 'ollama', 'default': settings.model,
                 'verified': False, 'models': []}
     return {'provider': 'ollama', 'default': settings.model,

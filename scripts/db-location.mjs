@@ -19,6 +19,7 @@ function migrate({ legacy, target, root, env }) {
     backupsDir: env.LODESTAR_BACKUP_DIR || join(root, 'backups'),
     remote: env.LODESTAR_RCLONE_REMOTE || 'gdrive',
     keep: Number(env.LODESTAR_BACKUP_KEEP) || 100,
+    keepDays: Number(env.LODESTAR_BACKUP_KEEP_DAYS) || 90,
     rcloneBin: env.LODESTAR_RCLONE_BIN || 'rclone',
   });
   mkdirSync(dirname(target), { recursive: true });
@@ -36,6 +37,29 @@ function migrate({ legacy, target, root, env }) {
  *  never merged or deleted. */
 function resolveDb({ root, env, envKey, filename, olderHomes }) {
   if (env[envKey]) return env[envKey];
+  // An opt-in guard for contexts with no business near real data: scratch
+  // scripts, screenshot runs, anything an agent writes to look at the app. The
+  // default has to stay the real board — `npm start` must open it with no
+  // ceremony — so this cannot be a default. What it removes is the specific
+  // failure of 2026-08-13: a script set LODESTAR_DB, a name nothing reads, fell
+  // through to this line, and served the user's own board. Setting the path
+  // explicitly always wins, which is why the check sits below that branch; it
+  // sits above the migration too, so a scratch run can never move a legacy file.
+  //
+  // The brackets are load-bearing, not a style choice: the invariant test
+  // brain/tests/test_config.py::test_env_example_documents_every_variable_the_code_reads
+  // scans scripts/*.mjs for env reads, and its pattern recognises the
+  // bracket-and-quotes form but not property access. Tidied into a dot, this
+  // read goes invisible to it and the .env.example entry below then fails as
+  // "in .env.example, read by nothing". That scanner reads this file as text,
+  // so a comment spelling either form out literally would itself be counted —
+  // which is why this one describes the shapes instead of quoting them.
+  if (env['LODESTAR_REFUSE_REAL_DB']) {
+    throw new Error(
+      `refusing to open databases/real/${filename}: LODESTAR_REFUSE_REAL_DB is `
+      + `set and no ${envKey} was given. Set ${envKey} to a temporary path, or `
+      + 'unset LODESTAR_REFUSE_REAL_DB if real data is genuinely wanted.');
+  }
   const target = join(root, 'databases', 'real', filename);
   if (existsSync(target)) return target;
   const legacy = olderHomes.find((p) => existsSync(p));

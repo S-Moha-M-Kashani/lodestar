@@ -35,12 +35,32 @@ function snapshot(dbPath, destPath) {
   }
 }
 
+/** The timestamp a snapshot filename carries, as a Date. `runBackup` writes
+ *  `<name>-<ISO with : and . replaced by ->.db`, so the timestamp arrives as
+ *  exactly six hyphen-separated segments — `2026`, `06`, `01T00`, `00`, `00`,
+ *  `000Z` — however many the database name itself contributes. Taking the last
+ *  six is therefore what makes a hyphenated name work: `brain-checkpoints.db`
+ *  is a real record in databases/real/, and a seventh segment would swallow
+ *  `checkpoints` into the date and parse nothing. The separators are lost but
+ *  their positions are not, so this restores them rather than parsing loosely.
+ *  An unreadable name returns the epoch, which prunes on count alone — the old
+ *  behaviour, and the safe direction for a file this cannot identify. */
+function stampOf(filename) {
+  const raw = filename.replace(/\.db$/, '').split('-').slice(-6).join('-');
+  const iso = raw.replace(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/,
+    '$1-$2-$3T$4:$5:$6.$7Z');
+  const at = new Date(iso);
+  return Number.isNaN(at.getTime()) ? new Date(0) : at;
+}
+
 export function runBackup({
   dbPath = process.env.BOARD_DB,
   databasesDir = join(ROOT, 'databases', 'real'),
   backupsDir = process.env.LODESTAR_BACKUP_DIR || join(ROOT, 'backups'),
   remote = process.env.LODESTAR_RCLONE_REMOTE || 'gdrive',
   keep = Number(process.env.LODESTAR_BACKUP_KEEP) || 100,
+  keepDays = Number(process.env.LODESTAR_BACKUP_KEEP_DAYS) || 90,
   now = new Date(),
   rcloneBin = process.env.LODESTAR_RCLONE_BIN || 'rclone',
 } = {}) {
@@ -67,12 +87,22 @@ export function runBackup({
     snapshot(src, dest);
     localPaths.push(dest);
 
-    // Prune per database name — board's snapshots must never be able to
-    // evict assistant's. Keep the newest `keep` of this name's files.
+    // Prune per database name — board's snapshots must never be able to evict
+    // assistant's. Two rules, and a file must fail both to be deleted: keep the
+    // newest `keep`, and keep anything younger than `keepDays` regardless of
+    // count. Count alone was the whole rule until 2026-08-13, when a measurement
+    // found 100 board snapshots spanning ten days — 49% of them from the last
+    // two — because an agent session writes 20-30 a day. That honours the number
+    // and loses the point: a backup exists to recover a mistake noticed a week
+    // later. A snapshot is ~300 KB, so age costs almost nothing and count is
+    // kept only as a ceiling on truly old ones.
+    const floor = new Date(now.getTime() - keepDays * 86_400_000);
     const backups = readdirSync(backupsDir)
       .filter((f) => f.startsWith(`${name}-`) && f.endsWith('.db'))
       .sort(); // ISO timestamps sort lexically = chronologically
-    for (const f of backups.slice(0, Math.max(0, backups.length - keep))) {
+    const surplus = backups.slice(0, Math.max(0, backups.length - keep));
+    for (const f of surplus) {
+      if (stampOf(f) >= floor) continue; // inside the age floor: keep it
       rmSync(join(backupsDir, f), { force: true });
     }
   }
