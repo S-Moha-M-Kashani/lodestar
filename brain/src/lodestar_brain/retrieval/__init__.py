@@ -44,9 +44,9 @@ from .expand import (QUESTION_WORDS, SYNONYMS, expand_queries, keyword_query,
                      multi_query)
 from .fusion import (CANDIDATES, RECALL_WEIGHTS, RERANK_DEPTH, RRF_K, TOP_K,
                      RankBM25Retriever, hybrid_retriever, rrf_fuse)
-from .gate import (GATE_BUDGET, GATE_MAX_CHARS, GATE_PROMPT, GRADE_THRESHOLD,
-                   GRADERS, NO_OPINION, gate_llm, relevance_gate,
-                   relevance_scores)
+from .gate import (GATE_BUDGET, GATE_MAX_CHARS, GATE_PROMPT,
+                   GATE_USER_TEMPLATE, GRADE_THRESHOLD, GRADERS, NO_OPINION,
+                   gate_llm, relevance_gate, relevance_scores)
 from .rerank import (FAKE_NGRAM, MIN_TERM_WEIGHT, RERANK_BACKENDS,
                      RERANK_BUDGET, RERANK_MODEL_DEFAULTS, FakeReranker,
                      OpenRouterReranker, Reranker, coverage, lexical_rerank,
@@ -77,8 +77,8 @@ __all__ = [
     'RERANK_MODEL_DEFAULTS', 'FakeReranker', 'OpenRouterReranker', 'Reranker',
     'coverage', 'lexical_rerank', 'make_reranker', 'resolve_rerank_model',
     # the relevance gate
-    'GATE_BUDGET', 'GATE_MAX_CHARS', 'GATE_PROMPT', 'GRADERS',
-    'GRADE_THRESHOLD', 'NO_OPINION', 'gate_llm', 'relevance_gate',
+    'GATE_BUDGET', 'GATE_MAX_CHARS', 'GATE_PROMPT', 'GATE_USER_TEMPLATE',
+    'GRADERS', 'GRADE_THRESHOLD', 'NO_OPINION', 'gate_llm', 'relevance_gate',
     'relevance_scores',
     # the two assemblies
     'CardIndex', 'ChatStore', 'LEGACY_BOARD', 'MEMORY_URL', 'ensure_database',

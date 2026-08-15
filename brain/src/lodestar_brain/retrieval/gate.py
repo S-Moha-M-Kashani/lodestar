@@ -37,6 +37,12 @@ GATE_PROMPT = (
     '"<number>: <score 0-10>" and nothing else. 0 means irrelevant, 10 means it '
     'directly contains the answer.')
 
+# Welded to the listing built below and to the regex that reads the reply — the
+# blank line is what separates the question from the numbered excerpts. Which is
+# why it lives here rather than in a shared prompts module: a prompt and the
+# parser that depends on its shape drift the moment they live apart.
+GATE_USER_TEMPLATE = 'Question: {query}\n\n{listing}'
+
 
 async def _within_budget(budget_s: float, work):
     """Await `work`, and give up on it after `budget_s`.
@@ -76,7 +82,7 @@ async def relevance_scores(llm, query: str, texts: list[str],
                           for i, text in enumerate(texts))
     reply = await _within_budget(budget_s, lambda: llm.ainvoke(
         [('system', GATE_PROMPT),
-         ('user', f'Question: {query}\n\n{listing}')]))
+         ('user', GATE_USER_TEMPLATE.format(query=query, listing=listing))]))
     scores = [NO_OPINION] * len(texts)
     parsed = 0
     for line in str(getattr(reply, 'content', '') or '').splitlines():

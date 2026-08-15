@@ -42,6 +42,10 @@ def _content(message) -> str:
                    if isinstance(part, dict))
 
 
+SUMMARY_PROMPT = ("Summarize in a few sentences what was on the user's "
+                  'mind in these messages, in their own terms:\n')
+
+
 def make_recap_tool(board: BoardClient | BoardSnapshot, store=None, llm=None,
                     today: date | None = None) -> BaseTool:
     """`store` is anything with chunks_on(day_int) — a ChatStore, or None when
@@ -109,9 +113,8 @@ def make_recap_tool(board: BoardClient | BoardSnapshot, store=None, llm=None,
         # summarised back would be the model quoting itself as the user's mind.
         summary = ''
         if llm is not None and user:
-            prompt = ("Summarize in a few sentences what was on the user's "
-                      'mind in these messages, in their own terms:\n'
-                      + '\n'.join('- ' + m.get('content', '') for m in user))
+            prompt = SUMMARY_PROMPT + '\n'.join(
+                '- ' + m.get('content', '') for m in user)
             summary = _content(await llm.ainvoke(prompt))
 
         return {'day': end.isoformat(),
