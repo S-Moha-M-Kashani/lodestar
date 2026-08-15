@@ -211,6 +211,26 @@ def test_the_prompt_says_it_cannot_delete_and_what_to_do_instead():
             f'the refusal must offer {alternative!r} in the same breath')
 
 
+# This is a unit test.
+def test_the_prompt_assigns_each_lookup_a_role_and_says_one_is_enough():
+    """The board is fetched once a turn (board/snapshot.py) and identical calls
+    are cached (middleware/cache.py) — the transport cannot be the fix for a
+    model that runs find_related → list_cards → find_related. The prompt is:
+    each lookup gets a role, and one lookup settles a question.
+
+    Read as one paragraph, for the same reason the delete limit above is read as
+    one: three claims that arrive in separate breaths leave the model free to
+    honour the roles and still run both lookups. The paragraph is found by its
+    own phrase rather than by index, with a default rather than a bare `next()`
+    — a StopIteration is a red that names nothing.
+    """
+    paragraph = next((p for p in SYSTEM_PROMPT.split('\n\n')
+                      if 'find_related is for meaning' in p), '')
+    assert paragraph, 'no paragraph in the prompt gives find_related a role'
+    assert 'list_cards is for enumeration' in paragraph
+    assert 'One lookup is enough' in paragraph
+
+
 def _card(id, title, column='inbox', **extra):
     return {'id': id, 'columnId': column, 'title': title, 'notes': '',
             'type': 'question', 'category': '', 'importance': '', 'urgency': '',

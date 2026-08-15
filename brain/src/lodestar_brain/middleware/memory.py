@@ -67,6 +67,12 @@ def board_of_run() -> str:
     return (config or {}).get('configurable', {}).get('board_id') or ''
 
 
+NOTES_HEADER = (
+    '\n\nNotes you saved about this board in earlier conversations. '
+    "They are your own notes, not the user's record, and they may be "
+    'out of date — check before relying on one.\n')
+
+
 def _block(items: list[Any]) -> str:
     """The facts as the model sees them: newest last, capped, fenced."""
     newest = sorted(items, key=lambda item: getattr(item, 'updated_at', None)
@@ -75,10 +81,7 @@ def _block(items: list[Any]) -> str:
              for item in newest if (item.value or {}).get('fact')]
     if not lines:
         return ''
-    return ('\n\nNotes you saved about this board in earlier conversations. '
-            'They are your own notes, not the user\'s record, and they may be '
-            'out of date — check before relying on one.\n'
-            + fence('\n'.join(lines)))
+    return NOTES_HEADER + fence('\n'.join(lines))
 
 
 def _with_facts(request, items: list[Any]):
@@ -113,8 +116,8 @@ class LongTermMemory(AgentMiddleware):
         return await handler(_with_facts(request, list(items)))
 
 
-__all__ = ['FACTS_INJECTED', 'FACT_CHARS', 'LongTermMemory', 'board_of_run',
-           'facts_namespace']
+__all__ = ['FACTS_INJECTED', 'FACT_CHARS', 'NOTES_HEADER', 'LongTermMemory',
+           'board_of_run', 'facts_namespace']
 
 """Alternatives considered
 ========================
