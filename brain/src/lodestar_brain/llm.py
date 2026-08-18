@@ -35,8 +35,17 @@ from .config import PROVIDER_MODELS, Settings
 # setting, because the right value is a property of *where the model runs*.
 REMOTE_TIMEOUT = 90
 LOCAL_TIMEOUT = 600
+# The third of the same kind, and here beside the other two for that reason: a
+# CLI subscription backend runs behind a whole coding agent, which boots a
+# session and may take several model turns of its own before it answers. Neither
+# the remote API's patience nor the local daemon's describes that.
+CLI_TIMEOUT = 300.0
 
 UI_PROVIDERS = {'ollama', 'openrouter'}
+# The backends that authenticate themselves, through a CLI this machine has
+# already logged in to. No key, no base URL, no `init_chat_model` — so they
+# leave before `_endpoint` is ever asked where the model lives.
+CLI_PROVIDERS = {'claude-cli', 'codex-cli'}
 
 
 def _endpoint(settings: Settings) -> tuple[str, str, int]:
@@ -78,6 +87,23 @@ def make_chat_model(settings: Settings, model: str | None = None,
     # deciding when to leave the field out.
     if settings.llm_provider == 'fake':
         return FakeChat()
+    # Ahead of the UI selection for the same reason `fake` is: the CLI backends
+    # are the owner's "never OpenRouter, no API keys" decision, and a browser
+    # naming a paid provider must not be able to overturn it from the client.
+    # The import is local because `llm_cli` imports this module for CLI_TIMEOUT.
+    if settings.llm_provider in CLI_PROVIDERS:
+        import os
+
+        from .llm_cli import ClaudeCliChatModel, CodexCliChatModel
+        # The binary is overridable by env var — the LODESTAR_RCLONE_BIN idiom,
+        # and what lets the tests run this seam against a stub script offline.
+        if settings.llm_provider == 'claude-cli':
+            return ClaudeCliChatModel(
+                binary=os.environ.get('BRAIN_CLAUDE_CLI_BIN', 'claude'),
+                model=model or os.environ.get('BRAIN_CLAUDE_CLI_MODEL', 'sonnet'))
+        # No model named: codex runs on its own default, by decision.
+        return CodexCliChatModel(
+            binary=os.environ.get('BRAIN_CODEX_CLI_BIN', 'codex'))
     if provider is not None:
         if provider not in UI_PROVIDERS:
             raise ValueError(f'unsupported UI provider {provider!r}')
