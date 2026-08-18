@@ -68,6 +68,6 @@ packages = ["src/lodestar_brain"]
 [tool.pytest.ini_options]
 markers = [
     "eval: behavioral/quality evals (deterministic, offline)",
-    "live: evals that call the real LLM; require OPENROUTER_API_KEY and BRAIN_EVAL_LIVE=1",
+    "live: evals that call the real LLM; require BRAIN_EVAL_LIVE=1 plus a backend that can answer (a CLI subscription, or OPENROUTER_API_KEY)",
     "calibration: measures a number the code currently guesses; the ones needing a real model or the embeddings extra skip themselves",
 ]
