@@ -19,9 +19,18 @@ NON_PRODUCTION_DATABASE = 'lodestar-test'
 # user never chose. `BRAIN_MODEL` still wins: an explicit model must never be
 # replaced by a default, or the answer came from something other than what the
 # picker says it did.
+#
+# The two CLI backends spend this machine's subscriptions rather than a key.
+# 'claude-cli' pins Sonnet by the owner's decision; 'codex-cli' names no model
+# at all, because that decision was "whatever codex defaults to" and a slug
+# written here would freeze it. Both still need an entry: without one the
+# `.get(..., openrouter)` fallback below hands a CLI backend an OpenRouter slug,
+# and /agent/models then reports a model that never answered anything.
 PROVIDER_MODELS = {'openrouter': 'openai/gpt-5-nano',
                    'ollama': '4skl/gemma4-e2b-mtp',
-                   'fake': 'openai/gpt-5-nano'}
+                   'fake': 'openai/gpt-5-nano',
+                   'claude-cli': 'sonnet',
+                   'codex-cli': ''}
 
 # What a long conversation is allowed to cost, and in which order the two
 # defences fire. The argument for these four numbers is in
@@ -53,7 +62,10 @@ class Settings:
     # backend under a provider field naming another is the exact mismatch
     # PROVIDER_MODELS exists to prevent.
     model: str = ''
-    llm_provider: str = 'ollama'       # 'openrouter' | 'ollama' | 'fake'
+    # 'openrouter' | 'ollama' | 'claude-cli' | 'codex-cli' | 'fake'. The two
+    # -cli backends shell out to a subscription binary this machine has already
+    # logged in to, so they need no key; `llm_cli.py` says what that costs.
+    llm_provider: str = 'ollama'
     # Where a locally served model lives. Ollama's OpenAI-compatible surface, so
     # the '/v1' is part of the URL rather than something the factory appends —
     # pointing this at any other local OpenAI-compatible server (llama.cpp, vLLM)
