@@ -43,6 +43,10 @@ backups/
 .vscode/
 .claude/
 
-# Dev-only docs are tracked here: development is the full copy, so nothing
-# the project holds depends on one machine's disk. They are dropped from
-# master when it is published, the way 125.md and docs/report/ already are.
+# Dev-only docs are untracked as of 2026-08-13 (owner decision): they live on
+# this machine's disk only. History up to the untracking stays in past commits
+# and the archive/* tags — see docs/archive.md.
+docs/
+README-Development.md
+ROADMAP-Development.md
+125.md
