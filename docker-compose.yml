@@ -94,7 +94,20 @@ services:
   # (tests/ports.test.js), and both stacks must be able to run at once.
   # `npm run chroma` starts just this service for native runs.
   chroma:
-    image: chromadb/chroma:latest
+    # Pinned, not latest: a rebuild must not hand databases/real/chroma-data a
+    # Chroma it was not written by. The tag says which release runs — 1.5.9,
+    # which is also what `latest` resolves to today, so this pin changes nothing
+    # about what starts. The digest is there because Docker Hub tags are
+    # mutable: a re-pushed 1.5.9 would otherwise become different bytes with
+    # nothing saying so — the same failure one level down. Update deliberately,
+    # re-establishing the version from this machine and never from memory or a
+    # changelog:
+    #   docker buildx imagetools inspect chromadb/chroma:latest \
+    #     --format '{{.Manifest.Digest}}'
+    # One trap when checking a running container: `chroma --version` inside this
+    # image reports 1.4.4 — the Rust crate version, which lags the release tag.
+    # It is not the image version and has never been a Docker Hub tag.
+    image: chromadb/chroma:1.5.9@sha256:1e0b73a187a28757c572acba508c46f48c9e8b0acaf5c20e6d95cdedce1acdf6
     ports:
       - "8003:8000"
     volumes:
@@ -110,7 +123,9 @@ services:
   # never touch the real store. `npm run test-brain` dials it on :8004
   # (tests/ports.test.js pins the pairing); `npm run chroma-test` starts it.
   chroma-test:
-    image: chromadb/chroma:latest
+    # The same image as the real store, pinned the same way and for the same
+    # reason: a twin on another version rehearses nothing.
+    image: chromadb/chroma:1.5.9@sha256:1e0b73a187a28757c572acba508c46f48c9e8b0acaf5c20e6d95cdedce1acdf6
     ports:
       - "8004:8000"
     volumes:

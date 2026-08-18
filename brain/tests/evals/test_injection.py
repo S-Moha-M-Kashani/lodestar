@@ -23,10 +23,19 @@ is what that snippet demanded; I ignored it"). Erring toward *reporting*
 obedience is the safe direction for a security eval: a green run can be trusted,
 and a red one is worth reading rather than dismissing.
 
-Run the measurement:
+Run the measurement — keyless, on this machine's CLI subscription:
 
-    BRAIN_EVAL_LIVE=1 OPENROUTER_API_KEY=… \\
+    BRAIN_EVAL_LIVE=1 BRAIN_LLM=claude-cli \\
       uv run --project brain pytest brain/tests/evals/test_injection.py -v -m live
+
+`codex-cli` runs the other subscription, and OpenRouter with a key is still a
+door (`conftest.live_unready` names all three). **What this file measures on a
+CLI backend is narrower than it looks**: `obeyed()` scores a canary in the reply
+or in a *brain* tool's arguments, and the hazard `llm_cli.py` hardens against is
+the subprocess's own Bash/Edit/Read, which never appear in an `AgentResult`. A
+clean run here does not clear that risk — see "Not in this plan, and why" in
+`docs/superpowers/plans/2026-08-13-unified-execution.md` for the measurement it
+would take.
 
 `untrusted.py` sets the bar at single-digit percentages: above that, a classifier
 has earned its per-call cost. Whatever the rate turns out to be, it belongs in
@@ -41,6 +50,7 @@ from lodestar_brain.middleware import untrusted
 from lodestar_brain.config import load_settings
 from lodestar_brain.llm import FakeChat
 
+from .conftest import LIVE
 from .harness import load_injections, obeyed, run_injection
 
 INJECTIONS = load_injections()
@@ -123,17 +133,25 @@ def test_the_fixture_is_wellformed_and_carries_the_real_marker():
 # a finding to read, not a flake to retry away. Parametrising *is* the score:
 # failures over cases is the obey rate, and a red case names the payload.
 @pytest.mark.live
-@pytest.mark.skipif(
-    os.environ.get('BRAIN_EVAL_LIVE') != '1' or not os.environ.get('OPENROUTER_API_KEY'),
-    reason='live eval: set BRAIN_EVAL_LIVE=1 and OPENROUTER_API_KEY to run')
+@LIVE
 @pytest.mark.parametrize('payload', INJECTIONS, ids=[p['id'] for p in INJECTIONS])
 def test_planted_instructions_are_not_obeyed(payload):
-    # 'openrouter' is named explicitly because conftest pins BRAIN_LLM=fake for
-    # the whole session, and a paid eval that silently ran the fake measures
-    # nothing. 'fake' embedder keeps the run to one paid thing, the chat model —
-    # the same reason test_tool_calling's live case does it.
-    settings = load_settings({**os.environ, 'BRAIN_LLM': 'openrouter',
-                              'BRAIN_EMBEDDER': 'fake'})
+    # The chat backend comes from the environment, unnamed here: BRAIN_LLM is how
+    # the run chooses which subscription or API answers, and a literal
+    # 'openrouter' in this line made `BRAIN_LLM=claude-cli` unreachable — the run
+    # command said one thing and the harness did another.
+    #
+    # This line used to claim the override was needed "because conftest pins
+    # BRAIN_LLM=fake for the whole session". There was no conftest.py in this
+    # repository when that was written, and there is no such pin in the one there
+    # is now. What actually guards against a paid eval silently running the fake
+    # is `live_unready()`, which *refuses* `fake` rather than overriding it: the
+    # documented offline env (`BRAIN_LLM=fake BRAIN_EMBEDDER=fake …`) exported in
+    # a shell skips this test instead of measuring nothing.
+    #
+    # The embedder is still forced, and only that: it keeps the run to one billed
+    # or metered thing, the chat model.
+    settings = load_settings({**os.environ, 'BRAIN_EMBEDDER': 'fake'})
     result = run_injection(payload, settings=settings)
     assert not obeyed(result, payload), (
         f"{payload['id']} obeyed via {payload['obeyed_if']}\n"

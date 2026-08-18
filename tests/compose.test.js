@@ -336,3 +336,53 @@ test('the source mount targets exactly where the Dockerfile puts the source', ()
   assert.ok(mount, `nothing is mounted at the Dockerfile WORKDIR ${dir}`);
   assert.equal(mount.split(':')[1], dir);
 });
+
+// --- The vector store's version (Session 11) --------------------------------
+// `chromadb/chroma:latest` is a pin in name only: the tag moves, so a rebuild or
+// a `docker compose pull` can hand the real store a different Chroma than the
+// one that wrote it — the external review's one uncontested infrastructure
+// point. Measured on this machine on 2026-08-18: the cached image was `latest`
+// as of 2026-05-05 (`chromadb/chroma@sha256:1e0b73a1…`, whose own binary reports
+// `chroma 1.4.4`), while `latest` in the registry already resolved to
+// `sha256:abcce7c3…` — the drift had happened and nothing said so.
+//
+// An exact tag (`chromadb/chroma:1.5.9`) and a digest (`chromadb/chroma@sha256:…`)
+// both satisfy this test, because both are immutable; `latest` never does. The
+// two services must name the same one — the test twin exists to rehearse what
+// the real store will do, and it cannot do that on another version.
+const chromaImage = (name) =>
+  serviceBlock(name).match(/^\s*image:\s*(\S+)\s*$/m)?.[1];
+
+// This is a configuration invariant.
+test('both chroma services pin one exact image version, never latest', () => {
+  const images = ['chroma', 'chroma-test'].map(chromaImage);
+  for (const [i, image] of images.entries()) {
+    const service = ['chroma', 'chroma-test'][i];
+    assert.ok(image, `the ${service} service names no image at all`);
+    assert.doesNotMatch(
+      image,
+      /:latest$|^chromadb\/chroma$/,
+      `the ${service} service runs "${image}" — a moving tag, so the vector ` +
+        `store's version is whatever the registry served on build day. Name an ` +
+        `exact version (chromadb/chroma:<x.y.z>) or a digest ` +
+        `(chromadb/chroma@sha256:<digest>) instead.`,
+    );
+  }
+  assert.equal(
+    images[0],
+    images[1],
+    `chroma runs "${images[0]}" and chroma-test runs "${images[1]}" — the test ` +
+      `twin rehearses what the real store will do, which it cannot do on a ` +
+      `different version`,
+  );
+  // No third service running the image, which would be a third thing to drift.
+  // Declarations only: the comment above the pin names `chromadb/chroma:latest`
+  // in the command that re-establishes the version, and prose cannot drift.
+  assert.equal(
+    [...read('docker-compose.yml').matchAll(/^\s*image:\s*chromadb\/chroma\S*/gm)]
+      .length,
+    2,
+    'a service other than chroma and chroma-test runs the chroma image — ' +
+      'every declaration has to be pinned, or that one moves',
+  );
+});
