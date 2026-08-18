@@ -375,11 +375,14 @@ test('both chroma services pin one exact image version, never latest', () => {
       `twin rehearses what the real store will do, which it cannot do on a ` +
       `different version`,
   );
-  // No third copy of the image name anywhere else in the file to drift.
+  // No third service running the image, which would be a third thing to drift.
+  // Declarations only: the comment above the pin names `chromadb/chroma:latest`
+  // in the command that re-establishes the version, and prose cannot drift.
   assert.equal(
-    [...read('docker-compose.yml').matchAll(/chromadb\/chroma[:@]\S+/g)].length,
+    [...read('docker-compose.yml').matchAll(/^\s*image:\s*chromadb\/chroma\S*/gm)]
+      .length,
     2,
-    'docker-compose.yml names the chroma image somewhere other than the two ' +
-      'chroma services — every copy has to be pinned, or one of them moves',
+    'a service other than chroma and chroma-test runs the chroma image — ' +
+      'every declaration has to be pinned, or that one moves',
   );
 });
