@@ -40,9 +40,23 @@ backups/
 # Subagent-driven-development scratch: ledgers, briefs, review packages.
 .superpowers/
 
-.vscode/
 .claude/
 
-# Dev-only docs are tracked here: development is the full copy, so nothing
-# the project holds depends on one machine's disk. They are dropped from
-# master when it is published, the way 125.md and docs/report/ already are.
+# Dev-only working material is untracked as of 2026-08-13 (owner decision): it
+# lives on this machine's disk only. History up to the untracking stays in past
+# commits and the archive/* tags — see docs/archive.md.
+#
+# The dev-only subtrees only, never docs/ wholesale. docs/README.md and
+# docs/superpowers/specs/ are the published design record: they are tracked on
+# master and cited by path from both CLAUDE.md files, so ignoring them would
+# make the next publication ship links to specs that exist on no branch and no
+# remote — only on this machine's disk.
+docs/report/
+docs/superpowers/plans/
+README-Development.md
+ROADMAP-Development.md
+125.md
+docs/
+.ruff_cache/
+.pytest_cache/
+
