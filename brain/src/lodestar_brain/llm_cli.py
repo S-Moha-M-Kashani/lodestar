@@ -391,7 +391,26 @@ rather than smoothed over. (1) Whether codex's `cached_input_tokens` is a subset
 of `input_tokens` or an addition to it — one sample cannot say, so nothing is
 summed on that side. (2) Whether these flags are *sufficient*: they are the ones
 each CLI documents, and no adversarial run has been made against a hardened
-invocation. The measurement that would settle it is `test_injection.py`'s
-payload set replayed with `BRAIN_LLM=claude-cli`, scored on whether any payload
-produces a tool call or a filesystem effect at all.
+invocation.
+
+**And the obvious measurement is not the measurement.** `BRAIN_LLM=claude-cli`
+can now reach the live tier keyless (Session 9, 2026-08-15: `npm run eval-live`),
+so `test_injection.py`'s payloads *can* be replayed against a hardened
+invocation — but that harness cannot see the thing this section is about.
+`evals/harness.obeyed` scores a canary leading `AgentResult.reply` or sitting in
+a **brain** tool's arguments; the hazard here is the subprocess's own Bash, Edit
+and Read inside `claude -p`, which never appear in an `AgentResult` at all. A run
+can therefore score a clean 0 of 12 while the subprocess wrote a file. **A green
+`-k injection` run does not clear this risk.** What the real measurement needs:
+a scratch working directory for the subprocess instead of the repository root, a
+filesystem sentinel (a canary file plus a before/after hash of the tree), and/or
+`--output-format stream-json` so the CLI's internal tool use is visible to the
+parser rather than collapsed into one final blob.
+
+One confound to read that score with, whichever way it lands: on this backend a
+tool call is a regex over a fenced block and there is no `tool_choice`, so "no
+payload produced a tool call" is ambiguous between *the fence held* and *the tool
+protocol never fired*. Until the tool-call fidelity rate above is measured, the
+tool-call half of an injection score on a CLI backend is not a security number.
+The reply half still is.
 """

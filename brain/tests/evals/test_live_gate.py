@@ -66,10 +66,18 @@ def test_a_cli_backend_unlocks_the_live_tier_without_a_key(monkeypatch):
     monkeypatch.setenv('BRAIN_LLM', 'claude-cli')
     assert live_unready() is not None
 
-    # A gate nothing consults is decoration, and the assert above would pass
+    # A gate nothing consults is decoration, and the asserts above would pass
     # just as happily with both live files still gating on OPENROUTER_API_KEY
     # themselves — in which case a CLI backend unlocks nothing at all.
+    #
+    # Written as `@LIVE` and the *absence* of `skipif`, rather than as a grep for
+    # `live_unready`, because the condition is now one shared mark instead of one
+    # call per file: a file that imports the mark never names the helper. The
+    # absence is the load-bearing half — a live file cannot decide for itself
+    # without a `skipif` of its own, so this fails when one grows a second door.
     here = Path(__file__).parent
     for name in LIVE_FILES:
-        assert 'live_unready' in (here / name).read_text(), (
+        source = (here / name).read_text()
+        assert '@LIVE' in source, f'{name} does not wear the shared live mark'
+        assert 'skipif' not in source, (
             f'{name} still decides on its own whether the live tier may run')

@@ -4,9 +4,10 @@ import os
 import pytest
 from fastapi.testclient import TestClient
 
-from lodestar_brain.config import Settings
+from lodestar_brain.config import load_settings
 from lodestar_brain.server import create_app
 
+from .conftest import LIVE
 from .harness import all_scenarios, load_scenario, run_scenario
 
 SCENARIOS = all_scenarios()
@@ -57,16 +58,22 @@ def test_at_least_one_scenario_exists():
     assert SCENARIOS, "no eval scenarios found"
 
 
-# This is a live eval: it calls the real model, and is skipped without BRAIN_EVAL_LIVE=1.
+# This is a live eval: it calls the real model, and is skipped without
+# BRAIN_EVAL_LIVE=1 plus a backend that can answer (see conftest.live_unready).
 @pytest.mark.live
-@pytest.mark.skipif(
-    os.environ.get("BRAIN_EVAL_LIVE") != "1" or not os.environ.get("OPENROUTER_API_KEY"),
-    reason="live eval: set BRAIN_EVAL_LIVE=1 and OPENROUTER_API_KEY to run")
+@LIVE
 def test_live_agent_answers_a_trivial_prompt():
-    # Uses real LLM but a fake board URL is fine — we only assert it replies.
-    # 'fake' keeps the live run to one paid thing — the chat model. 'hash' used
-    # to sit here and is now retired by name, so this only ever ran live.
-    app = create_app(Settings(embedder="fake"))  # llm_provider defaults to openrouter
+    # Uses a real LLM but a fake board URL is fine — we only assert it replies.
+    # 'fake' keeps the live run to one billed or metered thing, the chat model;
+    # 'hash' used to sit here and is now retired by name.
+    #
+    # Built from the environment, because `Settings(embedder="fake")` took every
+    # other field's default and the comment here claimed that meant OpenRouter.
+    # It did not: `llm_provider` defaults to 'ollama' (config.py), so this case
+    # gated on OPENROUTER_API_KEY, never read it, and pointed a "live" run at
+    # localhost:11434 — green on a machine running Ollama, a connection error on
+    # any other, and in neither case the model the gate was asking about.
+    app = create_app(load_settings({**os.environ, "BRAIN_EMBEDDER": "fake"}))
     client = TestClient(app)
     res = client.post("/agent/chat", json={"messages": [
         {"role": "user", "content": "Say the word ready and nothing else."}]})

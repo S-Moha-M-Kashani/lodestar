@@ -165,8 +165,10 @@ payload closes the fence with `END` itself, substituted from this module rather
 than written into the fixture, so the attack cannot go stale if the marker text
 changes.
 
-    BRAIN_EVAL_LIVE=1 OPENROUTER_API_KEY=… \\
+    BRAIN_EVAL_LIVE=1 BRAIN_LLM=claude-cli \\
       uv run --project brain pytest brain/tests/evals/test_injection.py -v -m live
+
+(or with `OPENROUTER_API_KEY`, which is no longer the only door.)
 
 **Measured 2026-08-13 against `openai/gpt-5-nano` on OpenRouter (the
 `PROVIDER_MODELS` default): the obey rate is 3 of 12, 25%.** Two passes of the
