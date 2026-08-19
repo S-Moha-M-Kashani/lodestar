@@ -1,5 +1,6 @@
 import { assistantState, refreshChatSessions, refreshChatTrash, startNewChat } from '../assistant/session.js';
 import { armHistoryIdle, cancelHistoryIdle, closeChatHistory, closeChatRowMenus, extrasOpen, fromChatRowMenu, renderAssistantTools, setChatMenuOpen, setExtrasOpen } from '../assistant/tools.js';
+import { KEY_PREFIX } from '../core/keys.js';
 import { filters } from '../core/state.js';
 import { $, announce } from './dom.js';
 import { render } from './render.js';
@@ -45,6 +46,31 @@ document.addEventListener('keydown', (e) => {
     menuBtn.focus();
   }
 });
+
+// Two view toggles in the Menu: hide the ledger numbers, hide the Done
+// column. Purely visual — a body class the CSS reads — so the stored flag and
+// the class are the whole state; no card data is touched. Same toggle idiom
+// as #habit-mute: aria-pressed announces the state ("true" = hidden), and
+// persisting is done here where the click is. Hidden stores '1', shown
+// removes the key outright, and boot applies whatever is stored so a reload
+// keeps the choice.
+for (const [btnId, cls, key] of [
+  ['#toggle-card-nums', 'hide-card-nums', KEY_PREFIX + 'hideCardNums'],
+  ['#toggle-done-col', 'hide-done-col', KEY_PREFIX + 'hideDoneCol'],
+]) {
+  const btn = $(btnId);
+  const apply = (hidden) => {
+    document.body.classList.toggle(cls, hidden);
+    btn.setAttribute('aria-pressed', String(hidden));
+  };
+  apply(localStorage.getItem(key) === '1');
+  btn.addEventListener('click', () => {
+    const hidden = !document.body.classList.contains(cls);
+    if (hidden) localStorage.setItem(key, '1');
+    else localStorage.removeItem(key);
+    apply(hidden);
+  });
+}
 
 // The Assistant's Chat menu closes the same two ways. Registered here, once,
 // rather than in renderChatActions: the rail is rebuilt on every render, and

@@ -735,6 +735,102 @@ try:
         page.wait_for_selector(".card")
         check("persistence: board intact after reload", page.locator(".card").count() == count_before)
 
+        # ---- Hide the card numbers & hide the Done column --------------------
+        # This is an end-to-end test. Two Menu toggles declutter the board
+        # without touching data: #toggle-card-nums hides every ledger number
+        # (body class hide-card-nums), #toggle-done-col hides the Done column
+        # (body class hide-done-col). Both persist in localStorage under the
+        # lodestar: prefix, so a reload keeps the choice. Every click is guarded
+        # and every compound check short-circuits on presence first: while the
+        # feature is missing these must come back as red lines, never as a
+        # TimeoutError that abandons the checks after them.
+        def body_has(cls):
+            return page.evaluate("c => document.body.classList.contains(c)", cls)
+
+        def menu_toggle(btn_id):
+            """Click a Menu toggle if it exists; report whether it was there."""
+            page.keyboard.press("Escape")  # the panel must start closed
+            page.wait_for_timeout(50)
+            page.click("#menu-btn")
+            btn = page.locator(f"#menu-panel #{btn_id}")
+            present = btn.count() == 1
+            if present:
+                btn.click()
+                page.wait_for_timeout(100)
+            page.keyboard.press("Escape")  # a toggle may leave the panel open
+            page.wait_for_timeout(50)
+            return present
+
+        page.click("#menu-btn")
+        check("hide: Menu offers both toggles, each announcing its pressed state",
+              page.locator("#menu-panel #toggle-card-nums").count() == 1
+              and page.locator("#menu-panel #toggle-done-col").count() == 1
+              and page.get_attribute("#toggle-card-nums", "aria-pressed") == "false"
+              and page.get_attribute("#toggle-done-col", "aria-pressed") == "false")
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(50)
+
+        nums_total = page.locator("#board .card-num").count()
+        cards_outside_done = page.locator(
+            '.column:not([data-col="answered"]) .card').count()
+        check("hide: the ledger numbers start visible",
+              nums_total > 0 and page.locator("#board .card-num").first.is_visible())
+
+        # Hide the numbers: body class on, spans invisible, aria-pressed flips.
+        toggled = menu_toggle("toggle-card-nums")
+        check("hide: the toggle hides every ledger number",
+              toggled and body_has("hide-card-nums")
+              and not page.locator("#board .card-num").first.is_visible()
+              and page.locator("#board .card-num").first.bounding_box() is None
+              and page.get_attribute("#toggle-card-nums", "aria-pressed") == "true")
+        # Purely visual: same spans in the DOM, same cards outside Done.
+        check("hide: hiding is visual only — the cards themselves are untouched",
+              page.locator("#board .card-num").count() == nums_total
+              and page.locator('.column:not([data-col="answered"]) .card').count()
+                  == cards_outside_done)
+        check("hide: the choice is stored under the lodestar: prefix",
+              bool(page.evaluate("localStorage.getItem('lodestar:hideCardNums')")))
+
+        # Persistence: a reload must come back with the numbers still hidden.
+        page.reload()
+        page.wait_for_selector(".card")
+        check("hide: the numbers stay hidden across a reload",
+              body_has("hide-card-nums")
+              and not page.locator("#board .card-num").first.is_visible())
+
+        # Toggle back off: class gone, numbers visible, stored flag cleared.
+        toggled_off = menu_toggle("toggle-card-nums")
+        check("hide: toggling again brings the numbers back",
+              toggled_off and not body_has("hide-card-nums")
+              and page.locator("#board .card-num").first.is_visible()
+              and page.get_attribute("#toggle-card-nums", "aria-pressed") == "false"
+              and not page.evaluate("localStorage.getItem('lodestar:hideCardNums')"))
+
+        # The Done column, same contract: hide, persist the key, bring it back.
+        done_col = page.locator('section.column[data-col="answered"]')
+        toggled = menu_toggle("toggle-done-col")
+        check("hide: the toggle hides the Done column and only that one",
+              toggled and body_has("hide-done-col")
+              and done_col.count() == 1 and not done_col.is_visible()
+              and page.get_attribute("#toggle-done-col", "aria-pressed") == "true"
+              and page.locator('section.column[data-col="inbox"]').is_visible()
+              and bool(page.evaluate("localStorage.getItem('lodestar:hideDoneCol')")))
+        toggled_off = menu_toggle("toggle-done-col")
+        check("hide: toggling again brings the Done column back",
+              toggled_off and not body_has("hide-done-col")
+              and done_col.is_visible()
+              and page.get_attribute("#toggle-done-col", "aria-pressed") == "false")
+
+        # Leave no residue for the checks after this block: whatever state the
+        # (possibly missing) toggles left behind, clear it outright.
+        page.evaluate("""() => {
+          localStorage.removeItem('lodestar:hideCardNums');
+          localStorage.removeItem('lodestar:hideDoneCol');
+          document.body.classList.remove('hide-card-nums', 'hide-done-col');
+        }""")
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(50)
+
         # ---- Export ---------------------------------------------------------
         menu_click("#export-btn")
         page.wait_for_selector("#export-dialog[open]")
