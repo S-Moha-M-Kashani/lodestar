@@ -522,8 +522,11 @@
       <input type="text" id="prompt-input" maxlength="200" autocomplete="off">
       <div class="dialog-actions">
         <span class="spacer"></span>
-        <button value="cancel" id="prompt-cancel" class="btn ghost">Cancel</button>
-        <button value="ok" id="prompt-ok" class="btn primary"></button>
+        <!-- Cancel is type=button: were it an implicit submit button, Enter in
+             the input would fire it (first submit in tree order) and quietly
+             cancel the typed name. Only OK submits, so Enter means OK. -->
+        <button type="button" id="prompt-cancel" class="btn ghost">Cancel</button>
+        <button type="submit" value="ok" id="prompt-ok" class="btn primary"></button>
       </div>
     </form>
   </dialog>

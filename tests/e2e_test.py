@@ -313,6 +313,17 @@ def api_put(cards):
         return json.loads(r.read())
 
 
+def api_boards():
+    with urllib.request.urlopen(URL + "/api/boards", timeout=3) as r:
+        return json.loads(r.read())
+
+
+def api_delete(path):
+    req = urllib.request.Request(URL + path, method="DELETE")
+    with urllib.request.urlopen(req, timeout=3) as r:
+        return json.loads(r.read())
+
+
 def api_chat_append(session_id, messages):
     """Seed a chat straight into the record.
 
@@ -3807,6 +3818,93 @@ try:
               "Getaway" in page.locator("#board-select").inner_text()
               and [c["title"] for c in api_state(new_id)["cards"]] == ["Book the ferry"])
         page.click("#close-boards")
+
+        # ---- Enter confirms the name dialog ----------------------------------
+        # This is an end-to-end test.
+        # Enter in #prompt-input must submit as OK. With both dialog buttons
+        # left as implicit submit buttons, Enter fires the first in tree order —
+        # Cancel — and the typed board name silently goes nowhere, which users
+        # read as "it does not work the first time".
+        def quiet(cond):
+            # A condition polled across a page reload: the evaluate can land in
+            # a destroyed execution context, and that must read as "not yet",
+            # never as an exception that abandons the remaining checks.
+            try:
+                return cond()
+            except Exception:
+                return False
+
+        def selected_board_name():
+            return page.evaluate(
+                "() => document.querySelector('#board-select')"
+                "?.selectedOptions[0]?.textContent || ''")
+
+        board_menu("#board-new")
+        prompt_open = wait_until(
+            lambda: page.locator("#prompt-dialog[open]").count() == 1)
+        check("prompt: the name dialog opens for a new board", prompt_open)
+        if prompt_open:
+            page.fill("#prompt-input", "Enter Probe")
+            # Stash how the dialog closes where the reload that a successful
+            # create triggers cannot lose it.
+            page.evaluate(
+                "() => { const d = document.querySelector('#prompt-dialog');"
+                " d.addEventListener('close', () =>"
+                " localStorage.setItem('e2e:prompt-close', d.returnValue),"
+                " { once: true }); }")
+            page.press("#prompt-input", "Enter")
+            # The reload the create triggers is waited out before the stash is
+            # read: a write-triggered backup can hold the single-threaded
+            # server for seconds, and reading mid-navigation is a race. The
+            # board being open is itself proof the dialog resolved as OK.
+            check("boards: the board named with Enter exists and is open",
+                  wait_until(lambda: quiet(
+                      lambda: selected_board_name() == "Enter Probe"), timeout=8.0))
+            check("prompt: Enter closes the name dialog as OK, not Cancel",
+                  wait_until(lambda: quiet(lambda: page.evaluate(
+                      "() => localStorage.getItem('e2e:prompt-close')") == "ok")))
+
+        # Cancel still cancels: by the button, and by Escape.
+        page.wait_for_selector(".quick-add input")
+        name_before = selected_board_name()
+        board_menu("#board-rename")
+        prompt_open = wait_until(
+            lambda: page.locator("#prompt-dialog[open]").count() == 1)
+        check("prompt: the rename dialog opens", prompt_open)
+        if prompt_open:
+            page.fill("#prompt-input", "Should Not Stick")
+            page.click("#prompt-cancel")
+            check("prompt: Cancel closes the dialog and drops the typed name",
+                  wait_until(
+                      lambda: page.locator("#prompt-dialog[open]").count() == 0)
+                  and selected_board_name() == name_before
+                  and "Should Not Stick"
+                  not in page.locator("#board-select").inner_text())
+        board_menu("#board-rename")
+        if wait_until(lambda: page.locator("#prompt-dialog[open]").count() == 1):
+            page.press("#prompt-input", "Escape")
+            check("prompt: Escape still cancels",
+                  wait_until(
+                      lambda: page.locator("#prompt-dialog[open]").count() == 0)
+                  and selected_board_name() == name_before)
+        else:
+            check("prompt: Escape still cancels", False)
+
+        # Put the world back: leave for the first board, then erase the probe
+        # board through the API so later checks see the original board set.
+        page.evaluate("() => localStorage.removeItem('e2e:prompt-close')")
+        if page.evaluate("() => document.querySelector('#board-select')?.value") != "main":
+            page.select_option("#board-select", "main")
+            wait_for_board("Lodestar")
+        probe = next(
+            (b for b in api_boards()["boards"] if b["name"] == "Enter Probe"), None)
+        if probe:
+            api_delete(f"/api/boards/{probe['id']}")
+            api_delete(f"/api/boards/trash/{probe['id']}")
+        check("boards: the probe board is gone and the first board is active",
+              page.evaluate("() => document.querySelector('#board-select')?.value")
+              == "main"
+              and all(b["name"] != "Enter Probe" for b in api_boards()["boards"]))
 
         # ---- Server-offline banner + recovery -------------------------------
         def block_state_put(route):
