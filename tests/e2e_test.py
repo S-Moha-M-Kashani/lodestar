@@ -39,7 +39,11 @@ NO_RCLONE = os.path.join(BACKUP_DIR, "no-such-rclone")
 
 
 def snapshots():
-    return [f for f in os.listdir(BACKUP_DIR)
+    # Snapshots live in the db/ subfolder (json/ holds the importable exports).
+    db_dir = os.path.join(BACKUP_DIR, "db")
+    if not os.path.isdir(db_dir):
+        return []
+    return [f for f in os.listdir(db_dir)
             if f.startswith("board-") and f.endswith(".db")]
 
 
