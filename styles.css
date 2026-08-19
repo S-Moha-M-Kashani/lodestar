@@ -793,6 +793,12 @@ body[data-view="board"] .cards { min-height: 0; }
 /* When there are no notes, the badge takes the right edge itself */
 .card-num + .badge { margin-left: auto; }
 
+/* The Menu's view toggles: a body class is the whole state, the data never
+   changes. Numbers go everywhere they render; the Done column only here. */
+.hide-card-nums .card-num,
+.hide-card-nums .row-num { display: none; }
+.hide-done-col .column[data-col="answered"] { display: none; }
+
 /* Card type as a rubber stamp — always neutral ink; colour means category */
 .badge {
   font-family: var(--mono);
