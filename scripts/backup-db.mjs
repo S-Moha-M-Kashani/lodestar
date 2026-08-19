@@ -37,12 +37,14 @@ function snapshot(dbPath, destPath) {
 
 /** The timestamp a backup filename carries, as a Date. `runBackup` writes
  *  `<name>-<ISO with : and . replaced by ->.db` (and `.json` for the export
- *  twin), so the timestamp arrives as exactly six hyphen-separated segments —
- *  `2026`, `06`, `01T00`, `00`, `00`, `000Z` — however many the database name
- *  itself contributes. Taking the last six is therefore what makes a
+ *  twins, which add a board id: `<name>-<boardId>-<stamp>.json`), so the
+ *  timestamp arrives as exactly six hyphen-separated segments — `2026`, `06`,
+ *  `01T00`, `00`, `00`, `000Z` — however many the database name and board id
+ *  themselves contribute. Taking the last six is therefore what makes a
  *  hyphenated name work: `brain-checkpoints.db` is a real record in
- *  databases/real/, and a seventh segment would swallow `checkpoints` into the
- *  date and parse nothing. The separators are lost but their positions are
+ *  databases/real/, board ids like `b-abc12` are hyphenated by construction,
+ *  and a seventh segment would swallow the extra piece into the date and
+ *  parse nothing. The separators are lost but their positions are
  *  not, so this restores them rather than parsing loosely. An unreadable name
  *  returns the epoch, which prunes on count alone — the old behaviour, and the
  *  safe direction for a file this cannot identify. */
@@ -56,7 +58,7 @@ function stampOf(filename) {
 }
 
 /**
- * Write an Import-JSON-ready export of a board snapshot to `destPath`.
+ * Write the Import-JSON-ready exports of a board snapshot into `jsonDir`.
  *
  * The point of the json/ twin: a .db snapshot needs a working `node:sqlite` to
  * be worth anything, while a JSON file pastes straight into the board's Import
@@ -65,78 +67,107 @@ function stampOf(filename) {
  * Reads the just-written snapshot (readOnly), never the live database, so the
  * export is exactly as consistent as the snapshot it sits beside. Only a real
  * SQLite file with a `cards` table qualifies — assistant.db and a byte-copied
- * non-database simply return false, never throw: the .db snapshot already
- * exists at that point and a broken export must not fail the backup.
+ * non-database simply return [], never throw: the .db snapshot already exists
+ * at that point and a broken export must not fail the backup.
  *
  * The shape is what `parseState` (js/core/cards.js) accepts and what the
  * server's `rowToCard` produces: `{ version: 1, cards, categories }`, keys
- * camelCased, JSON-string columns parsed. Two deliberate simplifications:
+ * camelCased, JSON-string columns parsed. One deliberate simplification:
  * values are exported raw rather than re-validated (sanitizeCard on import is
- * the validator, and duplicating its rules here would let them drift), and
- * `board_id` is ignored — every board's live cards land in one file, because
- * the Import dialog merges into one board anyway and an export that silently
- * dropped the non-default boards would be a backup with holes in it.
+ * the validator, and duplicating its rules here would let them drift).
+ *
+ * One file per LIVE board — `<name>-<boardId>-<stamp>.json`, board ids because
+ * they are stable where names are not — holding only that board's live cards.
+ * The Import dialog merges into ONE board, so a merged export imports other
+ * boards' cards into whichever board receives it, and a deleted board's cards
+ * into anything (deleting a board stamps the board row, not its cards). A live
+ * board with no live cards still gets a file: an empty board is a valid
+ * restore target, cheap and unambiguous. Categories are global, so every file
+ * carries the same list. A pre-multi-board snapshot — no `boards` table, or a
+ * `cards` table without `board_id` — keeps the single `<name>-<stamp>.json`.
+ *
+ * Returns one `{ path, pruneName }` per file written, so the caller prunes
+ * each board's series under its own full prefix.
  */
-function exportJson(snapPath, destPath) {
+function exportJsons(snapPath, jsonDir, name, stamp) {
   let db;
   try {
     db = new DatabaseSync(snapPath, { readOnly: true });
   } catch {
-    return false; // not a SQLite file at all
+    return []; // not a SQLite file at all
   }
   try {
-    const table = (name) => db.prepare(
-      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(name);
-    if (!table('cards')) return false;
+    const table = (t) => db.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(t);
+    if (!table('cards')) return [];
     const parsed = (s, fallback) => {
       try { return JSON.parse(s) ?? fallback; } catch { return fallback; }
     };
     // Filtered in JS, not SQL, so a pre-migration file missing deleted_at or
     // pending still exports (an absent column reads as undefined = live).
-    const cards = db.prepare('SELECT * FROM cards').all()
+    const rows = db.prepare('SELECT * FROM cards').all()
       .filter((r) => r.deleted_at == null && !r.pending)
-      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
-      .map((r) => ({
-        id: r.id,
-        columnId: r.column_id,
-        title: r.title,
-        notes: r.notes,
-        type: r.type,
-        category: r.category,
-        importance: r.importance,
-        urgency: r.urgency,
-        effort: r.effort,
-        control: r.control,
-        effortSrc: r.effort_src,
-        controlSrc: r.control_src,
-        deadline: r.deadline,
-        habitFreq: r.habit_freq,
-        habitCount: r.habit_count,
-        habitTimes: parsed(r.habit_times, []),
-        habitHistory: parsed(r.habit_history, {}),
-        num: r.num,
-        tags: parsed(r.tags, []),
-        createdAt: r.created_at,
-        updatedAt: r.updated_at,
-      }));
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+    const toCard = (r) => ({
+      id: r.id,
+      columnId: r.column_id,
+      title: r.title,
+      notes: r.notes,
+      type: r.type,
+      category: r.category,
+      importance: r.importance,
+      urgency: r.urgency,
+      effort: r.effort,
+      control: r.control,
+      effortSrc: r.effort_src,
+      controlSrc: r.control_src,
+      deadline: r.deadline,
+      habitFreq: r.habit_freq,
+      habitCount: r.habit_count,
+      habitTimes: parsed(r.habit_times, []),
+      habitHistory: parsed(r.habit_history, {}),
+      num: r.num,
+      tags: parsed(r.tags, []),
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    });
     const categories = table('categories')
       ? db.prepare('SELECT id, label, h FROM categories ORDER BY position ASC').all()
         .map((r) => ({ id: r.id, label: r.label, h: r.h }))
       : [];
-    mkdirSync(dirname(destPath), { recursive: true });
-    writeFileSync(destPath, JSON.stringify({ version: 1, cards, categories }, null, 2));
-    return true;
+    const writeOne = (destPath, cards) => {
+      mkdirSync(dirname(destPath), { recursive: true });
+      writeFileSync(destPath, JSON.stringify({ version: 1, cards, categories }, null, 2));
+    };
+    const hasBoardId = rows.length
+      ? 'board_id' in rows[0]
+      : db.prepare('PRAGMA table_info(cards)').all().some((c) => c.name === 'board_id');
+    if (table('boards') && hasBoardId) {
+      const written = [];
+      const boards = db.prepare('SELECT id FROM boards WHERE deleted_at IS NULL').all();
+      for (const b of boards) {
+        const path = join(jsonDir, `${name}-${b.id}-${stamp}.json`);
+        writeOne(path, rows.filter((r) => r.board_id === b.id).map(toCard));
+        written.push({ path, pruneName: `${name}-${b.id}` });
+      }
+      return written;
+    }
+    const path = join(jsonDir, `${name}-${stamp}.json`);
+    writeOne(path, rows.map(toCard));
+    return [{ path, pruneName: name }];
   } catch {
-    return false; // a cards table this cannot read is not a board
+    return []; // a cards table this cannot read is not a board
   } finally {
     db.close();
   }
 }
 
-/** Prune one backup folder for one database name: keep the newest `keep`, and
+/** Prune one backup folder for one series prefix: keep the newest `keep`, and
  *  keep anything younger than `floor` regardless of count — a file must fail
- *  both rules to be deleted. Per name, so board's backups can never evict
- *  assistant's; per folder, so db/ and json/ retention never interact. */
+ *  both rules to be deleted. Per prefix (the database name, plus the board id
+ *  for json exports), so board's backups can never evict assistant's and one
+ *  board's exports can never evict another board's; per folder, so db/ and
+ *  json/ retention never interact. */
 function prune(dir, name, ext, keep, floor) {
   if (!existsSync(dir)) return;
   const files = readdirSync(dir)
@@ -195,11 +226,16 @@ export function runBackup({
     const dest = join(dbDir, `${name}-${stamp}.db`);
     snapshot(src, dest);
     localPaths.push(dest);
-    // The json twin, cut from the snapshot just written so both files agree.
-    const jsonDest = join(jsonDir, `${name}-${stamp}.json`);
-    if (exportJson(dest, jsonDest)) jsonPaths.push(jsonDest);
+    // The json twins, cut from the snapshot just written so the files agree:
+    // one per live board, or the single legacy file (see exportJsons).
+    const exported = exportJsons(dest, jsonDir, name, stamp);
+    jsonPaths.push(...exported.map((e) => e.path));
     prune(dbDir, name, '.db', keep, floor);
-    prune(jsonDir, name, '.json', keep, floor);
+    // json/ prunes under each file's own full prefix — <name>-<boardId>- for a
+    // multi-board file — so one board's burst can never evict another board's.
+    for (const pruneName of new Set(exported.map((e) => e.pruneName))) {
+      prune(jsonDir, pruneName, '.json', keep, floor);
+    }
   }
   const localPath = localPaths[0];
 
