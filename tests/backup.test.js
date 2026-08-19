@@ -247,15 +247,24 @@ test('a burst of snapshots cannot evict last month\'s', () => {
 });
 
 // This is an integration test: a real SQLite board on disk and a stub rclone binary.
-test('a board DB also gets an Import-JSON-ready export under json/', () => {
+test('a board DB exports one Import-JSON file per live board under json/', () => {
   const dir = mkdtempSync(join(tmpdir(), 'bk-'));
   const databasesDir = join(dir, 'databases', 'real');
   mkdirSync(databasesDir, { recursive: true });
 
-  // A minimal but real board.db on the current server schema: one live card,
-  // one soft-deleted, one pending proposal — only the live one may reach an
-  // export the board's Import JSON dialog would accept.
+  // A minimal but real board.db on the current server schema: a boards table
+  // with two live boards and a soft-deleted one, and cards spread across all
+  // three (live / soft-deleted / pending). Each LIVE board must get its own
+  // file holding exactly its own live cards — a merged export imports one
+  // board's cards into another, and a deleted board's cards into anything.
   const db = new DatabaseSync(join(databasesDir, 'board.db'));
+  db.exec(`CREATE TABLE boards (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, position INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, deleted_at INTEGER)`);
+  const bins = db.prepare('INSERT INTO boards VALUES (?, ?, ?, ?, ?, ?)');
+  bins.run('main', 'Lodestar', 0, 1000, 1000, null);
+  bins.run('b-two', 'Second board', 1, 1000, 1000, null);
+  bins.run('b-gone', 'Deleted board', 2, 1000, 1000, 5000);
   db.exec(`CREATE TABLE cards (
     id TEXT PRIMARY KEY, board_id TEXT NOT NULL DEFAULT 'main',
     column_id TEXT NOT NULL, title TEXT NOT NULL, notes TEXT NOT NULL DEFAULT '',
@@ -272,11 +281,17 @@ test('a board DB also gets an Import-JSON-ready export under json/', () => {
     habit_times TEXT NOT NULL DEFAULT '[]', habit_history TEXT NOT NULL DEFAULT '{}')`);
   db.exec('CREATE TABLE categories (id TEXT PRIMARY KEY, label TEXT, h INTEGER, position INTEGER)');
   const ins = db.prepare(`INSERT INTO cards
-    (id, column_id, title, category, tags, created_at, updated_at, num, deleted_at, pending)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-  ins.run('live', 'inbox', 'Live card', 'work', '["work","urgent"]', 1000, 2000, 7, null, 0);
-  ins.run('gone', 'inbox', 'Soft-deleted card', '', '[]', 1000, 2000, 8, 3000, 0);
-  ins.run('maybe', 'inbox', 'Pending proposal', '', '[]', 1000, 2000, 0, null, 1);
+    (id, board_id, column_id, title, category, tags, created_at, updated_at, num, deleted_at, pending)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  ins.run('live', 'main', 'inbox', 'Live card', 'work', '["work","urgent"]', 1000, 2000, 7, null, 0);
+  ins.run('gone', 'main', 'inbox', 'Soft-deleted card', '', '[]', 1000, 2000, 8, 3000, 0);
+  ins.run('maybe', 'main', 'inbox', 'Pending proposal', '', '[]', 1000, 2000, 0, null, 1);
+  // b-two's only card is soft-deleted: an empty live board is still a valid
+  // restore target and must get a file with cards: [].
+  ins.run('two-gone', 'b-two', 'inbox', 'Deleted on board two', '', '[]', 1000, 2000, 9, 3000, 0);
+  // A live card on a deleted board: deleting a board stamps the board row, not
+  // its cards — this card must appear in no export at all.
+  ins.run('ghost', 'b-gone', 'inbox', 'Live card on a deleted board', '', '[]', 1000, 2000, 10, null, 0);
   db.prepare('INSERT INTO categories VALUES (?, ?, ?, ?)').run('work', 'Work', 220, 0);
   db.close();
   // A real SQLite DB with no cards table (assistant.db's shape): snapshotted
@@ -284,6 +299,14 @@ test('a board DB also gets an Import-JSON-ready export under json/', () => {
   const adb = new DatabaseSync(join(databasesDir, 'assistant.db'));
   adb.exec('CREATE TABLE messages (id INTEGER PRIMARY KEY, body TEXT)');
   adb.close();
+  // A pre-multi-board file: cards table, no boards table, no board_id column.
+  // It must keep today's single merged export, named <dbname>-<stamp>.json.
+  const ldb = new DatabaseSync(join(databasesDir, 'legacy.db'));
+  ldb.exec(`CREATE TABLE cards (id TEXT PRIMARY KEY, column_id TEXT, title TEXT,
+    created_at INTEGER, updated_at INTEGER, deleted_at INTEGER)`);
+  ldb.exec("INSERT INTO cards VALUES ('l1', 'inbox', 'Old live', 1000, 2000, NULL)");
+  ldb.exec("INSERT INTO cards VALUES ('l2', 'inbox', 'Old gone', 1000, 2000, 3000)");
+  ldb.close();
 
   const backupsDir = join(dir, 'backups');
   const { bin, logPath } = makeStubRclone(dir);
@@ -292,19 +315,25 @@ test('a board DB also gets an Import-JSON-ready export under json/', () => {
   assert.equal(r.status, 'ok');
 
   const jsonDir = join(backupsDir, 'json');
-  const jsonFiles = readdirSync(jsonDir);
-  assert.equal(jsonFiles.filter((f) => f.startsWith('board-') && f.endsWith('.json')).length, 1);
-  assert.ok(!jsonFiles.some((f) => f.startsWith('assistant-')),
-    'a DB without a cards table gets no json export');
-  const exportPath = join(jsonDir, jsonFiles.find((f) => f.startsWith('board-')));
+  const stamp = '2026-08-19T10-00-00-000Z';
+  const jsonFiles = readdirSync(jsonDir).sort();
+  // One file per LIVE board, named <dbname>-<boardId>-<stamp>.json (board ids
+  // are stable, names are not) — no file for the deleted board, no merged
+  // board-<stamp>.json any more, and none for a DB without a cards table.
+  assert.deepEqual(jsonFiles, [
+    `board-b-two-${stamp}.json`,
+    `board-main-${stamp}.json`,
+    `legacy-${stamp}.json`,
+  ]);
   // jsonPaths reports exactly the exports made, alongside the db/ localPaths.
-  assert.deepEqual(r.jsonPaths, [exportPath]);
-  assert.equal(r.localPaths.length, 2);
+  assert.deepEqual([...r.jsonPaths].sort(), jsonFiles.map((f) => join(jsonDir, f)));
+  assert.equal(r.localPaths.length, 3);
 
-  // The export is the board's Import JSON shape, keys camelCased.
-  const data = JSON.parse(readFileSync(exportPath, 'utf8'));
+  // main's export is the board's Import JSON shape, keys camelCased, holding
+  // exactly its own live cards — not b-two's, not the deleted board's.
+  const data = JSON.parse(readFileSync(join(jsonDir, `board-main-${stamp}.json`), 'utf8'));
   assert.equal(data.version, 1);
-  assert.equal(data.cards.length, 1, 'soft-deleted and pending rows never export');
+  assert.equal(data.cards.length, 1, 'soft-deleted, pending and other-board rows never export');
   const card = data.cards[0];
   assert.equal(card.id, 'live');
   assert.equal(card.columnId, 'inbox');
@@ -315,15 +344,40 @@ test('a board DB also gets an Import-JSON-ready export under json/', () => {
   assert.equal(card.num, 7);
   assert.deepEqual(data.categories, [{ id: 'work', label: 'Work', h: 220 }]);
 
-  // The export rides to its own Drive folder, json/ beside db/.
-  const log = readFileSync(logPath, 'utf8');
-  assert.match(log, /copy .*board-2026-08-19.*\.json gdrive:lodestar-backups\/json\//);
+  // b-two is live but has no live cards: still a file, categories are global
+  // (same in every file), cards empty.
+  const two = JSON.parse(readFileSync(join(jsonDir, `board-b-two-${stamp}.json`), 'utf8'));
+  assert.deepEqual(two, { version: 1, cards: [], categories: data.categories });
 
-  // Prune applies per name inside json/ too, same two rules (keepDays: 0 so
-  // the count ceiling is observable — see the note in the databases/ test).
+  // The deleted board's live card is in no export anywhere.
+  for (const f of jsonFiles) {
+    const ids = JSON.parse(readFileSync(join(jsonDir, f), 'utf8')).cards.map((c) => c.id);
+    assert.ok(!ids.includes('ghost'), `deleted board's card leaked into ${f}`);
+  }
+
+  // The legacy DB keeps the single merged file: its live cards, no board split.
+  const legacy = JSON.parse(readFileSync(join(jsonDir, `legacy-${stamp}.json`), 'utf8'));
+  assert.deepEqual(legacy.cards.map((c) => c.id), ['l1']);
+
+  // Every export rides to its own Drive folder, json/ beside db/.
+  const log = readFileSync(logPath, 'utf8');
+  assert.match(log, /copy .*board-main-2026-08-19.*\.json gdrive:lodestar-backups\/json\//);
+  assert.match(log, /copy .*board-b-two-2026-08-19.*\.json gdrive:lodestar-backups\/json\//);
+
+  // Prune inside json/ keys on the full per-board prefix (<dbname>-<boardId>-),
+  // same two rules, so one board's burst can never evict another's: after four
+  // runs with keep=2, EACH board series holds 2 files — a prune keyed on the
+  // db name alone would leave 2 in total. keepDays: 0 so the count ceiling is
+  // observable — see the note in the databases/ test. The hyphen in b-two also
+  // pins that stampOf still parses a stamp behind a hyphenated board id.
   for (let i = 1; i <= 3; i++) {
     runBackup({ databasesDir, backupsDir, rcloneBin: bin, keep: 2, keepDays: 0,
                 now: new Date(`2026-08-19T10:0${i}:00Z`) });
   }
-  assert.equal(readdirSync(jsonDir).filter((f) => f.startsWith('board-')).length, 2);
+  const after = readdirSync(jsonDir);
+  assert.equal(after.filter((f) => f.startsWith('board-main-')).length, 2);
+  assert.equal(after.filter((f) => f.startsWith('board-b-two-')).length, 2);
+  assert.ok(after.filter((f) => f.startsWith('board-main-')).every((f) => /10-0[23]/.test(f)),
+    'per-board prune keeps the newest of that board');
+  assert.equal(after.filter((f) => f.startsWith('legacy-')).length, 2);
 });
