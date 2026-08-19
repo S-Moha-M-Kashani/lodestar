@@ -454,6 +454,26 @@ try:
               page.locator(".cat-tab-count").count() == 0)
         check("categories: 'All' is pressed when nothing is filtered",
               page.get_attribute(".cat-tab-all", "aria-pressed") == "true")
+        # This is an end-to-end test. The ✎ Edit tab sits immediately beside the
+        # last category tab — measured, because a margin-left:auto pushing it to
+        # the far edge of the rail passes every count and class assertion. The
+        # slack guard keeps the check honest: with no spare width in the rail the
+        # two placements are indistinguishable.
+        rail_loc = page.locator("#cat-rail")
+        last_loc = page.locator(".cat-tab:not(.cat-tab-edit)").last
+        edit_loc = page.locator("#edit-cats-btn")
+        rail_box = rail_loc.bounding_box() if rail_loc.count() else None
+        last_box = last_loc.bounding_box() if last_loc.count() else None
+        edit_box = edit_loc.bounding_box() if edit_loc.count() else None
+        tabs_loc = page.locator(".cat-tab")
+        tab_boxes = [b for b in (tabs_loc.nth(i).bounding_box()
+                                 for i in range(tabs_loc.count())) if b]
+        rail_slack = (rail_box["width"] - sum(b["width"] for b in tab_boxes)
+                      if rail_box and tab_boxes else 0)
+        check("categories: the ✎ Edit tab sits beside the last tab, not flush right",
+              rail_box is not None and last_box is not None and edit_box is not None
+              and rail_slack > 24
+              and edit_box["x"] - (last_box["x"] + last_box["width"]) < 24)
         check("categories: cards carry their category spine",
               page.locator(".card.categorized").count() == 6)
         page.locator('.cat-tab[data-cat="love"]').click()
