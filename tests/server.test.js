@@ -859,8 +859,12 @@ function backupSandbox() {
   };
 }
 
-const snapshots = (dir) =>
-  (existsSync(dir) ? readdirSync(dir) : []).filter((f) => f.startsWith('board-') && f.endsWith('.db'));
+// Snapshots land in the db/ subfolder of the backup dir (json/ holds the
+// importable exports beside it).
+const snapshots = (dir) => {
+  const dbDir = join(dir, 'db');
+  return (existsSync(dbDir) ? readdirSync(dbDir) : []).filter((f) => f.startsWith('board-') && f.endsWith('.db'));
+};
 
 // Wait until at least `n` snapshots exist, or the timeout expires.
 async function waitForSnapshots(dir, n, timeoutMs = 8000) {
