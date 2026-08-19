@@ -434,7 +434,6 @@ input, select, textarea { font: inherit; color: inherit; }
 
 /* ✎ Edit — quiet utility tab at the end of the rail */
 .cat-tab-edit {
-  margin-left: auto;
   color: var(--ink-soft);
   background: transparent;
   border-style: dashed;
