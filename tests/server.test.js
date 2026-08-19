@@ -888,7 +888,7 @@ test('PUT with a never-before-seen card triggers one backup', async () => {
     const files = await waitForSnapshots(bk.dir, 1);
     assert.equal(files.length, 1, 'a new card must produce exactly one snapshot');
     // The snapshot is taken after the commit, so it contains the new card.
-    const snap = new DatabaseSync(join(bk.dir, files[0]), { readOnly: true });
+    const snap = new DatabaseSync(join(bk.dir, 'db', files[0]), { readOnly: true });
     const row = snap.prepare('SELECT title FROM cards WHERE id = ?').get('n1');
     assert.equal(row.title, 'A new thought');
   } finally { await s.stop(); }
