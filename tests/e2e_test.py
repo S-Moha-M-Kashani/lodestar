@@ -15,6 +15,7 @@ import sys
 import tempfile
 import time
 import urllib.request
+from datetime import datetime, timedelta
 from playwright.sync_api import sync_playwright
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -39,7 +40,11 @@ NO_RCLONE = os.path.join(BACKUP_DIR, "no-such-rclone")
 
 
 def snapshots():
-    return [f for f in os.listdir(BACKUP_DIR)
+    # Snapshots live in the db/ subfolder (json/ holds the importable exports).
+    db_dir = os.path.join(BACKUP_DIR, "db")
+    if not os.path.isdir(db_dir):
+        return []
+    return [f for f in os.listdir(db_dir)
             if f.startswith("board-") and f.endswith(".db")]
 
 
@@ -309,6 +314,17 @@ def api_put(cards):
         return json.loads(r.read())
 
 
+def api_boards():
+    with urllib.request.urlopen(URL + "/api/boards", timeout=3) as r:
+        return json.loads(r.read())
+
+
+def api_delete(path):
+    req = urllib.request.Request(URL + path, method="DELETE")
+    with urllib.request.urlopen(req, timeout=3) as r:
+        return json.loads(r.read())
+
+
 def api_chat_append(session_id, messages):
     """Seed a chat straight into the record.
 
@@ -430,12 +446,25 @@ try:
               len(api_state().get("cards", [])) == 6)
 
         # ---- Actions menu ----------------------------------------------------
+        # This is an end-to-end test. One Menu ▾ holds everything that is not
+        # a filter: the board's own actions (the ⋯ that hung beside the board
+        # name is gone), History, Export/Import, a hover-out Show submenu for
+        # what is painted on the cards, the habit sound and the theme. Undo
+        # left the menu — History is the way back.
         check("menu: panel starts closed", page.locator("#menu-panel").is_hidden())
         page.click("#menu-btn")
-        check("menu: click opens the panel with all four actions",
+        check("menu: one panel holds board actions, history, data and display",
               page.locator("#menu-panel").is_visible()
               and all(page.locator(f"#menu-panel #{i}").count() == 1
-                      for i in ("undo-btn", "history-btn", "export-btn", "import-btn")))
+                      for i in ("board-new", "board-rename", "board-delete",
+                                "history-btn", "export-btn", "import-btn",
+                                "menu-show", "habit-mute", "menu-sound",
+                                "theme-select")))
+        check("menu: Undo left the menu — History is the way back",
+              page.locator("#menu-panel #undo-btn").count() == 0)
+        check("menu: the ⋯ beside the board name is gone, the picker stays",
+              page.locator("#board-menu-btn").count() == 0
+              and page.locator(".board-switch #board-select").count() == 1)
         page.keyboard.press("Escape")
         page.wait_for_timeout(50)
         check("menu: Escape closes the panel", page.locator("#menu-panel").is_hidden())
@@ -450,6 +479,26 @@ try:
               page.locator(".cat-tab-count").count() == 0)
         check("categories: 'All' is pressed when nothing is filtered",
               page.get_attribute(".cat-tab-all", "aria-pressed") == "true")
+        # This is an end-to-end test. The ✎ Edit tab sits immediately beside the
+        # last category tab — measured, because a margin-left:auto pushing it to
+        # the far edge of the rail passes every count and class assertion. The
+        # slack guard keeps the check honest: with no spare width in the rail the
+        # two placements are indistinguishable.
+        rail_loc = page.locator("#cat-rail")
+        last_loc = page.locator(".cat-tab:not(.cat-tab-edit)").last
+        edit_loc = page.locator("#edit-cats-btn")
+        rail_box = rail_loc.bounding_box() if rail_loc.count() else None
+        last_box = last_loc.bounding_box() if last_loc.count() else None
+        edit_box = edit_loc.bounding_box() if edit_loc.count() else None
+        tabs_loc = page.locator(".cat-tab")
+        tab_boxes = [b for b in (tabs_loc.nth(i).bounding_box()
+                                 for i in range(tabs_loc.count())) if b]
+        rail_slack = (rail_box["width"] - sum(b["width"] for b in tab_boxes)
+                      if rail_box and tab_boxes else 0)
+        check("categories: the ✎ Edit tab sits beside the last tab, not flush right",
+              rail_box is not None and last_box is not None and edit_box is not None
+              and rail_slack > 24
+              and edit_box["x"] - (last_box["x"] + last_box["width"]) < 24)
         check("categories: cards carry their category spine",
               page.locator(".card.categorized").count() == 6)
         page.locator('.cat-tab[data-cat="love"]').click()
@@ -735,6 +784,280 @@ try:
         page.wait_for_selector(".card")
         check("persistence: board intact after reload", page.locator(".card").count() == count_before)
 
+        # ---- Menu toggles: Tags on/off, Done column; the numbers are gone ----
+        # This is an end-to-end test. Review verdict on the ledger numbers:
+        # clutter nobody toggled back on — so they are simply never shown and
+        # the Menu item is gone. In its place the Menu offers Tags: the chips
+        # on every card and the tag filter bar go with one press. Same idiom
+        # as ever: body class + lodestar: key, aria-pressed "true" = hidden.
+        # Every click is guarded and every compound check short-circuits on
+        # presence first: while the feature is missing these must come back as
+        # red lines, never as a TimeoutError that abandons the checks after.
+        def body_has(cls):
+            return page.evaluate("c => document.body.classList.contains(c)", cls)
+
+        def menu_toggle(btn_id):
+            """Reach a Show toggle through the hover submenu; report presence."""
+            page.keyboard.press("Escape")  # the panel must start closed
+            page.wait_for_timeout(50)
+            page.click("#menu-btn")
+            page.hover("#menu-show")
+            page.wait_for_timeout(150)
+            btn = page.locator(f"#show-panel #{btn_id}")
+            present = btn.count() == 1 and btn.is_visible()
+            if present:
+                btn.click()
+                page.wait_for_timeout(100)
+            page.keyboard.press("Escape")  # a toggle may leave the panel open
+            page.wait_for_timeout(50)
+            return present
+
+        # The four card-paint toggles live behind one hover-out "Show"
+        # submenu (the standard name for appear/disappear controls): Tags,
+        # Priorities, Types, Done column. They appear on hover and are not in
+        # the way otherwise.
+        page.click("#menu-btn")
+        check("menu: card numbers left the Menu; Show holds the paint toggles",
+              page.locator("#menu-panel #toggle-card-nums").count() == 0
+              and page.locator("#menu-panel #menu-show").count() == 1
+              and page.locator("#show-panel").is_hidden())
+        page.hover("#menu-show")
+        page.wait_for_timeout(150)
+        check("menu: hovering Show unfolds the Filters group and Done column",
+              page.locator("#show-panel").is_visible()
+              and all(page.locator(f"#show-panel #{i}").count() == 1
+                      for i in ("toggle-tags", "toggle-prios",
+                                "toggle-types", "toggle-done-col"))
+              # text_content, not inner_text: the label renders uppercase via
+              # CSS text-transform, and inner_text reports the rendered text.
+              and page.locator("#show-panel .menu-label").first.text_content().strip()
+                  == "Filters"
+              and page.get_attribute("#toggle-tags", "aria-pressed") == "false"
+              and page.get_attribute("#toggle-done-col", "aria-pressed") == "false")
+        # The Menu reads as groups — board, act/data, display — split by
+        # visible separators rather than one undifferentiated list, with the
+        # display controls last.
+        check("menu: the panel is grouped by separators, display controls last",
+              page.locator("#menu-panel .menu-sep").count() >= 2
+              and page.evaluate(
+                  "() => { const items = [...document.querySelectorAll('#menu-panel .menu-item')];"
+                  " return items.indexOf(document.querySelector('#menu-show'))"
+                  " > items.indexOf(document.querySelector('#export-btn')); }"))
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(50)
+
+        check("numbers: no ledger number is visible on any card",
+              page.locator("#board .card-num:visible").count() == 0)
+
+        # Show's three Filters toggles act on the FILTER CONTROLS — the tag
+        # bar and tag dropdown, the priority dropdown, the type dropdown —
+        # never on what is painted on the cards. Chips and stamps are the
+        # cards' own; a filter you don't use is the thing worth hiding.
+        tags_total = page.locator("#board .card-tag").count()
+        check("show: the tag filters start visible, chips always on the cards",
+              tags_total > 0 and page.locator("#board .card-tag").first.is_visible()
+              and page.locator("#tag-bar").is_visible()
+              and page.locator("#tag-filter").is_visible())
+
+        toggled = menu_toggle("toggle-tags")
+        check("show: the Tags toggle hides both tag filters, never the chips",
+              toggled and body_has("hide-tags")
+              and not page.locator("#tag-bar").is_visible()
+              and not page.locator("#tag-filter").is_visible()
+              and page.locator("#board .card-tag").first.is_visible()
+              and page.get_attribute("#toggle-tags", "aria-pressed") == "true")
+        check("show: the choice is stored under the lodestar: prefix",
+              bool(page.evaluate("localStorage.getItem('lodestar:hideTags')")))
+
+        # Persistence: a reload must come back with the filters still hidden.
+        page.reload()
+        page.wait_for_selector(".card")
+        check("show: the tag filters stay hidden across a reload",
+              body_has("hide-tags")
+              and not page.locator("#tag-filter").is_visible()
+              and page.locator("#board .card-tag").first.is_visible())
+
+        toggled_off = menu_toggle("toggle-tags")
+        check("show: toggling Tags again brings the filters back",
+              toggled_off and not body_has("hide-tags")
+              and page.locator("#tag-filter").is_visible()
+              and page.locator("#tag-bar").is_visible()
+              and page.get_attribute("#toggle-tags", "aria-pressed") == "false"
+              and not page.evaluate("localStorage.getItem('lodestar:hideTags')"))
+
+        # Priorities and Types, same contract: the toggle hides the dropdown,
+        # the stamps on the cards stay exactly as they were.
+        check("show: priority and type stamps are on the cards to stay",
+              page.locator("#board .prio-badge").first.is_visible()
+              and page.locator("#board .card .badge").first.is_visible())
+        toggled = menu_toggle("toggle-prios")
+        check("show: the Priorities toggle hides the priority filter, stamps stay",
+              toggled and body_has("hide-prios")
+              and not page.locator("#prio-filter").is_visible()
+              and page.locator("#board .prio-badge").first.is_visible()
+              and bool(page.evaluate("localStorage.getItem('lodestar:hidePrios')")))
+        toggled_off = menu_toggle("toggle-prios")
+        check("show: toggling Priorities again brings the filter back",
+              toggled_off and not body_has("hide-prios")
+              and page.locator("#prio-filter").is_visible())
+        toggled = menu_toggle("toggle-types")
+        check("show: the Types toggle hides the type filter, stamps stay",
+              toggled and body_has("hide-types")
+              and not page.locator("#type-filter").is_visible()
+              and page.locator("#board .card .badge").first.is_visible()
+              and bool(page.evaluate("localStorage.getItem('lodestar:hideTypes')")))
+        toggled_off = menu_toggle("toggle-types")
+        check("show: toggling Types again brings the filter back",
+              toggled_off and not body_has("hide-types")
+              and page.locator("#type-filter").is_visible())
+
+        # The Done column, same contract: hide, persist the key, bring it back.
+        done_col = page.locator('section.column[data-col="answered"]')
+        toggled = menu_toggle("toggle-done-col")
+        check("hide: the toggle hides the Done column and only that one",
+              toggled and body_has("hide-done-col")
+              and done_col.count() == 1 and not done_col.is_visible()
+              and page.get_attribute("#toggle-done-col", "aria-pressed") == "true"
+              and page.locator('section.column[data-col="inbox"]').is_visible()
+              and bool(page.evaluate("localStorage.getItem('lodestar:hideDoneCol')")))
+        toggled_off = menu_toggle("toggle-done-col")
+        check("hide: toggling again brings the Done column back",
+              toggled_off and not body_has("hide-done-col")
+              and done_col.is_visible()
+              and page.get_attribute("#toggle-done-col", "aria-pressed") == "false")
+
+        # Leave no residue for the checks after this block: whatever state the
+        # (possibly missing) toggles left behind, clear it outright.
+        page.evaluate("""() => {
+          localStorage.removeItem('lodestar:hideTags');
+          localStorage.removeItem('lodestar:hidePrios');
+          localStorage.removeItem('lodestar:hideTypes');
+          localStorage.removeItem('lodestar:hideDoneCol');
+          document.body.classList.remove(
+            'hide-tags', 'hide-prios', 'hide-types', 'hide-done-col');
+        }""")
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(50)
+
+        # ---- Header and chrome styling ---------------------------------------
+        # This is an end-to-end test. Three quiet-chrome rules from review:
+        # the board picker blends into the header (transparent background,
+        # tagline ink) instead of reading as a form control; the ✎ Edit tab
+        # rests faded — translucent ink, dashed hairline — and only darkens
+        # under the pointer; the footer drag hint is one thin line, about a
+        # third of the panel it used to be.
+        def css(sel, prop):
+            return page.evaluate(
+                "([s, p]) => getComputedStyle(document.querySelector(s))[p]",
+                [sel, prop])
+
+        def alpha(color):
+            # Chromium serialises legacy colours as rgba(r, g, b, a) but
+            # color-mix() results as color(srgb r g b / a) — read either.
+            if color.startswith("rgba("):
+                return float(color[5:-1].split(",")[3])
+            if color.startswith("color(") and "/" in color:
+                return float(color.rstrip(")").split("/")[1])
+            return 1.0
+
+        check("header: the board picker blends in — transparent, tagline ink",
+              css("#board-select", "backgroundColor") in ("rgba(0, 0, 0, 0)", "transparent")
+              and css("#board-select", "color") == css(".tagline", "color"))
+
+        rest_ink = css("#edit-cats-btn", "color")
+        check("categories: the ✎ Edit tab rests faded — translucent ink, dashed",
+              alpha(rest_ink) < 1.0
+              and css("#edit-cats-btn", "borderTopStyle") == "dashed")
+        page.hover("#edit-cats-btn")
+        page.wait_for_timeout(250)  # its colours transition
+        check("categories: hovering ✎ Edit inks it darker",
+              css("#edit-cats-btn", "color") != rest_ink)
+        page.mouse.move(0, 0)
+        page.wait_for_timeout(100)
+
+        footer = page.locator(".app-footer").bounding_box()
+        check("footer: the drag hint is one thin line (a third of what it was)",
+              footer is not None and footer["height"] <= 16)
+
+        # ---- Filters live on the category rail --------------------------------
+        # This is an end-to-end test. Search and the two filters left the top
+        # toolbar for the tab row, so every way of narrowing the board sits in
+        # one place: the category tabs, then type and priority right after the
+        # last tab, and search flush against the right edge.
+        rail_line = page.locator(".rail-row")
+        check("rail: categories, filters and search share one row",
+              rail_line.count() == 1
+              and rail_line.locator("#cat-rail").count() == 1
+              and rail_line.locator("#type-filter").count() == 1
+              and rail_line.locator("#prio-filter").count() == 1
+              and rail_line.locator("#tag-filter").count() == 1
+              and rail_line.locator("#search").count() == 1
+              and page.locator(".toolbar #search").count() == 0
+              and page.locator(".toolbar #type-filter").count() == 0
+              and page.locator(".toolbar #prio-filter").count() == 0
+              and page.locator("#menu-panel #theme-select").count() == 1)
+        # The view switch is the page's centre of gravity, and the Menu shrank
+        # to the same quiet ⚙ the Assistant's settings use — one look, two
+        # contents, each on its own page.
+        switch_bb = page.locator(".view-switch").bounding_box()
+        header_bb = page.locator(".header-row").bounding_box()
+        check("header: the view switch sits in the middle of the page",
+              switch_bb is not None and header_bb is not None
+              and abs((switch_bb["x"] + switch_bb["width"] / 2)
+                      - (header_bb["x"] + header_bb["width"] / 2)) <= 30)
+        check("header: Menu is the same quiet gear the Assistant settings use",
+              page.locator("#menu-btn").inner_text().strip() == "⚙"
+              and "assistant-extras-btn" in (page.get_attribute("#menu-btn", "class") or ""))
+
+        last_tab_bb = page.locator("#cat-rail .cat-tab").last.bounding_box()
+        type_bb = page.locator("#type-filter").bounding_box()
+        prio_bb = page.locator("#prio-filter").bounding_box()
+        search_bb = page.locator("#search").bounding_box()
+        row_bb = rail_line.bounding_box()
+        check("rail: type and priority follow the last tab, search at the far right",
+              all(b is not None for b in (last_tab_bb, type_bb, prio_bb, search_bb, row_bb))
+              and type_bb["x"] >= last_tab_bb["x"] + last_tab_bb["width"]
+              and prio_bb["x"] >= type_bb["x"] + type_bb["width"]
+              and search_bb["x"] >= prio_bb["x"] + prio_bb["width"]
+              and (search_bb["x"] + search_bb["width"])
+                  >= (row_bb["x"] + row_bb["width"]) - 40
+              and abs(search_bb["y"] - last_tab_bb["y"]) <= 24)
+
+        # Everything on the rail shares the tabs' upper and lower edge — a
+        # control floating above or below the line reads as broken.
+        def edges(sel):
+            b = page.locator(sel).bounding_box()
+            return (b["y"], b["y"] + b["height"]) if b else None
+
+        tab_edges = edges("#cat-rail .cat-tab >> nth=1")  # a quiet, unpressed tab
+        offenders = [s for s in ("#edit-cats-btn", "#type-filter", "#prio-filter",
+                                 "#tag-filter", "#search")
+                     if edges(s) is None or tab_edges is None
+                     or abs(edges(s)[0] - tab_edges[0]) > 2
+                     or abs(edges(s)[1] - tab_edges[1]) > 2]
+        check(f"rail: every control shares the tabs' edges (off: {offenders})",
+              tab_edges is not None and not offenders)
+
+        # The tags dropdown is a third filter beside type and priority: every
+        # tag on the board is an option, picking one narrows the board to its
+        # cards, and the empty option lets the whole board back.
+        board_tags = sorted({t for c in api_state()["cards"]
+                             for t in (c.get("tags") or [])})
+        opt_text = " ".join(page.locator("#tag-filter option").all_text_contents())
+        pick = board_tags[0] if board_tags else None
+        if pick:
+            page.select_option("#tag-filter", pick)
+            page.wait_for_timeout(200)
+        tagged = sum(1 for c in api_state()["cards"]
+                     if pick and pick in (c.get("tags") or []))
+        check("filter: the tag dropdown lists every tag and narrows to the pick",
+              pick is not None and tagged > 0
+              and all(t in opt_text for t in board_tags)
+              and page.locator("#board .card").count() == tagged)
+        if pick:
+            page.select_option("#tag-filter", "")
+            page.wait_for_timeout(200)
+
         # ---- Export ---------------------------------------------------------
         menu_click("#export-btn")
         page.wait_for_selector("#export-dialog[open]")
@@ -767,11 +1090,31 @@ try:
         # select_option('star') and hid the ~180 assertions after it. So a gap in
         # the feature has to come back as False, never as an exception.
         def select_theme(theme):
+            # The picker lives in the ⚙ Menu, so it has to be dropped open
+            # first (a hidden <select> fails Playwright's actionability
+            # checks) — and the Menu belongs to the board, so from the
+            # Assistant this takes the same detour a person would: over to the
+            # board, switch, and back. The theme sticks across views.
             try:
-                page.select_option("#theme-select", theme, timeout=1500)
+                came_from = page.evaluate("document.body.dataset.view")
+                if not page.locator("#menu-btn").is_visible():
+                    page.click('.view-switch button[data-view="board"]')
+                    page.wait_for_timeout(150)
+                if page.locator("#menu-panel").is_hidden():
+                    page.click("#menu-btn")
+                page.select_option("#menu-panel #theme-select", theme, timeout=1500)
+                page.keyboard.press("Escape")
+                page.wait_for_timeout(50)
+                if came_from and came_from != page.evaluate("document.body.dataset.view"):
+                    page.click(f'.view-switch button[data-view="{came_from}"]')
+                    page.wait_for_timeout(150)
                 return True
             except Exception:
+                page.keyboard.press("Escape")
                 return False
+
+        check("theme: the picker lives in the Menu now",
+              page.locator("#menu-panel #theme-select").count() == 1)
 
         def css(sel, prop):
             return page.evaluate(
@@ -791,7 +1134,7 @@ try:
         page.wait_for_selector(".card")
         check("theme: an unknown stored theme falls back to Morning",
               page.evaluate("document.documentElement.dataset.theme") == "light")
-        page.select_option("#theme-select", "white")
+        select_theme("white")
         page.reload()
         page.wait_for_selector(".card")
         check("theme: choice persisted across reload",
@@ -807,7 +1150,7 @@ try:
         except Exception:
             day_bg_white = False
         check("theme: Day mode uses a plain white background", day_bg_white)
-        page.select_option("#theme-select", "light")
+        select_theme("light")
 
         # ---- The brand mark -------------------------------------------------
         # This is an end-to-end test. The header mark is the nova, drawn as two
@@ -1075,9 +1418,16 @@ try:
         check("delete: confirming removes the card",
               page.locator('[data-col="answered"] .card').count() == 1)
 
-        menu_click("#undo-btn")
+        # Undo is History now: the entry below "current" is the state before
+        # the delete, and Restore is the undo.
+        menu_click("#history-btn")
+        page.wait_for_selector("#history-dialog[open]")
+        page.locator("#history-list .history-row").nth(1) \
+            .locator("button:has-text('Restore')").click()
         page.wait_for_timeout(150)
-        check("undo: deleted card restored to Answered",
+        page.click("#close-history")
+        page.wait_for_timeout(100)
+        check("undo via History: deleted card restored to Answered",
               page.locator('[data-col="answered"] .card').count() == 2)
 
         # ---- History --------------------------------------------------------
@@ -1117,6 +1467,17 @@ try:
         page.wait_for_selector("#board.backlog")
         check("backlog: rows match Inbox card count",
               page.locator(".backlog-row").count() == inbox_count)
+        # The rows lost their ledger-number column; the grid must lose it too,
+        # or every cell slides one column left — the stamp overlapping the
+        # title, the title wrapping inside the 96px the stamp used to have.
+        first_row = page.locator(".backlog-row").first
+        badge_bb = first_row.locator(".badge").bounding_box()
+        title_bb = first_row.locator(".row-title").bounding_box()
+        row_bb = first_row.bounding_box()
+        check("backlog: the stamp and the title share the line without overlap",
+              all(b is not None for b in (badge_bb, title_bb, row_bb))
+              and badge_bb["x"] + badge_bb["width"] <= title_bb["x"] + 1
+              and title_bb["width"] >= row_bb["width"] * 0.5)
         check("backlog: view button marked pressed",
               page.get_attribute('.view-switch button[data-view="backlog"]', "aria-pressed") == "true")
         page.locator(".backlog-row").first.click()
@@ -1397,9 +1758,14 @@ try:
         check("import: confirming substitute replaces the whole board",
               page.locator(".card").count() == 2)
 
-        menu_click("#undo-btn")
+        menu_click("#history-btn")
+        page.wait_for_selector("#history-dialog[open]")
+        page.locator("#history-list .history-row").nth(1) \
+            .locator("button:has-text('Restore')").click()
         page.wait_for_timeout(150)
-        check("undo: substitution rolled back",
+        page.click("#close-history")
+        page.wait_for_timeout(100)
+        check("undo via History: substitution rolled back",
               page.locator(".card").count() == count_before_import + 2)
 
         # ---- Import: invalid file -------------------------------------------
@@ -2065,27 +2431,40 @@ try:
               and page.locator(".chat-dock button").count() == 0)
 
         # This is an end-to-end test.
-        # All four tools are header furniture now, in one row, left to right in
-        # the order you reach for them: search the record, list it, start a new
-        # chat, configure. View-specific, like the board's own search and
-        # filters — a gear for a screen you are not on is furniture that does
-        # nothing.
-        recall = box(".assistant-tools .chat-recall")
+        # The assistant's four tools left the app header for the sheet's own
+        # header: search the record, History, New chat, the gear — right of
+        # the "Assistant" heading, in that order. The app header above keeps
+        # the brand and the centred view switch; the board's own ⚙ Menu is
+        # gone here, because everything in it acts on a board you are not
+        # looking at.
+        recall = box(".assistant-head .chat-recall")
         hist, plus = box("#chat-history-btn"), box("#chat-new")
-        gear, theme = box("#assistant-extras-btn"), box("#theme-select")
-        row = [recall, hist, plus, gear, theme]
-        in_header = (all(row) and sheet_box
-                     and all(b["y"] + b["height"] <= sheet_box["y"] for b in row)
-                     and all(abs(b["y"] - theme["y"]) <= 12 for b in row))
-        ordered = all(row[i]["x"] < row[i + 1]["x"] for i in range(len(row) - 1))
+        gear = box("#assistant-extras-btn")
+        heading_bb = box(".assistant-head h2")
+        row = [recall, hist, plus, gear]
+        in_head = (all(row) and heading_bb
+                   and all(abs(b["y"] - heading_bb["y"]) <= 24 for b in row)
+                   and all(b["x"] > heading_bb["x"] + heading_bb["width"] for b in row)
+                   and page.locator(".assistant-head .assistant-tools").count() == 1
+                   and page.locator(".app-header .assistant-tools").count() == 0)
+        ordered = all(row) and all(
+            row[i]["x"] < row[i + 1]["x"] for i in range(len(row) - 1))
+        menu_gone_here = not page.locator("#menu-btn").is_visible()
         page.click("[data-view='board']")
         page.wait_for_selector(".column")
-        away = not page.locator(".assistant-tools").is_visible()
+        away = page.locator(".assistant-head").count() == 0
+        menu_back = page.locator("#menu-btn").is_visible()
         page.click("[data-view='assistant']")
         page.wait_for_selector("#chat-input")
-        check("tools: search, History, New chat and the gear sit in the header, in order",
-              in_header and ordered and away
-              and page.locator(".assistant-tools").is_visible())
+        check("tools: search, History, New chat and the gear sit right of the Assistant heading",
+              in_head and ordered and menu_gone_here and away and menu_back)
+        # The tools are one wired-once node that moves between parents, so the
+        # round trip above must not orphan its listeners: History still opens.
+        page.click("#chat-history-btn")
+        check("tools: History still opens after leaving and returning",
+              wait_until(lambda: page.locator("#chat-history").count() == 1))
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(100)
 
         # This is an end-to-end test.
         # The gear drops a panel like the two beside it. It used to open inside
@@ -2095,10 +2474,14 @@ try:
         page.wait_for_selector("#assistant-extras:not([hidden])")
         drawer = box("#assistant-extras")
         gear = box("#assistant-extras-btn")
-        dropped = (drawer and gear and sheet_box
+        # The gear sits in the sheet's head now, so the drawer hangs from the
+        # gear itself rather than from the app header above the sheet.
+        dropped = (drawer and gear
                    and drawer["y"] >= gear["y"] + gear["height"] - 1
-                   and drawer["y"] < sheet_box["y"] + 40)
-        page.mouse.click(700, 700)
+                   and drawer["y"] <= gear["y"] + gear["height"] + 60)
+        # Outside means outside: the page margin left of the sheet, where the
+        # drawer (which now also lives lower on the page) can never reach.
+        page.mouse.click(10, 500)
         shut = wait_until(lambda: page.locator("#assistant-extras[hidden]").count() == 1)
         check("tools: the settings drop from the gear and shut on a click outside",
               dropped and shut)
@@ -2467,19 +2850,18 @@ try:
         page.keyboard.press("Escape")
 
         # This is an end-to-end test.
-        # The board's search, filters, category tabs, tag bar and Menu filter and
-        # act on cards, and the footer explains dragging cards and the keys that
-        # move them. None of it reaches the Assistant, so around a conversation
-        # they are furniture that does nothing. The theme picker stays: it is the
-        # app's, not the board's.
+        # The board's search, filters, category tabs, tag bar and ⚙ Menu filter
+        # and act on cards, and the footer explains dragging cards and the keys
+        # that move them. None of it reaches the Assistant, so around a
+        # conversation they are furniture that does nothing — the Menu (and the
+        # theme select inside it) belongs to the board and leaves with it.
         hidden_here = (not page.locator("#search").is_visible()
                        and not page.locator("#type-filter").is_visible()
                        and not page.locator("#prio-filter").is_visible()
                        and not page.locator("#menu-btn").is_visible()
                        and not page.locator("#cat-rail").is_visible()
                        and not page.locator("#tag-bar").is_visible()
-                       and not page.locator(".app-footer").is_visible()
-                       and page.locator("#theme-select").is_visible())
+                       and not page.locator(".app-footer").is_visible())
         page.locator('.view-switch button[data-view="board"]').click()
         page.wait_for_selector(".board .column")
         back_on_board = (page.locator("#search").is_visible()
@@ -3573,8 +3955,86 @@ try:
         check("habit: a due habit announces itself when the board opens",
               page.locator(".habit-banner").count() == 1
               and "Meditate" in page.locator(".habit-banner").inner_text())
-        check("habit: the sound can be muted from the board",
-              page.locator("#habit-mute").count() == 1)
+        # The sound row says its state in a word beside the sign — "on" in
+        # green, "off" in red — and greets being switched ON with a chime
+        # (window fires 'lodestar:chime' so this suite can hear it without
+        # ears). Switching OFF stays silent.
+        def sound_word():
+            return page.locator("#habit-mute .habit-sound-state").inner_text().strip()
+
+        def sound_rgb():
+            c = page.locator("#habit-mute .habit-sound-state").evaluate(
+                "el => getComputedStyle(el).color")
+            return [float(x) for x in c[c.index("(") + 1:c.index(")")].split(",")[:3]]
+
+        page.evaluate("window.addEventListener('lodestar:chime',"
+                      " () => localStorage.setItem('e2e:chime', '1'))")
+        page.click("#menu-btn")
+        has_state = page.locator("#habit-mute .habit-sound-state").count() == 1
+        check("habit: the sound row says 'on' in green while it is on",
+              has_state and sound_word() == "on"
+              and sound_rgb()[1] > sound_rgb()[0])  # green channel leads
+        if has_state:
+            page.click("#habit-mute")  # off — no chime for going silent
+            page.wait_for_timeout(100)
+            check("habit: switched off it says 'off' in red, silently",
+                  sound_word() == "off"
+                  and sound_rgb()[0] > sound_rgb()[1]  # red channel leads
+                  and not page.evaluate("localStorage.getItem('e2e:chime')"))
+            page.click("#habit-mute")  # back on — this is the moment that chimes
+            page.wait_for_timeout(200)
+            check("habit: switching the sound on plays the chime and says 'on'",
+                  sound_word() == "on"
+                  and page.evaluate("localStorage.getItem('e2e:chime')") == "1")
+        else:
+            check("habit: switched off it says 'off' in red, silently", False)
+            check("habit: switching the sound on plays the chime and says 'on'", False)
+        page.evaluate("() => localStorage.removeItem('e2e:chime')")
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(50)
+
+        # Under the on/off row sits Sound — hover it and the four chimes
+        # unfold (Marimba, Bell, Droplet, Kalimba). Picking one previews it,
+        # marks it chosen, persists across a reload, and is what every chime
+        # from then on plays.
+        page.click("#menu-btn")
+        check("sound: a hover Sound submenu sits under the on/off row",
+              page.locator("#menu-panel #menu-sound").count() == 1
+              and page.locator("#sound-panel").is_hidden()
+              and page.evaluate(
+                  "() => { const items = [...document.querySelectorAll('#menu-panel .menu-item')];"
+                  " return items.indexOf(document.querySelector('#menu-sound'))"
+                  " > items.indexOf(document.querySelector('#habit-mute')); }"))
+        page.hover("#menu-sound")
+        page.wait_for_timeout(150)
+        chime_options = ("sound-marimba", "sound-bell", "sound-droplet", "sound-kalimba")
+        check("sound: hovering unfolds the four chimes, exactly one chosen",
+              page.locator("#sound-panel").is_visible()
+              and all(page.locator(f"#sound-panel #{o}").count() == 1
+                      for o in chime_options)
+              and sum(page.get_attribute(f"#{o}", "aria-checked") == "true"
+                      for o in chime_options) == 1)
+        page.evaluate("window.addEventListener('lodestar:chime',"
+                      " e => localStorage.setItem('e2e:chime-name', e.detail?.name || ''))")
+        page.click("#sound-bell")
+        page.wait_for_timeout(150)
+        check("sound: picking Bell previews it, marks it, and persists",
+              page.evaluate("localStorage.getItem('e2e:chime-name')") == "bell"
+              and page.evaluate("localStorage.getItem('lodestar:habitChime')") == "bell"
+              and page.get_attribute("#sound-bell", "aria-checked") == "true")
+        page.reload()
+        page.wait_for_selector(".quick-add input")
+        page.click("#menu-btn")
+        page.hover("#menu-sound")
+        page.wait_for_timeout(150)
+        check("sound: the choice survives a reload",
+              page.get_attribute("#sound-bell", "aria-checked") == "true")
+        page.evaluate("""() => {
+          localStorage.removeItem('e2e:chime-name');
+          localStorage.removeItem('lodestar:habitChime');
+        }""")
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(50)
         page.locator(".habit-banner .habit-banner-hide").click()
         page.wait_for_timeout(100)
         check("habit: the banner can be dismissed",
@@ -3622,7 +4082,8 @@ try:
         # step here waits for the board to be painted again rather than for a
         # re-render in place.
         def board_menu(action_sel):
-            page.click("#board-menu-btn")
+            # The board actions live in the one Menu ▾ now; the ⋯ is gone.
+            page.click("#menu-btn")
             page.click(action_sel)
 
         # Switching boards reloads, and the board being opened may be empty —
@@ -3677,16 +4138,119 @@ try:
               page.evaluate("() => document.querySelector('#board-select').value") == "main"
               and "Getaway" not in page.locator("#board-select").inner_text())
 
-        board_menu("#board-trash-btn")
-        page.wait_for_selector("#boards-dialog .history-row")
-        check("boards: a deleted board is listed with its cards intact",
-              "Getaway · 1 card(s)" in page.locator("#boards-trash-list").inner_text())
-        page.click("#boards-dialog .history-row button:has-text('Restore')")
+        # Deleted boards live in the History dialog now, beside the deleted
+        # cards — one place where everything that was removed can be brought
+        # back. The board menu therefore carries no "Deleted boards…" entry,
+        # and the history says in words which board is deleted.
+        page.click("#menu-btn")
+        check("boards: the menu has no trash entry — History owns it",
+              page.locator("#menu-panel #board-trash-btn").count() == 0)
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(50)
+
+        page.click("#menu-btn")
+        page.click("#history-btn")
+        page.wait_for_selector("#history-dialog[open]")
+        boards_section = page.locator("#boards-trash-section")
+        check("boards: History says which board is deleted, cards counted",
+              boards_section.is_visible()
+              and "Board “Getaway” is deleted" in boards_section.inner_text()
+              and "1 card(s)" in boards_section.inner_text())
+        page.click("#boards-trash-section button:has-text('Restore')")
         page.wait_for_timeout(300)
-        check("boards: restoring brings the board back with its cards",
+        check("boards: restoring from History puts the board back in the picker",
               "Getaway" in page.locator("#board-select").inner_text()
-              and [c["title"] for c in api_state(new_id)["cards"]] == ["Book the ferry"])
-        page.click("#close-boards")
+              and [c["title"] for c in api_state(new_id)["cards"]] == ["Book the ferry"]
+              and page.locator("#boards-trash-section .history-row").count() == 0)
+        page.click("#close-history")
+        page.wait_for_timeout(100)
+
+        # ---- Enter confirms the name dialog ----------------------------------
+        # This is an end-to-end test.
+        # Enter in #prompt-input must submit as OK. With both dialog buttons
+        # left as implicit submit buttons, Enter fires the first in tree order —
+        # Cancel — and the typed board name silently goes nowhere, which users
+        # read as "it does not work the first time".
+        def quiet(cond):
+            # A condition polled across a page reload: the evaluate can land in
+            # a destroyed execution context, and that must read as "not yet",
+            # never as an exception that abandons the remaining checks.
+            try:
+                return cond()
+            except Exception:
+                return False
+
+        def selected_board_name():
+            return page.evaluate(
+                "() => document.querySelector('#board-select')"
+                "?.selectedOptions[0]?.textContent || ''")
+
+        board_menu("#board-new")
+        prompt_open = wait_until(
+            lambda: page.locator("#prompt-dialog[open]").count() == 1)
+        check("prompt: the name dialog opens for a new board", prompt_open)
+        if prompt_open:
+            page.fill("#prompt-input", "Enter Probe")
+            # Stash how the dialog closes where the reload that a successful
+            # create triggers cannot lose it.
+            page.evaluate(
+                "() => { const d = document.querySelector('#prompt-dialog');"
+                " d.addEventListener('close', () =>"
+                " localStorage.setItem('e2e:prompt-close', d.returnValue),"
+                " { once: true }); }")
+            page.press("#prompt-input", "Enter")
+            # The reload the create triggers is waited out before the stash is
+            # read: a write-triggered backup can hold the single-threaded
+            # server for seconds, and reading mid-navigation is a race. The
+            # board being open is itself proof the dialog resolved as OK.
+            check("boards: the board named with Enter exists and is open",
+                  wait_until(lambda: quiet(
+                      lambda: selected_board_name() == "Enter Probe"), timeout=8.0))
+            check("prompt: Enter closes the name dialog as OK, not Cancel",
+                  wait_until(lambda: quiet(lambda: page.evaluate(
+                      "() => localStorage.getItem('e2e:prompt-close')") == "ok")))
+
+        # Cancel still cancels: by the button, and by Escape.
+        page.wait_for_selector(".quick-add input")
+        name_before = selected_board_name()
+        board_menu("#board-rename")
+        prompt_open = wait_until(
+            lambda: page.locator("#prompt-dialog[open]").count() == 1)
+        check("prompt: the rename dialog opens", prompt_open)
+        if prompt_open:
+            page.fill("#prompt-input", "Should Not Stick")
+            page.click("#prompt-cancel")
+            check("prompt: Cancel closes the dialog and drops the typed name",
+                  wait_until(
+                      lambda: page.locator("#prompt-dialog[open]").count() == 0)
+                  and selected_board_name() == name_before
+                  and "Should Not Stick"
+                  not in page.locator("#board-select").inner_text())
+        board_menu("#board-rename")
+        if wait_until(lambda: page.locator("#prompt-dialog[open]").count() == 1):
+            page.press("#prompt-input", "Escape")
+            check("prompt: Escape still cancels",
+                  wait_until(
+                      lambda: page.locator("#prompt-dialog[open]").count() == 0)
+                  and selected_board_name() == name_before)
+        else:
+            check("prompt: Escape still cancels", False)
+
+        # Put the world back: leave for the first board, then erase the probe
+        # board through the API so later checks see the original board set.
+        page.evaluate("() => localStorage.removeItem('e2e:prompt-close')")
+        if page.evaluate("() => document.querySelector('#board-select')?.value") != "main":
+            page.select_option("#board-select", "main")
+            wait_for_board("Lodestar")
+        probe = next(
+            (b for b in api_boards()["boards"] if b["name"] == "Enter Probe"), None)
+        if probe:
+            api_delete(f"/api/boards/{probe['id']}")
+            api_delete(f"/api/boards/trash/{probe['id']}")
+        check("boards: the probe board is gone and the first board is active",
+              page.evaluate("() => document.querySelector('#board-select')?.value")
+              == "main"
+              and all(b["name"] != "Enter Probe" for b in api_boards()["boards"]))
 
         # ---- Server-offline banner + recovery -------------------------------
         def block_state_put(route):
@@ -3718,6 +4282,43 @@ try:
         check("offline route-abort surfaced a console error to scrub", len(provoked) >= 1)
         for e in provoked:
             errors.remove(e)
+
+        # ---- The reminder fires from the background ---------------------------
+        # This is an end-to-end test. A habit slot arriving while the page
+        # just sits there must show the banner and chime on its own — no
+        # click, no render, no reload. The page runs on Playwright's mocked
+        # clock, so "three minutes later" costs nothing: the reminder loop's
+        # interval fires as the clock is pushed past the slot. Its own
+        # context, so the mocked clock cannot leak into the main page.
+        bg = browser.new_context(viewport={"width": 1440, "height": 900})
+        bg.add_init_script("window.QBOARD_DISABLE_SEMANTIC = true;")
+        bg_page = bg.new_page()
+        bg_page.clock.install()
+        bg_page.goto(URL)
+        bg_page.wait_for_selector(".quick-add input")
+        bg_page.evaluate("window.addEventListener('lodestar:chime',"
+                         " () => localStorage.setItem('e2e:bg-chime', '1'))")
+        slot = (datetime.now() + timedelta(minutes=2)).strftime("%H:%M")
+        bg_page.fill(".quick-add input", "Water the plants")
+        bg_page.press(".quick-add input", "Enter")
+        bg_page.locator('[data-col="inbox"] .card',
+                        has_text="Water the plants").first.click()
+        bg_page.wait_for_selector("#card-dialog[open]")
+        bg_page.locator('.type-picker label:has(input[value="habit"])').click()
+        bg_page.fill("#card-habit-times", slot)
+        bg_page.click('#card-form button[type="submit"]')
+        bg_page.wait_for_timeout(300)
+        # Not due yet: the slot is still two (mocked) minutes away.
+        quiet_before = bg_page.locator(".habit-banner",
+                                       has_text="Water the plants").count() == 0
+        bg_page.clock.fast_forward("03:00")  # past the slot — the loop must notice
+        bg_page.wait_for_timeout(400)
+        check("habit: a slot arriving in the background banners and chimes by itself",
+              quiet_before
+              and bg_page.locator(".habit-banner",
+                                  has_text="Water the plants").count() == 1
+              and bg_page.evaluate("localStorage.getItem('e2e:bg-chime')") == "1")
+        bg.close()
 
         check("console: no JS errors during entire run", not errors)
         if errors:

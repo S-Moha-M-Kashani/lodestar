@@ -1,6 +1,6 @@
 import { assistantState, ensureChatSession, refreshChatSessions } from '../assistant/session.js';
 import { renderAssistant } from '../assistant/sheet.js';
-import { renderAssistantTools } from '../assistant/tools.js';
+import { renderAssistantTools, rescueAssistantTools } from '../assistant/tools.js';
 import { COLUMNS, VIEWS, VIEW_LABELS } from '../core/constants.js';
 import { timeline } from '../core/history.js';
 import { VIEW_KEY } from '../core/keys.js';
@@ -23,9 +23,13 @@ export function render() {
   const board = $('#board');
   board.className = view;
   // The header's controls are the board's — search, the filters, the category
-  // tabs, the tag bar, the Menu. Which view is showing decides whether they
-  // are furniture that does nothing; the theme picker is the app's and stays.
+  // tabs, the tag bar, the ⚙ Menu (theme included). Which view is showing
+  // decides whether they are furniture that does nothing.
   document.body.dataset.view = view;
+  // The assistant's tools live in the sheet's head while the Assistant is
+  // open, and the sheet is about to be torn down — rescue the wired-once node
+  // back to its header parking spot BEFORE the wipe destroys it.
+  rescueAssistantTools();
   board.innerHTML = '';
   hidePlotTip();
   if (view === 'backlog') {
@@ -52,7 +56,6 @@ export function render() {
   renderTagBar();
   renderHabitBanner();
   renderAssistantTools();
-  $('#undo-btn').disabled = timeline.index <= 0;
 
   if (dealCards) {
     board.querySelectorAll('.card, .backlog-row').forEach((el, i) => {

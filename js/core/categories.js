@@ -53,5 +53,7 @@ export function sanitizeCategories(raw) {
     out.push({ id, label, h });
     if (out.length >= CAT_LIMIT) break;
   }
-  return out.length ? out : null;
+  // An array in is an array out — [] included, since a registry someone emptied
+  // is a real state to keep. Only a missing/non-array field returns null.
+  return out;
 }

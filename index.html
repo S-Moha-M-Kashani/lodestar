@@ -209,17 +209,11 @@
                until the server has listed the boards — with no backend there is
                one board, held in this browser, and a picker offering to switch
                between one thing is furniture that does nothing. -->
+          <!-- The picker alone: its actions (new / rename / delete) live in
+               the one Menu ▾ with everything else — the ⋯ that hung here was
+               a second menu nobody expected. -->
           <div class="board-switch" hidden>
             <select id="board-select" aria-label="Board" title="Board"></select>
-            <div class="toolbar-menu">
-              <button id="board-menu-btn" class="btn ghost" aria-haspopup="true" aria-expanded="false" title="Add, rename or remove a board">⋯</button>
-              <div id="board-menu-panel" class="menu-panel" hidden>
-                <button id="board-new" class="menu-item" title="Start a board with its own cards and its own chats">＋ New board</button>
-                <button id="board-rename" class="menu-item" title="Rename the board you are on">Rename board</button>
-                <button id="board-delete" class="menu-item" title="Remove this board — its cards are kept and it can be restored">Delete board</button>
-                <button id="board-trash-btn" class="menu-item" title="Boards you deleted — restore one, or erase it for good">Deleted boards…</button>
-              </div>
-            </div>
           </div>
         </div>
       </div>
@@ -233,32 +227,56 @@
         <button type="button" data-view="assistant" aria-pressed="false">Assistant</button>
       </div>
       <div class="toolbar">
-        <input id="search" type="search" placeholder="Search the board…" aria-label="Search the board">
-        <select id="type-filter" aria-label="Filter by type">
-          <option value="">All types</option>
-          <option value="question">? Questions</option>
-          <option value="problem">! Problems</option>
-          <option value="task">✓ Tasks</option>
-          <option value="idea">✦ Ideas</option>
-          <option value="plan">→ Plans</option>
-          <option value="habit">↻ Habits</option>
-        </select>
-        <select id="prio-filter" aria-label="Filter by priority">
-          <option value="">All priorities</option>
-          <option value="1">P1 · urgent &amp; important</option>
-          <option value="2">P2 · urgent</option>
-          <option value="3">P3 · important</option>
-          <option value="4">P4 · neither</option>
-          <option value="none">No label</option>
-        </select>
         <div class="toolbar-menu">
-          <button id="menu-btn" class="btn ghost" aria-haspopup="true" aria-expanded="false" title="Undo, history, export and import">Menu ▾</button>
+          <!-- The board's menu behind the same quiet gear the Assistant's
+               settings use — one look, two contents, each on its own page. -->
+          <button id="menu-btn" class="assistant-extras-btn" aria-label="Menu" aria-haspopup="true" aria-expanded="false" title="Boards, history, export, import, display and sound">⚙</button>
+          <!-- One menu, four groups split by rule lines: the board itself,
+               history and data, what is painted on the cards (a hover Show
+               submenu), and the app's sound and theme. Undo left — History
+               is the way back. -->
           <div id="menu-panel" class="menu-panel" hidden>
-            <button id="undo-btn" class="menu-item" title="Undo the last change">↶ Undo</button>
-            <button id="history-btn" class="menu-item" title="Board history — jump back to any state">History</button>
+            <button id="board-new" class="menu-item" title="Start a board with its own cards and its own chats">＋ New board</button>
+            <button id="board-rename" class="menu-item" title="Rename the board you are on">Rename board</button>
+            <button id="board-delete" class="menu-item" title="Remove this board — its cards are kept and it can be restored from History">Delete board</button>
+            <hr class="menu-sep">
+            <button id="history-btn" class="menu-item" title="Board history — every change, deleted cards and deleted boards">History</button>
             <button id="export-btn" class="menu-item" title="Download the board as a JSON file">Export JSON</button>
             <button id="import-btn" class="menu-item" title="Restore the board from a JSON file">Import JSON</button>
+            <hr class="menu-sep">
+            <div class="menu-flyout">
+              <button id="menu-show" class="menu-item" aria-haspopup="true" aria-expanded="false" title="What is painted on the cards">Show ◂</button>
+              <div id="show-panel" class="menu-panel flyout-panel" hidden>
+                <!-- These act on the FILTER CONTROLS, never on what is
+                     painted on the cards — chips and stamps are the cards'
+                     own; a filter you don't use is the thing worth hiding. -->
+                <span class="menu-label">Filters</span>
+                <button id="toggle-tags" class="menu-item" aria-pressed="false" title="Hide the tag filters — the # bar and the tags dropdown"># Tags</button>
+                <button id="toggle-prios" class="menu-item" aria-pressed="false" title="Hide the priority filter dropdown">Priorities</button>
+                <button id="toggle-types" class="menu-item" aria-pressed="false" title="Hide the type filter dropdown">Types</button>
+                <hr class="menu-sep">
+                <button id="toggle-done-col" class="menu-item" aria-pressed="false" title="Hide the Done column on the Board view">Done column</button>
+              </div>
+            </div>
             <button id="habit-mute" class="menu-item" aria-pressed="false" title="Sound the reminder when a habit is due">🔊 Habit sound</button>
+            <div class="menu-flyout">
+              <button id="menu-sound" class="menu-item" aria-haspopup="true" aria-expanded="false" title="Which chime the reminder plays">Sound ◂</button>
+              <div id="sound-panel" class="menu-panel flyout-panel" hidden>
+                <button id="sound-marimba" class="menu-item" role="menuitemradio" aria-checked="false" title="Two warm wooden notes">Marimba</button>
+                <button id="sound-bell" class="menu-item" role="menuitemradio" aria-checked="false" title="One soft bell with a shimmer">Bell</button>
+                <button id="sound-droplet" class="menu-item" role="menuitemradio" aria-checked="false" title="A watery upward blip">Droplet</button>
+                <button id="sound-kalimba" class="menu-item" role="menuitemradio" aria-checked="false" title="A muted thumb-piano pluck">Kalimba</button>
+              </div>
+            </div>
+            <label class="menu-item menu-theme-row">Theme
+              <select id="theme-select" aria-label="Theme">
+                <option value="light">Morning</option>
+                <option value="white">Day</option>
+                <option value="sepia">Dusk</option>
+                <option value="dark">Night</option>
+                <option value="star">Star</option>
+              </select>
+            </label>
           </div>
         </div>
         <input id="import-input" type="file" accept="application/json,.json" hidden>
@@ -276,21 +294,42 @@
           <div id="chat-history-slot"></div>
           <div id="assistant-extras-slot"></div>
         </div>
-        <!-- The control says what it is, not only what is chosen. Shut, a
-             <select> shows its selected option and nothing else, so "Morning"
-             sat in the toolbar naming no control at all; the word rides in each
-             option instead, which is the one way a closed select can carry it. -->
-        <select id="theme-select" aria-label="Theme" title="Theme">
-          <option value="light">Theme: Morning</option>
-          <option value="white">Theme: Day</option>
-          <option value="sepia">Theme: Dusk</option>
-          <option value="dark">Theme: Night</option>
-          <option value="star">Theme: Star</option>
-        </select>
       </div>
     </div>
     <div id="habit-banner-slot" role="status" aria-live="polite"></div>
-    <div id="cat-rail" class="cat-rail" role="group" aria-label="Filter by category" hidden></div>
+    <!-- Every way of narrowing the board on one line: the category tabs,
+         then type and priority right after the last tab, search flush
+         right. The filters are static markup beside the rail, never inside
+         it — renderCatRail() wipes the rail's children on every repaint. -->
+    <div class="rail-row">
+      <div id="cat-rail" class="cat-rail" role="group" aria-label="Filter by category" hidden></div>
+      <div class="rail-filters">
+        <select id="type-filter" aria-label="Filter by type">
+          <option value="">All types</option>
+          <option value="question">? Questions</option>
+          <option value="problem">! Problems</option>
+          <option value="task">✓ Tasks</option>
+          <option value="idea">✦ Ideas</option>
+          <option value="plan">→ Plans</option>
+          <option value="habit">↻ Habits</option>
+        </select>
+        <select id="prio-filter" aria-label="Filter by priority">
+          <option value="">All priorities</option>
+          <option value="1">P1 · urgent &amp; important</option>
+          <option value="2">P2 · urgent</option>
+          <option value="3">P3 · important</option>
+          <option value="4">P4 · neither</option>
+          <option value="none">No label</option>
+        </select>
+        <!-- The third filter: pick one tag from a list instead of hunting it
+             in the # bar below. Options are painted by renderTagBar(), which
+             already knows every tag on the board. -->
+        <select id="tag-filter" aria-label="Filter by tag">
+          <option value="">All tags</option>
+        </select>
+        <input id="search" type="search" placeholder="Search the board…" aria-label="Search the board">
+      </div>
+    </div>
     <div id="tag-bar" class="tag-bar" role="group" aria-label="Filter by tag" hidden></div>
   </header>
 
@@ -456,6 +495,12 @@
       <p class="import-copy">Every change is logged here, newest first. Restore any earlier state — moving around never deletes history, so you can always come forward again.</p>
       <div id="history-list" class="history-list"></div>
 
+      <section id="boards-trash-section" class="trash-section" hidden>
+        <h3 class="trash-head">Deleted boards</h3>
+        <p class="import-copy">A deleted board is hidden, never emptied — its cards and its chats are still in the database. Restore one to bring it back whole, dropdown and all. <strong>Delete permanently</strong> erases it with everything on it.</p>
+        <div id="boards-trash-list" class="history-list"></div>
+      </section>
+
       <section id="trash-section" class="trash-section" hidden>
         <h3 class="trash-head">Deleted cards</h3>
         <p class="import-copy">Deleted cards are kept in the database and stay recoverable here. <strong>Delete permanently</strong> is the only thing that truly erases one — nothing else, not even clearing this browser, can lose it.</p>
@@ -465,18 +510,6 @@
       <div class="dialog-actions">
         <span class="spacer"></span>
         <button type="button" id="close-history" class="btn ghost">Close</button>
-      </div>
-    </div>
-  </dialog>
-
-  <dialog id="boards-dialog">
-    <div class="dialog-body">
-      <h2>Deleted boards</h2>
-      <p class="import-copy">A deleted board is hidden, never emptied — its cards and its chats are still in the database. Restore one to bring it back whole. <strong>Delete permanently</strong> is the only thing that erases a board, and it takes everything on it.</p>
-      <div id="boards-trash-list" class="history-list"></div>
-      <div class="dialog-actions">
-        <span class="spacer"></span>
-        <button type="button" id="close-boards" class="btn ghost">Close</button>
       </div>
     </div>
   </dialog>
@@ -520,8 +553,11 @@
       <input type="text" id="prompt-input" maxlength="200" autocomplete="off">
       <div class="dialog-actions">
         <span class="spacer"></span>
-        <button value="cancel" id="prompt-cancel" class="btn ghost">Cancel</button>
-        <button value="ok" id="prompt-ok" class="btn primary"></button>
+        <!-- Cancel is type=button: were it an implicit submit button, Enter in
+             the input would fire it (first submit in tree order) and quietly
+             cancel the typed name. Only OK submits, so Enter means OK. -->
+        <button type="button" id="prompt-cancel" class="btn ghost">Cancel</button>
+        <button type="submit" value="ok" id="prompt-ok" class="btn primary"></button>
       </div>
     </form>
   </dialog>

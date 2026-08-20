@@ -5,7 +5,8 @@ import { initTimeline } from './core/history.js';
 import { initServerSync } from './core/sync.js';
 import { initBoardPicker } from './ui/boards-picker.js';
 import { announce } from './ui/dom.js';
-import { HABIT_MUTE_KEY, habitMuted, renderHabitBanner, setHabitMuted, syncHabitMute } from './ui/habits.js';
+import { CHIME_NAMES, HABIT_MUTE_KEY, habitMuted, playChime, renderHabitBanner,
+  setHabitChime, setHabitMuted, syncChimePicker, syncHabitMute } from './ui/habits.js';
 import { refreshEdits, refreshProposals } from './ui/proposals.js';
 import { render, syncViewButtons } from './ui/render.js';
 
@@ -55,14 +56,28 @@ document.addEventListener('keydown', (event) => {
 });
 
 // The habit sound lives in the actions menu but is owned by the habit rail, so
-// the toggle is wired where the two meet rather than inside either.
+// the toggle is wired where the two meet rather than inside either. Switching
+// it ON is greeted by the chosen chime — the one moment a demo is exactly the
+// confirmation wanted; going silent is confirmed silently, on principle.
 document.querySelector('#habit-mute').addEventListener('click', () => {
   setHabitMuted(!habitMuted);
   localStorage.setItem(HABIT_MUTE_KEY, habitMuted ? '1' : '0');
   syncHabitMute();
+  if (!habitMuted) playChime();
   announce(habitMuted ? 'Habit reminders are silent' : 'Habit reminders will sound');
 });
 syncHabitMute();
+
+// The Sound submenu: four chimes, radio semantics, and picking one previews
+// it — choosing a sound you cannot hear is not choosing.
+for (const name of CHIME_NAMES) {
+  document.querySelector(`#sound-${name}`)?.addEventListener('click', () => {
+    setHabitChime(name);
+    syncChimePicker();
+    playChime(name);
+  });
+}
+syncChimePicker();
 
 // A slot time passing is the other moment a habit comes due, so the reminder
 // is re-checked while the board is open, not only when it is opened.
