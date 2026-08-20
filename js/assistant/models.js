@@ -206,6 +206,56 @@ export function renderChatSettings() {
   hint.className = 'field-hint';
   hint.textContent = 'Text generation applies to the chat. Ollama uses models pulled on this machine; OpenRouter currently offers GPT-5 Nano and requires an API key. The omni model transcribes your voice, unless the brain is dictating locally with Parakeet — that ignores this pick.';
   fields.appendChild(hint);
+  // The OpenRouter key, typed here instead of edited into the brain's env.
+  // Write-only end to end: a password field that empties itself once the brain
+  // has the key, a status that only ever says yes or no, and nothing kept in
+  // localStorage — the one store this page has is one any script could read.
+  const keyLabel = document.createElement('label');
+  keyLabel.className = 'field';
+  keyLabel.append('OpenRouter API key');
+  const keyRow = document.createElement('span');
+  keyRow.className = 'chat-key-row';
+  const keyInput = document.createElement('input');
+  keyInput.type = 'password';
+  keyInput.id = 'openrouter-key';
+  keyInput.autocomplete = 'off';
+  keyInput.placeholder = 'sk-or-…';
+  const keySave = document.createElement('button');
+  keySave.type = 'button';
+  keySave.id = 'openrouter-key-save';
+  keySave.textContent = 'Save';
+  const keyStatus = document.createElement('span');
+  keyStatus.className = 'chat-key-status';
+  // "stored"/"none yet" rather than anything containing "set": the word is the
+  // save's confirmation, and a resting label that already matched it would let
+  // a reader (or the e2e) mistake the old state for the new.
+  const sayStatus = (configured) => {
+    keyStatus.textContent = configured ? 'a key is stored' : 'none yet';
+  };
+  const refreshKeyStatus = () => {
+    fetch('/api/agent/key').then((r) => r.json())
+      .then((d) => sayStatus(d.configured))
+      .catch(() => { keyStatus.textContent = 'brain unreachable'; });
+  };
+  if (settingsOpen) refreshKeyStatus();
+  panel.addEventListener('toggle', () => { if (panel.open) refreshKeyStatus(); });
+  keySave.addEventListener('click', async () => {
+    try {
+      const res = await fetch('/api/agent/key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: keyInput.value }),
+      });
+      const d = await res.json();
+      keyInput.value = '';
+      keyStatus.textContent = d.configured ? 'key set' : 'none yet';
+    } catch {
+      keyStatus.textContent = 'brain unreachable';
+    }
+  });
+  keyRow.append(keyInput, keySave, keyStatus);
+  keyLabel.appendChild(keyRow);
+  fields.appendChild(keyLabel);
   // Where the chat model runs, when the brain told us. Worth saying out loud:
   // a local backend is free and private but answers in tens of seconds, and
   // the list above is then the daemon's, not ours.

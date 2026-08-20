@@ -96,6 +96,10 @@ class TranscribeBody(BaseModel):
     model: str | None = None
 
 
+class KeyBody(BaseModel):
+    key: str
+
+
 class RecallBody(BaseModel):
     text: str
     # Bounded exactly as RecallChatArgs' k already was. Unbounded, one request
@@ -292,6 +296,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         Only a local backend answers with a list: see `served_models`."""
         return served_models(settings)
+
+    # What the brain booted with. An empty save restores this rather than '',
+    # so a stack keyed by env cannot be un-configured from the browser.
+    boot_key = settings.openrouter_api_key
+
+    @app.get('/agent/key')
+    def key_status() -> dict:
+        """Whether a hosted-API key is in force — never the key itself."""
+        return {'configured': bool(agent.settings.openrouter_api_key)}
+
+    @app.post('/agent/key')
+    def set_key(body: KeyBody) -> dict:
+        """Take an OpenRouter key typed into the Assistant's settings drawer.
+
+        Write-only by design: both routes answer yes or no and no response ever
+        carries the key. The agent is handed whole new settings and drops its
+        graph cache — a compiled graph binds the credential its model was
+        constructed with, so anything less keeps answering with the old one.
+        """
+        key = body.key.strip() or boot_key
+        agent.reconfigure(replace(agent.settings, openrouter_api_key=key))
+        return {'configured': bool(key)}
 
     def priced(result: AgentResult, body: ChatBody) -> float | None:
         """What this turn cost, in USD, or None if that is not knowable.
