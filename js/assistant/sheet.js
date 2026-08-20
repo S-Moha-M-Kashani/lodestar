@@ -1,6 +1,7 @@
 import { brainModels, probeBrainModels } from './models.js';
 import { assistantState, contextWindow, replayable } from './session.js';
 import { chatScroll, isPinnedToBottom, setChatScroll, submitChat } from './streaming.js';
+import { renderChatSuggestions } from './suggestions.js';
 import { mountAssistantTools, renderChatDock, renderChatDrift } from './tools.js';
 import { busyLabel, renderChatMessage, renderSessionCost } from './transcript.js';
 import { cancelRecording, formatElapsed, startRecording, stopRecording, voiceState, voiceSupported } from './voice.js';
@@ -122,11 +123,16 @@ export function renderAssistant() {
   log.addEventListener('scroll', () => {
     setChatScroll({ top: log.scrollTop, pinned: isPinnedToBottom(log) });
   });
+  // Nothing said yet: the hint, and one opener per thing the assistant can
+  // actually do. Keyed on an empty transcript rather than on a new-chat event,
+  // which is what makes New chat, a first load and reopening a chat nobody ever
+  // spoke into all offer them, with nothing to raise or listen for.
   if (!assistantState.messages.length) {
     const hint = document.createElement('p');
     hint.className = 'chat-status';
-    hint.textContent = 'Ask about your board — research a question, triage the inbox, or find connections.';
+    hint.textContent = 'Ask about your board — or start with one of these.';
     log.appendChild(hint);
+    log.appendChild(renderChatSuggestions());
   }
   // Where the sent window begins, marked in the transcript itself. Trimming
   // nobody can see is the quiet loss this project refuses; the marker is the

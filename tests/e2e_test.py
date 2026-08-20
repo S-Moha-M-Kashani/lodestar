@@ -1991,6 +1991,39 @@ try:
         page.wait_for_selector("#chat-input")
         check("assistant: view opens with composer",
               page.get_attribute('.view-switch button[data-view="assistant"]', "aria-pressed") == "true")
+        # ---- Suggestions: what to ask, on a chat with nothing in it ----------
+        # This is an end-to-end test.
+        # An empty transcript is the one place the assistant cannot say what it
+        # is for, and the composer's placeholder has one line to do it in. Eight
+        # chips, one per tool the brain actually builds (server.py's tool list),
+        # asserted on the capability each chip stands for rather than on its
+        # wording — so rephrasing a suggestion stays a copy edit, while dropping
+        # a capability, or offering one no tool backs, stays a failure.
+        capabilities = {"list_cards", "find_related", "web_search", "create_card",
+                        "update_card", "recall_chat", "daily_recap", "remember_fact"}
+        chips = page.locator(".chat-suggest")
+        check("suggestions: an empty chat offers one opener per capability",
+              chips.count() == len(capabilities)
+              and {c.get_attribute("data-capability") for c in chips.all()} == capabilities
+              and all(t.strip() for t in chips.all_inner_texts()))
+        # Clicked, not typed: reaching a first question without having to compose
+        # one is the whole point. What the chip says has to arrive as the user's
+        # own turn — printed where their words go — and be what the brain is
+        # asked, which the fake backend echoes back verbatim.
+        asked = chips.nth(2).inner_text().strip()
+        chips.nth(2).click()
+        page.wait_for_selector(".chat-msg.assistant")
+        check("suggestions: clicking one sends it as the user's own message",
+              wait_until(lambda: asked in page.inner_text(".chat-msg.user")
+                         and f"FAKE: {asked}" in page.inner_text(".chat-log")))
+        # And then they are gone, leaving an empty composer behind them. The
+        # chips are keyed on an empty transcript, which is what makes New chat,
+        # first load and a chat never spoken into all show them with nobody
+        # raising an event — and what takes them away again here.
+        check("suggestions: they leave once the chat has a turn in it",
+              page.locator(".chat-suggest").count() == 0
+              and page.input_value("#chat-input") == "")
+
         page.fill("#chat-input", "hello brain")
         page.click("#chat-send")
         page.wait_for_selector(".chat-msg.assistant")

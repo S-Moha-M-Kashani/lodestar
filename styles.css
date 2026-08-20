@@ -2891,6 +2891,35 @@ body[data-view="assistant"] .app-footer { display: none; }
   min-height: 120px;
   padding: 4px 2px;
 }
+
+/* Openers on an empty chat. Built on .tag-chip's idiom — mono, hairline, hover
+   to full ink — but left-aligned prose rather than a keyword, so each one wraps
+   inside its own chip instead of the row scrolling sideways. Neutral ink and no
+   category hue: colour means life area everywhere else on the board, and a
+   suggestion belongs to no area. Sits above the transcript's first message and
+   inherits the log's 14px gap from it. */
+.chat-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: flex-start;
+}
+.chat-suggest {
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.45;
+  text-align: left;
+  color: var(--ink-soft);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 5px 9px;
+  max-width: 100%;
+  white-space: normal;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.chat-suggest:hover { color: var(--ink); border-color: var(--ink-soft); }
+
 .chat-msg {
   position: relative;
   padding: 10px 14px;
