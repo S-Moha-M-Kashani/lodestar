@@ -823,11 +823,15 @@ try:
               and page.locator("#show-panel").is_hidden())
         page.hover("#menu-show")
         page.wait_for_timeout(150)
-        check("menu: hovering Show unfolds Tags, Priorities, Types, Done column",
+        check("menu: hovering Show unfolds the Filters group and Done column",
               page.locator("#show-panel").is_visible()
               and all(page.locator(f"#show-panel #{i}").count() == 1
                       for i in ("toggle-tags", "toggle-prios",
                                 "toggle-types", "toggle-done-col"))
+              # text_content, not inner_text: the label renders uppercase via
+              # CSS text-transform, and inner_text reports the rendered text.
+              and page.locator("#show-panel .menu-label").first.text_content().strip()
+                  == "Filters"
               and page.get_attribute("#toggle-tags", "aria-pressed") == "false"
               and page.get_attribute("#toggle-done-col", "aria-pressed") == "false")
         # The Menu reads as groups — board, act/data, display — split by
@@ -845,66 +849,67 @@ try:
         check("numbers: no ledger number is visible on any card",
               page.locator("#board .card-num:visible").count() == 0)
 
+        # Show's three Filters toggles act on the FILTER CONTROLS — the tag
+        # bar and tag dropdown, the priority dropdown, the type dropdown —
+        # never on what is painted on the cards. Chips and stamps are the
+        # cards' own; a filter you don't use is the thing worth hiding.
         tags_total = page.locator("#board .card-tag").count()
-        check("tags: the chips start visible",
-              tags_total > 0 and page.locator("#board .card-tag").first.is_visible())
+        check("show: the tag filters start visible, chips always on the cards",
+              tags_total > 0 and page.locator("#board .card-tag").first.is_visible()
+              and page.locator("#tag-bar").is_visible()
+              and page.locator("#tag-filter").is_visible())
 
-        # Hide the tags: body class on, chips and tag bar invisible, flag set.
         toggled = menu_toggle("toggle-tags")
-        check("tags: the toggle hides every chip and the tag bar",
+        check("show: the Tags toggle hides both tag filters, never the chips",
               toggled and body_has("hide-tags")
-              and not page.locator("#board .card-tag").first.is_visible()
               and not page.locator("#tag-bar").is_visible()
+              and not page.locator("#tag-filter").is_visible()
+              and page.locator("#board .card-tag").first.is_visible()
               and page.get_attribute("#toggle-tags", "aria-pressed") == "true")
-        # Purely visual: same chips in the DOM, no card data touched.
-        check("tags: hiding is visual only — the cards keep their tags",
-              page.locator("#board .card-tag").count() == tags_total)
-        check("tags: the choice is stored under the lodestar: prefix",
+        check("show: the choice is stored under the lodestar: prefix",
               bool(page.evaluate("localStorage.getItem('lodestar:hideTags')")))
 
-        # Persistence: a reload must come back with the tags still hidden.
+        # Persistence: a reload must come back with the filters still hidden.
         page.reload()
         page.wait_for_selector(".card")
-        check("tags: they stay hidden across a reload",
+        check("show: the tag filters stay hidden across a reload",
               body_has("hide-tags")
-              and not page.locator("#board .card-tag").first.is_visible())
+              and not page.locator("#tag-filter").is_visible()
+              and page.locator("#board .card-tag").first.is_visible())
 
-        # Toggle back off: class gone, chips visible, stored flag cleared.
         toggled_off = menu_toggle("toggle-tags")
-        check("tags: toggling again brings the chips back",
+        check("show: toggling Tags again brings the filters back",
               toggled_off and not body_has("hide-tags")
-              and page.locator("#board .card-tag").first.is_visible()
+              and page.locator("#tag-filter").is_visible()
+              and page.locator("#tag-bar").is_visible()
               and page.get_attribute("#toggle-tags", "aria-pressed") == "false"
               and not page.evaluate("localStorage.getItem('lodestar:hideTags')"))
 
-        # Priorities and Types, the two new coats of paint, same contract:
-        # visible chips, one press hides them without touching data, a second
-        # brings them back.
-        prio_total = page.locator("#board .prio-badge").count()
-        type_total = page.locator("#board .card .badge").count()
-        check("show: priority and type stamps start visible",
-              prio_total > 0 and page.locator("#board .prio-badge").first.is_visible()
-              and type_total > 0 and page.locator("#board .card .badge").first.is_visible())
+        # Priorities and Types, same contract: the toggle hides the dropdown,
+        # the stamps on the cards stay exactly as they were.
+        check("show: priority and type stamps are on the cards to stay",
+              page.locator("#board .prio-badge").first.is_visible()
+              and page.locator("#board .card .badge").first.is_visible())
         toggled = menu_toggle("toggle-prios")
-        check("show: the Priorities toggle hides every P-stamp",
+        check("show: the Priorities toggle hides the priority filter, stamps stay",
               toggled and body_has("hide-prios")
-              and not page.locator("#board .prio-badge").first.is_visible()
-              and page.locator("#board .prio-badge").count() == prio_total
+              and not page.locator("#prio-filter").is_visible()
+              and page.locator("#board .prio-badge").first.is_visible()
               and bool(page.evaluate("localStorage.getItem('lodestar:hidePrios')")))
         toggled_off = menu_toggle("toggle-prios")
-        check("show: toggling Priorities again brings the stamps back",
+        check("show: toggling Priorities again brings the filter back",
               toggled_off and not body_has("hide-prios")
-              and page.locator("#board .prio-badge").first.is_visible())
+              and page.locator("#prio-filter").is_visible())
         toggled = menu_toggle("toggle-types")
-        check("show: the Types toggle hides every type stamp",
+        check("show: the Types toggle hides the type filter, stamps stay",
               toggled and body_has("hide-types")
-              and not page.locator("#board .card .badge").first.is_visible()
-              and page.locator("#board .card .badge").count() == type_total
+              and not page.locator("#type-filter").is_visible()
+              and page.locator("#board .card .badge").first.is_visible()
               and bool(page.evaluate("localStorage.getItem('lodestar:hideTypes')")))
         toggled_off = menu_toggle("toggle-types")
-        check("show: toggling Types again brings the stamps back",
+        check("show: toggling Types again brings the filter back",
               toggled_off and not body_has("hide-types")
-              and page.locator("#board .card .badge").first.is_visible())
+              and page.locator("#type-filter").is_visible())
 
         # The Done column, same contract: hide, persist the key, bring it back.
         done_col = page.locator('section.column[data-col="answered"]')
@@ -985,6 +990,7 @@ try:
               and rail_line.locator("#cat-rail").count() == 1
               and rail_line.locator("#type-filter").count() == 1
               and rail_line.locator("#prio-filter").count() == 1
+              and rail_line.locator("#tag-filter").count() == 1
               and rail_line.locator("#search").count() == 1
               and page.locator(".toolbar #search").count() == 0
               and page.locator(".toolbar #type-filter").count() == 0
@@ -1016,6 +1022,41 @@ try:
               and (search_bb["x"] + search_bb["width"])
                   >= (row_bb["x"] + row_bb["width"]) - 40
               and abs(search_bb["y"] - last_tab_bb["y"]) <= 24)
+
+        # Everything on the rail shares the tabs' upper and lower edge — a
+        # control floating above or below the line reads as broken.
+        def edges(sel):
+            b = page.locator(sel).bounding_box()
+            return (b["y"], b["y"] + b["height"]) if b else None
+
+        tab_edges = edges("#cat-rail .cat-tab >> nth=1")  # a quiet, unpressed tab
+        offenders = [s for s in ("#edit-cats-btn", "#type-filter", "#prio-filter",
+                                 "#tag-filter", "#search")
+                     if edges(s) is None or tab_edges is None
+                     or abs(edges(s)[0] - tab_edges[0]) > 2
+                     or abs(edges(s)[1] - tab_edges[1]) > 2]
+        check(f"rail: every control shares the tabs' edges (off: {offenders})",
+              tab_edges is not None and not offenders)
+
+        # The tags dropdown is a third filter beside type and priority: every
+        # tag on the board is an option, picking one narrows the board to its
+        # cards, and the empty option lets the whole board back.
+        board_tags = sorted({t for c in api_state()["cards"]
+                             for t in (c.get("tags") or [])})
+        opt_text = " ".join(page.locator("#tag-filter option").all_text_contents())
+        pick = board_tags[0] if board_tags else None
+        if pick:
+            page.select_option("#tag-filter", pick)
+            page.wait_for_timeout(200)
+        tagged = sum(1 for c in api_state()["cards"]
+                     if pick and pick in (c.get("tags") or []))
+        check("filter: the tag dropdown lists every tag and narrows to the pick",
+              pick is not None and tagged > 0
+              and all(t in opt_text for t in board_tags)
+              and page.locator("#board .card").count() == tagged)
+        if pick:
+            page.select_option("#tag-filter", "")
+            page.wait_for_timeout(200)
 
         # ---- Export ---------------------------------------------------------
         menu_click("#export-btn")
@@ -1426,6 +1467,17 @@ try:
         page.wait_for_selector("#board.backlog")
         check("backlog: rows match Inbox card count",
               page.locator(".backlog-row").count() == inbox_count)
+        # The rows lost their ledger-number column; the grid must lose it too,
+        # or every cell slides one column left — the stamp overlapping the
+        # title, the title wrapping inside the 96px the stamp used to have.
+        first_row = page.locator(".backlog-row").first
+        badge_bb = first_row.locator(".badge").bounding_box()
+        title_bb = first_row.locator(".row-title").bounding_box()
+        row_bb = first_row.bounding_box()
+        check("backlog: the stamp and the title share the line without overlap",
+              all(b is not None for b in (badge_bb, title_bb, row_bb))
+              and badge_bb["x"] + badge_bb["width"] <= title_bb["x"] + 1
+              and title_bb["width"] >= row_bb["width"] * 0.5)
         check("backlog: view button marked pressed",
               page.get_attribute('.view-switch button[data-view="backlog"]', "aria-pressed") == "true")
         page.locator(".backlog-row").first.click()

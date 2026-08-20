@@ -401,6 +401,16 @@ input, select, textarea { font: inherit; color: inherit; }
   border-top: 1px dashed var(--line);
 }
 
+/* A group's name inside a panel — a heading, not a row you can press. */
+.menu-label {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  padding: 4px 12px 2px;
+}
+
 /* Hover submenus (Show, Sound): the trigger is an ordinary row, the panel
    unfolds beside the menu — leftwards, because the menu hangs off the
    window's right edge. */
@@ -429,6 +439,7 @@ input, select, textarea { font: inherit; color: inherit; }
    the last tab and search sits flush right, so every way of narrowing the
    board shares this one line. */
 .rail-row {
+  --rail-h: 25px; /* one height for everything that stands on the rule */
   display: flex;
   align-items: flex-end;
   gap: 12px;
@@ -442,15 +453,31 @@ input, select, textarea { font: inherit; color: inherit; }
   flex-wrap: wrap;
   padding: 0 2px;
 }
+.rail-row .cat-tab {
+  box-sizing: border-box;
+  height: var(--rail-h);
+  align-items: center;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+/* The open drawer still pulls up — taller, growing upward off the shared
+   bottom edge, instead of the padding trick a fixed height would swallow. */
+.rail-row .cat-tab[aria-pressed="true"] { height: calc(var(--rail-h) + 3px); }
 .rail-filters {
   display: flex;
   flex: 1;
-  align-items: center;
+  align-items: flex-end;
   gap: 8px;
-  padding-bottom: 4px; /* the controls hover just above the rule */
 }
 .rail-filters select,
-.rail-filters #search { font-size: 11px; }
+.rail-filters #search {
+  box-sizing: border-box;
+  height: var(--rail-h);
+  font-size: 11px;
+  padding-block: 0;
+  position: relative;
+  top: 1px; /* seated on the rule, exactly like the tabs */
+}
 .rail-filters #search { margin-left: auto; min-width: 200px; }
 
 .cat-tab {
@@ -861,11 +888,13 @@ body[data-view="board"] .cards { min-height: 0; }
    retired it — nobody toggled them back on. The spans stay in the DOM (and
    cardLabel still names cards in the trash), so `.card-num + .badge` below
    keeps the layout it always had. */
-.card-num, .row-num { display: none; }
-.hide-tags .card-tags,
-.hide-tags #tag-bar { display: none; }
-.hide-prios .prio-badge { display: none; }
-.hide-types .badge[class*="type-"] { display: none; }
+.card-num { display: none; }
+/* Show's Filters toggles hide the FILTER CONTROLS — never what is painted on
+   the cards. Chips and stamps are the cards' own. */
+.hide-tags #tag-bar,
+.hide-tags #tag-filter { display: none; }
+.hide-prios #prio-filter { display: none; }
+.hide-types #type-filter { display: none; }
 .hide-done-col .column[data-col="answered"] { display: none; }
 
 /* Card type as a rubber stamp — always neutral ink; colour means category */
@@ -1326,10 +1355,12 @@ body[data-view="board"] .cards { min-height: 0; }
 
 .backlog-list { display: flex; flex-direction: column; }
 
-/* One card per ruled line: [id] [type] [text + category + tags] [notes] */
+/* One card per ruled line: [type] [text + category + tags] [notes]. The
+   ledger-number column left with the numbers — a grid keeps paying for a
+   column whether or not anything visible sits in it. */
 .backlog-row {
   display: grid;
-  grid-template-columns: 54px 96px 1fr auto;
+  grid-template-columns: 96px 1fr auto;
   align-items: baseline;
   gap: 14px;
   padding: 13px 4px 13px 8px;
@@ -1346,13 +1377,6 @@ body[data-view="board"] .cards { min-height: 0; }
 .backlog-row:hover { background: color-mix(in srgb, var(--ink-blue) 6%, transparent); }
 
 .backlog-row .badge { justify-self: start; }
-
-.row-num {
-  font-family: var(--mono);
-  font-size: 10.5px;
-  letter-spacing: 0.06em;
-  color: var(--ink-soft);
-}
 
 .row-main { min-width: 0; }
 
@@ -1373,10 +1397,10 @@ body[data-view="board"] .cards { min-height: 0; }
 
 @media (max-width: 640px) {
   .backlog { padding: 12px 14px 20px; }
-  .backlog-row { grid-template-columns: 48px 1fr; gap: 4px 10px; }
-  .backlog-row .badge { grid-column: 2; margin-bottom: 4px; }
-  .backlog-row .row-main { grid-column: 2; }
-  .row-notes { grid-column: 1; grid-row: 1; }
+  .backlog-row { grid-template-columns: 1fr auto; gap: 4px 10px; }
+  .backlog-row .badge { grid-column: 1; margin-bottom: 4px; }
+  .backlog-row .row-main { grid-column: 1 / -1; }
+  .row-notes { grid-column: 2; grid-row: 1; }
 }
 
 /* ---------------------------------------------------------------------------
