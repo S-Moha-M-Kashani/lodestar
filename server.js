@@ -97,7 +97,9 @@ const CAT_LIMIT = 24;
 const catSlug = (s) =>
   String(s).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24);
 
-/** Same shape/rules as the client: [{id, label, h}] or null when unusable. */
+/** Same shape/rules as the client: [{id, label, h}] for an array — empty
+ *  included, deleting the last category is a real state to persist — or null
+ *  when the field was absent or not an array at all. */
 function sanitizeCategories(raw) {
   if (!Array.isArray(raw)) return null;
   const seen = new Set();
@@ -112,7 +114,7 @@ function sanitizeCategories(raw) {
     out.push({ id, label, h });
     if (out.length >= CAT_LIMIT) break;
   }
-  return out.length ? out : null;
+  return out;
 }
 const iuVal = (v) => (v === 'high' || v === 'low' ? v : '');
 // Effort & control always hold a value (the scale's midpoint until someone —
@@ -312,34 +314,77 @@ db.exec(`
   );
 `);
 
-// The user's category registry. Seeded with the default life areas the first
-// time; from then on the client's edits (add/remove/import) are the truth.
+// The user's category registry — per board since 2026-08-20. It was one shared
+// table, and that shape is what let a category deleted on one board resurrect:
+// every browser caches the registry per board, so a global registry was
+// rewritten by whichever board's stale copy pushed last. Each board owns its
+// rows now. Seeding happens ONLY when the table itself is first created or a
+// board is — never from a zero count at boot, because a registry someone
+// emptied on purpose is a real state, not a missing one.
+const hadCategoriesTable = db.prepare(
+  "SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'categories'").get() !== undefined;
 db.exec(`
   CREATE TABLE IF NOT EXISTS categories (
-    id       TEXT    PRIMARY KEY,
+    board_id TEXT    NOT NULL DEFAULT 'main' REFERENCES boards(id),
+    id       TEXT    NOT NULL,
     label    TEXT    NOT NULL,
     h        INTEGER NOT NULL,
-    position INTEGER NOT NULL DEFAULT 0
+    position INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (board_id, id)
   );
 `);
-if (db.prepare('SELECT COUNT(*) AS n FROM categories').get().n === 0) {
-  const seed = db.prepare('INSERT INTO categories (id, label, h, position) VALUES (?, ?, ?, ?)');
-  DEFAULT_CATEGORIES.forEach((c, i) => seed.run(c.id, c.label, c.h, i));
+
+function seedCategories(boardId) {
+  const insert = db.prepare('INSERT INTO categories (board_id, id, label, h, position) VALUES (?, ?, ?, ?, ?)');
+  DEFAULT_CATEGORIES.forEach((c, i) => insert.run(boardId, c.id, c.label, c.h, i));
 }
 
-function readCategories() {
-  return db.prepare('SELECT id, label, h FROM categories ORDER BY position ASC').all()
-    .map((r) => ({ id: r.id, label: r.label, h: r.h }));
-}
-
-/** Replace the whole registry — it's config, not card data, so unlike cards
- *  it has no soft-delete: removing a category never touches any card row. */
-function writeCategories(cats) {
+// Migrate a shared-registry table: the primary key changes (id → board_id+id),
+// which ALTER TABLE cannot do, so the table is rebuilt. Every board — deleted
+// ones included, a restore must bring a board back whole — gets its own copy of
+// the registry all of them showed yesterday; nothing changes on screen.
+if (hadCategoriesTable
+    && !db.prepare('PRAGMA table_info(categories)').all().some((c) => c.name === 'board_id')) {
+  const shared = db.prepare('SELECT id, label, h, position FROM categories ORDER BY position ASC').all();
   db.exec('BEGIN');
   try {
-    db.exec('DELETE FROM categories');
-    const insert = db.prepare('INSERT INTO categories (id, label, h, position) VALUES (?, ?, ?, ?)');
-    cats.forEach((c, i) => insert.run(c.id, c.label, c.h, i));
+    db.exec('DROP TABLE categories');
+    db.exec(`
+      CREATE TABLE categories (
+        board_id TEXT    NOT NULL DEFAULT 'main' REFERENCES boards(id),
+        id       TEXT    NOT NULL,
+        label    TEXT    NOT NULL,
+        h        INTEGER NOT NULL,
+        position INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (board_id, id)
+      );
+    `);
+    const insert = db.prepare('INSERT INTO categories (board_id, id, label, h, position) VALUES (?, ?, ?, ?, ?)');
+    for (const b of db.prepare('SELECT id FROM boards').all()) {
+      shared.forEach((c) => insert.run(b.id, c.id, c.label, c.h, c.position));
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+} else if (!hadCategoriesTable) {
+  for (const b of db.prepare('SELECT id FROM boards').all()) seedCategories(b.id);
+}
+
+function readCategories(boardId) {
+  return db.prepare('SELECT id, label, h FROM categories WHERE board_id = ? ORDER BY position ASC')
+    .all(boardId).map((r) => ({ id: r.id, label: r.label, h: r.h }));
+}
+
+/** Replace one board's registry — it's config, not card data, so unlike cards
+ *  it has no soft-delete: removing a category never touches any card row. */
+function writeCategories(cats, boardId) {
+  db.exec('BEGIN');
+  try {
+    db.prepare('DELETE FROM categories WHERE board_id = ?').run(boardId);
+    const insert = db.prepare('INSERT INTO categories (board_id, id, label, h, position) VALUES (?, ?, ?, ?, ?)');
+    cats.forEach((c, i) => insert.run(boardId, c.id, c.label, c.h, i));
     db.exec('COMMIT');
   } catch (err) {
     db.exec('ROLLBACK');
@@ -347,14 +392,17 @@ function writeCategories(cats) {
   }
 }
 
-const categoryIds = () => new Set(db.prepare('SELECT id FROM categories').all().map((r) => r.id));
+const categoryIds = (boardId) => new Set(
+  db.prepare('SELECT id FROM categories WHERE board_id = ?').all(boardId).map((r) => r.id));
 
 // --------------------------------------------------------------------------
 // Boards
 // --------------------------------------------------------------------------
-// One database, several boards. Cards and chats carry a board_id; the category
-// registry deliberately does not, because colour means category everywhere in
-// this app and per-board hues would make one colour mean two things.
+// One database, several boards. Cards, chats and categories all carry a
+// board_id. The registry was shared at first ("colour means category
+// everywhere"), but in practice one board's categories leaking onto every
+// other read as a bug, and the shared table made deletions un-stickable —
+// see the migration note above the categories table.
 
 const BOARD_NAME_MAX = 60;
 const newBoardId = () => 'b-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -429,6 +477,9 @@ function createBoard(rawName) {
   const id = newBoardId();
   db.prepare('INSERT INTO boards (id, name, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
     .run(id, name, next, now, now);
+  // A new board starts with the default life areas, not a copy of anyone
+  // else's registry — creation is the one moment seeding is ever done.
+  seedCategories(id);
   return rowToBoard({ id, name, position: next, created_at: now, updated_at: now, n: 0 });
 }
 
@@ -498,6 +549,7 @@ function purgeBoard(id) {
   try {
     db.prepare(`DELETE FROM card_edits WHERE card_id IN (SELECT id FROM cards WHERE board_id = ?)`).run(id);
     cards = db.prepare('DELETE FROM cards WHERE board_id = ?').run(id).changes;
+    db.prepare('DELETE FROM categories WHERE board_id = ?').run(id);
     db.prepare('DELETE FROM boards WHERE id = ?').run(id);
     db.exec('COMMIT');
   } catch (err) {
@@ -863,16 +915,16 @@ function safeTags(json) {
 // The live board is the cards that are neither soft-deleted nor still
 // awaiting the user's approval.
 function readBoard(boardId) {
-  const catIds = categoryIds();
+  const catIds = categoryIds(boardId);
   const rows = db.prepare(
     'SELECT * FROM cards WHERE board_id = ? AND deleted_at IS NULL AND pending = 0 ORDER BY position ASC')
     .all(boardId);
-  return { version: 1, cards: rows.map((r) => rowToCard(r, catIds)), categories: readCategories() };
+  return { version: 1, cards: rows.map((r) => rowToCard(r, catIds)), categories: readCategories(boardId) };
 }
 
 // Cards the Assistant proposed, oldest first, still waiting to be accepted.
 function readProposals(boardId) {
-  const catIds = categoryIds();
+  const catIds = categoryIds(boardId);
   const rows = db.prepare(
     'SELECT * FROM cards WHERE board_id = ? AND deleted_at IS NULL AND pending = 1 ORDER BY created_at ASC')
     .all(boardId);
@@ -882,7 +934,7 @@ function readProposals(boardId) {
 // The Trash is the soft-deleted cards, newest deletion first. They are still
 // in the database and can be restored (re-added by the client) until purged.
 function readTrash(boardId) {
-  const catIds = categoryIds();
+  const catIds = categoryIds(boardId);
   const rows = db.prepare(
     'SELECT * FROM cards WHERE board_id = ? AND deleted_at IS NOT NULL ORDER BY deleted_at DESC')
     .all(boardId);
@@ -939,7 +991,7 @@ const cryptoId = () => 'id-' + Math.random().toString(36).slice(2) + Date.now().
  */
 function writeBoard(cards, boardId) {
   const now = Date.now();
-  const catIds = categoryIds();
+  const catIds = categoryIds(boardId);
   const clean = cards.map((c) => cleanCard(c, now, catIds)).filter(Boolean);
   const keep = new Set(clean.map((c) => c.id));
 
@@ -1010,7 +1062,7 @@ function writeBoard(cards, boardId) {
  */
 function writeProposal(raw, boardId) {
   const now = Date.now();
-  const catIds = categoryIds();
+  const catIds = categoryIds(boardId);
   const card = cleanCard(raw, now, catIds);
   if (!card) return null;
   db.prepare(`
@@ -1306,7 +1358,7 @@ const server = createServer(async (req, res) => {
         // Registry first, then cards — so cards referencing a just-added
         // category validate against the fresh registry.
         const cats = sanitizeCategories(parsed.categories);
-        if (cats) writeCategories(cats);
+        if (cats) writeCategories(cats, boardId);
         const { board, created } = writeBoard(parsed.cards, boardId);
         sendJson(res, 200, board);
         // After the response: one snapshot per save that brought new cards,
