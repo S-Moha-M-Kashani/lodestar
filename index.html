@@ -216,8 +216,7 @@
               <div id="board-menu-panel" class="menu-panel" hidden>
                 <button id="board-new" class="menu-item" title="Start a board with its own cards and its own chats">＋ New board</button>
                 <button id="board-rename" class="menu-item" title="Rename the board you are on">Rename board</button>
-                <button id="board-delete" class="menu-item" title="Remove this board — its cards are kept and it can be restored">Delete board</button>
-                <button id="board-trash-btn" class="menu-item" title="Boards you deleted — restore one, or erase it for good">Deleted boards…</button>
+                <button id="board-delete" class="menu-item" title="Remove this board — its cards are kept and it can be restored from Menu ▾ → History">Delete board</button>
               </div>
             </div>
           </div>
@@ -253,13 +252,18 @@
         </select>
         <div class="toolbar-menu">
           <button id="menu-btn" class="btn ghost" aria-haspopup="true" aria-expanded="false" title="Undo, history, export and import">Menu ▾</button>
+          <!-- Three groups, split by rule lines: act on the board, move data
+               in and out, tune the display. One flat list made the undo sit
+               beside a visual toggle as if they were the same kind of thing. -->
           <div id="menu-panel" class="menu-panel" hidden>
             <button id="undo-btn" class="menu-item" title="Undo the last change">↶ Undo</button>
-            <button id="history-btn" class="menu-item" title="Board history — jump back to any state">History</button>
+            <button id="history-btn" class="menu-item" title="Board history — every change, deleted cards and deleted boards">History</button>
+            <hr class="menu-sep">
             <button id="export-btn" class="menu-item" title="Download the board as a JSON file">Export JSON</button>
             <button id="import-btn" class="menu-item" title="Restore the board from a JSON file">Import JSON</button>
+            <hr class="menu-sep">
             <button id="habit-mute" class="menu-item" aria-pressed="false" title="Sound the reminder when a habit is due">🔊 Habit sound</button>
-            <button id="toggle-card-nums" class="menu-item" aria-pressed="false" title="Hide the C-001 ledger numbers on every card"># Card numbers</button>
+            <button id="toggle-tags" class="menu-item" aria-pressed="false" title="Hide the tag chips on cards and the tag filter bar"># Tags</button>
             <button id="toggle-done-col" class="menu-item" aria-pressed="false" title="Hide the Done column on the Board view">Done column</button>
           </div>
         </div>
@@ -458,6 +462,12 @@
       <p class="import-copy">Every change is logged here, newest first. Restore any earlier state — moving around never deletes history, so you can always come forward again.</p>
       <div id="history-list" class="history-list"></div>
 
+      <section id="boards-trash-section" class="trash-section" hidden>
+        <h3 class="trash-head">Deleted boards</h3>
+        <p class="import-copy">A deleted board is hidden, never emptied — its cards and its chats are still in the database. Restore one to bring it back whole, dropdown and all. <strong>Delete permanently</strong> erases it with everything on it.</p>
+        <div id="boards-trash-list" class="history-list"></div>
+      </section>
+
       <section id="trash-section" class="trash-section" hidden>
         <h3 class="trash-head">Deleted cards</h3>
         <p class="import-copy">Deleted cards are kept in the database and stay recoverable here. <strong>Delete permanently</strong> is the only thing that truly erases one — nothing else, not even clearing this browser, can lose it.</p>
@@ -467,18 +477,6 @@
       <div class="dialog-actions">
         <span class="spacer"></span>
         <button type="button" id="close-history" class="btn ghost">Close</button>
-      </div>
-    </div>
-  </dialog>
-
-  <dialog id="boards-dialog">
-    <div class="dialog-body">
-      <h2>Deleted boards</h2>
-      <p class="import-copy">A deleted board is hidden, never emptied — its cards and its chats are still in the database. Restore one to bring it back whole. <strong>Delete permanently</strong> is the only thing that erases a board, and it takes everything on it.</p>
-      <div id="boards-trash-list" class="history-list"></div>
-      <div class="dialog-actions">
-        <span class="spacer"></span>
-        <button type="button" id="close-boards" class="btn ghost">Close</button>
       </div>
     </div>
   </dialog>
