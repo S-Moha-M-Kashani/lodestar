@@ -1,5 +1,5 @@
-import { activeBoard, activeBoardId, boards, createBoard, deleteBoard, fetchDeletedBoards,
-  loadBoards, openBoard, purgeBoard, renameBoard, restoreBoard, setBoards,
+import { activeBoard, activeBoardId, boards, createBoard, deleteBoard,
+  loadBoards, openBoard, renameBoard, setBoards,
   startLeavingBoard } from '../core/boards.js';
 import { cancelPendingPush } from '../core/sync.js';
 import { ask, prompt } from './dialogs.js';
@@ -16,8 +16,6 @@ const switcher = $('.board-switch');
 const select = $('#board-select');
 const menuBtn = $('#board-menu-btn');
 const menuPanel = $('#board-menu-panel');
-const dialog = $('#boards-dialog');
-const trashList = $('#boards-trash-list');
 
 function paintSelect() {
   select.replaceChildren(...boards.map((b) => {
@@ -100,7 +98,7 @@ $('#board-delete').addEventListener('click', async () => {
   if (!current) return;
   const ok = await ask({
     title: `Delete ${current.name}?`,
-    message: `Its ${current.cardCount} card(s) and its chats are kept — the board is hidden and can be restored from “Deleted boards”.`,
+    message: `Its ${current.cardCount} card(s) and its chats are kept — the board is hidden and can be restored from Menu ▾ → History.`,
     okLabel: 'Delete board',
     danger: true,
   });
@@ -118,82 +116,9 @@ $('#board-delete').addEventListener('click', async () => {
   } catch (err) { failed('delete that board', err); }
 });
 
-async function paintTrash() {
-  let deleted = [];
-  try {
-    deleted = await fetchDeletedBoards();
-  } catch (err) {
-    trashList.replaceChildren(row(`Could not load deleted boards — ${err.message}`));
-    return;
-  }
-  if (!deleted.length) {
-    trashList.replaceChildren(row('No deleted boards.'));
-    return;
-  }
-  trashList.replaceChildren(...deleted.map(boardRow));
-}
-
-function row(text) {
-  const empty = document.createElement('p');
-  empty.className = 'import-copy';
-  empty.textContent = text;
-  return empty;
-}
-
-function boardRow(board) {
-  const item = document.createElement('div');
-  item.className = 'history-row';
-
-  const label = document.createElement('span');
-  label.className = 'history-action';
-  label.textContent = `${board.name} · ${board.cardCount} card(s)`;
-  item.append(label);
-
-  const restore = document.createElement('button');
-  restore.type = 'button';
-  restore.className = 'btn ghost';
-  restore.textContent = 'Restore';
-  restore.addEventListener('click', async () => {
-    try {
-      const back = await restoreBoard(board.id);
-      setBoards([...boards, back]);
-      paintSelect();
-      await paintTrash();
-      announce(`${back.name} is back`);
-    } catch (err) { failed('restore that board', err); }
-  });
-
-  const purge = document.createElement('button');
-  purge.type = 'button';
-  purge.className = 'btn danger';
-  purge.textContent = 'Delete permanently';
-  purge.addEventListener('click', async () => {
-    const ok = await ask({
-      title: `Erase ${board.name}?`,
-      message: `This deletes the board, its ${board.cardCount} card(s) and its chats for good. Nothing else can recover them.`,
-      okLabel: 'Delete permanently',
-      danger: true,
-    });
-    if (!ok) return;
-    try {
-      const gone = await purgeBoard(board.id);
-      await paintTrash();
-      announce(`Erased ${board.name} — ${gone.cards} card(s), ${gone.sessions} chat(s)`);
-    } catch (err) { failed('erase that board', err); }
-  });
-
-  item.append(restore, purge);
-  return item;
-}
-
-$('#board-trash-btn').addEventListener('click', async () => {
-  dialog.showModal();
-  await paintTrash();
-});
-
-$('#close-boards').addEventListener('click', () => dialog.close());
-
-/** Re-read the list from the server, for a caller that changed it elsewhere. */
+/** Re-read the list from the server, for a caller that changed it elsewhere —
+ *  the History dialog restoring a deleted board is the one that matters: the
+ *  board must land back in this dropdown the moment it is restored. */
 export async function refreshBoards() {
   if (await loadBoards()) paintSelect();
 }

@@ -770,15 +770,15 @@ try:
         page.wait_for_selector(".card")
         check("persistence: board intact after reload", page.locator(".card").count() == count_before)
 
-        # ---- Hide the card numbers & hide the Done column --------------------
-        # This is an end-to-end test. Two Menu toggles declutter the board
-        # without touching data: #toggle-card-nums hides every ledger number
-        # (body class hide-card-nums), #toggle-done-col hides the Done column
-        # (body class hide-done-col). Both persist in localStorage under the
-        # lodestar: prefix, so a reload keeps the choice. Every click is guarded
-        # and every compound check short-circuits on presence first: while the
-        # feature is missing these must come back as red lines, never as a
-        # TimeoutError that abandons the checks after them.
+        # ---- Menu toggles: Tags on/off, Done column; the numbers are gone ----
+        # This is an end-to-end test. Review verdict on the ledger numbers:
+        # clutter nobody toggled back on — so they are simply never shown and
+        # the Menu item is gone. In its place the Menu offers Tags: the chips
+        # on every card and the tag filter bar go with one press. Same idiom
+        # as ever: body class + lodestar: key, aria-pressed "true" = hidden.
+        # Every click is guarded and every compound check short-circuits on
+        # presence first: while the feature is missing these must come back as
+        # red lines, never as a TimeoutError that abandons the checks after.
         def body_has(cls):
             return page.evaluate("c => document.body.classList.contains(c)", cls)
 
@@ -797,49 +797,58 @@ try:
             return present
 
         page.click("#menu-btn")
-        check("hide: Menu offers both toggles, each announcing its pressed state",
-              page.locator("#menu-panel #toggle-card-nums").count() == 1
+        check("menu: card numbers left the Menu; Tags and Done column are in it",
+              page.locator("#menu-panel #toggle-card-nums").count() == 0
+              and page.locator("#menu-panel #toggle-tags").count() == 1
               and page.locator("#menu-panel #toggle-done-col").count() == 1
-              and page.get_attribute("#toggle-card-nums", "aria-pressed") == "false"
+              and page.get_attribute("#toggle-tags", "aria-pressed") == "false"
               and page.get_attribute("#toggle-done-col", "aria-pressed") == "false")
+        # The Menu reads as three groups — act (Undo, History), move data
+        # (Export, Import), tune the display (sound and the toggles) — split
+        # by visible separators rather than one undifferentiated list.
+        check("menu: the panel is grouped by separators, display toggles last",
+              page.locator("#menu-panel .menu-sep").count() >= 2
+              and page.evaluate(
+                  "() => { const items = [...document.querySelectorAll('#menu-panel .menu-item')];"
+                  " return items.indexOf(document.querySelector('#toggle-tags'))"
+                  " > items.indexOf(document.querySelector('#export-btn')); }"))
         page.keyboard.press("Escape")
         page.wait_for_timeout(50)
 
-        nums_total = page.locator("#board .card-num").count()
-        cards_outside_done = page.locator(
-            '.column:not([data-col="answered"]) .card').count()
-        check("hide: the ledger numbers start visible",
-              nums_total > 0 and page.locator("#board .card-num").first.is_visible())
+        check("numbers: no ledger number is visible on any card",
+              page.locator("#board .card-num:visible").count() == 0)
 
-        # Hide the numbers: body class on, spans invisible, aria-pressed flips.
-        toggled = menu_toggle("toggle-card-nums")
-        check("hide: the toggle hides every ledger number",
-              toggled and body_has("hide-card-nums")
-              and not page.locator("#board .card-num").first.is_visible()
-              and page.locator("#board .card-num").first.bounding_box() is None
-              and page.get_attribute("#toggle-card-nums", "aria-pressed") == "true")
-        # Purely visual: same spans in the DOM, same cards outside Done.
-        check("hide: hiding is visual only — the cards themselves are untouched",
-              page.locator("#board .card-num").count() == nums_total
-              and page.locator('.column:not([data-col="answered"]) .card').count()
-                  == cards_outside_done)
-        check("hide: the choice is stored under the lodestar: prefix",
-              bool(page.evaluate("localStorage.getItem('lodestar:hideCardNums')")))
+        tags_total = page.locator("#board .card-tag").count()
+        check("tags: the chips start visible",
+              tags_total > 0 and page.locator("#board .card-tag").first.is_visible())
 
-        # Persistence: a reload must come back with the numbers still hidden.
+        # Hide the tags: body class on, chips and tag bar invisible, flag set.
+        toggled = menu_toggle("toggle-tags")
+        check("tags: the toggle hides every chip and the tag bar",
+              toggled and body_has("hide-tags")
+              and not page.locator("#board .card-tag").first.is_visible()
+              and not page.locator("#tag-bar").is_visible()
+              and page.get_attribute("#toggle-tags", "aria-pressed") == "true")
+        # Purely visual: same chips in the DOM, no card data touched.
+        check("tags: hiding is visual only — the cards keep their tags",
+              page.locator("#board .card-tag").count() == tags_total)
+        check("tags: the choice is stored under the lodestar: prefix",
+              bool(page.evaluate("localStorage.getItem('lodestar:hideTags')")))
+
+        # Persistence: a reload must come back with the tags still hidden.
         page.reload()
         page.wait_for_selector(".card")
-        check("hide: the numbers stay hidden across a reload",
-              body_has("hide-card-nums")
-              and not page.locator("#board .card-num").first.is_visible())
+        check("tags: they stay hidden across a reload",
+              body_has("hide-tags")
+              and not page.locator("#board .card-tag").first.is_visible())
 
-        # Toggle back off: class gone, numbers visible, stored flag cleared.
-        toggled_off = menu_toggle("toggle-card-nums")
-        check("hide: toggling again brings the numbers back",
-              toggled_off and not body_has("hide-card-nums")
-              and page.locator("#board .card-num").first.is_visible()
-              and page.get_attribute("#toggle-card-nums", "aria-pressed") == "false"
-              and not page.evaluate("localStorage.getItem('lodestar:hideCardNums')"))
+        # Toggle back off: class gone, chips visible, stored flag cleared.
+        toggled_off = menu_toggle("toggle-tags")
+        check("tags: toggling again brings the chips back",
+              toggled_off and not body_has("hide-tags")
+              and page.locator("#board .card-tag").first.is_visible()
+              and page.get_attribute("#toggle-tags", "aria-pressed") == "false"
+              and not page.evaluate("localStorage.getItem('lodestar:hideTags')"))
 
         # The Done column, same contract: hide, persist the key, bring it back.
         done_col = page.locator('section.column[data-col="answered"]')
@@ -859,12 +868,52 @@ try:
         # Leave no residue for the checks after this block: whatever state the
         # (possibly missing) toggles left behind, clear it outright.
         page.evaluate("""() => {
-          localStorage.removeItem('lodestar:hideCardNums');
+          localStorage.removeItem('lodestar:hideTags');
           localStorage.removeItem('lodestar:hideDoneCol');
-          document.body.classList.remove('hide-card-nums', 'hide-done-col');
+          document.body.classList.remove('hide-tags', 'hide-done-col');
         }""")
         page.keyboard.press("Escape")
         page.wait_for_timeout(50)
+
+        # ---- Header and chrome styling ---------------------------------------
+        # This is an end-to-end test. Three quiet-chrome rules from review:
+        # the board picker blends into the header (transparent background,
+        # tagline ink) instead of reading as a form control; the ✎ Edit tab
+        # rests faded — translucent ink, dashed hairline — and only darkens
+        # under the pointer; the footer drag hint is one thin line, about a
+        # third of the panel it used to be.
+        def css(sel, prop):
+            return page.evaluate(
+                "([s, p]) => getComputedStyle(document.querySelector(s))[p]",
+                [sel, prop])
+
+        def alpha(color):
+            # Chromium serialises legacy colours as rgba(r, g, b, a) but
+            # color-mix() results as color(srgb r g b / a) — read either.
+            if color.startswith("rgba("):
+                return float(color[5:-1].split(",")[3])
+            if color.startswith("color(") and "/" in color:
+                return float(color.rstrip(")").split("/")[1])
+            return 1.0
+
+        check("header: the board picker blends in — transparent, tagline ink",
+              css("#board-select", "backgroundColor") in ("rgba(0, 0, 0, 0)", "transparent")
+              and css("#board-select", "color") == css(".tagline", "color"))
+
+        rest_ink = css("#edit-cats-btn", "color")
+        check("categories: the ✎ Edit tab rests faded — translucent ink, dashed",
+              alpha(rest_ink) < 1.0
+              and css("#edit-cats-btn", "borderTopStyle") == "dashed")
+        page.hover("#edit-cats-btn")
+        page.wait_for_timeout(250)  # its colours transition
+        check("categories: hovering ✎ Edit inks it darker",
+              css("#edit-cats-btn", "color") != rest_ink)
+        page.mouse.move(0, 0)
+        page.wait_for_timeout(100)
+
+        footer = page.locator(".app-footer").bounding_box()
+        check("footer: the drag hint is one thin line (a third of what it was)",
+              footer is not None and footer["height"] <= 16)
 
         # ---- Export ---------------------------------------------------------
         menu_click("#export-btn")
@@ -3808,16 +3857,32 @@ try:
               page.evaluate("() => document.querySelector('#board-select').value") == "main"
               and "Getaway" not in page.locator("#board-select").inner_text())
 
-        board_menu("#board-trash-btn")
-        page.wait_for_selector("#boards-dialog .history-row")
-        check("boards: a deleted board is listed with its cards intact",
-              "Getaway · 1 card(s)" in page.locator("#boards-trash-list").inner_text())
-        page.click("#boards-dialog .history-row button:has-text('Restore')")
+        # Deleted boards live in the History dialog now, beside the deleted
+        # cards — one place where everything that was removed can be brought
+        # back. The board menu therefore carries no "Deleted boards…" entry,
+        # and the history says in words which board is deleted.
+        page.click("#board-menu-btn")
+        check("boards: the board menu has no trash entry — History owns it",
+              page.locator("#board-menu-panel #board-trash-btn").count() == 0)
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(50)
+
+        page.click("#menu-btn")
+        page.click("#history-btn")
+        page.wait_for_selector("#history-dialog[open]")
+        boards_section = page.locator("#boards-trash-section")
+        check("boards: History says which board is deleted, cards counted",
+              boards_section.is_visible()
+              and "Board “Getaway” is deleted" in boards_section.inner_text()
+              and "1 card(s)" in boards_section.inner_text())
+        page.click("#boards-trash-section button:has-text('Restore')")
         page.wait_for_timeout(300)
-        check("boards: restoring brings the board back with its cards",
+        check("boards: restoring from History puts the board back in the picker",
               "Getaway" in page.locator("#board-select").inner_text()
-              and [c["title"] for c in api_state(new_id)["cards"]] == ["Book the ferry"])
-        page.click("#close-boards")
+              and [c["title"] for c in api_state(new_id)["cards"]] == ["Book the ferry"]
+              and page.locator("#boards-trash-section .history-row").count() == 0)
+        page.click("#close-history")
+        page.wait_for_timeout(100)
 
         # ---- Enter confirms the name dialog ----------------------------------
         # This is an end-to-end test.

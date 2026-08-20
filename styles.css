@@ -386,6 +386,13 @@ input, select, textarea { font: inherit; color: inherit; }
 }
 
 .menu-item:hover { background: var(--paper); }
+/* The rule lines that split the Menu into its three groups: act, move data,
+   tune the display. */
+.menu-sep {
+  margin: 4px 10px;
+  border: none;
+  border-top: 1px dashed var(--line);
+}
 .menu-item:disabled { opacity: 0.45; cursor: default; }
 .menu-item:disabled:hover { background: transparent; }
 
@@ -432,13 +439,23 @@ input, select, textarea { font: inherit; color: inherit; }
 /* "All" — the whole board at once; neutral ink, never a category colour */
 .cat-tab-all { font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; font-size: 10px; }
 
-/* ✎ Edit — quiet utility tab at the end of the rail */
+/* ✎ Edit — quiet utility tab at the end of the rail. It rests faded —
+   translucent ink, a dashed hairline barely there — and only inks up under
+   the pointer or keyboard focus: a tool you reach for, not a tab competing
+   with the categories. */
 .cat-tab-edit {
-  color: var(--ink-soft);
-  background: transparent;
+  color: color-mix(in srgb, var(--ink-soft) 55%, transparent);
+  background: color-mix(in srgb, var(--ink) 3%, transparent);
   border-style: dashed;
+  border-color: color-mix(in srgb, var(--ink) 14%, transparent);
+  font-size: 10px;
 }
-.cat-tab-edit:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, var(--card)); }
+.cat-tab-edit:hover,
+.cat-tab-edit:focus-visible {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 8%, var(--card));
+  border-color: color-mix(in srgb, var(--ink) 40%, transparent);
+}
 
 /* Categories editor dialog */
 .cats-list {
@@ -794,8 +811,13 @@ body[data-view="board"] .cards { min-height: 0; }
 
 /* The Menu's view toggles: a body class is the whole state, the data never
    changes. Numbers go everywhere they render; the Done column only here. */
-.hide-card-nums .card-num,
-.hide-card-nums .row-num { display: none; }
+/* The ledger numbers are never shown. They had a Menu toggle once; review
+   retired it — nobody toggled them back on. The spans stay in the DOM (and
+   cardLabel still names cards in the trash), so `.card-num + .badge` below
+   keeps the layout it always had. */
+.card-num, .row-num { display: none; }
+.hide-tags .card-tags,
+.hide-tags #tag-bar { display: none; }
 .hide-done-col .column[data-col="answered"] { display: none; }
 
 /* Card type as a rubber stamp — always neutral ink; colour means category */
@@ -1955,16 +1977,26 @@ dialog::backdrop {
 /* ---------------------------------------------------------------------------
    Footer
 --------------------------------------------------------------------------- */
+/* One thin line — a hint, not a panel. It was 8px + 18px of padding around
+   10.5px type (~41px tall); review asked for a third of that, so everything
+   in it shrinks together, the kbd chips included. */
 .app-footer {
-  padding: 8px 28px 18px;
+  padding: 1px 28px 2px;
   text-align: center;
 }
 
 .app-footer p {
   margin: 0;
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: 9px;
+  line-height: 1.2;
   color: var(--ink-soft);
+}
+
+.app-footer kbd {
+  font-size: 8px;
+  padding: 0 3px;
+  border-bottom-width: 1px;
 }
 
 kbd {
@@ -2899,10 +2931,22 @@ body[data-view="assistant"] .app-footer { display: none; }
    [hidden] rule, so without this the picker shows even with no backend to
    list a second board. */
 .board-switch[hidden] { display: none; }
+/* The picker blends into the brand block it sits in: page background, the
+   tagline's ink — a label that happens to drop a list, not a form control
+   shouting under the wordmark. Hover inks it up so it still reads as
+   pressable. */
 .board-switch #board-select {
   max-width: 172px;
   font-size: 11px;
   padding-block: 3px;
+  background: transparent;
+  border-color: transparent;
+  color: var(--ink-soft);
+}
+.board-switch #board-select:hover,
+.board-switch #board-select:focus-visible {
+  color: var(--ink);
+  border-color: var(--line);
 }
 .board-switch #board-menu-btn { padding: 3px 7px; }
 /* Drops from the left, under the brand, rather than off the header's edge. */

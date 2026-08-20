@@ -47,15 +47,16 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// Two view toggles in the Menu: hide the ledger numbers, hide the Done
-// column. Purely visual — a body class the CSS reads — so the stored flag and
-// the class are the whole state; no card data is touched. Same toggle idiom
-// as #habit-mute: aria-pressed announces the state ("true" = hidden), and
-// persisting is done here where the click is. Hidden stores '1', shown
-// removes the key outright, and boot applies whatever is stored so a reload
-// keeps the choice.
+// Two view toggles in the Menu: hide the tag chips (and the tag filter bar),
+// hide the Done column. Purely visual — a body class the CSS reads — so the
+// stored flag and the class are the whole state; no card data is touched.
+// Same toggle idiom as #habit-mute: aria-pressed announces the state ("true"
+// = hidden), and persisting is done here where the click is. Hidden stores
+// '1', shown removes the key outright, and boot applies whatever is stored so
+// a reload keeps the choice. (The ledger numbers had a toggle here once;
+// review retired it — they are simply never shown now, styles.css.)
 for (const [btnId, cls, key] of [
-  ['#toggle-card-nums', 'hide-card-nums', KEY_PREFIX + 'hideCardNums'],
+  ['#toggle-tags', 'hide-tags', KEY_PREFIX + 'hideTags'],
   ['#toggle-done-col', 'hide-done-col', KEY_PREFIX + 'hideDoneCol'],
 ]) {
   const btn = $(btnId);
