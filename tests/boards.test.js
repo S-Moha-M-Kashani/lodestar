@@ -141,6 +141,77 @@ test('chats belong to a board and a board only ever sees its own', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test. It encodes the reported bug: categories from one
+// board appeared on another, and a category deleted on the second board came
+// back. Desired behaviour — each board owns its registry; a new board is seeded
+// with the default life areas; no save on one board can touch another's registry.
+test('the category registry is per board', async () => {
+  const s = await startServer();
+  try {
+    const DEFAULT_IDS = ['work', 'love', 'family', 'health', 'mind', 'music', 'travel', 'home', 'money'];
+    const putState = (body, board) => fetch(
+      s.base + '/api/state' + (board ? `?board=${board}` : ''),
+      { method: 'PUT', headers: json, body: JSON.stringify({ version: 1, ...body }) });
+
+    // Give the default board a custom category beside the defaults.
+    await putState({ cards: [], categories: [
+      ...DEFAULT_IDS.map((id, i) => ({ id, label: id, h: i * 10 })),
+      { id: 'garden', label: 'Garden', h: 120 },
+    ] });
+
+    // A new board starts with the default life areas — not the first board's
+    // registry, so 'garden' must not leak onto it.
+    const second = await newBoard(s.base, 'Second');
+    const fresh = await get(s.base, `/api/state?board=${second.id}`);
+    assert.deepEqual(fresh.categories.map((c) => c.id), DEFAULT_IDS);
+
+    // Deleting categories on the second board touches only the second board.
+    await putState({ cards: [], categories: [{ id: 'work', label: 'Work', h: 255 }] }, second.id);
+    const firstAfter = await get(s.base, '/api/state');
+    assert.ok(firstAfter.categories.some((c) => c.id === 'garden'),
+      'the first board keeps its own registry');
+    assert.equal(firstAfter.categories.length, DEFAULT_IDS.length + 1);
+
+    // The reported resurrection: a later save on the first board (its registry
+    // in full, as the browser always sends it) must not bring the second
+    // board's deleted categories back.
+    await putState({ cards: [], categories: firstAfter.categories });
+    const secondAfter = await get(s.base, `/api/state?board=${second.id}`);
+    assert.deepEqual(secondAfter.categories.map((c) => c.id), ['work']);
+
+    // Deleting the last category persists too: an empty registry is a real
+    // state of one board, not a malformed payload to be skipped.
+    await putState({ cards: [], categories: [] }, second.id);
+    assert.deepEqual((await get(s.base, `/api/state?board=${second.id}`)).categories, []);
+    assert.equal((await get(s.base, '/api/state')).categories.length, DEFAULT_IDS.length + 1);
+  } finally { await s.stop(); }
+});
+
+// This is an integration test. A board.db whose categories table predates
+// per-board registries must hand its rows — custom categories included — to the
+// default board, exactly as the migration at the top of this file does for cards.
+test('a categories table with no board column migrates onto the default board', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lodestar-legacy-cats-'));
+  const dbPath = join(dir, 'board.db');
+  const legacy = new DatabaseSync(dbPath);
+  legacy.exec(`
+    CREATE TABLE categories (
+      id TEXT PRIMARY KEY, label TEXT NOT NULL, h INTEGER NOT NULL,
+      position INTEGER NOT NULL DEFAULT 0
+    );
+    INSERT INTO categories (id, label, h, position) VALUES
+      ('work', 'Work', 255, 0), ('garden', 'Garden', 120, 1);
+  `);
+  legacy.close();
+
+  const s = await startServer({ env: { BOARD_DB: dbPath } });
+  try {
+    const state = await get(s.base, '/api/state');
+    assert.deepEqual(state.cards, []);
+    assert.deepEqual(state.categories.map((c) => c.id), ['work', 'garden']);
+  } finally { await s.stop(); }
+});
+
 // This is an integration test. A board.db written before this feature must open
 // on a board that looks exactly like the one it had.
 test('a database with no boards table migrates onto the default board', async () => {
