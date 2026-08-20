@@ -155,6 +155,12 @@ def test_every_invocation_strips_the_subprocess_of_its_own_tools(tmp_path, monke
     assert '--ignore-user-config' in argv
     assert '--ignore-rules' in argv, 'no user or project execpolicy rules'
     assert '--ephemeral' in argv, 'a private board leaves no session file behind'
+    # Not a denial like the four above, and asserted with them anyway because it
+    # is load-bearing in the other direction: without it `codex exec` refuses to
+    # start in the empty scratch directory the wrapper now runs it in, and every
+    # codex turn is a 500. Dropping this flag and dropping the scratch cwd are
+    # the same bug seen from two sides, so the tests for them sit together.
+    assert '--skip-git-repo-check' in argv, 'the scratch cwd is not a git repo'
 
 
 # This is a unit test, and it finishes the job the one above starts.
@@ -328,3 +334,22 @@ def test_a_failing_cli_says_why_instead_of_naming_an_exit_code(tmp_path, monkeyp
     llm = make_chat_model(Settings(llm_provider='claude-cli'))
     with pytest.raises(Exception, match='/login'):
         llm.invoke([HumanMessage(content='ping')])
+
+    # Codex is the other way round, and this is a capture rather than a guess:
+    # run against a genuinely exhausted plan on 2026-08-20, stderr held only
+    # "Reading prompt from stdin..." while the reason arrived on *stdout* as an
+    # event. Taking stderr first — which is what a CLI's convention says to do —
+    # reported the line that says nothing and threw away the only line the user
+    # could act on.
+    monkeypatch.setenv('BRAIN_CODEX_CLI_BIN', _stub(
+        tmp_path, 'codex',
+        'echo "Reading prompt from stdin..." >&2\n'
+        "echo '{\"type\":\"thread.started\",\"thread_id\":\"01a0\"}'\n"
+        "echo '{\"type\":\"error\",\"message\":\"You have hit your usage limit."
+        " Upgrade to Pro or try again at 7:26 PM.\"}'\n"
+        "echo '{\"type\":\"turn.failed\",\"error\":{\"message\":\"You have hit"
+        " your usage limit.\"}}'\n"
+        'exit 1'))
+    with pytest.raises(Exception, match='usage limit'):
+        make_chat_model(Settings(llm_provider='codex-cli')).invoke(
+            [HumanMessage(content='ping')])

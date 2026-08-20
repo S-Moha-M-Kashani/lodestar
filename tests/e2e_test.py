@@ -3313,9 +3313,15 @@ try:
         with page.expect_request("**/api/agent/chat/stream") as cli_req:
             page.fill("#chat-input", "cli provider ride-along probe")
             page.click("#chat-send")
+        sent = (cli_req.value.post_data or "").replace(" ", "")
         check("assistant: the chosen CLI backend rides along on the chat request",
-              '"provider":"claude-cli"'
-              in (cli_req.value.post_data or "").replace(" ", ""))
+              '"provider":"claude-cli"' in sent)
+        # And the model goes with it. A slug from another backend riding on this
+        # request is a turn that fails at the binary — `claude --model
+        # 4skl/gemma4-e2b-mtp` loads nothing — and it is what happened when the
+        # local daemon's tag list was allowed to govern a pick bound elsewhere.
+        check("assistant: the model that rides along belongs to that backend",
+              '"model":"sonnet"' in sent)
         page.wait_for_selector(".chat-msg.assistant")
         # And the offline contract holds. This brain is BRAIN_LLM=fake; a browser
         # naming a live subscription must not be able to move it onto one, so the

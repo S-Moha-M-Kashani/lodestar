@@ -127,6 +127,14 @@ export async function probeBrainModels() {
     return;
   }
   if (!answered || !brainModels.verified || !brainModels.models.length) return;
+  // The daemon's tag list governs a pick that is going to the daemon, and only
+  // that. Without this guard the list below rewrites the text pick whenever the
+  // *brain* is Ollama, however the picker is set — so choosing Claude CLI and
+  // reloading left `sonnet` replaced by an Ollama tag and sent to `claude`,
+  // which cannot load it. Found by running it. The same was already true of an
+  // OpenRouter pick on an Ollama brain; one guard covers both, because the
+  // question is what the pick will be sent to, not what the brain booted as.
+  if (assistantModels.provider !== 'ollama') return;
   // The backend named its models, so an unservable text pick is switched to
   // one that works rather than left to fail on the next turn.
   let changed = false;

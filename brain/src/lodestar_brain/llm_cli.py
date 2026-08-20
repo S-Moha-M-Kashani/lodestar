@@ -77,7 +77,21 @@ CLAUDE_HARDENING = ['--tools', '',            # every built-in tool off
 CODEX_HARDENING = ['-s', 'read-only',          # the sandbox may not write
                    '--ignore-user-config',
                    '--ignore-rules',           # no execpolicy .rules files
-                   '--ephemeral']              # no session file left on disk
+                   '--ephemeral',              # no session file left on disk
+                   # The one entry here that grants rather than denies, and it
+                   # is the scratch working directory's bill: `codex exec`
+                   # refuses to start outside a git repository ("Not inside a
+                   # trusted directory and --skip-git-repo-check was not
+                   # specified"), and an empty temp dir is not one. It used to
+                   # inherit this repo, which is precisely what the scratch cwd
+                   # exists to stop. Safe because the guard it lifts protects a
+                   # *person* from running a coding agent somewhere unintended;
+                   # what protects the filesystem is `-s read-only` above, and
+                   # the intended directory here is one this module just made
+                   # and nothing else can reach. Found by running it — no
+                   # fixture-driven test can see this, because a stub script
+                   # does not care what directory it was started in.
+                   '--skip-git-repo-check']
 
 
 def _text(message: BaseMessage) -> str:
@@ -156,6 +170,17 @@ class _CliChatModel(BaseChatModel):
         """The reply text and the turn's usage_metadata."""
         raise NotImplementedError
 
+    def _failure(self, stdout: str, stderr: str) -> str:
+        """Why the binary exited non-zero, in the words the user needs to read.
+
+        stderr first, because that is where a CLI puts what went wrong — but a
+        hook rather than a fixed expression, since one of these two binaries
+        disagrees with that and the difference is not cosmetic (see the codex
+        override). Everything this returns reaches the Assistant as the error
+        bubble's text.
+        """
+        return (stderr or stdout).strip()
+
     def _generate(self, messages: list[BaseMessage], stop: list[str] | None = None,
                   run_manager: Any = None, **kwargs: Any) -> ChatResult:
         system = self._system(messages)
@@ -181,7 +206,7 @@ class _CliChatModel(BaseChatModel):
             # of this backend is an expired subscription, and "run /login" has to
             # survive the trip to the user — the same rule the tool-error handler
             # follows when it returns str(exc) rather than the exception type.
-            detail = (out.stderr or out.stdout or '').strip()
+            detail = self._failure(out.stdout or '', out.stderr or '')
             raise RuntimeError(f'{self._llm_type} failed: '
                                f'{detail or f"exit status {out.returncode}"}')
         text, usage = self._parse(out.stdout)
@@ -268,6 +293,36 @@ class CodexCliChatModel(_CliChatModel):
         # so passing both would send the conversation twice.
         return ([self.binary, 'exec', '--json', *CODEX_HARDENING],
                 f'{system}\n\n{prompt}')
+
+    def _failure(self, stdout: str, stderr: str) -> str:
+        """Codex puts the reason on *stdout*, as an event, and progress chatter
+        on stderr — the opposite of the convention the base method assumes.
+
+        Measured 2026-08-20 against a real exhausted plan: stderr held only
+        "Reading prompt from stdin...", while stdout carried
+        `{"type":"error","message":"You've hit your usage limit…"}` followed by
+        `turn.failed`. Taking stderr first therefore reported the one line that
+        says nothing and discarded the only line that says anything — and this
+        backend's whole error policy is that "run /login" or "you are out of
+        quota" has to survive the trip to the user, because it is the likeliest
+        way it fails and the only thing they can act on.
+        """
+        for line in stdout.splitlines():
+            if not (line := line.strip()):
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get('type') == 'error':
+                said = event.get('message')
+            elif event.get('type') == 'turn.failed':
+                said = (event.get('error') or {}).get('message')
+            else:
+                continue
+            if said:
+                return said
+        return super()._failure(stdout, stderr)
 
     def _parse(self, stdout: str) -> tuple[str, dict]:
         text, usage = '', {}
