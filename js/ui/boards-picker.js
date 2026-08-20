@@ -14,8 +14,6 @@ import { $, announce } from './dom.js';
 
 const switcher = $('.board-switch');
 const select = $('#board-select');
-const menuBtn = $('#board-menu-btn');
-const menuPanel = $('#board-menu-panel');
 
 function paintSelect() {
   select.replaceChildren(...boards.map((b) => {
@@ -46,30 +44,11 @@ function leaveFor(id) {
   openBoard(id);
 }
 
-function setMenuOpen(open) {
-  menuPanel.hidden = !open;
-  menuBtn.setAttribute('aria-expanded', String(open));
-}
-
 select.addEventListener('change', () => leaveFor(select.value));
 
-menuBtn.addEventListener('click', () => setMenuOpen(menuPanel.hidden));
-document.addEventListener('click', (e) => {
-  // Scoped to this menu's own container: two dropdowns share the
-  // .toolbar-menu class, and a check that only asked "is the click inside a
-  // toolbar menu" would leave this one open while you used the other.
-  if (!menuPanel.hidden && !e.target.closest('.board-switch')) setMenuOpen(false);
-});
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && !menuPanel.hidden) {
-    setMenuOpen(false);
-    menuBtn.focus();
-  }
-});
-menuPanel.addEventListener('click', (e) => {
-  if (e.target.closest('button')) setMenuOpen(false);
-});
-
+// The board's own actions — new, rename, delete — are rows of the one
+// Menu ▾ (toolbar.js owns that panel's open/close); this module only wires
+// what each row does.
 const failed = (verb, err) => announce(`Could not ${verb} — ${err.message}`);
 
 $('#board-new').addEventListener('click', async () => {

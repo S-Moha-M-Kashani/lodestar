@@ -11,11 +11,8 @@ import { $, announce } from './dom.js';
 // Trash beside it: everything that was removed, cards and whole boards alike,
 // is brought back from here.
 
-$('#undo-btn').addEventListener('click', () => {
-  if (timeline.index <= 0) return;
-  const undone = timeline.entries[timeline.index].action;
-  restoreEntry(timeline.index - 1, `Undid “${undone}”`);
-});
+// Undo left the Menu (review, 2026-08-20): the timeline below restores any
+// state, which is undo with a memory, so one control does the job of two.
 
 const historyDialog = $('#history-dialog');
 
