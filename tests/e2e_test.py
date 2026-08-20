@@ -3182,6 +3182,36 @@ try:
         check("assistant: switching back restores the local list and its default",
               option_values("#model-text") == [DEFAULT_TEXT, ALT_TEXT, THIRD_TEXT]
               and page.input_value("#model-text") == DEFAULT_TEXT)
+
+        # This is an end-to-end test.
+        # ---- The OpenRouter key is typed into the settings drawer, handed to
+        # the brain, and kept nowhere the browser could leak it from: the field
+        # is a password input, it empties itself after a save, the key never
+        # lands in localStorage, and the status route answers only yes or no.
+        open_models(page)
+        key_secret = "sk-or-e2e-abcdef123456"
+        key_input = page.locator("#openrouter-key")
+        check("key: a password field sits in the settings drawer",
+              key_input.count() == 1
+              and key_input.get_attribute("type") == "password"
+              and page.locator("#openrouter-key-save").count() == 1)
+        key_input.fill(key_secret)
+        page.click("#openrouter-key-save")
+        page.wait_for_function(
+            "document.querySelector('.chat-key-status')"
+            " && /set/i.test(document.querySelector('.chat-key-status').textContent)")
+        check("key: saving reports the key as set", True)
+        check("key: the field empties itself after the save",
+              key_input.input_value() == "")
+        check("key: localStorage never holds it",
+              page.evaluate(
+                  "Object.keys(localStorage).every("
+                  "  k => !(localStorage.getItem(k) || '').includes('%s'))"
+                  % key_secret))
+        key_status = page.evaluate(
+            "fetch('/api/agent/key').then(r => r.json())")
+        check("key: the brain reports configured, and only that",
+              key_status == {"configured": True})
         # openrouter/auto is gone from every picker, not just the text one: it is
         # deprecated, and the resolved model was never read back out of the
         # response, so no picker should be able to hand the brain a router.
