@@ -2,6 +2,20 @@
 
 *2026-08-12*
 
+> **Amended 2026-08-20: categories are per board after all.** The shared
+> registry decided below did not survive contact with use. Every browser caches
+> the registry inside each board's localStorage snapshot and pushes it back on
+> load ("the local board wins"), so a single shared registry was rewritten by
+> whichever board's stale copy pushed last — categories leaked onto new boards,
+> and a category deleted on one board resurrected the next time another board
+> was opened. The fix scopes the `categories` table by `board_id` (composite
+> primary key, table rebuilt on migration with every board — deleted ones
+> included — keeping a copy of the registry it showed the day before). A new
+> board is seeded with the default life areas at creation, and only then: an
+> emptied registry is a real state, never re-seeded at boot. Tests:
+> `tests/boards.test.js`. Where the text below says categories are shared, this
+> note wins.
+
 ## What this adds
 
 Lodestar has always held exactly one board. This adds as many as you want: a
