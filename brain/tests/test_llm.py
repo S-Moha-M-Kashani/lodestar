@@ -217,3 +217,79 @@ def test_an_unreachable_ollama_daemon_is_logged_not_silent(caplog):
 
     assert out['verified'] is False and out['models'] == []
     assert 'ollama.invalid' in caplog.text, 'the warning names the root it tried'
+
+
+# This is a unit test.
+def test_the_browser_can_choose_a_cli_backend_and_gets_that_cli():
+    """A CLI subscription is a per-board choice, not only a boot-time one.
+
+    Until now `claude-cli` and `codex-cli` were reachable through `BRAIN_LLM`
+    alone, so one brain served one backend to every board it had. Two people on
+    two boards want two different subscriptions against the same endpoint, and
+    the picker is where that choice belongs — the seam OpenRouter and Ollama
+    already travel through.
+
+    Everything the UI path already guarantees is asserted here too, because a
+    new provider in `UI_PROVIDERS` is a new way to reach it: the model follows
+    the provider (a CLI must never inherit an OpenRouter slug), the offline
+    contract still belongs to the server, and an unknown provider still raises.
+    """
+    from lodestar_brain.config import PROVIDER_MODELS
+    from lodestar_brain.llm_cli import ClaudeCliChatModel, CodexCliChatModel
+
+    llm = make_chat_model(_settings(llm_provider='ollama'), None,
+                          provider='claude-cli')
+    assert isinstance(llm, ClaudeCliChatModel)
+    # Naming no model gets that backend's own default, never the one the brain
+    # booted with — PROVIDER_MODELS is the rule, and it applies per request.
+    assert llm.model == PROVIDER_MODELS['claude-cli']
+
+    # Codex deliberately names no model: the owner's choice is "whatever codex
+    # defaults to", so the picker must not smuggle a slug in behind it.
+    codex = make_chat_model(_settings(llm_provider='openrouter'), None,
+                            provider='codex-cli')
+    assert isinstance(codex, CodexCliChatModel) and codex.model == ''
+
+    # An explicit model still wins, exactly as it does for the API backends.
+    assert make_chat_model(_settings(llm_provider='ollama'), 'opus',
+                           provider='claude-cli').model == 'opus'
+
+    # The offline contract is the server's, not the client's: a browser naming a
+    # live subscription must not move a brain configured as fake onto it.
+    assert isinstance(make_chat_model(_settings(llm_provider='fake'), None,
+                                      provider='claude-cli'), FakeChat)
+    # And no auto modes — a CLI this brain cannot serve is an error, not the
+    # nearest one it can.
+    with pytest.raises(ValueError):
+        make_chat_model(_settings(llm_provider='ollama'), None,
+                        provider='gemini-cli')
+
+
+# This is a unit test.
+def test_served_models_says_which_cli_backends_this_machine_can_serve(
+        tmp_path, monkeypatch):
+    """The picker may only offer a subscription that is installed here.
+
+    `verified`'s rule, one backend further out. A CLI backend has no model list
+    worth probing — the subscription decides that — but it does have a binary,
+    and whether the binary is there is knowable for certain and for free.
+    Offering `claude-cli` on a machine with no `claude` would fail every turn
+    with no way out from the UI, which is the failure `served_models` exists to
+    prevent.
+
+    Both halves are asserted in one run, because the bug worth catching is a
+    check that answers the same way whether the binary is there or not.
+    """
+    installed = tmp_path / 'claude'
+    installed.write_text('#!/bin/sh\nexit 0\n')
+    installed.chmod(0o755)
+    monkeypatch.setenv('BRAIN_CLAUDE_CLI_BIN', str(installed))
+    monkeypatch.setenv('BRAIN_CODEX_CLI_BIN', str(tmp_path / 'no-such-codex'))
+
+    out = served_models(_settings(llm_provider='fake'))
+
+    assert out['cli'] == {'claude-cli': True, 'codex-cli': False}
+    # The existing answer is untouched: `cli` is an addition, and a fake brain
+    # still claims to verify nothing. Two questions, two answers, neither of
+    # them something the frontend has to disentangle from the other.
+    assert out['provider'] == 'fake' and out['verified'] is False

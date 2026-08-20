@@ -2,41 +2,44 @@
 
 *2026-08-20*
 
+> **Built on 2026-08-20: the first half only.** Sections 1, 4, 5 and the docs
+> shipped — a CLI backend is now a per-board choice made in the picker, offered
+> only where its binary exists, priced as nothing rather than as zero, and run in
+> an empty scratch directory. **The bridge did not ship**, by decision: the whole
+> registry, lease and dial-out apparatus below exists to serve one case — a brain
+> in Docker reaching a CLI on a *different* machine — and the owner cut it rather
+> than carry that much machinery for it. So today the CLI backends work where the
+> brain and the logged-in binary are on the same computer, and `docs/cli-backends.md`
+> says so on its first screen. Everything below about `bridge.py`, `cli_bridge.py`,
+> `/agent/bridge/*`, `BRAIN_CLI_EXECUTOR` and the `CliCall` seam is a **design
+> that has not been implemented**; it is kept because the case is real and the
+> argument was made, not because the code exists. What did ship is listed under
+> *What actually shipped* at the foot of this file.
+
 ## What this adds
 
 `llm_cli.py` already lets the brain answer through `claude` or `codex` on this
 machine's own subscriptions, keyless. It is selectable **only by `BRAIN_LLM`, and
-only where the brain runs**. That is exactly wrong for the deployment this board
-actually has: the brain runs in Docker on a home server, the container holds
-neither binary nor either login, and two people share the endpoint from two
-laptops that each hold their own.
+only where the brain runs**. Two limits fall out of that, and they are different
+problems: one brain serves every board the same backend, and a brain in a
+container holds neither binary nor anybody's login.
 
-This makes a CLI backend a **per-board choice made in the browser, executed on
-the machine whose subscription pays for it**. Two people, two laptops, one
-endpoint, two boards, two different backends at the same time:
+The first is what shipped: a CLI backend becomes a **per-board choice made in the
+browser**, so several boards on one endpoint can each answer through a different
+subscription. The second is what the bridge below was for.
 
 ```
-Pari's laptop                                 Home server (docker)
-┌────────────────────────────┐                ┌──────────────────────────────┐
-│ browser → board moha-pari  │ ──── http ───→ │ :3000 Node (proxy + limiter) │
-│   Assistant: Codex CLI     │                │ :9000 brain (not published)  │
-│                            │                │   agent loop, tools, fence   │
-│ bridge.py --provider       │ ─ SSE (out) ─→ │   /agent/bridge/stream       │
-│   codex-cli --board pari   │ ─── POST ───→  │   /agent/bridge/result       │
-│   └─ codex exec --json     │                │                              │
-└────────────────────────────┘                │                              │
-┌────────────────────────────┐                │                              │
-│ Moha's laptop              │                │                              │
-│ browser → board moha       │ ──── http ───→ │                              │
-│   Assistant: Claude CLI    │                │                              │
-│ bridge.py --provider       │ ─ SSE (out) ─→ │                              │
-│   claude-cli --board moha  │                │                              │
-│   └─ claude -p …           │                └──────────────────────────────┘
-└────────────────────────────┘
+one computer
+┌──────────────────────────────────────────────────────────────┐
+│ browser → board A   Assistant: Claude CLI ──┐                │
+│ browser → board B   Assistant: Codex CLI  ──┤                │
+│                                             ▼                │
+│ :3000 Node (proxy + limiter) ──→ :9000 brain                 │
+│                                    agent loop, tools, fence  │
+│                                    └─ claude -p / codex exec │
+│                                       (already logged in)    │
+└──────────────────────────────────────────────────────────────┘
 ```
-
-Everything the laptop does is **outbound**: no inbound port, no static address,
-no firewall prompt, and it works from a café as well as the living room.
 
 ## What is not being built, and why that matters
 
@@ -323,3 +326,31 @@ lists reachable from four places. The thing that varies is the transport, so the
 transport is the seam. It also keeps the eight existing `test_llm_cli.py` cases
 covering the remote path for free: they assert on argv and parsing, and both are
 still built and done in the brain.
+
+## What actually shipped (2026-08-20)
+
+| Change | Where |
+| --- | --- |
+| `UI_PROVIDERS` grew both CLI backends; a browser-named CLI is built by `_cli_model`, behind the `fake` guard, and `PROVIDER_MODELS` still moves the model with the provider | `llm.py` |
+| `BRAIN_MODEL` now reaches a CLI backend, but only when the brain is *configured* for it — a slug meant for Ollama must not be handed to Claude. `BRAIN_CLAUDE_CLI_MODEL` is gone: two knobs for one model is two things to disagree | `llm.py`, `.env.example` |
+| `served_models` grew `cli: {backend: bool}` from `shutil.which`, so the picker offers only an installed subscription | `llm.py` |
+| `ChatBody.provider` accepts both CLI values — they were a 422 from the request model before the seam was ever reached | `server.py` |
+| `ZERO_BILL = {'ollama', 'fake'}`. A subscription turn prices as `None`, not `$0.000`, which is what `llm_cli.py`'s comment already claimed | `pricing.py` |
+| Every invocation runs in a fresh empty temp directory — the fix this file's own security note asked for, and a prompt-integrity fix as much as a filesystem one | `llm_cli.py` |
+| Two picker options offered per board, labelled *your own subscription*; `sonnet`/`opus`/`haiku` for Claude and no model for Codex; a saved backend the brain can no longer serve is switched off rather than left to fail | `js/assistant/models.js` |
+| The models key is board-scoped (`boardSuffix`), so boards differ and the default board's existing pick does not move | `js/assistant/models.js` |
+| Activation guide, written for someone who is not a developer, opening with the one thing that decides whether any of it works | `docs/cli-backends.md` |
+
+Tests: `test_llm.py` (UI selection, `served_models`' `cli`), `test_llm_cli.py`
+(the scratch cwd, measured from inside the subprocess — the only place it can be,
+since a `TemporaryDirectory` is gone by the time a test could look),
+`test_pricing.py` (folded into `test_a_price_is_never_invented`, where the rule
+lives), `test_server.py` (the wire contract and `cost is None`), and five e2e
+checks including per-board persistence across a board switch.
+
+**Not shipped, and not only the bridge:** the two `server.js` fixes this file
+lists — the proxy forwarding no `authorization` header, and its 120 s abort
+truncating both `CLI_TIMEOUT` (300 s) and `LOCAL_TIMEOUT` (600 s). The second is
+a live bug for Ollama today and wants its own `fix/` branch; neither is reachable
+from the shipped feature, because a CLI backend selected in the picker is served
+by the brain the browser is already talking to.

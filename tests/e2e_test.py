@@ -38,6 +38,17 @@ CHECKPOINT_DB_PATH = os.path.join(os.path.dirname(DB_PATH), "brain-checkpoints.d
 BACKUP_DIR = tempfile.mkdtemp(prefix="qboard-backups-")
 NO_RCLONE = os.path.join(BACKUP_DIR, "no-such-rclone")
 
+# A stand-in `claude` binary, and a `codex` that is deliberately absent. The
+# Assistant may only offer a CLI subscription this machine can actually serve,
+# so the run needs one of each: with both present, a picker that listed every
+# CLI regardless of what is installed would pass.
+CLI_BIN_DIR = tempfile.mkdtemp(prefix="qboard-cli-")
+CLAUDE_CLI_STUB = os.path.join(CLI_BIN_DIR, "claude")
+with open(CLAUDE_CLI_STUB, "w") as _stub_file:
+    _stub_file.write("#!/bin/sh\nexit 0\n")
+os.chmod(CLAUDE_CLI_STUB, 0o755)
+NO_CODEX_CLI = os.path.join(CLI_BIN_DIR, "no-such-codex")
+
 
 def snapshots():
     # Snapshots live in the db/ subfolder (json/ holds the importable exports).
@@ -257,6 +268,12 @@ def start_brain():
              # into databases/real/: an e2e turn must not resume — or grow —
              # a real conversation.
              "BRAIN_CHECKPOINT_DB": CHECKPOINT_DB_PATH,
+             # One CLI subscription installed and one not, so the picker's
+             # gating can be checked in both directions in one run. Neither is
+             # ever executed here: BRAIN_LLM=fake outranks a browser's provider
+             # choice, which is itself one of the things asserted below.
+             "BRAIN_CLAUDE_CLI_BIN": CLAUDE_CLI_STUB,
+             "BRAIN_CODEX_CLI_BIN": NO_CODEX_CLI,
              "BRAIN_CHAT_COLLECTION": "chat-e2e"},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -3186,8 +3203,19 @@ try:
               page.locator("#model-provider").count() == 1)
         check("assistant: the provider defaults to the local daemon",
               page.input_value("#model-provider") == "ollama")
-        check("assistant: the provider selector offers exactly local and remote",
-              option_values("#model-provider") == ["ollama", "openrouter"])
+        # The two API routes, then whichever CLI subscription this machine can
+        # actually serve. `claude` is stubbed into the brain's env for this run
+        # and `codex` deliberately is not, so the list proves the gating in both
+        # directions: a picker that offered every CLI it knows the name of would
+        # hand the brain a backend with no binary behind it, and every turn
+        # would fail with no way out from the UI.
+        check("assistant: the provider selector offers the two APIs and the "
+              "installed CLI, and not the missing one",
+              option_values("#model-provider")
+              == ["ollama", "openrouter", "claude-cli"])
+        check("assistant: the CLI option says whose subscription pays for it",
+              "subscription" in " ".join(
+                  page.locator("#model-provider option").all_inner_texts()).lower())
         text_labels = page.locator("#model-text option").all_inner_texts()
         check("assistant: every local text option says it runs locally",
               all("local" in label for label in text_labels))
@@ -3276,6 +3304,57 @@ try:
               served.get("verified") is False and served.get("models") == [])
         check("assistant: no local-backend hint when the models are unverified",
               "served locally" not in page.locator(".chat-settings").inner_text())
+        check("assistant: the brain says which CLI subscriptions it can serve",
+              served.get("cli") == {"claude-cli": True, "codex-cli": False})
+
+        # ---- A CLI subscription is a backend like any other: it rides along on
+        # the request, and it cannot overrule the brain's own configuration.
+        page.select_option("#model-provider", "claude-cli")
+        with page.expect_request("**/api/agent/chat/stream") as cli_req:
+            page.fill("#chat-input", "cli provider ride-along probe")
+            page.click("#chat-send")
+        check("assistant: the chosen CLI backend rides along on the chat request",
+              '"provider":"claude-cli"'
+              in (cli_req.value.post_data or "").replace(" ", ""))
+        page.wait_for_selector(".chat-msg.assistant")
+        # And the offline contract holds. This brain is BRAIN_LLM=fake; a browser
+        # naming a live subscription must not be able to move it onto one, so the
+        # reply is still the fake backend's. The guard belongs to the server —
+        # a client cannot be trusted to protect the server's own promise.
+        check("assistant: naming a CLI backend cannot move a fake brain onto it",
+              wait_until(lambda: "FAKE: cli provider ride-along probe"
+                         in page.inner_text(".chat-log")))
+
+        # ---- The backend is remembered per board, which is the point of the
+        # feature: two boards on one endpoint, each answering through its own
+        # subscription. Storage keys are board-scoped, so a second board starts
+        # from the default rather than inheriting this one's choice.
+        second = page.evaluate(
+            "() => fetch('/api/boards', {method: 'POST',"
+            " headers: {'Content-Type': 'application/json'},"
+            " body: JSON.stringify({name: 'CLI backend probe'})})"
+            ".then(r => r.json()).then(b => b.board.id)")
+        page.reload()
+        # `state="attached"`: an <option> inside a closed <select> is never
+        # "visible", so the default wait can only ever time out on one.
+        page.wait_for_selector("#board-select option[value='%s']" % second,
+                               state="attached")
+        page.select_option("#board-select", second)
+        page.wait_for_load_state()
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        # open_models, not open_extras: a reload resets the Models fold, and the
+        # picker is inside it.
+        open_models(page)
+        check("assistant: a second board starts on the default backend, not the "
+              "first board's CLI",
+              page.input_value("#model-provider") == "ollama")
+        page.select_option("#board-select", "main")
+        page.wait_for_load_state()
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        open_models(page)
+        check("assistant: coming back to a board restores the backend it was on",
+              page.input_value("#model-provider") == "claude-cli")
+        page.select_option("#model-provider", "ollama")
 
         n_replies = page.locator(".chat-msg.assistant").count()
         page.fill("#chat-input", "model ride-along probe")

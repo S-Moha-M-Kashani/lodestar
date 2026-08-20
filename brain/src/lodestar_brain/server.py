@@ -67,8 +67,16 @@ class ChatBody(BaseModel):
     messages: list[dict]
     model: str | None = None
     # The browser defaults to the local Ollama provider. OpenRouter is an
-    # explicit alternative because it can use billed remote models such as Nano.
-    provider: Literal['ollama', 'openrouter'] | None = None
+    # explicit alternative because it can use billed remote models such as Nano,
+    # and the two -cli backends answer on this machine's own subscriptions.
+    #
+    # Spelled out rather than derived from `llm.UI_PROVIDERS`: pydantic needs a
+    # static Literal to validate against, and a set comprehension here would
+    # trade a wire contract you can read for one you have to run. The two must
+    # agree — a provider the picker offers and this rejects is a 422 the browser
+    # can do nothing with, which is what the -cli backends were until now.
+    provider: Literal['ollama', 'openrouter', 'claude-cli',
+                      'codex-cli'] | None = None
     # Which chat this turn belongs to. Optional rather than required: the evals,
     # any curl and sixteen tests post without one, and none of those should be a
     # lost turn — Node files an unnamed batch under its reserved 'adhoc' chat.
