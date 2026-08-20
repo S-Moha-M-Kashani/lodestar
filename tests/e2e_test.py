@@ -3196,7 +3196,18 @@ try:
               and key_input.get_attribute("type") == "password"
               and page.locator("#openrouter-key-save").count() == 1)
         key_input.fill(key_secret)
-        page.click("#openrouter-key-save")
+        with page.expect_response(
+                lambda r: r.url.endswith("/api/agent/key")
+                and r.request.method == "POST") as key_res:
+            page.click("#openrouter-key-save")
+        check("key: the save round-trips to the brain",
+              key_res.value.status == 200
+              and key_res.value.json() == {"configured": True})
+        # Waited for rather than read at once, and satisfied by either writer:
+        # the save handler and the drawer's own refresh share one wording, so a
+        # repaint between the click and the answer cannot strand the
+        # confirmation on a detached span. The brain boots keyless here, so the
+        # resting label before the save is "none yet" and cannot match early.
         page.wait_for_function(
             "document.querySelector('.chat-key-status')"
             " && /set/i.test(document.querySelector('.chat-key-status').textContent)")
