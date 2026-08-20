@@ -1,5 +1,6 @@
 import { assistantState, refreshChatSessions, refreshChatTrash, startNewChat } from '../assistant/session.js';
 import { armHistoryIdle, cancelHistoryIdle, closeChatHistory, closeChatRowMenus, extrasOpen, fromChatRowMenu, renderAssistantTools, setChatMenuOpen, setExtrasOpen } from '../assistant/tools.js';
+import { KEY_PREFIX } from '../core/keys.js';
 import { filters } from '../core/state.js';
 import { $, announce } from './dom.js';
 import { render } from './render.js';
@@ -22,18 +23,55 @@ $('#prio-filter').addEventListener('change', (e) => {
   render();
 });
 
-// One Menu button holds Undo / History / Export / Import. The panel closes on
-// outside click, Escape, or after any action inside it is chosen.
+// The tags dropdown: one tag or all of them. It writes the same Set the #
+// bar toggles, so the two stay one filter with two handles — picking here
+// replaces whatever combination the bar had built, and the empty option
+// clears it.
+$('#tag-filter').addEventListener('change', (e) => {
+  filters.tags.clear();
+  if (e.target.value) filters.tags.add(e.target.value);
+  render();
+});
+
+// One Menu button holds the board actions, History / Export / Import, the
+// Show and Sound hover submenus, the habit sound and the theme. The panel
+// closes on outside click, Escape, or after any one-shot action inside it is
+// chosen; the submenus and the toggles they hold keep it open, because
+// flipping three toggles should not mean opening the menu three times.
 const menuBtn = $('#menu-btn');
 const menuPanel = $('#menu-panel');
+
+// A hover submenu: unfolds while the pointer is over its wrapper, and the
+// button itself toggles it for keyboard and touch, where there is no hover.
+function wireFlyout(btnSel, panelSel) {
+  const btn = $(btnSel);
+  const panel = $(panelSel);
+  const wrap = btn.parentElement;
+  const setOpen = (open) => {
+    panel.hidden = !open;
+    btn.setAttribute('aria-expanded', String(open));
+  };
+  wrap.addEventListener('mouseenter', () => setOpen(true));
+  wrap.addEventListener('mouseleave', () => setOpen(false));
+  btn.addEventListener('click', () => setOpen(panel.hidden));
+  return setOpen;
+}
+const setShowOpen = wireFlyout('#menu-show', '#show-panel');
+const setSoundOpen = wireFlyout('#menu-sound', '#sound-panel');
 
 function setMenuOpen(open) {
   menuPanel.hidden = !open;
   menuBtn.setAttribute('aria-expanded', String(open));
+  if (!open) { setShowOpen(false); setSoundOpen(false); }
 }
 
 menuBtn.addEventListener('click', () => setMenuOpen(menuPanel.hidden));
 menuPanel.addEventListener('click', (e) => {
+  // Submenus, their toggles, the sound on/off and the theme row are "stay
+  // open" surfaces — flipping a switch and watching it flip is the point.
+  // Only a one-shot action (history, export, a board action…) dismisses.
+  if (e.target.closest('.menu-flyout') || e.target.closest('.menu-theme-row')
+      || e.target.closest('#habit-mute')) return;
   if (e.target.closest('button')) setMenuOpen(false);
 });
 document.addEventListener('click', (e) => {
@@ -45,6 +83,35 @@ document.addEventListener('keydown', (e) => {
     menuBtn.focus();
   }
 });
+
+// The Show submenu's four paint toggles: tag chips (and the tag filter bar),
+// priority stamps, type stamps, the Done column. Purely visual — a body class
+// the CSS reads — so the
+// stored flag and the class are the whole state; no card data is touched.
+// Same toggle idiom as #habit-mute: aria-pressed announces the state ("true"
+// = hidden), and persisting is done here where the click is. Hidden stores
+// '1', shown removes the key outright, and boot applies whatever is stored so
+// a reload keeps the choice. (The ledger numbers had a toggle here once;
+// review retired it — they are simply never shown now, styles.css.)
+for (const [btnId, cls, key] of [
+  ['#toggle-tags', 'hide-tags', KEY_PREFIX + 'hideTags'],
+  ['#toggle-prios', 'hide-prios', KEY_PREFIX + 'hidePrios'],
+  ['#toggle-types', 'hide-types', KEY_PREFIX + 'hideTypes'],
+  ['#toggle-done-col', 'hide-done-col', KEY_PREFIX + 'hideDoneCol'],
+]) {
+  const btn = $(btnId);
+  const apply = (hidden) => {
+    document.body.classList.toggle(cls, hidden);
+    btn.setAttribute('aria-pressed', String(hidden));
+  };
+  apply(localStorage.getItem(key) === '1');
+  btn.addEventListener('click', () => {
+    const hidden = !document.body.classList.contains(cls);
+    if (hidden) localStorage.setItem(key, '1');
+    else localStorage.removeItem(key);
+    apply(hidden);
+  });
+}
 
 // The Assistant's Chat menu closes the same two ways. Registered here, once,
 // rather than in renderChatActions: the rail is rebuilt on every render, and

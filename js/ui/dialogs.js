@@ -29,6 +29,11 @@ export function ask({ title, message, okLabel = 'OK', cancelLabel = 'Cancel', da
 /** ask() with a text field. Resolves to the trimmed text, or null when
  *  cancelled — which is why an empty string and a cancel are distinguishable
  *  rather than both falsy-and-identical. */
+// Cancel is a plain button (see index.html for why), so closing on its click
+// is wired here, once. close() keeps the '' returnValue prompt() just set,
+// which is what makes the promise resolve null rather than a trimmed ''.
+$('#prompt-cancel').addEventListener('click', () => $('#prompt-dialog').close());
+
 export function prompt({ title, label, value = '', okLabel = 'Save' }) {
   return new Promise((resolve) => {
     const dialog = $('#prompt-dialog');

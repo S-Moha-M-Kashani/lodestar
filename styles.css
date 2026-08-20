@@ -40,6 +40,7 @@
   --medium: #a8752c;
   --low: #4a7a54;
   --danger: #b3402e;
+  --ok: #2e7d43;
 
   --shadow-card: 0 1px 2px rgba(34, 48, 58, 0.1), 0 1px 1px rgba(34, 48, 58, 0.06);
   --shadow-lift: 0 6px 16px rgba(34, 48, 58, 0.14), 0 2px 4px rgba(34, 48, 58, 0.08);
@@ -74,6 +75,7 @@
   --medium: #d2a35c;
   --low: #8fbf95;
   --danger: #e08a79;
+  --ok: #7fc48f;
 
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-lift: 0 6px 16px rgba(0, 0, 0, 0.5);
@@ -107,6 +109,7 @@
   --medium: #96682a;
   --low: #42704c;
   --danger: #a83a29;
+  --ok: #2f7d3f;
 
   --shadow-card: 0 1px 2px rgba(23, 32, 41, 0.08), 0 1px 1px rgba(23, 32, 41, 0.05);
   --shadow-lift: 0 6px 16px rgba(23, 32, 41, 0.12), 0 2px 4px rgba(23, 32, 41, 0.07);
@@ -144,6 +147,7 @@
   --medium: #9a6b24;
   --low: #55764a;
   --danger: #a53d26;
+  --ok: #4c7d34;
 
   --shadow-card: 0 1px 2px rgba(55, 41, 27, 0.12), 0 1px 1px rgba(55, 41, 27, 0.07);
   --shadow-lift: 0 6px 16px rgba(55, 41, 27, 0.16), 0 2px 4px rgba(55, 41, 27, 0.09);
@@ -179,6 +183,7 @@
   --medium: #d9ab68;
   --low: #93c79a;
   --danger: #e59484;
+  --ok: #8fce9d;
 
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.5);
   --shadow-lift: 0 6px 18px rgba(0, 0, 0, 0.6);
@@ -239,9 +244,11 @@ input, select, textarea { font: inherit; color: inherit; }
   gap: 10px 14px;
   flex-wrap: nowrap;
 }
-.header-row .brand,
+/* Brand and toolbar take equal shares so the view switch — the page's centre
+   of gravity — sits in the true middle whatever either side holds. */
+.header-row .brand { flex: 1 1 0; min-width: 0; }
 .header-row .view-switch { flex: none; }
-.header-row .toolbar { flex: 1 1 auto; min-width: 0; flex-wrap: nowrap;
+.header-row .toolbar { flex: 1 1 0; min-width: 0; flex-wrap: nowrap;
                        justify-content: flex-end; }
 /* The priority filter is sized by its longest option ("P1 urgent & important"),
    which is 50px of width spent on a string nobody reads in the closed state. */
@@ -386,19 +393,92 @@ input, select, textarea { font: inherit; color: inherit; }
 }
 
 .menu-item:hover { background: var(--paper); }
+/* The rule lines that split the Menu into its groups: the board itself,
+   history and data, display and sound. */
+.menu-sep {
+  margin: 4px 10px;
+  border: none;
+  border-top: 1px dashed var(--line);
+}
+
+/* A group's name inside a panel — a heading, not a row you can press. */
+.menu-label {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  padding: 4px 12px 2px;
+}
+
+/* Hover submenus (Show, Sound): the trigger is an ordinary row, the panel
+   unfolds beside the menu — leftwards, because the menu hangs off the
+   window's right edge. */
+.menu-flyout { position: relative; display: flex; flex-direction: column; }
+.menu-flyout > .menu-item { width: 100%; }
+.flyout-panel {
+  top: -7px;
+  right: calc(100% + 8px);
+  left: auto;
+}
+
+/* The habit sound's state, in a word beside the sign. The one place green
+   and red mean on and off; category colour stays category colour. */
+.habit-sound-state { font-weight: 600; }
+.habit-sound-state.on { color: var(--ok); }
+.habit-sound-state.off { color: var(--danger); }
+
+/* The theme row: a labelled select that keeps the menu open while used. */
+.menu-theme-row { display: flex; align-items: center; gap: 10px; }
+.menu-theme-row select { flex: 1; }
 .menu-item:disabled { opacity: 0.45; cursor: default; }
 .menu-item:disabled:hover { background: transparent; }
 
-/* Category rail — coloured index tabs sitting on a rule, one per life area */
+/* Category rail — coloured index tabs sitting on a rule, one per life area.
+   The rule (and the row) belongs to .rail-row now: type and priority follow
+   the last tab and search sits flush right, so every way of narrowing the
+   board shares this one line. */
+.rail-row {
+  --rail-h: 25px; /* one height for everything that stands on the rule */
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  margin-top: 8px;
+  border-bottom: 1px solid var(--line);
+}
 .cat-rail {
   display: flex;
   align-items: flex-end;
   gap: 5px;
   flex-wrap: wrap;
-  margin-top: 8px;
   padding: 0 2px;
-  border-bottom: 1px solid var(--line);
 }
+.rail-row .cat-tab {
+  box-sizing: border-box;
+  height: var(--rail-h);
+  align-items: center;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+/* The open drawer still pulls up — taller, growing upward off the shared
+   bottom edge, instead of the padding trick a fixed height would swallow. */
+.rail-row .cat-tab[aria-pressed="true"] { height: calc(var(--rail-h) + 3px); }
+.rail-filters {
+  display: flex;
+  flex: 1;
+  align-items: flex-end;
+  gap: 8px;
+}
+.rail-filters select,
+.rail-filters #search {
+  box-sizing: border-box;
+  height: var(--rail-h);
+  font-size: 11px;
+  padding-block: 0;
+  position: relative;
+  top: 1px; /* seated on the rule, exactly like the tabs */
+}
+.rail-filters #search { margin-left: auto; min-width: 200px; }
 
 .cat-tab {
   font-family: var(--mono);
@@ -432,14 +512,23 @@ input, select, textarea { font: inherit; color: inherit; }
 /* "All" — the whole board at once; neutral ink, never a category colour */
 .cat-tab-all { font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; font-size: 10px; }
 
-/* ✎ Edit — quiet utility tab at the end of the rail */
+/* ✎ Edit — quiet utility tab at the end of the rail. It rests faded —
+   translucent ink, a dashed hairline barely there — and only inks up under
+   the pointer or keyboard focus: a tool you reach for, not a tab competing
+   with the categories. */
 .cat-tab-edit {
-  margin-left: auto;
-  color: var(--ink-soft);
-  background: transparent;
+  color: color-mix(in srgb, var(--ink-soft) 55%, transparent);
+  background: color-mix(in srgb, var(--ink) 3%, transparent);
   border-style: dashed;
+  border-color: color-mix(in srgb, var(--ink) 14%, transparent);
+  font-size: 10px;
 }
-.cat-tab-edit:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, var(--card)); }
+.cat-tab-edit:hover,
+.cat-tab-edit:focus-visible {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 8%, var(--card));
+  border-color: color-mix(in srgb, var(--ink) 40%, transparent);
+}
 
 /* Categories editor dialog */
 .cats-list {
@@ -792,6 +881,21 @@ body[data-view="board"] .cards { min-height: 0; }
 
 /* When there are no notes, the badge takes the right edge itself */
 .card-num + .badge { margin-left: auto; }
+
+/* The Menu's view toggles: a body class is the whole state, the data never
+   changes. Numbers go everywhere they render; the Done column only here. */
+/* The ledger numbers are never shown. They had a Menu toggle once; review
+   retired it — nobody toggled them back on. The spans stay in the DOM (and
+   cardLabel still names cards in the trash), so `.card-num + .badge` below
+   keeps the layout it always had. */
+.card-num { display: none; }
+/* Show's Filters toggles hide the FILTER CONTROLS — never what is painted on
+   the cards. Chips and stamps are the cards' own. */
+.hide-tags #tag-bar,
+.hide-tags #tag-filter { display: none; }
+.hide-prios #prio-filter { display: none; }
+.hide-types #type-filter { display: none; }
+.hide-done-col .column[data-col="answered"] { display: none; }
 
 /* Card type as a rubber stamp — always neutral ink; colour means category */
 .badge {
@@ -1251,10 +1355,12 @@ body[data-view="board"] .cards { min-height: 0; }
 
 .backlog-list { display: flex; flex-direction: column; }
 
-/* One card per ruled line: [id] [type] [text + category + tags] [notes] */
+/* One card per ruled line: [type] [text + category + tags] [notes]. The
+   ledger-number column left with the numbers — a grid keeps paying for a
+   column whether or not anything visible sits in it. */
 .backlog-row {
   display: grid;
-  grid-template-columns: 54px 96px 1fr auto;
+  grid-template-columns: 96px 1fr auto;
   align-items: baseline;
   gap: 14px;
   padding: 13px 4px 13px 8px;
@@ -1271,13 +1377,6 @@ body[data-view="board"] .cards { min-height: 0; }
 .backlog-row:hover { background: color-mix(in srgb, var(--ink-blue) 6%, transparent); }
 
 .backlog-row .badge { justify-self: start; }
-
-.row-num {
-  font-family: var(--mono);
-  font-size: 10.5px;
-  letter-spacing: 0.06em;
-  color: var(--ink-soft);
-}
 
 .row-main { min-width: 0; }
 
@@ -1298,10 +1397,10 @@ body[data-view="board"] .cards { min-height: 0; }
 
 @media (max-width: 640px) {
   .backlog { padding: 12px 14px 20px; }
-  .backlog-row { grid-template-columns: 48px 1fr; gap: 4px 10px; }
-  .backlog-row .badge { grid-column: 2; margin-bottom: 4px; }
-  .backlog-row .row-main { grid-column: 2; }
-  .row-notes { grid-column: 1; grid-row: 1; }
+  .backlog-row { grid-template-columns: 1fr auto; gap: 4px 10px; }
+  .backlog-row .badge { grid-column: 1; margin-bottom: 4px; }
+  .backlog-row .row-main { grid-column: 1 / -1; }
+  .row-notes { grid-column: 2; grid-row: 1; }
 }
 
 /* ---------------------------------------------------------------------------
@@ -1950,16 +2049,26 @@ dialog::backdrop {
 /* ---------------------------------------------------------------------------
    Footer
 --------------------------------------------------------------------------- */
+/* One thin line — a hint, not a panel. It was 8px + 18px of padding around
+   10.5px type (~41px tall); review asked for a third of that, so everything
+   in it shrinks together, the kbd chips included. */
 .app-footer {
-  padding: 8px 28px 18px;
+  padding: 1px 28px 2px;
   text-align: center;
 }
 
 .app-footer p {
   margin: 0;
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: 9px;
+  line-height: 1.2;
   color: var(--ink-soft);
+}
+
+.app-footer kbd {
+  font-size: 8px;
+  padding: 0 3px;
+  border-bottom-width: 1px;
 }
 
 kbd {
@@ -2316,11 +2425,8 @@ body[data-view="assistant"] .app-header { flex: none; }
 /* Nothing in the board's toolbar acts on a conversation. Left above the
    Assistant it is a row of controls that do nothing to what is on screen. The
    theme picker is the app's, not the board's, so it stays. */
-body[data-view="assistant"] #search,
-body[data-view="assistant"] #type-filter,
-body[data-view="assistant"] #prio-filter,
+body[data-view="assistant"] .rail-row,
 body[data-view="assistant"] .toolbar-menu,
-body[data-view="assistant"] #cat-rail,
 body[data-view="assistant"] #tag-bar,
 /* The footer explains dragging cards and the keys that move them. */
 body[data-view="assistant"] .app-footer { display: none; }
@@ -2894,14 +3000,31 @@ body[data-view="assistant"] .app-footer { display: none; }
    [hidden] rule, so without this the picker shows even with no backend to
    list a second board. */
 .board-switch[hidden] { display: none; }
+/* The picker blends into the brand block it sits in: page background, the
+   tagline's ink — a label that happens to drop a list, not a form control
+   shouting under the wordmark. Hover inks it up so it still reads as
+   pressable. */
 .board-switch #board-select {
   max-width: 172px;
   font-size: 11px;
   padding-block: 3px;
+  background: transparent;
+  border-color: transparent;
+  color: var(--ink-soft);
 }
-.board-switch #board-menu-btn { padding: 3px 7px; }
-/* Drops from the left, under the brand, rather than off the header's edge. */
-.board-switch .menu-panel { left: 0; right: auto; }
+.board-switch #board-select:hover,
+.board-switch #board-select:focus-visible {
+  color: var(--ink);
+  border-color: var(--line);
+}
+
+/* The sheet's own header: the heading left, the tools row flush right. */
+.assistant-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.assistant-head .assistant-tools { margin-left: auto; }
 
 .assistant-tools {
   position: relative;

@@ -288,6 +288,19 @@ export function renderTagBar() {
   // Drop filters for tags that no longer exist
   for (const t of [...filters.tags]) if (!allTags.includes(t)) filters.tags.delete(t);
 
+  // The dropdown twin: same tags as the bar, one pick at a time. Repainted
+  // here because this is the one place that already knows every tag; its
+  // value mirrors the Set only when the Set is a single tag — the bar can
+  // build combinations the dropdown has no word for.
+  const dropdown = $('#tag-filter');
+  if (dropdown) {
+    dropdown.replaceChildren(
+      new Option('All tags', ''),
+      ...allTags.map((t) => new Option('#' + t, t)),
+    );
+    dropdown.value = filters.tags.size === 1 ? [...filters.tags][0] : '';
+  }
+
   bar.hidden = allTags.length === 0;
   bar.innerHTML = '';
   if (!allTags.length) return;

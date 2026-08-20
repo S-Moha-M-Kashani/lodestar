@@ -51,6 +51,8 @@ function safeEnv(root) {
     LODESTAR_RCLONE_BIN: join(root, 'no-such-rclone'),
   };
 }
+// Snapshots land in the db/ subfolder of the backup dir.
+const snapDir = (env) => join(env.LODESTAR_BACKUP_DIR, 'db');
 
 // This is an integration test: real files on disk.
 test('legacy board.db is backed up, then moved into databases/real/', () => {
@@ -64,15 +66,15 @@ test('legacy board.db is backed up, then moved into databases/real/', () => {
   assert.ok(!existsSync(join(root, 'board.db')), 'legacy file is moved, not copied');
 
   // Backed up FIRST: a board-*.db snapshot with the same bytes exists.
-  const backups = readdirSync(env.LODESTAR_BACKUP_DIR)
+  const backups = readdirSync(snapDir(env))
     .filter((f) => f.startsWith('board-') && f.endsWith('.db'));
   assert.equal(backups.length, 1, 'exactly one pre-move backup');
-  assert.equal(readFileSync(join(env.LODESTAR_BACKUP_DIR, backups[0]), 'utf8'), 'DBDATA');
+  assert.equal(readFileSync(join(snapDir(env), backups[0]), 'utf8'), 'DBDATA');
 
   // A second boot is a no-op: same path back, no second backup.
   assert.equal(resolveBoardDb({ root, env }), p);
   assert.equal(readFileSync(p, 'utf8'), 'DBDATA');
-  assert.equal(readdirSync(env.LODESTAR_BACKUP_DIR).length, 1);
+  assert.equal(readdirSync(snapDir(env)).length, 1);
 });
 
 // This is an integration test: real files on disk.
@@ -89,7 +91,7 @@ test('a board.db in the pre-split databases/ home moves into databases/real/', (
     'the pre-split file is moved, not copied');
 
   // Backed up FIRST, exactly like the root-level legacy.
-  const backups = readdirSync(env.LODESTAR_BACKUP_DIR)
+  const backups = readdirSync(snapDir(env))
     .filter((f) => f.startsWith('board-') && f.endsWith('.db'));
   assert.equal(backups.length, 1, 'exactly one pre-move backup');
 
@@ -168,14 +170,14 @@ test('resolveAssistantDb mirrors the board rules for assistant.db', () => {
   assert.equal(readFileSync(p, 'utf8'), 'CHATS', 'content survives the move');
   assert.ok(!existsSync(join(root, 'databases', 'assistant.db')),
     'the pre-split file is moved, not copied');
-  const backups = readdirSync(env.LODESTAR_BACKUP_DIR)
+  const backups = readdirSync(snapDir(env))
     .filter((f) => f.startsWith('assistant-') && f.endsWith('.db'));
   assert.equal(backups.length, 1, 'exactly one pre-move backup');
 
   // A second boot is a no-op, and an existing target is never overwritten.
   assert.equal(resolveAssistantDb({ root, env }), p);
   assert.equal(readFileSync(p, 'utf8'), 'CHATS');
-  assert.equal(readdirSync(env.LODESTAR_BACKUP_DIR).length, 1);
+  assert.equal(readdirSync(snapDir(env)).length, 1);
 });
 
 // This is a unit test: an empty temp root, so nothing on disk is read, moved
@@ -277,7 +279,7 @@ test('server boot migrates a legacy board.db and still serves its cards', async 
     const state = await (await fetch(`http://127.0.0.1:${port}/api/state`)).json();
     assert.deepEqual(state.cards.map((c) => c.title), ['Survives the move']);
 
-    const backups = readdirSync(join(tmpRoot, 'test-backups'))
+    const backups = readdirSync(join(tmpRoot, 'test-backups', 'db'))
       .filter((f) => f.startsWith('board-') && f.endsWith('.db'));
     assert.equal(backups.length, 1, 'the boot migration backed up before moving');
   } finally {
