@@ -225,7 +225,21 @@ def start_server():
              "ASSISTANT_DB": ASSISTANT_DB_PATH, "NODE_NO_WARNINGS": "1",
              "AGENT_URL": f"http://127.0.0.1:{BRAIN_PORT}",
              "LODESTAR_BACKUP_ON_WRITE": "1", "LODESTAR_BACKUP_DIR": BACKUP_DIR,
-             "LODESTAR_RCLONE_BIN": NO_RCLONE},
+             "LODESTAR_RCLONE_BIN": NO_RCLONE,
+             # The assistant surface's token bucket is off for the test board.
+             # It defends a single-user board against a runaway client, and this
+             # suite *is* a runaway client: it walks every Assistant panel, every
+             # provider and two boards in well under a minute, which is more
+             # calls than the 60/240 default allows and more than any person
+             # would make. Left on, the limiter throttles the harness rather
+             # than the product — 429s the browser logs as console errors, so
+             # the run fails on "no JS errors" for a reason that is not a bug,
+             # and fails a little harder with every check added after it.
+             # No coverage is lost: what the limiter does is pinned for real in
+             # tests/server.test.js on its own tuned bucket, and the 429 the UI
+             # has to explain to the user is provoked here by a mocked route.
+             "LODESTAR_AGENT_BURST": "100000",
+             "LODESTAR_AGENT_PER_MIN": "100000"},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
