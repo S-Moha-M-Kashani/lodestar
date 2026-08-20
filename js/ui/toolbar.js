@@ -23,6 +23,16 @@ $('#prio-filter').addEventListener('change', (e) => {
   render();
 });
 
+// The tags dropdown: one tag or all of them. It writes the same Set the #
+// bar toggles, so the two stay one filter with two handles — picking here
+// replaces whatever combination the bar had built, and the empty option
+// clears it.
+$('#tag-filter').addEventListener('change', (e) => {
+  filters.tags.clear();
+  if (e.target.value) filters.tags.add(e.target.value);
+  render();
+});
+
 // One Menu button holds the board actions, History / Export / Import, the
 // Show and Sound hover submenus, the habit sound and the theme. The panel
 // closes on outside click, Escape, or after any one-shot action inside it is
