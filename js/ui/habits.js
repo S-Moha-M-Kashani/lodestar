@@ -206,25 +206,80 @@ function habitExpectedBy(card, at = new Date()) {
 const habitReminding = (card, at = new Date()) =>
   habitDue(card) && habitDoneNow(card) < habitExpectedBy(card, at);
 
-function bip() {
-  if (habitMuted) return;
+// --- The chime -------------------------------------------------------------
+// Four synthesized voices, no audio files. The chosen one is what the
+// reminder plays and what greets the sound being switched on; the Sound
+// submenu previews each on click. `lodestar:chime` fires on window whenever a
+// chime is *asked* to play — audio itself is at the browser's mercy (no
+// sound before the first gesture on the page), so the event is the honest,
+// testable record of intent and the banner stays the channel that always
+// works.
+
+export const CHIME_KEY = KEY_PREFIX + 'habitChime';
+export const CHIME_NAMES = ['marimba', 'bell', 'droplet', 'kalimba'];
+export let habitChime = (() => {
+  const stored = localStorage.getItem(CHIME_KEY);
+  return CHIME_NAMES.includes(stored) ? stored : 'marimba';
+})();
+
+export function setHabitChime(name) {
+  if (!CHIME_NAMES.includes(name)) return;
+  habitChime = name;
+  try { localStorage.setItem(CHIME_KEY, name); } catch (_) { /* private mode */ }
+}
+
+// One tone: frequency, start offset, length, peak gain, wave, optional glide.
+function tone(a, { f, at = 0, len = 0.3, peak = 0.09, type = 'sine', glideTo = null }) {
+  const t = a.currentTime + at;
+  const osc = a.createOscillator();
+  const gain = a.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(f, t);
+  if (glideTo) osc.frequency.exponentialRampToValueAtTime(glideTo, t + len * 0.7);
+  gain.gain.setValueAtTime(0.0001, t);
+  gain.gain.exponentialRampToValueAtTime(peak, t + 0.012);
+  gain.gain.exponentialRampToValueAtTime(0.0001, t + len);
+  osc.connect(gain).connect(a.destination);
+  osc.start(t);
+  osc.stop(t + len + 0.05);
+}
+
+const CHIMES = {
+  marimba(a) { // two warm wooden notes, E6 then A6
+    tone(a, { f: 1318.5, type: 'triangle', len: 0.16, peak: 0.10 });
+    tone(a, { f: 1760.0, type: 'triangle', at: 0.11, len: 0.22, peak: 0.09 });
+  },
+  bell(a) { // A5 with a gentle octave-and-a-third shimmer
+    tone(a, { f: 880, len: 0.55, peak: 0.08 });
+    tone(a, { f: 1760, len: 0.4, peak: 0.03 });
+    tone(a, { f: 2637, len: 0.25, peak: 0.015 });
+  },
+  droplet(a) { // a watery upward blip, C6 gliding to G6
+    tone(a, { f: 1046.5, glideTo: 1568, len: 0.18, peak: 0.09 });
+    tone(a, { f: 2093, at: 0.14, len: 0.12, peak: 0.03 });
+  },
+  kalimba(a) { // a muted thumb-piano pluck on A4
+    tone(a, { f: 440, type: 'triangle', len: 0.3, peak: 0.11 });
+    tone(a, { f: 880, type: 'sine', len: 0.18, peak: 0.03 });
+  },
+};
+
+/** Play a chime by name (the chosen one by default) and say so on window. */
+export function playChime(name = habitChime) {
+  if (!CHIME_NAMES.includes(name)) name = 'marimba';
+  window.dispatchEvent(new CustomEvent('lodestar:chime', { detail: { name } }));
   try {
     audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
     if (audioCtx.state === 'suspended') audioCtx.resume();
-    const t = audioCtx.currentTime;
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.type = 'sine';
-    osc.frequency.value = 880;
-    gain.gain.setValueAtTime(0.0001, t);
-    gain.gain.exponentialRampToValueAtTime(0.07, t + 0.01);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
-    osc.connect(gain).connect(audioCtx.destination);
-    osc.start(t);
-    osc.stop(t + 0.2);
+    CHIMES[name](audioCtx);
   } catch {
     // No audio device, or no user gesture yet. The banner still shows.
   }
+}
+
+function bip() {
+  if (habitMuted) return;
+  playChime();
 }
 
 export function renderHabitBanner() {
@@ -274,7 +329,23 @@ export function renderHabitBanner() {
 export function syncHabitMute() {
   const btn = $('#habit-mute');
   if (!btn) return;
-  btn.textContent = habitMuted ? '🔇 Habit sound' : '🔊 Habit sound';
+  // The state in a word, right of the sign: "on" in green, "off" in red —
+  // an icon that only swaps 🔊/🔇 made people look twice.
+  const state = document.createElement('span');
+  state.className = `habit-sound-state ${habitMuted ? 'off' : 'on'}`;
+  state.textContent = habitMuted ? 'off' : 'on';
+  btn.replaceChildren(
+    document.createTextNode(habitMuted ? '🔇 ' : '🔊 '),
+    state,
+    document.createTextNode(' Habit sound'),
+  );
   btn.setAttribute('aria-pressed', String(!habitMuted));
   btn.title = habitMuted ? 'Habit reminders are silent' : 'Sound the reminder when a habit is due';
+}
+
+/** Mark the chosen chime in the Sound submenu. */
+export function syncChimePicker() {
+  for (const name of CHIME_NAMES) {
+    $(`#sound-${name}`)?.setAttribute('aria-checked', String(name === habitChime));
+  }
 }

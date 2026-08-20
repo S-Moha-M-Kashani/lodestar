@@ -1,7 +1,7 @@
 import { brainModels, probeBrainModels } from './models.js';
 import { assistantState, contextWindow, replayable } from './session.js';
 import { chatScroll, isPinnedToBottom, setChatScroll, submitChat } from './streaming.js';
-import { renderChatDock, renderChatDrift } from './tools.js';
+import { mountAssistantTools, renderChatDock, renderChatDrift } from './tools.js';
 import { busyLabel, renderChatMessage, renderSessionCost } from './transcript.js';
 import { cancelRecording, formatElapsed, startRecording, stopRecording, voiceState, voiceSupported } from './voice.js';
 import { renderProposals, renderSuggestedEdits } from '../ui/proposals.js';
@@ -75,6 +75,10 @@ export function renderAssistant() {
   const heading = document.createElement('h2');
   heading.textContent = 'Assistant';
   head.appendChild(heading);
+  // The tools — search the record, History, New chat, the gear — sit right of
+  // the heading, in the sheet they act on. render() rescues the node back to
+  // the app header before every wipe, so this move is always of a live node.
+  mountAssistantTools(head);
   sheet.appendChild(head);
 
   // First in the sheet because that is where it is on screen — the margin at

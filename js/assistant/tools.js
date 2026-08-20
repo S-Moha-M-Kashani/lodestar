@@ -108,13 +108,31 @@ function renderChatSwitcher() {
   return wrap;
 }
 
-/** The Assistant's two header tools: History and the settings gear, beside the
- *  theme picker. Static markup driven from here, so the panel is not rebuilt
- *  by a render of the transcript underneath it.
+// The tools row is one wired-once node that MOVES: while the Assistant is
+// open it sits in the sheet's own header, right of the heading; every other
+// view parks it back in the app header, hidden. Moving the same element
+// keeps its listeners; what would destroy them is being inside the sheet
+// when render() wipes #board — hence the rescue, called before every wipe.
+const toolsEl = document.querySelector('.assistant-tools');
+const toolsHome = toolsEl ? toolsEl.parentElement : null;
+
+export function rescueAssistantTools() {
+  if (toolsEl && toolsHome && toolsEl.parentElement !== toolsHome) {
+    toolsHome.appendChild(toolsEl);
+  }
+}
+
+/** Seat the tools row in the Assistant sheet's head as it is built. */
+export function mountAssistantTools(parent) {
+  if (toolsEl) parent.appendChild(toolsEl);
+}
+
+/** The Assistant's tools: search the record, History, New chat, the settings
+ *  gear. Static markup driven from here, so the panels are not rebuilt by a
+ *  render of the transcript underneath them.
  *
- *  Shown only on the Assistant, like the search and filters beside them: a
- *  gear that configures a screen you are not on is furniture that does
- *  nothing. */
+ *  Shown only on the Assistant, seated in the sheet's own header: a gear that
+ *  configures a screen you are not on is furniture that does nothing. */
 export function renderAssistantTools() {
   const tools = $('.assistant-tools');
   if (!tools) return;

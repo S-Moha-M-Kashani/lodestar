@@ -23,18 +23,45 @@ $('#prio-filter').addEventListener('change', (e) => {
   render();
 });
 
-// One Menu button holds Undo / History / Export / Import. The panel closes on
-// outside click, Escape, or after any action inside it is chosen.
+// One Menu button holds the board actions, History / Export / Import, the
+// Show and Sound hover submenus, the habit sound and the theme. The panel
+// closes on outside click, Escape, or after any one-shot action inside it is
+// chosen; the submenus and the toggles they hold keep it open, because
+// flipping three toggles should not mean opening the menu three times.
 const menuBtn = $('#menu-btn');
 const menuPanel = $('#menu-panel');
+
+// A hover submenu: unfolds while the pointer is over its wrapper, and the
+// button itself toggles it for keyboard and touch, where there is no hover.
+function wireFlyout(btnSel, panelSel) {
+  const btn = $(btnSel);
+  const panel = $(panelSel);
+  const wrap = btn.parentElement;
+  const setOpen = (open) => {
+    panel.hidden = !open;
+    btn.setAttribute('aria-expanded', String(open));
+  };
+  wrap.addEventListener('mouseenter', () => setOpen(true));
+  wrap.addEventListener('mouseleave', () => setOpen(false));
+  btn.addEventListener('click', () => setOpen(panel.hidden));
+  return setOpen;
+}
+const setShowOpen = wireFlyout('#menu-show', '#show-panel');
+const setSoundOpen = wireFlyout('#menu-sound', '#sound-panel');
 
 function setMenuOpen(open) {
   menuPanel.hidden = !open;
   menuBtn.setAttribute('aria-expanded', String(open));
+  if (!open) { setShowOpen(false); setSoundOpen(false); }
 }
 
 menuBtn.addEventListener('click', () => setMenuOpen(menuPanel.hidden));
 menuPanel.addEventListener('click', (e) => {
+  // Submenus, their toggles, the sound on/off and the theme row are "stay
+  // open" surfaces — flipping a switch and watching it flip is the point.
+  // Only a one-shot action (history, export, a board action…) dismisses.
+  if (e.target.closest('.menu-flyout') || e.target.closest('.menu-theme-row')
+      || e.target.closest('#habit-mute')) return;
   if (e.target.closest('button')) setMenuOpen(false);
 });
 document.addEventListener('click', (e) => {
@@ -47,8 +74,9 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// Two view toggles in the Menu: hide the tag chips (and the tag filter bar),
-// hide the Done column. Purely visual — a body class the CSS reads — so the
+// The Show submenu's four paint toggles: tag chips (and the tag filter bar),
+// priority stamps, type stamps, the Done column. Purely visual — a body class
+// the CSS reads — so the
 // stored flag and the class are the whole state; no card data is touched.
 // Same toggle idiom as #habit-mute: aria-pressed announces the state ("true"
 // = hidden), and persisting is done here where the click is. Hidden stores
@@ -57,6 +85,8 @@ document.addEventListener('keydown', (e) => {
 // review retired it — they are simply never shown now, styles.css.)
 for (const [btnId, cls, key] of [
   ['#toggle-tags', 'hide-tags', KEY_PREFIX + 'hideTags'],
+  ['#toggle-prios', 'hide-prios', KEY_PREFIX + 'hidePrios'],
+  ['#toggle-types', 'hide-types', KEY_PREFIX + 'hideTypes'],
   ['#toggle-done-col', 'hide-done-col', KEY_PREFIX + 'hideDoneCol'],
 ]) {
   const btn = $(btnId);
