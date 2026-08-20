@@ -176,6 +176,18 @@ class LodestarAgent:
         self._store = store
         self._graphs.clear()
 
+    def reconfigure(self, settings: Settings) -> None:
+        """Swap the agent's settings — a key entered in the Assistant, typically.
+
+        The graph cache is dropped for the same reason `attach` drops it: a
+        compiled graph binds its chat model, and the model binds the credential
+        it was constructed with, so a kept cache would go on answering with the
+        key the brain booted without — configured in the UI, refused on the
+        wire, and nothing raises.
+        """
+        self.settings = settings
+        self._graphs.clear()
+
     def _graph(self, model: str | None, provider: str | None = None):
         """One compiled graph per provider/model pair.
 

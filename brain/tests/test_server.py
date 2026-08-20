@@ -596,3 +596,62 @@ def test_the_models_route_reads_the_configured_base_url():
         llm_provider='ollama', embedder='fake', transcriber='fake',
         ollama_base_url='http://gpu.lan:11434/v1')))
     assert client.get('/agent/models').json()['models'] == ['x:1b']
+
+
+# This is an integration test.
+def test_openrouter_key_is_set_from_the_ui_and_never_echoed():
+    """The key can be typed into the Assistant instead of edited into a file.
+
+    Contract of the pair of routes:
+    - GET /agent/key answers only {'configured': bool} — whether the agent's
+      *effective* settings carry a non-empty OpenRouter key. The key itself is
+      write-only: no response from either route may ever contain it.
+    - POST /agent/key {'key': 'sk-…'} hands the agent new settings carrying the
+      key (whitespace-trimmed).
+    - POST /agent/key {'key': ''} clears the override and restores whatever the
+      brain booted with — the env var, not the empty string, so a Docker stack
+      configured by env cannot be un-configured by an accidental empty save.
+    """
+    secret = 'sk-or-test-123456'
+    client = TestClient(fake_app())                    # boots with no key
+    assert client.get('/agent/key').json() == {'configured': False}
+
+    res = client.post('/agent/key', json={'key': f'  {secret}  '})
+    assert res.status_code == 200
+    assert res.json() == {'configured': True}
+    assert secret not in res.text
+    res = client.get('/agent/key')
+    assert res.json() == {'configured': True}
+    assert secret not in res.text
+
+    assert client.post('/agent/key', json={'key': ''}).json() == {
+        'configured': False}
+
+    # Booted WITH a key: clearing restores the boot key, it does not erase it.
+    keyed = TestClient(create_app(Settings(
+        llm_provider='fake', embedder='fake', transcriber='fake',
+        board_api_url='http://board.test', openrouter_api_key='sk-boot')))
+    assert keyed.get('/agent/key').json() == {'configured': True}
+    keyed.post('/agent/key', json={'key': secret})
+    assert keyed.post('/agent/key', json={'key': ''}).json() == {
+        'configured': True}
+    assert 'sk-boot' not in keyed.get('/agent/key').text
+
+
+# This is a unit test.
+def test_reconfigure_swaps_settings_and_drops_the_graph_cache():
+    """A key set at runtime must reach the model calls that follow. The agent
+    caches one compiled graph per provider/model pair with the credential baked
+    into the constructed chat model, so new settings that keep the cache would
+    keep answering with the old (missing) key — configured in the UI, refused
+    on the wire, and nothing raises."""
+    from dataclasses import replace
+
+    from lodestar_brain.agent.graph import LodestarAgent
+
+    agent = LodestarAgent(settings=Settings(llm_provider='fake',
+                                            embedder='fake'), tools=[])
+    before = agent._graph(None, None)
+    agent.reconfigure(replace(agent.settings, openrouter_api_key='sk-or-new'))
+    assert agent.settings.openrouter_api_key == 'sk-or-new'
+    assert agent._graph(None, None) is not before

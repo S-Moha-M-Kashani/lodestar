@@ -2733,6 +2733,37 @@ body[data-view="assistant"] .app-footer { display: none; }
   padding: 4px 6px;
   max-width: 100%;
 }
+/* The key row: an input and its Save on one line, the yes/no status after.
+   Same ledger idiom as the selects — the input is a cell, not a form. */
+.chat-key-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.chat-key-row input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 4px 6px;
+}
+.chat-key-row button {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.chat-key-row button:hover { border-color: var(--ink-soft); }
+.chat-key-status { white-space: nowrap; color: var(--ink-soft); }
 /* The embedder is a fact, not a pick — the brain runs exactly one, locally.
    Set as a filled-in ledger cell where the dropdown stood: the selects'
    footprint, no affordance, closed with a small neutral rubber stamp (the

@@ -118,6 +118,11 @@ try {
 // control that opens it (ui/tools.js).
 let settingsOpen = false;
 
+// What the drawer knows about the brain's OpenRouter key — the rendered status
+// text, kept here so a repaint shows the same answer without asking again.
+// '' = never asked.
+let keyKnown = '';
+
 // Folded away by default, like the evidence strip under a reply: a model is
 // chosen once and then left alone, and four pickers open in the rail is a wall
 // of controls nobody is using. The summary names the model that is answering,
@@ -206,6 +211,65 @@ export function renderChatSettings() {
   hint.className = 'field-hint';
   hint.textContent = 'Text generation applies to the chat. Ollama uses models pulled on this machine; OpenRouter currently offers GPT-5 Nano and requires an API key. The omni model transcribes your voice, unless the brain is dictating locally with Parakeet — that ignores this pick.';
   fields.appendChild(hint);
+  // The OpenRouter key, typed here instead of edited into the brain's env.
+  // Write-only end to end: a password field that empties itself once the brain
+  // has the key, a status that only ever says yes or no, and nothing kept in
+  // localStorage — the one store this page has is one any script could read.
+  const keyLabel = document.createElement('label');
+  keyLabel.className = 'field';
+  keyLabel.append('OpenRouter API key');
+  const keyRow = document.createElement('span');
+  keyRow.className = 'chat-key-row';
+  const keyInput = document.createElement('input');
+  keyInput.type = 'password';
+  keyInput.id = 'openrouter-key';
+  keyInput.autocomplete = 'off';
+  keyInput.placeholder = 'sk-or-…';
+  const keySave = document.createElement('button');
+  keySave.type = 'button';
+  keySave.id = 'openrouter-key-save';
+  keySave.textContent = 'Save';
+  const keyStatus = document.createElement('span');
+  keyStatus.className = 'chat-key-status';
+  // The status is rendered from module state (`keyConfigured`) and written to
+  // whichever status span is live — anything can repaint the drawer between
+  // the click and the brain's answer (the transcript's render does), and a
+  // handler that writes only its closed-over span updates a detached node.
+  // Fetched at deliberate moments only — first need, reopening the panel, and
+  // the save itself — never per render: a fetch on every repaint of a
+  // streaming transcript is a request storm that spends the assistant
+  // surface's own rate budget.
+  const sayStatus = () => {
+    const el = document.querySelector('.chat-key-status') || keyStatus;
+    el.textContent = keyKnown;
+  };
+  const learnKey = (text) => { keyKnown = text; sayStatus(); };
+  const refreshKeyStatus = () => {
+    fetch('/api/agent/key').then((r) => r.json())
+      .then((d) => learnKey(d.configured ? 'a key is set' : 'none yet'))
+      .catch(() => learnKey('brain unreachable'));
+  };
+  sayStatus();
+  if (settingsOpen && keyKnown === '') refreshKeyStatus();
+  panel.addEventListener('toggle', () => { if (panel.open) refreshKeyStatus(); });
+  keySave.addEventListener('click', async () => {
+    try {
+      const res = await fetch('/api/agent/key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: keyInput.value }),
+      });
+      const d = await res.json();
+      keyInput.value = '';
+      learnKey(res.ok ? (d.configured ? 'a key is set' : 'none yet')
+                      : 'brain unreachable');
+    } catch {
+      learnKey('brain unreachable');
+    }
+  });
+  keyRow.append(keyInput, keySave, keyStatus);
+  keyLabel.appendChild(keyRow);
+  fields.appendChild(keyLabel);
   // Where the chat model runs, when the brain told us. Worth saying out loud:
   // a local backend is free and private but answers in tens of seconds, and
   // the list above is then the daemon's, not ours.

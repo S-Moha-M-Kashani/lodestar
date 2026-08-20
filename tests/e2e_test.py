@@ -3215,6 +3215,47 @@ try:
         check("assistant: switching back restores the local list and its default",
               option_values("#model-text") == [DEFAULT_TEXT, ALT_TEXT, THIRD_TEXT]
               and page.input_value("#model-text") == DEFAULT_TEXT)
+
+        # This is an end-to-end test.
+        # ---- The OpenRouter key is typed into the settings drawer, handed to
+        # the brain, and kept nowhere the browser could leak it from: the field
+        # is a password input, it empties itself after a save, the key never
+        # lands in localStorage, and the status route answers only yes or no.
+        open_models(page)
+        key_secret = "sk-or-e2e-abcdef123456"
+        key_input = page.locator("#openrouter-key")
+        check("key: a password field sits in the settings drawer",
+              key_input.count() == 1
+              and key_input.get_attribute("type") == "password"
+              and page.locator("#openrouter-key-save").count() == 1)
+        key_input.fill(key_secret)
+        with page.expect_response(
+                lambda r: r.url.endswith("/api/agent/key")
+                and r.request.method == "POST") as key_res:
+            page.click("#openrouter-key-save")
+        check("key: the save round-trips to the brain",
+              key_res.value.status == 200
+              and key_res.value.json() == {"configured": True})
+        # Waited for rather than read at once, and satisfied by either writer:
+        # the save handler and the drawer's own refresh share one wording, so a
+        # repaint between the click and the answer cannot strand the
+        # confirmation on a detached span. The brain boots keyless here, so the
+        # resting label before the save is "none yet" and cannot match early.
+        page.wait_for_function(
+            "document.querySelector('.chat-key-status')"
+            " && /set/i.test(document.querySelector('.chat-key-status').textContent)")
+        check("key: saving reports the key as set", True)
+        check("key: the field empties itself after the save",
+              key_input.input_value() == "")
+        check("key: localStorage never holds it",
+              page.evaluate(
+                  "Object.keys(localStorage).every("
+                  "  k => !(localStorage.getItem(k) || '').includes('%s'))"
+                  % key_secret))
+        key_status = page.evaluate(
+            "fetch('/api/agent/key').then(r => r.json())")
+        check("key: the brain reports configured, and only that",
+              key_status == {"configured": True})
         # openrouter/auto is gone from every picker, not just the text one: it is
         # deprecated, and the resolved model was never read back out of the
         # response, so no picker should be able to hand the brain a router.
