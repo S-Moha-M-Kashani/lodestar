@@ -67,8 +67,16 @@ class ChatBody(BaseModel):
     messages: list[dict]
     model: str | None = None
     # The browser defaults to the local Ollama provider. OpenRouter is an
-    # explicit alternative because it can use billed remote models such as Nano.
-    provider: Literal['ollama', 'openrouter'] | None = None
+    # explicit alternative because it can use billed remote models such as Nano,
+    # and the two -cli backends answer on this machine's own subscriptions.
+    #
+    # Spelled out rather than derived from `llm.UI_PROVIDERS`: pydantic needs a
+    # static Literal to validate against, and a set comprehension here would
+    # trade a wire contract you can read for one you have to run. The two must
+    # agree — a provider the picker offers and this rejects is a 422 the browser
+    # can do nothing with, which is what the -cli backends were until now.
+    provider: Literal['ollama', 'openrouter', 'claude-cli',
+                      'codex-cli'] | None = None
     # Which chat this turn belongs to. Optional rather than required: the evals,
     # any curl and sixteen tests post without one, and none of those should be a
     # lost turn — Node files an unnamed batch under its reserved 'adhoc' chat.
@@ -94,6 +102,10 @@ class TranscribeBody(BaseModel):
     audio: str            # base64; the browser encodes 16 kHz mono WAV
     format: str = 'wav'
     model: str | None = None
+
+
+class KeyBody(BaseModel):
+    key: str
 
 
 class RecallBody(BaseModel):
@@ -292,6 +304,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         Only a local backend answers with a list: see `served_models`."""
         return served_models(settings)
+
+    # What the brain booted with. An empty save restores this rather than '',
+    # so a stack keyed by env cannot be un-configured from the browser.
+    boot_key = settings.openrouter_api_key
+
+    @app.get('/agent/key')
+    def key_status() -> dict:
+        """Whether a hosted-API key is in force — never the key itself."""
+        return {'configured': bool(agent.settings.openrouter_api_key)}
+
+    @app.post('/agent/key')
+    def set_key(body: KeyBody) -> dict:
+        """Take an OpenRouter key typed into the Assistant's settings drawer.
+
+        Write-only by design: both routes answer yes or no and no response ever
+        carries the key. The agent is handed whole new settings and drops its
+        graph cache — a compiled graph binds the credential its model was
+        constructed with, so anything less keeps answering with the old one.
+        """
+        key = body.key.strip() or boot_key
+        agent.reconfigure(replace(agent.settings, openrouter_api_key=key))
+        return {'configured': bool(key)}
 
     def priced(result: AgentResult, body: ChatBody) -> float | None:
         """What this turn cost, in USD, or None if that is not knowable.

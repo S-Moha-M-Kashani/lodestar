@@ -11,8 +11,10 @@ to the filesystem, and calling one is closer to spawning a colleague than to
 POSTing to `/chat/completions`. Three consequences shape everything below:
 
 - **Every invocation is stripped of the subprocess's own capabilities**
-  (`CLAUDE_HARDENING`, `CODEX_HARDENING`). See the `Alternatives considered`
-  note: this is a security boundary, not tidiness.
+  (`CLAUDE_HARDENING`, `CODEX_HARDENING`) **and of its working directory**,
+  which is a fresh empty temp dir rather than wherever the brain happens to be.
+  See the `Alternatives considered` note: this is a security boundary, not
+  tidiness.
 - **Tool calling is prompt-embedded**, because neither CLI accepts a tool
   schema on its API. The model is asked to end its reply with a fenced
   `tool_call` block and `_generate` parses it. Lower fidelity than the two API
@@ -30,6 +32,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import tempfile
 from typing import Any, Sequence
 from uuid import uuid4
 
@@ -74,7 +77,21 @@ CLAUDE_HARDENING = ['--tools', '',            # every built-in tool off
 CODEX_HARDENING = ['-s', 'read-only',          # the sandbox may not write
                    '--ignore-user-config',
                    '--ignore-rules',           # no execpolicy .rules files
-                   '--ephemeral']              # no session file left on disk
+                   '--ephemeral',              # no session file left on disk
+                   # The one entry here that grants rather than denies, and it
+                   # is the scratch working directory's bill: `codex exec`
+                   # refuses to start outside a git repository ("Not inside a
+                   # trusted directory and --skip-git-repo-check was not
+                   # specified"), and an empty temp dir is not one. It used to
+                   # inherit this repo, which is precisely what the scratch cwd
+                   # exists to stop. Safe because the guard it lifts protects a
+                   # *person* from running a coding agent somewhere unintended;
+                   # what protects the filesystem is `-s read-only` above, and
+                   # the intended directory here is one this module just made
+                   # and nothing else can reach. Found by running it — no
+                   # fixture-driven test can see this, because a stub script
+                   # does not care what directory it was started in.
+                   '--skip-git-repo-check']
 
 
 def _text(message: BaseMessage) -> str:
@@ -153,21 +170,43 @@ class _CliChatModel(BaseChatModel):
         """The reply text and the turn's usage_metadata."""
         raise NotImplementedError
 
+    def _failure(self, stdout: str, stderr: str) -> str:
+        """Why the binary exited non-zero, in the words the user needs to read.
+
+        stderr first, because that is where a CLI puts what went wrong — but a
+        hook rather than a fixed expression, since one of these two binaries
+        disagrees with that and the difference is not cosmetic (see the codex
+        override). Everything this returns reaches the Assistant as the error
+        bubble's text.
+        """
+        return (stderr or stdout).strip()
+
     def _generate(self, messages: list[BaseMessage], stop: list[str] | None = None,
                   run_manager: Any = None, **kwargs: Any) -> ChatResult:
         system = self._system(messages)
         prompt = _transcript([m for m in messages
                               if not isinstance(m, SystemMessage)])
         argv, stdin = self._command(system, prompt)
-        out = subprocess.run(argv, input=stdin, capture_output=True, text=True,
-                             timeout=self.timeout, check=False)
+        # An empty directory, never the brain's own. Both binaries start in the
+        # process's working directory, which for the brain is this repository —
+        # beside `databases/real/`, and beside a CLAUDE.md and an AGENTS.md that
+        # each CLI reads as instructions addressed to it. So the cwd is two
+        # things at once: the blast radius of anything that survives the
+        # hardening flags, and a second channel into a prompt this module is
+        # otherwise careful to write in full. A fresh empty directory closes
+        # both, and closes them for the *local* backend too — which is where the
+        # repository actually is.
+        with tempfile.TemporaryDirectory(prefix='lodestar-cli-') as scratch:
+            out = subprocess.run(argv, input=stdin, capture_output=True,
+                                 text=True, timeout=self.timeout, check=False,
+                                 cwd=scratch)
         if out.returncode != 0:
             # Never `check=True`: CalledProcessError says "returned non-zero
             # exit status 1" and discards the reason. The likeliest real failure
             # of this backend is an expired subscription, and "run /login" has to
             # survive the trip to the user — the same rule the tool-error handler
             # follows when it returns str(exc) rather than the exception type.
-            detail = (out.stderr or out.stdout or '').strip()
+            detail = self._failure(out.stdout or '', out.stderr or '')
             raise RuntimeError(f'{self._llm_type} failed: '
                                f'{detail or f"exit status {out.returncode}"}')
         text, usage = self._parse(out.stdout)
@@ -254,6 +293,36 @@ class CodexCliChatModel(_CliChatModel):
         # so passing both would send the conversation twice.
         return ([self.binary, 'exec', '--json', *CODEX_HARDENING],
                 f'{system}\n\n{prompt}')
+
+    def _failure(self, stdout: str, stderr: str) -> str:
+        """Codex puts the reason on *stdout*, as an event, and progress chatter
+        on stderr — the opposite of the convention the base method assumes.
+
+        Measured 2026-08-20 against a real exhausted plan: stderr held only
+        "Reading prompt from stdin...", while stdout carried
+        `{"type":"error","message":"You've hit your usage limit…"}` followed by
+        `turn.failed`. Taking stderr first therefore reported the one line that
+        says nothing and discarded the only line that says anything — and this
+        backend's whole error policy is that "run /login" or "you are out of
+        quota" has to survive the trip to the user, because it is the likeliest
+        way it fails and the only thing they can act on.
+        """
+        for line in stdout.splitlines():
+            if not (line := line.strip()):
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get('type') == 'error':
+                said = event.get('message')
+            elif event.get('type') == 'turn.failed':
+                said = (event.get('error') or {}).get('message')
+            else:
+                continue
+            if said:
+                return said
+        return super()._failure(stdout, stderr)
 
     def _parse(self, stdout: str) -> tuple[str, dict]:
         text, usage = '', {}
@@ -386,12 +455,24 @@ the binary is really invoked with rather than against a helper's return value,
 because the failure this guards against is somebody refactoring the flags away
 and every other test still passing.
 
+**The working directory is the other half of that boundary**, added 2026-08-20
+when the CLI backends became a per-board choice in the picker rather than a boot
+flag. Flags decide what the subprocess *may* do; the cwd decides what it would
+be doing it *to*. `subprocess.run(cwd=…)` now hands it a fresh empty temp
+directory, so the repository — and `databases/real/` beside it — is not
+somewhere it can reach by relative path, and the CLAUDE.md and AGENTS.md living
+there are no longer instructions it picks up on the way in. That last part is a
+prompt-integrity fix as much as a filesystem one: this module replaces each
+CLI's system prompt precisely so the text it reads is the text we wrote, and
+project context discovered from the cwd walked straight past that.
+
 **What is still unproven here.** Two things, both deliberately written down
 rather than smoothed over. (1) Whether codex's `cached_input_tokens` is a subset
 of `input_tokens` or an addition to it — one sample cannot say, so nothing is
 summed on that side. (2) Whether these flags are *sufficient*: they are the ones
 each CLI documents, and no adversarial run has been made against a hardened
-invocation.
+invocation. The scratch cwd narrows what an insufficient flag could reach; it
+does not turn (2) into a measurement.
 
 **And the obvious measurement is not the measurement.** `BRAIN_LLM=claude-cli`
 can now reach the live tier keyless (Session 9, 2026-08-15: `npm run eval-live`),
@@ -402,8 +483,10 @@ a **brain** tool's arguments; the hazard here is the subprocess's own Bash, Edit
 and Read inside `claude -p`, which never appear in an `AgentResult` at all. A run
 can therefore score a clean 0 of 12 while the subprocess wrote a file. **A green
 `-k injection` run does not clear this risk.** What the real measurement needs:
-a scratch working directory for the subprocess instead of the repository root, a
-filesystem sentinel (a canary file plus a before/after hash of the tree), and/or
+a scratch working directory for the subprocess instead of the repository root —
+**done, 2026-08-20**, and it is what makes the rest of the list runnable, since a
+canary can now be planted in a directory the subprocess is *meant* to be in — a
+filesystem sentinel (a canary file plus a before/after hash of that tree), and/or
 `--output-format stream-json` so the CLI's internal tool use is visible to the
 parser rather than collapsed into one final blob.
 

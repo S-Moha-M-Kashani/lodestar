@@ -2733,6 +2733,37 @@ body[data-view="assistant"] .app-footer { display: none; }
   padding: 4px 6px;
   max-width: 100%;
 }
+/* The key row: an input and its Save on one line, the yes/no status after.
+   Same ledger idiom as the selects — the input is a cell, not a form. */
+.chat-key-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.chat-key-row input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 4px 6px;
+}
+.chat-key-row button {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.chat-key-row button:hover { border-color: var(--ink-soft); }
+.chat-key-status { white-space: nowrap; color: var(--ink-soft); }
 /* The embedder is a fact, not a pick — the brain runs exactly one, locally.
    Set as a filled-in ledger cell where the dropdown stood: the selects'
    footprint, no affordance, closed with a small neutral rubber stamp (the
@@ -2891,6 +2922,35 @@ body[data-view="assistant"] .app-footer { display: none; }
   min-height: 120px;
   padding: 4px 2px;
 }
+
+/* Openers on an empty chat. Built on .tag-chip's idiom — mono, hairline, hover
+   to full ink — but left-aligned prose rather than a keyword, so each one wraps
+   inside its own chip instead of the row scrolling sideways. Neutral ink and no
+   category hue: colour means life area everywhere else on the board, and a
+   suggestion belongs to no area. Sits above the transcript's first message and
+   inherits the log's 14px gap from it. */
+.chat-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: flex-start;
+}
+.chat-suggest {
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.45;
+  text-align: left;
+  color: var(--ink-soft);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 5px 9px;
+  max-width: 100%;
+  white-space: normal;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.chat-suggest:hover { color: var(--ink); border-color: var(--ink-soft); }
+
 .chat-msg {
   position: relative;
   padding: 10px 14px;

@@ -38,6 +38,17 @@ CHECKPOINT_DB_PATH = os.path.join(os.path.dirname(DB_PATH), "brain-checkpoints.d
 BACKUP_DIR = tempfile.mkdtemp(prefix="qboard-backups-")
 NO_RCLONE = os.path.join(BACKUP_DIR, "no-such-rclone")
 
+# A stand-in `claude` binary, and a `codex` that is deliberately absent. The
+# Assistant may only offer a CLI subscription this machine can actually serve,
+# so the run needs one of each: with both present, a picker that listed every
+# CLI regardless of what is installed would pass.
+CLI_BIN_DIR = tempfile.mkdtemp(prefix="qboard-cli-")
+CLAUDE_CLI_STUB = os.path.join(CLI_BIN_DIR, "claude")
+with open(CLAUDE_CLI_STUB, "w") as _stub_file:
+    _stub_file.write("#!/bin/sh\nexit 0\n")
+os.chmod(CLAUDE_CLI_STUB, 0o755)
+NO_CODEX_CLI = os.path.join(CLI_BIN_DIR, "no-such-codex")
+
 
 def snapshots():
     # Snapshots live in the db/ subfolder (json/ holds the importable exports).
@@ -214,7 +225,21 @@ def start_server():
              "ASSISTANT_DB": ASSISTANT_DB_PATH, "NODE_NO_WARNINGS": "1",
              "AGENT_URL": f"http://127.0.0.1:{BRAIN_PORT}",
              "LODESTAR_BACKUP_ON_WRITE": "1", "LODESTAR_BACKUP_DIR": BACKUP_DIR,
-             "LODESTAR_RCLONE_BIN": NO_RCLONE},
+             "LODESTAR_RCLONE_BIN": NO_RCLONE,
+             # The assistant surface's token bucket is off for the test board.
+             # It defends a single-user board against a runaway client, and this
+             # suite *is* a runaway client: it walks every Assistant panel, every
+             # provider and two boards in well under a minute, which is more
+             # calls than the 60/240 default allows and more than any person
+             # would make. Left on, the limiter throttles the harness rather
+             # than the product — 429s the browser logs as console errors, so
+             # the run fails on "no JS errors" for a reason that is not a bug,
+             # and fails a little harder with every check added after it.
+             # No coverage is lost: what the limiter does is pinned for real in
+             # tests/server.test.js on its own tuned bucket, and the 429 the UI
+             # has to explain to the user is provoked here by a mocked route.
+             "LODESTAR_AGENT_BURST": "100000",
+             "LODESTAR_AGENT_PER_MIN": "100000"},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -257,6 +282,12 @@ def start_brain():
              # into databases/real/: an e2e turn must not resume — or grow —
              # a real conversation.
              "BRAIN_CHECKPOINT_DB": CHECKPOINT_DB_PATH,
+             # One CLI subscription installed and one not, so the picker's
+             # gating can be checked in both directions in one run. Neither is
+             # ever executed here: BRAIN_LLM=fake outranks a browser's provider
+             # choice, which is itself one of the things asserted below.
+             "BRAIN_CLAUDE_CLI_BIN": CLAUDE_CLI_STUB,
+             "BRAIN_CODEX_CLI_BIN": NO_CODEX_CLI,
              "BRAIN_CHAT_COLLECTION": "chat-e2e"},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -1991,6 +2022,39 @@ try:
         page.wait_for_selector("#chat-input")
         check("assistant: view opens with composer",
               page.get_attribute('.view-switch button[data-view="assistant"]', "aria-pressed") == "true")
+        # ---- Suggestions: what to ask, on a chat with nothing in it ----------
+        # This is an end-to-end test.
+        # An empty transcript is the one place the assistant cannot say what it
+        # is for, and the composer's placeholder has one line to do it in. Eight
+        # chips, one per tool the brain actually builds (server.py's tool list),
+        # asserted on the capability each chip stands for rather than on its
+        # wording — so rephrasing a suggestion stays a copy edit, while dropping
+        # a capability, or offering one no tool backs, stays a failure.
+        capabilities = {"list_cards", "find_related", "web_search", "create_card",
+                        "update_card", "recall_chat", "daily_recap", "remember_fact"}
+        chips = page.locator(".chat-suggest")
+        check("suggestions: an empty chat offers one opener per capability",
+              chips.count() == len(capabilities)
+              and {c.get_attribute("data-capability") for c in chips.all()} == capabilities
+              and all(t.strip() for t in chips.all_inner_texts()))
+        # Clicked, not typed: reaching a first question without having to compose
+        # one is the whole point. What the chip says has to arrive as the user's
+        # own turn — printed where their words go — and be what the brain is
+        # asked, which the fake backend echoes back verbatim.
+        asked = chips.nth(2).inner_text().strip()
+        chips.nth(2).click()
+        page.wait_for_selector(".chat-msg.assistant")
+        check("suggestions: clicking one sends it as the user's own message",
+              wait_until(lambda: asked in page.inner_text(".chat-msg.user")
+                         and f"FAKE: {asked}" in page.inner_text(".chat-log")))
+        # And then they are gone, leaving an empty composer behind them. The
+        # chips are keyed on an empty transcript, which is what makes New chat,
+        # first load and a chat never spoken into all show them with nobody
+        # raising an event — and what takes them away again here.
+        check("suggestions: they leave once the chat has a turn in it",
+              page.locator(".chat-suggest").count() == 0
+              and page.input_value("#chat-input") == "")
+
         page.fill("#chat-input", "hello brain")
         page.click("#chat-send")
         page.wait_for_selector(".chat-msg.assistant")
@@ -3153,8 +3217,19 @@ try:
               page.locator("#model-provider").count() == 1)
         check("assistant: the provider defaults to the local daemon",
               page.input_value("#model-provider") == "ollama")
-        check("assistant: the provider selector offers exactly local and remote",
-              option_values("#model-provider") == ["ollama", "openrouter"])
+        # The two API routes, then whichever CLI subscription this machine can
+        # actually serve. `claude` is stubbed into the brain's env for this run
+        # and `codex` deliberately is not, so the list proves the gating in both
+        # directions: a picker that offered every CLI it knows the name of would
+        # hand the brain a backend with no binary behind it, and every turn
+        # would fail with no way out from the UI.
+        check("assistant: the provider selector offers the two APIs and the "
+              "installed CLI, and not the missing one",
+              option_values("#model-provider")
+              == ["ollama", "openrouter", "claude-cli"])
+        check("assistant: the CLI option says whose subscription pays for it",
+              "subscription" in " ".join(
+                  page.locator("#model-provider option").all_inner_texts()).lower())
         text_labels = page.locator("#model-text option").all_inner_texts()
         check("assistant: every local text option says it runs locally",
               all("local" in label for label in text_labels))
@@ -3182,6 +3257,47 @@ try:
         check("assistant: switching back restores the local list and its default",
               option_values("#model-text") == [DEFAULT_TEXT, ALT_TEXT, THIRD_TEXT]
               and page.input_value("#model-text") == DEFAULT_TEXT)
+
+        # This is an end-to-end test.
+        # ---- The OpenRouter key is typed into the settings drawer, handed to
+        # the brain, and kept nowhere the browser could leak it from: the field
+        # is a password input, it empties itself after a save, the key never
+        # lands in localStorage, and the status route answers only yes or no.
+        open_models(page)
+        key_secret = "sk-or-e2e-abcdef123456"
+        key_input = page.locator("#openrouter-key")
+        check("key: a password field sits in the settings drawer",
+              key_input.count() == 1
+              and key_input.get_attribute("type") == "password"
+              and page.locator("#openrouter-key-save").count() == 1)
+        key_input.fill(key_secret)
+        with page.expect_response(
+                lambda r: r.url.endswith("/api/agent/key")
+                and r.request.method == "POST") as key_res:
+            page.click("#openrouter-key-save")
+        check("key: the save round-trips to the brain",
+              key_res.value.status == 200
+              and key_res.value.json() == {"configured": True})
+        # Waited for rather than read at once, and satisfied by either writer:
+        # the save handler and the drawer's own refresh share one wording, so a
+        # repaint between the click and the answer cannot strand the
+        # confirmation on a detached span. The brain boots keyless here, so the
+        # resting label before the save is "none yet" and cannot match early.
+        page.wait_for_function(
+            "document.querySelector('.chat-key-status')"
+            " && /set/i.test(document.querySelector('.chat-key-status').textContent)")
+        check("key: saving reports the key as set", True)
+        check("key: the field empties itself after the save",
+              key_input.input_value() == "")
+        check("key: localStorage never holds it",
+              page.evaluate(
+                  "Object.keys(localStorage).every("
+                  "  k => !(localStorage.getItem(k) || '').includes('%s'))"
+                  % key_secret))
+        key_status = page.evaluate(
+            "fetch('/api/agent/key').then(r => r.json())")
+        check("key: the brain reports configured, and only that",
+              key_status == {"configured": True})
         # openrouter/auto is gone from every picker, not just the text one: it is
         # deprecated, and the resolved model was never read back out of the
         # response, so no picker should be able to hand the brain a router.
@@ -3202,6 +3318,63 @@ try:
               served.get("verified") is False and served.get("models") == [])
         check("assistant: no local-backend hint when the models are unverified",
               "served locally" not in page.locator(".chat-settings").inner_text())
+        check("assistant: the brain says which CLI subscriptions it can serve",
+              served.get("cli") == {"claude-cli": True, "codex-cli": False})
+
+        # ---- A CLI subscription is a backend like any other: it rides along on
+        # the request, and it cannot overrule the brain's own configuration.
+        page.select_option("#model-provider", "claude-cli")
+        with page.expect_request("**/api/agent/chat/stream") as cli_req:
+            page.fill("#chat-input", "cli provider ride-along probe")
+            page.click("#chat-send")
+        sent = (cli_req.value.post_data or "").replace(" ", "")
+        check("assistant: the chosen CLI backend rides along on the chat request",
+              '"provider":"claude-cli"' in sent)
+        # And the model goes with it. A slug from another backend riding on this
+        # request is a turn that fails at the binary — `claude --model
+        # 4skl/gemma4-e2b-mtp` loads nothing — and it is what happened when the
+        # local daemon's tag list was allowed to govern a pick bound elsewhere.
+        check("assistant: the model that rides along belongs to that backend",
+              '"model":"sonnet"' in sent)
+        page.wait_for_selector(".chat-msg.assistant")
+        # And the offline contract holds. This brain is BRAIN_LLM=fake; a browser
+        # naming a live subscription must not be able to move it onto one, so the
+        # reply is still the fake backend's. The guard belongs to the server —
+        # a client cannot be trusted to protect the server's own promise.
+        check("assistant: naming a CLI backend cannot move a fake brain onto it",
+              wait_until(lambda: "FAKE: cli provider ride-along probe"
+                         in page.inner_text(".chat-log")))
+
+        # ---- The backend is remembered per board, which is the point of the
+        # feature: two boards on one endpoint, each answering through its own
+        # subscription. Storage keys are board-scoped, so a second board starts
+        # from the default rather than inheriting this one's choice.
+        second = page.evaluate(
+            "() => fetch('/api/boards', {method: 'POST',"
+            " headers: {'Content-Type': 'application/json'},"
+            " body: JSON.stringify({name: 'CLI backend probe'})})"
+            ".then(r => r.json()).then(b => b.board.id)")
+        page.reload()
+        # `state="attached"`: an <option> inside a closed <select> is never
+        # "visible", so the default wait can only ever time out on one.
+        page.wait_for_selector("#board-select option[value='%s']" % second,
+                               state="attached")
+        page.select_option("#board-select", second)
+        page.wait_for_load_state()
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        # open_models, not open_extras: a reload resets the Models fold, and the
+        # picker is inside it.
+        open_models(page)
+        check("assistant: a second board starts on the default backend, not the "
+              "first board's CLI",
+              page.input_value("#model-provider") == "ollama")
+        page.select_option("#board-select", "main")
+        page.wait_for_load_state()
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        open_models(page)
+        check("assistant: coming back to a board restores the backend it was on",
+              page.input_value("#model-provider") == "claude-cli")
+        page.select_option("#model-provider", "ollama")
 
         n_replies = page.locator(".chat-msg.assistant").count()
         page.fill("#chat-input", "model ride-along probe")
