@@ -15,6 +15,8 @@ applies to both cannot be added to one and forgotten on the other.
 A backend that is not OpenAI-compatible is a new `model_provider` string here
 (langchain-anthropic, langchain-google-genai, …) rather than a new import.
 """
+import os
+import shutil
 from typing import Any, Optional, Sequence
 
 from dataclasses import replace
@@ -41,11 +43,16 @@ LOCAL_TIMEOUT = 600
 # the remote API's patience nor the local daemon's describes that.
 CLI_TIMEOUT = 300.0
 
-UI_PROVIDERS = {'ollama', 'openrouter'}
 # The backends that authenticate themselves, through a CLI this machine has
 # already logged in to. No key, no base URL, no `init_chat_model` — so they
 # leave before `_endpoint` is ever asked where the model lives.
 CLI_PROVIDERS = {'claude-cli', 'codex-cli'}
+# What a browser may ask for. The CLI backends are in it because a subscription
+# is a per-board choice and not only a boot-time one: one brain serves several
+# boards, and two people on two boards want two different subscriptions against
+# the same endpoint. `served_models` is what stops the picker offering one this
+# machine cannot run.
+UI_PROVIDERS = {'ollama', 'openrouter'} | CLI_PROVIDERS
 
 
 def _endpoint(settings: Settings) -> tuple[str, str, int]:
@@ -72,6 +79,59 @@ def _endpoint(settings: Settings) -> tuple[str, str, int]:
     raise ValueError(f'unknown BRAIN_LLM {settings.llm_provider!r}')
 
 
+def _cli_binary(backend: str) -> str:
+    """Which binary this CLI backend runs, env override applied.
+
+    A branch rather than a lookup table, for the same reason `_endpoint` is one:
+    the env var has to appear here as a literal string. `.env.example` is
+    checked against the code by scanning for exactly this call
+    (`test_config.py::test_env_example_documents_every_variable_the_code_reads`),
+    and a name assembled from a table is a name that invariant cannot see — so
+    the override would quietly stop being documented.
+    """
+    if backend == 'claude-cli':
+        return os.environ.get('BRAIN_CLAUDE_CLI_BIN', 'claude')
+    return os.environ.get('BRAIN_CODEX_CLI_BIN', 'codex')
+
+
+def _cli_model(settings: Settings, backend: str,
+               model: str | None) -> BaseChatModel:
+    """Build a CLI-subscription wrapper. The import is local because `llm_cli`
+    imports this module for CLI_TIMEOUT.
+
+    Three sources for the model, in the order that keeps the label and the
+    answer in agreement: the request's own pick, then `BRAIN_MODEL` — but only
+    when the brain is *configured* for this backend, since a slug meant for
+    Ollama must not be handed to Claude — then the backend's own default.
+    """
+    from .llm_cli import ClaudeCliChatModel, CodexCliChatModel
+
+    configured = settings.model if settings.llm_provider == backend else ''
+    if backend == 'claude-cli':
+        return ClaudeCliChatModel(
+            binary=_cli_binary(backend),
+            # PROVIDER_MODELS rather than a literal, so the picker's default and
+            # `/agent/models`' answer cannot disagree about what will serve.
+            model=model or configured or PROVIDER_MODELS['claude-cli'])
+    # Deliberately no model, even when one is named: `codex exec` is never
+    # passed -m here — the choice made was codex's own default — so carrying a
+    # slug on the wrapper would describe a model that did not answer.
+    return CodexCliChatModel(binary=_cli_binary(backend))
+
+
+def cli_backends() -> dict:
+    """Which CLI subscriptions this machine can actually run.
+
+    `served_models`' honesty rule, one backend further out. A CLI backend has no
+    model list worth probing — the subscription decides that — but whether its
+    binary is here is knowable for certain and for nothing. Offering `claude-cli`
+    on a machine with no `claude` would fail every turn with no way out of it
+    from the UI, which is the failure `served_models` exists to prevent.
+    """
+    return {backend: shutil.which(_cli_binary(backend)) is not None
+            for backend in sorted(CLI_PROVIDERS)}
+
+
 def make_chat_model(settings: Settings, model: str | None = None,
                     provider: str | None = None) -> BaseChatModel:
     """Build a model for the configured backend or an explicit UI selection.
@@ -87,26 +147,16 @@ def make_chat_model(settings: Settings, model: str | None = None,
     # deciding when to leave the field out.
     if settings.llm_provider == 'fake':
         return FakeChat()
-    # Ahead of the UI selection for the same reason `fake` is: the CLI backends
-    # are the owner's "never OpenRouter, no API keys" decision, and a browser
-    # naming a paid provider must not be able to overturn it from the client.
-    # The import is local because `llm_cli` imports this module for CLI_TIMEOUT.
-    if settings.llm_provider in CLI_PROVIDERS:
-        import os
-
-        from .llm_cli import ClaudeCliChatModel, CodexCliChatModel
-        # The binary is overridable by env var — the LODESTAR_RCLONE_BIN idiom,
-        # and what lets the tests run this seam against a stub script offline.
-        if settings.llm_provider == 'claude-cli':
-            return ClaudeCliChatModel(
-                binary=os.environ.get('BRAIN_CLAUDE_CLI_BIN', 'claude'),
-                model=model or os.environ.get('BRAIN_CLAUDE_CLI_MODEL', 'sonnet'))
-        # No model named: codex runs on its own default, by decision.
-        return CodexCliChatModel(
-            binary=os.environ.get('BRAIN_CODEX_CLI_BIN', 'codex'))
+    if provider is not None and provider not in UI_PROVIDERS:
+        raise ValueError(f'unsupported UI provider {provider!r}')
+    # A CLI backend leaves here whether it was configured or chosen, and it
+    # leaves ahead of everything else: it has no base url and no key, so
+    # `_endpoint` has nothing to say about it. Behind `fake` on purpose — a
+    # browser naming a live subscription must not move an offline brain onto it.
+    backend = provider or settings.llm_provider
+    if backend in CLI_PROVIDERS:
+        return _cli_model(settings, backend, model)
     if provider is not None:
-        if provider not in UI_PROVIDERS:
-            raise ValueError(f'unsupported UI provider {provider!r}')
         # The model has to follow the provider: switching backend in the picker
         # without naming a model must not carry the other backend's slug across.
         settings = replace(settings, llm_provider=provider,
@@ -129,10 +179,18 @@ def served_models(settings: Settings) -> dict:
     deselect anything else. For OpenRouter nothing is probed — it is a paid API
     with hundreds of models and a request on every settings render would be
     absurd — so `verified` is False and the frontend's curated list stands.
+
+    `cli` answers a different question and therefore travels as its own field:
+    not "which models" but "which subscriptions could serve this board at all".
+    It is reported whatever the configured backend is, because the picker offers
+    a choice rather than a description of the boot flag — and reported even under
+    `fake`, where the offline contract in `make_chat_model` is what keeps the
+    choice from taking effect.
     """
+    answer = {'provider': settings.llm_provider, 'default': settings.model,
+              'verified': False, 'models': [], 'cli': cli_backends()}
     if settings.llm_provider != 'ollama':
-        return {'provider': settings.llm_provider, 'default': settings.model,
-                'verified': False, 'models': []}
+        return answer
     root = settings.ollama_base_url.rstrip('/').removesuffix('/v1')
     try:
         import httpx
@@ -147,10 +205,8 @@ def served_models(settings: Settings) -> dict:
         logging.getLogger(__name__).warning(
             'ollama tags unreachable at %s (%s); the picker gets no verified '
             'list', root, exc)
-        return {'provider': 'ollama', 'default': settings.model,
-                'verified': False, 'models': []}
-    return {'provider': 'ollama', 'default': settings.model,
-            'verified': True, 'models': tags}
+        return answer
+    return {**answer, 'verified': True, 'models': tags}
 
 
 def _text(message: BaseMessage) -> str:

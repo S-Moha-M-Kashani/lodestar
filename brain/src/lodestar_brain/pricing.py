@@ -49,6 +49,19 @@ class Prices:
     completion: float
 
 
+# The backends whose zero is a fact. A model on this machine has no per-token
+# bill and an offline test turn cost nothing, so both report 0.0 and mean it.
+#
+# Named, rather than "everything that is not openrouter", because that rule was
+# wrong the moment a third kind of backend existed. The CLI subscriptions spend
+# Claude Max and ChatGPT quota: real money, just not per token and not on an
+# invoice this module can read — and `claude -p` even returns a
+# `total_cost_usd`, which is the number it would be most tempting to pass on.
+# Under the old rule they inherited a confident $0.000, which is precisely the
+# "that was free" this file exists to refuse.
+ZERO_BILL = {'ollama', 'fake'}
+
+
 def forget_prices() -> None:
     """Drop the cached catalogue. For tests, and for nothing else — a running
     brain has no reason to re-fetch prices that do not change mid-process."""
@@ -97,9 +110,12 @@ def model_prices(settings, model: str | None = None) -> Prices | None:
     models within one conversation and the price of a turn is the price of the
     model that actually served it — not of whatever the brain booted with.
     """
-    if settings.llm_provider != 'openrouter':
-        # Local and fake backends have no per-token bill. A known zero.
+    if settings.llm_provider in ZERO_BILL:
         return Prices(0.0, 0.0)
+    if settings.llm_provider != 'openrouter':
+        # Anything else — a CLI subscription today — is billed somewhere this
+        # module cannot read, so it says nothing rather than guessing.
+        return None
     catalogue = _catalogue(settings.openrouter_base_url)
     if catalogue is None:
         return None

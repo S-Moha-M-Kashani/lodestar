@@ -61,12 +61,23 @@ def test_chat_accepts_the_providers_the_picker_offers_and_refuses_the_rest():
     A fake brain answers regardless — the offline contract belongs to the server,
     not to a browser deciding when to leave the field out."""
     client = TestClient(fake_app())
-    for provider in ('ollama', 'openrouter'):
+    # The two CLI subscriptions are in this list now, and being in it is the
+    # whole change: the picker offers them, so the route has to accept them.
+    # Left out, they were a 422 from the request model before `make_chat_model`
+    # was ever asked — a validation error the browser could do nothing with,
+    # for a backend the brain can serve perfectly well.
+    for provider in ('ollama', 'openrouter', 'claude-cli', 'codex-cli'):
         res = client.post('/agent/chat', json={
             'messages': [{'role': 'user', 'content': 'hello brain'}],
             'provider': provider})
         assert res.status_code == 200, provider
         assert res.json()['reply'] == 'FAKE: hello brain'
+        # A CLI turn spends subscription quota, which is not a per-token bill and
+        # not a free turn either. `pricing.py` reports nothing rather than a
+        # measurement nobody made, and the route must carry that None through
+        # instead of rendering it as 0.0 on the way out.
+        if provider.endswith('-cli'):
+            assert res.json()['cost'] is None, provider
     res = client.post('/agent/chat', json={
         'messages': [{'role': 'user', 'content': 'hello brain'}],
         'provider': 'anthropic'})
@@ -551,6 +562,14 @@ def test_models_route_says_nothing_is_verified_on_a_remote_backend():
     client = TestClient(create_app(Settings(llm_provider='openrouter',
                                             embedder='fake', transcriber='fake')))
     body = client.get('/agent/models').json()
+    # `cli` is lifted out before the payload is compared, and it has to be: it
+    # answers "which subscriptions could serve this board", so its values depend
+    # on which binaries exist on the machine running the suite. Asserting its
+    # *shape* is the part that is the same everywhere — the picker reads both
+    # backends off it and would offer neither if a key went missing.
+    cli = body.pop('cli')
+    assert sorted(cli) == ['claude-cli', 'codex-cli']
+    assert all(isinstance(known, bool) for known in cli.values())
     assert body == {'provider': 'openrouter', 'default': 'openai/gpt-5-nano',
                     'verified': False, 'models': []}
 

@@ -92,6 +92,25 @@ def test_a_price_is_never_invented():
     assert local == Prices(0.0, 0.0)
     assert turn_cost(USAGE, local) == 0.0
 
+    # A CLI subscription is NOT that known zero, and this is the assert that
+    # says so. `claude-cli` spends Claude Max quota and `codex-cli` spends a
+    # ChatGPT plan; the turn cost real money, just not per token and not on this
+    # invoice. Reporting it as 0.000$ tells the reader the turn was free, which
+    # is the single thing this module exists not to do — and the response even
+    # carries `total_cost_usd`, so the temptation is concrete.
+    #
+    # It read as a known zero for as long as the rule was "anything that is not
+    # openrouter": the CLI backends arrived under that rule and inherited a
+    # price nobody measured. So the zero-bill backends are named now, and
+    # everything else the catalogue cannot price says nothing at all.
+    for cli in ('claude-cli', 'codex-cli'):
+        assert model_prices(Settings(llm_provider=cli)) is None, cli
+        assert turn_cost(USAGE, model_prices(Settings(llm_provider=cli))) is None
+
+    # `fake` keeps the known zero it has always had: an offline test turn really
+    # did cost nothing, and every e2e assertion on a rendered cost rides on it.
+    assert model_prices(Settings(llm_provider='fake', model='x')) == Prices(0.0, 0.0)
+
     # An unreachable catalogue is not a free turn.
     respx.get(MODELS_URL).mock(return_value=httpx.Response(503))
     assert model_prices(_openrouter(), 'openai/gpt-5-nano') is None

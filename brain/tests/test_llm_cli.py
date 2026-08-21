@@ -17,6 +17,7 @@ fixture invented to match a parser is a parser that has never met its input.
 """
 import json
 import stat
+from pathlib import Path
 
 import pytest
 from langchain_core.messages import HumanMessage
@@ -154,6 +155,57 @@ def test_every_invocation_strips_the_subprocess_of_its_own_tools(tmp_path, monke
     assert '--ignore-user-config' in argv
     assert '--ignore-rules' in argv, 'no user or project execpolicy rules'
     assert '--ephemeral' in argv, 'a private board leaves no session file behind'
+    # Not a denial like the four above, and asserted with them anyway because it
+    # is load-bearing in the other direction: without it `codex exec` refuses to
+    # start in the empty scratch directory the wrapper now runs it in, and every
+    # codex turn is a 500. Dropping this flag and dropping the scratch cwd are
+    # the same bug seen from two sides, so the tests for them sit together.
+    assert '--skip-git-repo-check' in argv, 'the scratch cwd is not a git repo'
+
+
+# This is a unit test, and it finishes the job the one above starts.
+def test_the_subprocess_runs_in_a_scratch_directory_not_the_repository(
+        tmp_path, monkeypatch):
+    """The flags deny the subprocess its tools; this denies it its context.
+
+    `claude -p` and `codex exec` both start in the process's working directory,
+    which for the brain is this repository — next to `databases/real/`, and next
+    to a `CLAUDE.md` and an `AGENTS.md` that each CLI reads as instructions
+    addressed to it. Two distinct problems from one fact: whatever survives the
+    hardening flags gets the repo as its blast radius, and the "system prompt"
+    the wrapper so carefully replaces is joined by project context nobody chose
+    to send.
+
+    The security note in `llm_cli.py` names this and asks for exactly this fix —
+    "a scratch working directory for the subprocess instead of the repository
+    root". So the stub reports the directory it was actually run in, because a
+    `cwd=` argument that a later refactor drops would leave every other test
+    here passing.
+    """
+    where = tmp_path / 'claude.cwd'
+    listing = tmp_path / 'claude.ls'
+    # Both facts are reported from *inside* the subprocess, which is the only
+    # place they can be read: the scratch directory is a TemporaryDirectory and
+    # is gone by the time this test could look at it. It is also the stronger
+    # measurement — this is the directory as the CLI itself sees it.
+    monkeypatch.setenv('BRAIN_CLAUDE_CLI_BIN', _stub(
+        tmp_path, 'claude', f'pwd > "{where}"\n'
+                            f'ls -A > "{listing}"\n'
+                            f'cat "{tmp_path}/fixture"'))
+    (tmp_path / 'fixture').write_text(FIXTURE_CLAUDE)
+
+    make_chat_model(Settings(llm_provider='claude-cli')).invoke(
+        [HumanMessage(content='ping')])
+
+    ran_in = Path(where.read_text().strip()).resolve()
+    repo = Path(__file__).resolve().parents[2]
+    assert ran_in != repo, 'the CLI must not be run in the repository root'
+    assert repo not in ran_in.parents, 'nor anywhere inside the repository'
+    # Empty, not merely elsewhere: a scratch directory that carried a CLAUDE.md
+    # or an AGENTS.md would hand the subprocess instructions by another route,
+    # and this backend's whole prompt discipline is that the system text is the
+    # one the wrapper wrote.
+    assert listing.read_text().strip() == '', 'the cwd carries no project context'
 
 
 # This is a unit test.
@@ -282,3 +334,22 @@ def test_a_failing_cli_says_why_instead_of_naming_an_exit_code(tmp_path, monkeyp
     llm = make_chat_model(Settings(llm_provider='claude-cli'))
     with pytest.raises(Exception, match='/login'):
         llm.invoke([HumanMessage(content='ping')])
+
+    # Codex is the other way round, and this is a capture rather than a guess:
+    # run against a genuinely exhausted plan on 2026-08-20, stderr held only
+    # "Reading prompt from stdin..." while the reason arrived on *stdout* as an
+    # event. Taking stderr first — which is what a CLI's convention says to do —
+    # reported the line that says nothing and threw away the only line the user
+    # could act on.
+    monkeypatch.setenv('BRAIN_CODEX_CLI_BIN', _stub(
+        tmp_path, 'codex',
+        'echo "Reading prompt from stdin..." >&2\n'
+        "echo '{\"type\":\"thread.started\",\"thread_id\":\"01a0\"}'\n"
+        "echo '{\"type\":\"error\",\"message\":\"You have hit your usage limit."
+        " Upgrade to Pro or try again at 7:26 PM.\"}'\n"
+        "echo '{\"type\":\"turn.failed\",\"error\":{\"message\":\"You have hit"
+        " your usage limit.\"}}'\n"
+        'exit 1'))
+    with pytest.raises(Exception, match='usage limit'):
+        make_chat_model(Settings(llm_provider='codex-cli')).invoke(
+            [HumanMessage(content='ping')])
