@@ -48,13 +48,19 @@ export function saveTimeline() {
   }
 }
 
-export function saveState() {
+/** Write the board to this browser's cache and, unless told not to, queue the
+ *  save that carries it to the server.
+ *
+ *  `{ push: false }` is for a board that just *came* from the server: it still
+ *  belongs in the cache, but pushing it back is a round trip whose only possible
+ *  outcome is losing a race with a real edit. */
+export function saveState({ push = true } = {}) {
   try {
     localStorage.setItem(STORAGE_KEY + boardSuffix, JSON.stringify({ ...state, categories }));
   } catch (err) {
     console.warn('Could not save board.', err);
   }
-  pushToServer(); // keep the SQLite-backed server in sync when one is present
+  if (push) pushToServer(); // keep the SQLite-backed server in sync when one is present
 }
 
 export function commit(action) {

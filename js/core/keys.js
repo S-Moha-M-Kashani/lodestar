@@ -28,3 +28,9 @@ export const THEME_KEY = KEY_PREFIX + 'theme';
 export const VIEW_KEY = KEY_PREFIX + 'view';
 export const HISTORY_KEY = KEY_PREFIX + 'history';
 export const HISTORY_LIMIT = 50; // snapshots kept; oldest fall off like a rotated log
+
+// The board as of the last time the server and this browser agreed on it:
+// { rev, fp }. Owned by js/core/sync.js and written nowhere else. Deliberately
+// absent from LEGACY_SUFFIXES — it postdates the rename, and a wrong watermark
+// is worse than none: it would claim a sync that never happened.
+export const SYNC_KEY = KEY_PREFIX + 'synced';

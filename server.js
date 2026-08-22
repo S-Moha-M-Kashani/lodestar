@@ -8,7 +8,10 @@
 // The board is stored one row per card. The client sends its whole state
 // on every change (PUT /api/state); the server upserts the rows it sees and
 // SOFT-deletes the rows it doesn't (marks them, never removes them) — so a
-// partial or buggy save can never lose a card. Soft-deleted rows live on in
+// partial or buggy save can never lose a card. That reading of "absent" only
+// applies to a save that says which version of the board it was written
+// against, or says nothing at all: one naming a version this board has moved
+// past is applied additively and deletes nothing (`rev`, `mergeBoard`). Soft-deleted rows live on in
 // the Trash (GET /api/trash) and are recoverable until an explicit, deliberate
 // purge (DELETE /api/cards/:id). That purge is the ONLY thing that truly erases
 // a card from the database; otherwise the only way to lose data is to delete
@@ -25,6 +28,7 @@ import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { createHash } from 'node:crypto';
 import { resolveBoardDb, resolveAssistantDb } from './scripts/db-location.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
@@ -394,6 +398,35 @@ function writeCategories(cats, boardId) {
 
 const categoryIds = (boardId) => new Set(
   db.prepare('SELECT id FROM categories WHERE board_id = ?').all(boardId).map((r) => r.id));
+
+/**
+ * The additive half of the registry write, for a save that is based on a board
+ * this one has moved past (see the `rev` check on PUT /api/state): insert the
+ * ids this board lacks, and touch nothing else — no delete, no reorder, no
+ * relabel.
+ *
+ * Doing nothing at all would be worse than this, not safer. `cleanCard` blanks
+ * a `category` the registry does not know, and the registry is written before
+ * the cards on purpose, so a client that added a life area while it was out of
+ * date would get every card referencing it back with an empty category — a
+ * field wipe in the one table that has no Trash.
+ */
+function mergeCategories(cats, boardId) {
+  const have = categoryIds(boardId);
+  const missing = cats.filter((c) => !have.has(c.id)).slice(0, Math.max(0, CAT_LIMIT - have.size));
+  if (!missing.length) return;
+  const next = db.prepare('SELECT COALESCE(MAX(position), -1) AS p FROM categories WHERE board_id = ?').get(boardId).p;
+  const insert = db.prepare('INSERT INTO categories (board_id, id, label, h, position) VALUES (?, ?, ?, ?, ?)');
+  db.exec('BEGIN');
+  try {
+    missing.forEach((c, i) => insert.run(boardId, c.id, c.label, c.h, next + 1 + i));
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
 
 // --------------------------------------------------------------------------
 // Boards
@@ -922,6 +955,35 @@ function readBoard(boardId) {
   return { version: 1, cards: rows.map((r) => rowToCard(r, catIds)), categories: readCategories(boardId) };
 }
 
+/**
+ * Name the board a client is looking at, so a later save can say which board it
+ * was based on. The hash is taken over the exact bytes that client was sent, so
+ * it has no blind spot by construction: any difference the client could see is a
+ * different `rev`.
+ *
+ * Alternatives considered. A SQL aggregate (row count + count of trashed rows +
+ * MAX(updated_at) + category count) needs no serialising, but two of its blind
+ * spots are this feature's whole reason for existing: `updated_at` comes from
+ * the client's own clock, so an edit made by a laptop running a minute behind
+ * leaves every term unchanged, and a category *rename* changes no count at all.
+ * A monotonic `rev` column on `boards` would be exact, but it has to be bumped
+ * by every path that touches a card — the whole-board save, a proposal confirm,
+ * a purge, a restore — and the day one of them forgets, deletion silently stops
+ * working with nothing to notice it. Hashing what was actually sent cannot be
+ * forgotten. sha1 (not sha256) and 16 hex chars because this is a
+ * change-detector, never a security claim.
+ */
+const revOf = (board) => createHash('sha1').update(JSON.stringify(board)).digest('hex').slice(0, 16);
+
+/** The board plus the name of this exact version of it. Every read a client can
+ *  adopt from has to go through here: a client that adopts a board without a
+ *  rev believes it is up to date while claiming a rev the server has moved past,
+ *  and from then on every one of its deletions is refused in silence. */
+const boardWithRev = (boardId) => {
+  const board = readBoard(boardId);
+  return { ...board, rev: revOf(board) };
+};
+
 // Cards the Assistant proposed, oldest first, still waiting to be accepted.
 function readProposals(boardId) {
   const catIds = categoryIds(boardId);
@@ -1050,6 +1112,110 @@ function writeBoard(cards, boardId) {
   // A save can trash the card a suggestion points at. Cleared here rather than
   // filtered on read, so the row does not linger and reappear if the card is
   // later restored from Trash carrying an edit the user never saw.
+  pruneOrphanedEdits();
+  return { board: readBoard(boardId), created };
+}
+
+/**
+ * Apply a save that is based on a board this one has already moved past —
+ * `rev` did not match on PUT /api/state — and do it without ever removing
+ * anything. The whole-board sweep in `writeBoard` reads an absent card as
+ * "the user deleted this"; from a client that has not seen the current board
+ * that reading is simply wrong, and on 2026-08-22 it archived 24 cards a second
+ * machine had never heard of.
+ *
+ * The rules, and why each one:
+ *   - A card this board does not have is inserted, positioned after the last
+ *     one. That is the offline work the client is here to deliver.
+ *   - A card both sides have is updated only when the incoming `updatedAt` is
+ *     not older than the stored one — otherwise a stale copy quietly reverts a
+ *     newer title and there is no Trash entry to notice, which is the same loss
+ *     as the sweep wearing a different hat.
+ *   - `position` is never touched for a row that already exists, and neither is
+ *     the ledger `num`. Order is re-derived from array index on every save
+ *     without bumping `updatedAt`, so a stale client's ordering carries no
+ *     information; a number is permanent by definition.
+ *   - A card whose row is in the Trash stays in the Trash. This is the one that
+ *     makes deletion work at all between two machines: resurrecting it would
+ *     mean a card deleted here comes back the moment the other laptop saves.
+ *   - Proposals (`pending = 1`) are invisible to the browser, so a row that is
+ *     one is left entirely alone.
+ *
+ * Alternatives considered. The natural way to write "only if newer" is a
+ * conditional upsert — `ON CONFLICT DO UPDATE … WHERE excluded.updated_at >=
+ * cards.updated_at` — one statement, no read. It is wrong here for a reason
+ * that is invisible in the SQL: the same statement writes `position`, which is
+ * re-derived from array order on every save and never bumps `updatedAt`, so the
+ * guard would silently drop legitimate reorders along with stale content.
+ * Comparing in JavaScript is what lets content be guarded and order be left
+ * alone. A CRDT or a per-field vector clock would remove the last-write-wins
+ * guess entirely, and is the honest answer if this board ever gets simultaneous
+ * editors; for two laptops that take turns it is a large amount of machinery to
+ * decide something a timestamp already decides, and it would have to survive
+ * `PUT /api/state` being a whole document rather than a stream of operations.
+ *
+ * Returns { board, created } like `writeBoard`, so the route treats them alike.
+ */
+function mergeBoard(cards, boardId) {
+  const now = Date.now();
+  const catIds = categoryIds(boardId);
+  const clean = cards.map((c) => cleanCard(c, now, catIds)).filter(Boolean);
+
+  // Every row of this board, live and trashed alike: the trashed ones are what
+  // stop a stale save from undoing a deletion.
+  const rows = new Map(db.prepare(
+    'SELECT id, updated_at, deleted_at, pending FROM cards WHERE board_id = ?')
+    .all(boardId).map((r) => [r.id, r]));
+  let nextPos = db.prepare(
+    'SELECT COALESCE(MAX(position), -1) AS p FROM cards WHERE board_id = ?').get(boardId).p + 1;
+
+  const insert = db.prepare(`
+    INSERT INTO cards (id, board_id, column_id, title, notes, type, category, importance, urgency,
+                       effort, control, effort_src, control_src, deadline,
+                       habit_freq, habit_count, habit_times, habit_history,
+                       num, tags, created_at, updated_at, position, deleted_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+    ON CONFLICT(id) DO NOTHING
+  `);
+  const update = db.prepare(`
+    UPDATE cards SET
+      column_id = ?, title = ?, notes = ?, type = ?, category = ?,
+      importance = ?, urgency = ?, effort = ?, control = ?,
+      effort_src = ?, control_src = ?, deadline = ?,
+      habit_freq = ?, habit_count = ?, habit_times = ?, habit_history = ?,
+      tags = ?, updated_at = ?
+    WHERE id = ? AND deleted_at IS NULL AND pending = 0
+  `);
+
+  let created = 0;
+  db.exec('BEGIN');
+  try {
+    for (const c of clean) {
+      const row = rows.get(c.id);
+      if (!row) {
+        // DO NOTHING, not an upsert: `rows` is scoped to this board, so an id
+        // that is already on a *different* one would otherwise raise on the
+        // primary key and roll the whole save back. A card keeps the board it
+        // is on here for the same reason it does in `writeBoard`.
+        const { changes } = insert.run(c.id, boardId, c.columnId, c.title, c.notes, c.type, c.category,
+          c.importance, c.urgency, c.effort, c.control, c.effortSrc, c.controlSrc, c.deadline,
+          c.habitFreq, c.habitCount, JSON.stringify(c.habitTimes), JSON.stringify(c.habitHistory),
+          c.num, JSON.stringify(c.tags), c.createdAt, c.updatedAt, nextPos++);
+        if (changes) created += 1;
+        continue;
+      }
+      if (row.deleted_at !== null || row.pending) continue;
+      if (c.updatedAt < row.updated_at) continue;
+      update.run(c.columnId, c.title, c.notes, c.type, c.category, c.importance, c.urgency,
+        c.effort, c.control, c.effortSrc, c.controlSrc, c.deadline,
+        c.habitFreq, c.habitCount, JSON.stringify(c.habitTimes), JSON.stringify(c.habitHistory),
+        JSON.stringify(c.tags), c.updatedAt, c.id);
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
   pruneOrphanedEdits();
   return { board: readBoard(boardId), created };
 }
@@ -1347,7 +1513,7 @@ const server = createServer(async (req, res) => {
   if (path === '/api/state') {
     if (boardId === null) return noSuchBoard();
     if (req.method === 'GET') {
-      return sendJson(res, 200, readBoard(boardId));
+      return sendJson(res, 200, boardWithRev(boardId));
     }
     if (req.method === 'PUT') {
       try {
@@ -1355,14 +1521,37 @@ const server = createServer(async (req, res) => {
         if (!parsed || !Array.isArray(parsed.cards)) {
           return sendJson(res, 400, { error: 'Body must be { version, cards: [...] }' });
         }
+        // Which board this save was written against. Three states, one field,
+        // and the difference between them is only ever whether DELETING is
+        // authorised:
+        //   absent            — say nothing, get the old contract. Every curl,
+        //                       eval and pre-rev test lives here, and so does
+        //                       the whole-board sweep they rely on.
+        //   the current rev   — this client is looking at what the database
+        //                       holds, so an omitted card really was deleted.
+        //   anything else     — including '': the client is describing a board
+        //                       that has since moved. Its save is applied
+        //                       additively and deletes nothing.
+        // Sending '' rather than omitting the field is what a client does when
+        // it has no rev yet, so that no client code path can be granted the
+        // right to delete by forgetting to say anything.
+        const claimed = Object.hasOwn(parsed, 'rev') ? String(parsed.rev) : null;
+        // Read-compare-write with no lock, and it needs none: node:sqlite is
+        // synchronous and the one await in this handler (readBody) is already
+        // done. Nothing may put an await between this line and the write.
+        const stale = claimed !== null && claimed !== revOf(readBoard(boardId));
+
         // Registry first, then cards — so cards referencing a just-added
         // category validate against the fresh registry.
         const cats = sanitizeCategories(parsed.categories);
-        if (cats) writeCategories(cats, boardId);
-        const { board, created } = writeBoard(parsed.cards, boardId);
-        sendJson(res, 200, board);
+        if (cats) (stale ? mergeCategories : writeCategories)(cats, boardId);
+        const { board, created } = (stale ? mergeBoard : writeBoard)(parsed.cards, boardId);
+        // The rev of the board as it now stands, so the client that just wrote
+        // is the one client guaranteed not to be stale on its next save.
+        sendJson(res, 200, { ...board, rev: revOf(board), ...(stale ? { stale: true } : {}) });
         // After the response: one snapshot per save that brought new cards,
         // however many they were. Never before, or the backup would miss them.
+        // A merge counts: it is exactly when never-seen cards arrive.
         if (created > 0) backupAfterNewCards();
         return;
       } catch (err) {
@@ -1549,7 +1738,9 @@ const server = createServer(async (req, res) => {
     if (action === 'confirm') {
       const landedOn = confirmProposal(id);
       if (!landedOn) return sendJson(res, 404, { error: 'No such proposal' });
-      sendJson(res, 200, readBoard(landedOn));
+      // With the rev: the browser adopts this board, and a client that adopts a
+      // board without knowing its rev is stale from then on without being told.
+      sendJson(res, 200, boardWithRev(landedOn));
       // The card is the user's now, which is the moment worth a snapshot.
       backupAfterNewCards();
       return;

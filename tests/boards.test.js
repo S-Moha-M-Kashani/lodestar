@@ -44,6 +44,67 @@ test('a whole-board PUT touches only the board it names', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test. The 2026-08-22 incident: a second machine loaded
+// this board with a days-old copy, saved it, and the sweep archived the 24 cards
+// that copy had never heard of. A save now says which version of the board it was
+// written against, and one that names a version the server has moved past is
+// applied additively — it can add, it can update what it is not behind on, and it
+// cannot delete.
+test('a save that names a rev it has not seen adds and never deletes', async () => {
+  const s = await startServer();
+  try {
+    const put2 = (cards, body) => fetch(s.base + '/api/state', {
+      method: 'PUT', headers: json, body: JSON.stringify({ version: 1, cards, ...body }),
+    });
+    const older = { id: 'a', columnId: 'inbox', title: 'A', updatedAt: 1000 };
+    const newer = { id: 'b', columnId: 'inbox', title: 'B', updatedAt: 2000 };
+    await put2([older, newer], {});
+
+    // The rev names this exact board, and it changes when the board does.
+    const seen = await get(s.base, '/api/state');
+    assert.equal(typeof seen.rev, 'string');
+    assert.ok(seen.rev.length > 0);
+
+    // A save carrying the current rev is the ordinary case and still sweeps.
+    const fresh = await (await put2([older], { rev: seen.rev })).json();
+    assert.deepEqual(fresh.cards.map((c) => c.id), ['a']);
+    assert.notEqual(fresh.rev, seen.rev);
+    // Restore it, so what follows is about staleness and not about the trash.
+    const restored = await (await put2([older, newer], { rev: fresh.rev })).json();
+
+    // Now the stale save: it is based on `seen`, so it has never heard of card
+    // 'c', still carries an old copy of 'b', and omits 'a' — which is the thing
+    // it must not be believed about.
+    await put2([older, newer, { id: 'c', columnId: 'inbox', title: 'C' }], { rev: restored.rev });
+    const stale = await (await put2(
+      [{ ...newer, title: 'B, reverted', updatedAt: 1500 },
+       { id: 'd', columnId: 'inbox', title: 'D from the other machine' }],
+      { rev: seen.rev, categories: [{ id: 'boats', label: 'Boats', h: 200 }] },
+    )).json();
+
+    assert.equal(stale.stale, true);
+    assert.notEqual(stale.rev, seen.rev);
+    const ids = stale.cards.map((c) => c.id);
+    assert.deepEqual(ids.sort(), ['a', 'b', 'c', 'd']); // nothing archived, the new card landed
+    assert.equal((await get(s.base, '/api/trash')).cards.length, 0);
+    // Not behind on 'b' is not the same as authoritative about it: the stored
+    // copy is newer, so the revert is refused rather than applied.
+    assert.equal(stale.cards.find((c) => c.id === 'b').title, 'B');
+    // The registry is additive too. Replacing it would drop every category the
+    // stale client never saw, and cleanCard would then blank that field on
+    // every card holding one.
+    const cats = stale.categories.map((c) => c.id);
+    assert.ok(cats.includes('boats'), 'a category the board lacked is added');
+    assert.ok(cats.includes('work'), 'the categories it never saw survive');
+
+    // And the contract for everything that predates rev — curl, the evals, the
+    // brain, every test above this one: say nothing, get the old behaviour.
+    await put2([older], {});
+    assert.deepEqual((await get(s.base, '/api/state')).cards.map((c) => c.id), ['a']);
+    assert.equal((await get(s.base, '/api/trash')).cards.length, 3);
+  } finally { await s.stop(); }
+});
+
 // This is an integration test.
 test('a board is created, renamed, soft-deleted and restored whole', async () => {
   const s = await startServer();
