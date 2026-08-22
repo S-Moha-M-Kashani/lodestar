@@ -878,6 +878,51 @@ try:
         page.keyboard.press("Escape")
         page.wait_for_timeout(50)
 
+        # This is an end-to-end test.
+        # A hand reaches a flyout by DRAGGING the pointer across the space
+        # between the button and the panel; page.hover() teleports onto the
+        # target and so never touches that space, which is why every check
+        # above passes while the feature is unusable with a mouse. The panel
+        # sits 8px to the LEFT of its button, and those 8px belong to neither
+        # the button nor the panel: crossing them fires mouseleave on the
+        # wrapper, the panel is hidden, and the pointer arrives where it used
+        # to be. So the walk is asserted, not the destination — halfway across
+        # the gap and then on the panel itself.
+        def hover_travel(btn_sel, panel_sel):
+            """Walk the pointer from a flyout's button onto its panel.
+
+            Returns (open in the gap, open on the panel). Reported rather than
+            raised: a flyout that has vanished must be one red line, not a
+            TimeoutError that abandons every check after it."""
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(50)
+            page.click("#menu-btn")
+            btn = page.locator(btn_sel).bounding_box()
+            page.mouse.move(btn["x"] + btn["width"] - 4, btn["y"] + btn["height"] / 2)
+            page.wait_for_timeout(150)
+            panel = page.locator(panel_sel)
+            box = panel.bounding_box() if panel.is_visible() else None
+            if box is None:
+                return (False, False)
+            lane = btn["y"] + btn["height"] / 2
+            # steps=, so the browser gets the intermediate mousemoves a hand
+            # would produce — one jump would skip the gap entirely.
+            page.mouse.move((box["x"] + box["width"] + btn["x"]) / 2, lane, steps=8)
+            page.wait_for_timeout(150)
+            in_gap = panel.is_visible()
+            page.mouse.move(box["x"] + box["width"] / 2, lane, steps=8)
+            page.wait_for_timeout(150)
+            on_panel = panel.is_visible()
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(50)
+            return (in_gap, on_panel)
+
+        show_gap, show_panel = hover_travel("#menu-show", "#show-panel")
+        sound_gap, sound_panel = hover_travel("#menu-sound", "#sound-panel")
+        check("menu: a flyout survives the pointer travelling to it, both of them",
+              show_gap and show_panel and sound_gap and sound_panel)
+
+
         # The ledger number is the card's permanent identity (C-001, cardLabel),
         # so every card paints one and nothing in the UI can take it away: the
         # Menu toggle asserted absent above is not coming back, and there is no

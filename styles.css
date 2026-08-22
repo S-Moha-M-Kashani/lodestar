@@ -414,12 +414,33 @@ input, select, textarea { font: inherit; color: inherit; }
 /* Hover submenus (Show, Sound): the trigger is an ordinary row, the panel
    unfolds beside the menu — leftwards, because the menu hangs off the
    window's right edge. */
-.menu-flyout { position: relative; display: flex; flex-direction: column; }
+.menu-flyout { position: relative; display: flex; flex-direction: column;
+  --flyout-gap: 8px; }
 .menu-flyout > .menu-item { width: 100%; }
 .flyout-panel {
   top: -7px;
-  right: calc(100% + 8px);
+  right: calc(100% + var(--flyout-gap));
   left: auto;
+}
+
+/* The gap between the row and its panel was 8px belonging to neither, and a
+   pointer dragged across it left the wrapper: mouseleave fired, the panel was
+   hidden, and the hand arrived where it had just been — only a keyboard could
+   reach these lists. So the panel claims the gap with a transparent bridge.
+   A pseudo-element hit-tests as part of its element, hence as part of the
+   wrapper, so the walk from the row to the list never leaves the hover area
+   while the gap still looks like a gap. It is the panel's own, so it is gone
+   whenever the panel is (`[hidden] { display: none }`), and it spans the full
+   height rather than the row's, so approaching diagonally works too.
+   page.hover() teleports onto its target and never crossed the gap, which is
+   why no test saw this. */
+.flyout-panel::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: calc(-1 * var(--flyout-gap));
+  width: var(--flyout-gap);
 }
 
 /* The habit sound's state, in a word beside the sign. The one place green
