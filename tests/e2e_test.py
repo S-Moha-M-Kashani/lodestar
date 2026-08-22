@@ -815,10 +815,11 @@ try:
         page.wait_for_selector(".card")
         check("persistence: board intact after reload", page.locator(".card").count() == count_before)
 
-        # ---- Menu toggles: Tags on/off, Done column; the numbers are gone ----
-        # This is an end-to-end test. Review verdict on the ledger numbers:
-        # clutter nobody toggled back on — so they are simply never shown and
-        # the Menu item is gone. In its place the Menu offers Tags: the chips
+        # ---- Menu toggles: Tags on/off, Done column; numbers have no toggle ----
+        # This is an end-to-end test. Final verdict on the ledger numbers: they
+        # are always painted and have no Menu item — a card's number is its
+        # identity, not a display preference, so the one control that could
+        # remove it stays retired. In its place the Menu offers Tags: the chips
         # on every card and the tag filter bar go with one press. Same idiom
         # as ever: body class + lodestar: key, aria-pressed "true" = hidden.
         # Every click is guarded and every compound check short-circuits on
@@ -877,8 +878,19 @@ try:
         page.keyboard.press("Escape")
         page.wait_for_timeout(50)
 
-        check("numbers: no ledger number is visible on any card",
-              page.locator("#board .card-num:visible").count() == 0)
+        # The ledger number is the card's permanent identity (C-001, cardLabel),
+        # so every card paints one and nothing in the UI can take it away: the
+        # Menu toggle asserted absent above is not coming back, and there is no
+        # body class or CSS rule that hides the span either. Counted per card
+        # and matched against the format — "at least one is visible" passes on a
+        # board that has lost the number off every card but the first.
+        nums_here = page.locator("#board .card-num")
+        check("numbers: every card shows its ledger number and nothing hides it",
+              nums_here.count() == page.locator("#board .card").count()
+              and nums_here.count() > 0
+              and nums_here.count() == page.locator("#board .card-num:visible").count()
+              and all(re.fullmatch(r"C-\d{3,}", t.strip())
+                      for t in nums_here.all_inner_texts()))
 
         # Show's three Filters toggles act on the FILTER CONTROLS — the tag
         # bar and tag dropdown, the priority dropdown, the type dropdown —
@@ -1498,15 +1510,27 @@ try:
         page.wait_for_selector("#board.backlog")
         check("backlog: rows match Inbox card count",
               page.locator(".backlog-row").count() == inbox_count)
-        # The rows lost their ledger-number column; the grid must lose it too,
-        # or every cell slides one column left — the stamp overlapping the
-        # title, the title wrapping inside the 96px the stamp used to have.
+        # The rows carry the ledger number again, so the grid must pay for that
+        # column again: number, then stamp, then title, each starting where the
+        # one before it ends. Get the columns wrong in either direction and the
+        # cells slide — the stamp overlapping the title, or the title wrapping
+        # inside the 96px the stamp used to have.
+        # bounding_box() waits for its element, so the number cell is measured
+        # only once it is known to be there: while the feature is missing this
+        # must come back as a red line, not a TimeoutError that abandons every
+        # check after it.
         first_row = page.locator(".backlog-row").first
+        num = first_row.locator(".row-num")
+        num_there = num.count() == 1 and num.is_visible()
+        num_bb = num.bounding_box() if num_there else None
         badge_bb = first_row.locator(".badge").bounding_box()
         title_bb = first_row.locator(".row-title").bounding_box()
         row_bb = first_row.bounding_box()
-        check("backlog: the stamp and the title share the line without overlap",
-              all(b is not None for b in (badge_bb, title_bb, row_bb))
+        check("backlog: the number, stamp and title share the line without overlap",
+              num_there
+              and all(b is not None for b in (num_bb, badge_bb, title_bb, row_bb))
+              and re.fullmatch(r"C-\d{3,}", num.inner_text().strip())
+              and num_bb["x"] + num_bb["width"] <= badge_bb["x"] + 1
               and badge_bb["x"] + badge_bb["width"] <= title_bb["x"] + 1
               and title_bb["width"] >= row_bb["width"] * 0.5)
         check("backlog: view button marked pressed",
