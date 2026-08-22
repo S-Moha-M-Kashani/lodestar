@@ -3055,6 +3055,51 @@ try:
         check("assistant: memory being off is not reported as 'no matches'",
               said_off and "no matches" not in off_text
               and page.locator(".recall-hit").count() == 0)
+
+        # This is an end-to-end test.
+        # Search is one of four tools on one row, and pressing another of them
+        # is a move to that tool — not a click "inside" search — so the fold
+        # shuts and the row never has two things dropped from it at once.
+        # Everything else stays: a search you have to re-run because you looked
+        # at your own conversation is not a search. (New chat is in the same
+        # group and the same rule; it is not driven here because it would clear
+        # the transcript the checks below still read.)
+        if has_panel:
+            def search_open():
+                return page.locator("#recall-input").is_visible()
+
+            def open_search():
+                if not search_open():
+                    page.locator(".chat-recall summary").click()
+                    page.wait_for_timeout(80)
+
+            open_search()
+            opened = search_open()
+            page.click("#chat-history-btn")
+            page.wait_for_timeout(100)
+            shut_by_history = not search_open()
+            page.keyboard.press("Escape")  # and put the chats list away again
+            page.wait_for_timeout(50)
+            open_search()
+            page.click("#assistant-extras-btn")
+            page.wait_for_timeout(100)
+            shut_by_gear = not search_open()
+            page.click("#assistant-extras-btn")  # the drawer back as it was
+            page.wait_for_timeout(50)
+            open_search()
+            page.locator(".chat-log").click(position={"x": 5, "y": 5})
+            page.wait_for_timeout(100)
+            reading_keeps_it = search_open()
+            page.locator(".chat-recall summary").click()  # leave it shut
+            page.wait_for_timeout(50)
+            check("assistant: another tool shuts the search fold, reading the"
+                  " conversation does not",
+                  opened and shut_by_history and shut_by_gear
+                  and reading_keeps_it)
+        else:
+            check("assistant: another tool shuts the search fold, reading the"
+                  " conversation does not", False)
+
         check("gate: the proposed card is NOT on the board yet",
               not any(c["title"] == "What is Leiden clustering?"
                       for c in api_state()["cards"])
