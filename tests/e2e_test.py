@@ -1917,6 +1917,53 @@ try:
               fresh_page.locator(".card", has_text="PERSIST-MARKER-alpha").count() == 1)
         fresh.close()
 
+        # This is an end-to-end test. The 2026-08-22 incident: a second machine
+        # opened this board holding a days-old copy in its localStorage, the
+        # browser pushed that copy as the truth, and the whole-board save
+        # archived the 24 cards the copy had never heard of. A stale browser now
+        # merges instead — it may add, it may not delete — and the cards it never
+        # saw are still on the board afterwards.
+        server_cards = api_state()["cards"]
+        stale_copy = [c for c in server_cards if c["title"] != "PERSIST-MARKER-alpha"]
+        assert len(stale_copy) < len(server_cards), "the marker card should be missing from the stale copy"
+        # Plus one card only this browser has: work done while the server was
+        # unreachable must survive the same load that adopts the server's board.
+        stale_copy = stale_copy + [{
+            "id": "stale-local-only", "columnId": "inbox", "title": "OFFLINE-MARKER-local",
+            "type": "task", "num": 900, "createdAt": 1, "updatedAt": 1,
+        }]
+        stale = browser.new_context(viewport={"width": 1200, "height": 800})
+        stale.add_init_script("window.QBOARD_DISABLE_SEMANTIC = true;")
+        stale.add_init_script(
+            "localStorage.setItem('lodestar:v1', JSON.stringify(%s));"
+            % json.dumps({"version": 1, "cards": stale_copy}))
+        stale_page = stale.new_page()
+        stale_page.goto(URL)
+        stale_page.wait_for_selector(".card")
+        stale_page.wait_for_timeout(600)  # the merge, then its debounced push
+        after = api_state()["cards"]
+        check("stale browser: the card it had never seen is still on the board",
+              any(c["title"] == "PERSIST-MARKER-alpha" for c in after))
+        check("stale browser: nothing was archived by its load",
+              not any(c["title"] == "PERSIST-MARKER-alpha" for c in api_trash()["cards"]))
+        check("stale browser: its own unsynced card was pushed, not dropped",
+              any(c["title"] == "OFFLINE-MARKER-local" for c in after))
+        check("stale browser: it shows the merged board, not its own copy",
+              stale_page.locator(".card", has_text="PERSIST-MARKER-alpha").count() == 1)
+        stale.close()
+        # Leave the board as the rest of the run expects it: the merge added a
+        # card, and this one is only ever a stand-in for the other machine.
+        api_put([c for c in after if c["title"] != "OFFLINE-MARKER-local"])
+        # And re-sync this page, which is now describing a board two writes old.
+        # Not test housekeeping — it is the behaviour under test seen from the
+        # other side: a save based on a board that has moved is merged rather
+        # than obeyed, so the first delete made here would be bounced back with
+        # "the board had newer changes". A reload is what the app itself does to
+        # catch up, and a real user gets the announcement instead.
+        page.reload()
+        page.wait_for_selector(".card")
+        page.wait_for_timeout(400)
+
         # ---- localStorage keys: 'question-board:*' → 'lodestar:*' ----
         # This is an end-to-end test.
         # The prefix was renamed with the board's word, and several of the ten
