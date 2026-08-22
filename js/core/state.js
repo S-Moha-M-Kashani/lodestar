@@ -13,7 +13,13 @@ import { STORAGE_KEY, VIEW_KEY } from './keys.js';
 // That is the whole discipline — a grep for `setCards(` finds every place the
 // board is swapped out, which the old single-closure file could not tell you.
 
-export let loadedFromStorage = false; // true when this browser already had a saved board
+// True when this browser already had a board of its own saved. It is not the
+// same question as "does the board have cards": a browser opening for the first
+// time is handed the seed cards, and those are an explanation of the app, not
+// work worth defending against the database. js/core/sync.js is the only reader,
+// and treating the two alike duplicated the whole seed set onto the server the
+// first time a fresh browser opened an existing board.
+export let loadedFromStorage = false;
 
 function loadState() {
   try {
