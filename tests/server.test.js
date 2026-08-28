@@ -22,6 +22,42 @@ test('GET /api/state returns version, cards, seeded categories', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test. The plan travels with the card, and the two
+// rules that make it more than another text column are enforced here too: a
+// plan mirrors the deadline until somebody sets one, and the type 'plan' —
+// retired on 2026-08-28 — is stored as a task rather than coerced to a
+// question, which would have re-filed years of work as unanswered.
+test('PUT /api/state keeps a card plan, and retires the plan type', async () => {
+  const s = await startServer();
+  try {
+    const put = await fetch(s.base + '/api/state', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ version: 1, cards: [
+        { id: 'own', columnId: 'inbox', title: 'Sail an ocean', plan: '2031-06', planSrc: 'user' },
+        { id: 'auto', columnId: 'inbox', title: 'Tax forms', deadline: '2026-09-01' },
+        { id: 'junk', columnId: 'inbox', title: 'Half a plan', plan: '2027-02-30', planSrc: 'user' },
+        { id: 'old', columnId: 'inbox', title: 'A card that says it is a plan', type: 'plan' },
+      ] }),
+    });
+    assert.equal(put.status, 200);
+    const byId = Object.fromEntries((await put.json()).cards.map((c) => [c.id, c]));
+
+    assert.equal(byId.own.plan, '2031-06');
+    assert.equal(byId.own.planSrc, 'user');
+    // Nobody set this one, so the deadline is the plan.
+    assert.equal(byId.auto.plan, '2026-09-01');
+    assert.equal(byId.auto.planSrc, 'auto');
+    // The impossible day goes; the month someone did mean stays.
+    assert.equal(byId.junk.plan, '2027-02');
+    assert.equal(byId.old.type, 'task');
+
+    // And it survives a re-read from the database rather than only the echo.
+    const again = await (await fetch(s.base + '/api/state')).json();
+    assert.equal(again.cards.find((c) => c.id === 'own').plan, '2031-06');
+  } finally { await s.stop(); }
+});
+
 // This is an integration test.
 test('PUT /api/state persists a card and echoes full board', async () => {
   const s = await startServer();

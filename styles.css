@@ -1317,10 +1317,54 @@ body[data-view="board"] .cards { min-height: 0; }
 }
 .plan-rail-pick:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 1px; }
 
-.plan-rail-sub {
-  margin: 4px 0 0;
+/* The opt-in to the board's filters. Off it is a quiet word; on it is inked
+   like a pressed tab, because a filtered plan must never look like the whole
+   plan. */
+.plan-filter-toggle {
+  margin-top: 5px;
+  width: 100%;
+  padding: 3px 4px;
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: 9.5px;
+  letter-spacing: 0.02em;
+  color: var(--ink-soft);
+  background: transparent;
+  border: 1px dotted var(--card-line);
+  border-radius: 2px;
+  cursor: pointer;
+}
+.plan-filter-toggle:hover { color: var(--ink); border-color: var(--ink-soft); }
+.plan-filter-toggle.on {
+  color: var(--paper);
+  background: var(--ink-soft);
+  border-style: solid;
+  border-color: transparent;
+}
+.plan-filter-toggle:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 1px; }
+
+/* A group inside the plan: Day, Week, Month, Year, Dreams. Ruled like a
+   ledger's sub-total line, so the eye can skip a whole horizon. */
+.plan-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 10px 0 2px;
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--card-line);
+}
+.plan-group-head:first-child { margin-top: 6px; }
+.plan-group-title {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+.plan-group-count {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 9.5px;
   color: var(--ink-soft);
 }
 
@@ -1364,6 +1408,9 @@ body[data-view="board"] .cards { min-height: 0; }
   white-space: nowrap;
 }
 .plan-rail-when.late { color: var(--high); }
+/* Planned after it was due — the state the dialog refuses to save, so it is
+   marked wherever an older board still carries it. */
+.plan-rail-when.conflict { color: var(--high); text-decoration: underline wavy; }
 
 .plan-rail-empty {
   margin: 2px 0 0;

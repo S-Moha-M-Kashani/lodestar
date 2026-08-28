@@ -1,37 +1,74 @@
-import { cardLabel, moveCard } from '../core/cards.js';
+import { cardLabel, matchesFilters, moveCard } from '../core/cards.js';
 import { catColor } from '../core/categories.js';
 import { KEY_PREFIX } from '../core/keys.js';
-import { PLAN_HORIZONS, planCardsIn, planDay, planHorizonLabel, planHorizonVal } from '../core/plan.js';
+import {
+  PLAN_HORIZONS, planCardsIn, planConflict, planDay, planGroups, planHorizonLabel,
+  planHorizonVal, planPrecision,
+} from '../core/plan.js';
 import { state } from '../core/state.js';
-import { announce } from './dom.js';
+import { $, announce } from './dom.js';
 import { openDialog } from './edit-dialog.js';
 import { render } from './render.js';
 
-// The plan section of the rail — the day's shortlist, under the habits.
+// The plan section of the rail — what you mean to do, under the habits.
 //
 // It borrows the habit strip's box on purpose: on this board a box you tick is
 // one thing done, whether it is the fourth glass of water or the tax return.
 // The difference is what the tick means. A habit's box records a repetition and
 // the card stays; a plan's box finishes the card, so it moves to Done and
-// leaves the list. That is the only feedback the click needs.
+// leaves the list.
+//
+// Two layouts, because the same list answers two different questions. Stacked
+// shows day, week, month, year and dreams at once — the whole horizon, each
+// card in exactly one place. Dropdown shows one horizon at a time, and then it
+// accumulates: "this week" includes today. Which one you get is a setting in
+// the ⚙ menu, not a guess.
+//
+// And the block is outside the board's filters by default. The point of a plan
+// is to see the day whole; a category tab left on an hour ago would quietly
+// hide half of it. `apply board filters` is the one button that opts in.
 
+const LAYOUT_KEY = KEY_PREFIX + 'plan-layout';
 const HORIZON_KEY = KEY_PREFIX + 'plan-horizon';
+const FILTERS_KEY = KEY_PREFIX + 'plan-filters';
+
+const layoutVal = (v) => (v === 'dropdown' ? 'dropdown' : 'stacked');
+export let planLayout = layoutVal(localStorage.getItem(LAYOUT_KEY));
 let horizon = planHorizonVal(localStorage.getItem(HORIZON_KEY));
+let useFilters = localStorage.getItem(FILTERS_KEY) === '1';
+
+const remember = (key, value) => {
+  try { localStorage.setItem(key, value); } catch (_) { /* private mode */ }
+};
+
+/** Stacked or one at a time. Wired from main.js, like the habit chime. */
+export function setPlanLayout(next) {
+  planLayout = layoutVal(next);
+  remember(LAYOUT_KEY, planLayout);
+}
+
+/** Mark the chosen layout in the ⚙ menu's Plan submenu. */
+export function syncPlanLayoutPicker() {
+  for (const name of ['stacked', 'dropdown']) {
+    $(`#plan-${name}`)?.setAttribute('aria-checked', String(name === planLayout));
+  }
+}
 
 function setHorizon(next) {
   horizon = planHorizonVal(next);
-  try { localStorage.setItem(HORIZON_KEY, horizon); } catch (_) { /* private mode */ }
+  remember(HORIZON_KEY, horizon);
   render();
   announce(`Plan: ${planHorizonLabel(horizon)}`);
 }
 
-const EMPTY = {
-  today: 'Nothing due today.',
-  week: 'Nothing due this week.',
-  month: 'Nothing due this month.',
-  year: 'Nothing due this year.',
-  dream: 'Every card carries a date.',
-};
+function setUseFilters(on) {
+  useFilters = on;
+  remember(FILTERS_KEY, on ? '1' : '0');
+  render();
+  announce(on ? 'Plan follows the board filters' : 'Plan shows everything planned');
+}
+
+// --- the pieces -------------------------------------------------------------
 
 function horizonPicker() {
   const pick = document.createElement('select');
@@ -47,6 +84,38 @@ function horizonPicker() {
   }
   pick.addEventListener('change', () => setHorizon(pick.value));
   return pick;
+}
+
+function filterToggle() {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'plan-filter-toggle' + (useFilters ? ' on' : '');
+  btn.textContent = 'apply board filters';
+  btn.setAttribute('aria-pressed', String(useFilters));
+  btn.title = useFilters
+    ? 'The plan is showing only cards the board filters keep'
+    : 'Narrow the plan with the board’s search, tabs and filters';
+  btn.addEventListener('click', () => setUseFilters(!useFilters));
+  return btn;
+}
+
+/** The date a row shows, at the precision it was planned at. Today's own date
+ *  is left off — the section says it — and a plan that has slipped, or that
+ *  starts after the deadline, is marked. */
+function whenChip(card, today) {
+  const plan = card.plan;
+  if (!plan || plan === today) return null;
+  const chip = document.createElement('span');
+  const late = plan < today;
+  chip.className = 'plan-rail-when' + (late ? ' late' : '')
+    + (planConflict(plan, card.deadline) ? ' conflict' : '');
+  // A day this year needs no year; a month or a whole year says itself.
+  chip.textContent = planPrecision(plan) === 'day' && plan.slice(0, 4) === today.slice(0, 4)
+    ? plan.slice(5) : plan;
+  chip.title = planConflict(plan, card.deadline)
+    ? `Planned ${plan}, but due ${card.deadline}`
+    : late ? `Planned for ${plan} — that has passed` : `Planned for ${plan}`;
+  return chip;
 }
 
 function planRow(card, today) {
@@ -74,24 +143,29 @@ function planRow(card, today) {
   name.addEventListener('click', () => openDialog(card.id));
 
   row.append(box, name);
-
-  // The date, only where it says something the heading does not: overdue in
-  // red, and any deadline past the horizon's own name.
-  if (card.deadline && card.deadline !== today) {
-    const when = document.createElement('span');
-    when.className = 'plan-rail-when' + (card.deadline < today ? ' late' : '');
-    when.textContent = card.deadline.slice(5); // MM-DD; the year is the horizon's job
-    when.title = card.deadline < today ? `Overdue — was due ${card.deadline}` : `Due ${card.deadline}`;
-    row.append(when);
-  }
+  const when = whenChip(card, today);
+  if (when) row.append(when);
   return row;
+}
+
+function sectionHead(label, n) {
+  const head = document.createElement('div');
+  head.className = 'plan-group-head';
+  const title = document.createElement('h3');
+  title.className = 'plan-group-title';
+  title.textContent = label;
+  const count = document.createElement('span');
+  count.className = 'plan-group-count';
+  count.textContent = String(n);
+  head.append(title, count);
+  return head;
 }
 
 /** The plan, beside the board. Always present, even empty: unlike the habit
  *  rail it is where a card is *put*, so it has to be somewhere to aim at. */
 export function renderPlanRail() {
   const today = planDay();
-  const cards = planCardsIn(state.cards, horizon);
+  const pass = useFilters ? matchesFilters : () => true;
 
   const section = document.createElement('section');
   section.className = 'plan-rail';
@@ -102,22 +176,40 @@ export function renderPlanRail() {
   const title = document.createElement('h2');
   title.className = 'plan-rail-title';
   title.textContent = 'Plan';
-  const sub = document.createElement('p');
-  sub.className = 'plan-rail-sub';
-  sub.textContent = horizon === 'dream'
-    ? `${cards.length} dreams`
-    : `${cards.length} planned`;
-  head.append(title, horizonPicker(), sub);
+  head.append(title);
+  if (planLayout === 'dropdown') head.append(horizonPicker());
+  head.append(filterToggle());
   section.append(head);
 
-  if (!cards.length) {
-    const empty = document.createElement('p');
-    empty.className = 'plan-rail-empty';
-    empty.textContent = EMPTY[horizon];
-    section.append(empty);
-    return section;
+  const body = document.createElement('div');
+  body.className = 'plan-rail-body';
+
+  let shown = 0;
+  if (planLayout === 'stacked') {
+    for (const group of planGroups(state.cards, new Date(), pass)) {
+      if (!group.cards.length) continue;
+      shown += group.cards.length;
+      body.append(sectionHead(group.label, group.cards.length));
+      for (const card of group.cards) body.append(planRow(card, today));
+    }
+  } else {
+    const cards = planCardsIn(state.cards, horizon, new Date(), pass);
+    shown = cards.length;
+    if (cards.length) body.append(sectionHead(planHorizonLabel(horizon), cards.length));
+    for (const card of cards) body.append(planRow(card, today));
   }
 
-  for (const card of cards) section.append(planRow(card, today));
+  if (!shown) {
+    const empty = document.createElement('p');
+    empty.className = 'plan-rail-empty';
+    empty.textContent = useFilters
+      ? 'Nothing planned matches the board filters.'
+      : planLayout === 'dropdown'
+        ? `Nothing planned for ${planHorizonLabel(horizon).toLowerCase()}.`
+        : 'Nothing planned yet. Give a card a plan from its ＋ menu.';
+    body.append(empty);
+  }
+
+  section.append(body);
   return section;
 }

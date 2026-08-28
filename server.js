@@ -82,9 +82,14 @@ const BACKUP_ON_WRITE = process.env.LODESTAR_BACKUP_ON_WRITE !== '0';
 const BACKUP_SCRIPT = join(ROOT, 'scripts', 'backup-db.mjs');
 
 const COLUMN_IDS = ['inbox', 'in-progress', 'answered'];
-// 'plan' was a type until 2026-08-28 and is now a date on every card; a card
-// still arriving as one is stored as a task (typeVal below).
+// 'plan' was a type until 2026-08-28 and is now a date on every card. One
+// still arriving as a plan — an older browser, an old export, an assistant
+// working from memory — is stored as a task with its dates intact; coercing it
+// to 'question' (the fallback for real nonsense) would have re-filed years of
+// work as unanswered. Mirrors typeVal in js/core/cards.js.
 const TYPES = ['question', 'problem', 'task', 'idea', 'habit'];
+const LEGACY_TYPES = { plan: 'task' };
+const typeVal = (t) => (TYPES.includes(t) ? t : LEGACY_TYPES[t] || 'question');
 
 // Categories are the user's own registry (id + label + oklch hue), stored in
 // their own table and editable from the app. These defaults seed an empty DB.
@@ -138,6 +143,33 @@ const deadlineVal = (v) => {
   const d = new Date(v + 'T00:00:00Z');
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v ? v : '';
 };
+
+// --- The plan -------------------------------------------------------------
+// When a card is meant to happen, as a *partial* ISO date: '2027', '2027-03'
+// or '2027-03-04'. One string, so a day cannot exist without its month. A bad
+// tail is dropped rather than the whole value — losing a year someone typed
+// because the day was wrong is the worse trade. planSrc records who set it:
+// while it is 'auto' the plan mirrors the deadline, and once a person or the
+// brain has set one, nothing overwrites it. Mirrored from js/core/plan.js,
+// because the server never trusts the client's validation.
+const daysInMonth = (year, month) => new Date(year, month, 0).getDate();
+const planVal = (v) => {
+  if (typeof v !== 'string') return '';
+  const m = /^(\d{4})(?:-(\d{2}))?(?:-(\d{2}))?$/.exec(v.trim());
+  if (!m) return '';
+  const year = Number(m[1]);
+  if (year < 1900 || year > 2999) return '';
+  if (m[2] === undefined) return m[1];
+  const month = Number(m[2]);
+  if (month < 1 || month > 12) return m[1];
+  if (m[3] === undefined) return `${m[1]}-${m[2]}`;
+  const day = Number(m[3]);
+  if (day < 1 || day > daysInMonth(year, month)) return `${m[1]}-${m[2]}`;
+  return `${m[1]}-${m[2]}-${m[3]}`;
+};
+const planSrcVal = (v) => (v === 'user' || v === 'ai' ? v : 'auto');
+const resolvePlan = (plan, planSrc, deadline) =>
+  (planSrcVal(planSrc) === 'auto' ? deadlineVal(deadline) : planVal(plan));
 
 // --- Habits ---------------------------------------------------------------
 // A habit repeats: habitFreq names the calendar period, habitCount is how many
@@ -259,7 +291,9 @@ db.exec(`
     habit_freq    TEXT    NOT NULL DEFAULT '',
     habit_count   INTEGER NOT NULL DEFAULT 1,
     habit_times   TEXT    NOT NULL DEFAULT '[]',
-    habit_history TEXT    NOT NULL DEFAULT '{}'
+    habit_history TEXT    NOT NULL DEFAULT '{}',
+    plan          TEXT    NOT NULL DEFAULT '',
+    plan_src      TEXT    NOT NULL DEFAULT 'auto'
   );
 `);
 
@@ -284,6 +318,8 @@ if (!columnNames.has('habit_freq')) db.exec("ALTER TABLE cards ADD COLUMN habit_
 if (!columnNames.has('habit_count')) db.exec('ALTER TABLE cards ADD COLUMN habit_count INTEGER NOT NULL DEFAULT 1');
 if (!columnNames.has('habit_times')) db.exec("ALTER TABLE cards ADD COLUMN habit_times TEXT NOT NULL DEFAULT '[]'");
 if (!columnNames.has('habit_history')) db.exec("ALTER TABLE cards ADD COLUMN habit_history TEXT NOT NULL DEFAULT '{}'");
+if (!columnNames.has('plan')) db.exec("ALTER TABLE cards ADD COLUMN plan TEXT NOT NULL DEFAULT ''");
+if (!columnNames.has('plan_src')) db.exec("ALTER TABLE cards ADD COLUMN plan_src TEXT NOT NULL DEFAULT 'auto'");
 // Every card written before boards existed belongs to the default board, which
 // the column default says without a single UPDATE. The REFERENCES clause is
 // carried across too, so a migrated database and a fresh one have one schema
@@ -920,7 +956,7 @@ const rowToCard = (r, catIds) => ({
   columnId: r.column_id,
   title: r.title,
   notes: r.notes,
-  type: TYPES.includes(r.type) ? r.type : 'question',
+  type: typeVal(r.type),
   category: catIds.has(r.category) ? r.category : '',
   importance: r.importance || '',
   urgency: r.urgency || '',
@@ -929,6 +965,8 @@ const rowToCard = (r, catIds) => ({
   effortSrc: srcVal(r.effort_src),
   controlSrc: srcVal(r.control_src),
   deadline: deadlineVal(r.deadline),
+  plan: resolvePlan(r.plan, r.plan_src, r.deadline),
+  planSrc: planSrcVal(r.plan_src),
   habitFreq: habitFreqVal(r.habit_freq),
   habitCount: habitCountVal(r.habit_count),
   habitTimes: habitTimesVal(safeJson(r.habit_times, []), habitCountVal(r.habit_count)),
@@ -1017,7 +1055,7 @@ function cleanCard(raw, now, catIds) {
     columnId: COLUMN_IDS.includes(raw.columnId) ? raw.columnId : 'inbox',
     title: raw.title.trim(),
     notes: typeof raw.notes === 'string' ? raw.notes : '',
-    type: TYPES.includes(raw.type) ? raw.type : 'question',
+    type: typeVal(raw.type),
     category: catIds.has(raw.category) ? raw.category : '',
     importance: iuVal(raw.importance),
     urgency: iuVal(raw.urgency),
@@ -1026,6 +1064,8 @@ function cleanCard(raw, now, catIds) {
     effortSrc: srcVal(raw.effortSrc),
     controlSrc: srcVal(raw.controlSrc),
     deadline: deadlineVal(raw.deadline),
+    plan: resolvePlan(raw.plan, raw.planSrc, raw.deadline),
+    planSrc: planSrcVal(raw.planSrc),
     habitFreq: habitFreqVal(raw.habitFreq),
     habitCount,
     habitTimes: habitTimesVal(raw.habitTimes, habitCount),
@@ -1070,9 +1110,9 @@ function writeBoard(cards, boardId) {
   const upsert = db.prepare(`
     INSERT INTO cards (id, board_id, column_id, title, notes, type, category, importance, urgency,
                        effort, control, effort_src, control_src, deadline,
-                       habit_freq, habit_count, habit_times, habit_history,
+                       habit_freq, habit_count, habit_times, habit_history, plan, plan_src,
                        num, tags, created_at, updated_at, position, deleted_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
     ON CONFLICT(id) DO UPDATE SET
       column_id = excluded.column_id, title = excluded.title, notes = excluded.notes,
       type = excluded.type, category = excluded.category,
@@ -1082,6 +1122,7 @@ function writeBoard(cards, boardId) {
       deadline = excluded.deadline,
       habit_freq = excluded.habit_freq, habit_count = excluded.habit_count,
       habit_times = excluded.habit_times, habit_history = excluded.habit_history,
+      plan = excluded.plan, plan_src = excluded.plan_src,
       num = excluded.num, tags = excluded.tags,
       created_at = excluded.created_at, updated_at = excluded.updated_at, position = excluded.position,
       deleted_at = NULL
@@ -1106,6 +1147,7 @@ function writeBoard(cards, boardId) {
       upsert.run(c.id, boardId, c.columnId, c.title, c.notes, c.type, c.category, c.importance, c.urgency,
         c.effort, c.control, c.effortSrc, c.controlSrc, c.deadline,
         c.habitFreq, c.habitCount, JSON.stringify(c.habitTimes), JSON.stringify(c.habitHistory),
+        c.plan, c.planSrc,
         c.num, JSON.stringify(c.tags), c.createdAt, c.updatedAt, i));
     db.exec('COMMIT');
   } catch (err) {
@@ -1175,9 +1217,9 @@ function mergeBoard(cards, boardId) {
   const insert = db.prepare(`
     INSERT INTO cards (id, board_id, column_id, title, notes, type, category, importance, urgency,
                        effort, control, effort_src, control_src, deadline,
-                       habit_freq, habit_count, habit_times, habit_history,
+                       habit_freq, habit_count, habit_times, habit_history, plan, plan_src,
                        num, tags, created_at, updated_at, position, deleted_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
     ON CONFLICT(id) DO NOTHING
   `);
   const update = db.prepare(`
@@ -1186,6 +1228,7 @@ function mergeBoard(cards, boardId) {
       importance = ?, urgency = ?, effort = ?, control = ?,
       effort_src = ?, control_src = ?, deadline = ?,
       habit_freq = ?, habit_count = ?, habit_times = ?, habit_history = ?,
+      plan = ?, plan_src = ?,
       tags = ?, updated_at = ?
     WHERE id = ? AND deleted_at IS NULL AND pending = 0
   `);
@@ -1203,6 +1246,7 @@ function mergeBoard(cards, boardId) {
         const { changes } = insert.run(c.id, boardId, c.columnId, c.title, c.notes, c.type, c.category,
           c.importance, c.urgency, c.effort, c.control, c.effortSrc, c.controlSrc, c.deadline,
           c.habitFreq, c.habitCount, JSON.stringify(c.habitTimes), JSON.stringify(c.habitHistory),
+          c.plan, c.planSrc,
           c.num, JSON.stringify(c.tags), c.createdAt, c.updatedAt, nextPos++);
         if (changes) created += 1;
         continue;
@@ -1212,6 +1256,7 @@ function mergeBoard(cards, boardId) {
       update.run(c.columnId, c.title, c.notes, c.type, c.category, c.importance, c.urgency,
         c.effort, c.control, c.effortSrc, c.controlSrc, c.deadline,
         c.habitFreq, c.habitCount, JSON.stringify(c.habitTimes), JSON.stringify(c.habitHistory),
+        c.plan, c.planSrc,
         JSON.stringify(c.tags), c.updatedAt, c.id);
     }
     db.exec('COMMIT');

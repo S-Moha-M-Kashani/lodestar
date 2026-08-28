@@ -50,6 +50,8 @@ let lastRev = '';
 const boardFingerprint = (cards) =>
   cards.map((c) => [c.id, c.columnId, c.title, c.notes, c.type, c.category || '', c.importance || '', c.urgency || '',
     c.effort || '', c.control || '', c.effortSrc || '', c.controlSrc || '', c.deadline || '',
+    // A save that only re-plans a card must not look "already in sync".
+    c.plan || '', c.planSrc || '',
     // Habit completions belong here: a board that differs only by a punch is
     // not "already in sync", and skipping the adopt would lose the tick.
     c.habitFreq || '', c.habitCount || 1, (c.habitTimes || []).join('|'),
