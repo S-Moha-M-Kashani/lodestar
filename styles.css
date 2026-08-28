@@ -1212,14 +1212,14 @@ body[data-view="board"] .cards { min-height: 0; }
 .tape-cell.miss { border-style: dotted; color: transparent; }
 .tape-cell.today { box-shadow: 0 0 0 1px var(--ink-soft); }
 
-/* --- The rail: today's habits beside the board ---------------------------- */
+/* --- The rail: today's habits and today's plan, beside the board ---------- */
 
-.board.has-habit-rail {
+.board.has-rail {
   grid-template-columns: repeat(3, minmax(210px, 1fr)) 200px;
   width: min(100%, 1440px);
 }
 
-.habit-rail {
+.board-rail {
   position: sticky;
   top: 8px;
   padding: 0 0 0 14px;
@@ -1279,6 +1279,97 @@ body[data-view="board"] .cards { min-height: 0; }
   font-size: 9.5px;
   color: var(--ink-soft);
   white-space: nowrap;
+}
+
+/* --- The plan: the day's shortlist, under the habits ---------------------- */
+
+/* Ruled off from the habits above, because the box means something else here:
+   a tick finishes the card instead of counting a repetition. The rule belongs
+   to the join, not to the section: with no habits the plan is the top of the
+   rail and a line above it would fence off nothing. */
+.habit-rail + .plan-rail {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+}
+
+.plan-rail-head { margin-bottom: 8px; }
+.plan-rail-title {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.plan-rail-title::before { content: "→ "; color: var(--ink-soft); }
+
+.plan-rail-pick {
+  margin-top: 5px;
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--card-line);
+  border-radius: 2px;
+  padding: 3px 4px;
+  cursor: pointer;
+}
+.plan-rail-pick:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 1px; }
+
+.plan-rail-sub {
+  margin: 4px 0 0;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-soft);
+}
+
+.plan-rail-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 7px 0;
+  border-bottom: 1px dotted var(--card-line);
+}
+.plan-rail-row:last-child { border-bottom: 0; }
+
+/* Empty until hovered, like a habit's box — but the tick shows through on the
+   way in, because here it is a promise about what the click will do. */
+.plan-box { flex: 0 0 auto; }
+.plan-box:hover { color: var(--ink-soft); }
+
+.plan-rail-open {
+  font-family: var(--body);
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: left;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.plan-rail-open:hover { text-decoration: underline; }
+.plan-rail-row.categorized .plan-rail-open::before {
+  content: "▪ ";
+  color: var(--cat);
+}
+
+.plan-rail-when {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+.plan-rail-when.late { color: var(--high); }
+
+.plan-rail-empty {
+  margin: 2px 0 0;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-soft);
 }
 
 /* --- The reminder --------------------------------------------------------- */
@@ -2130,7 +2221,7 @@ kbd {
   }
   /* No room for a fourth column, so the rail joins the carousel as the last
      panel rather than squeezing the board. */
-  .habit-rail {
+  .board-rail {
     flex: 0 0 240px;
     position: static;
     scroll-snap-align: start;

@@ -129,13 +129,13 @@ export function habitCardParts(card, el) {
   if (openTapes.has(card.id)) el.append(habitTape(card));
 }
 
-/** The rail: today's habits beside the board. Absent until there is one — an
- *  empty panel would cost every non-habit user a column of space. */
+/** The habits section of the rail beside the board. Absent until there is one
+ *  — an empty list would cost every non-habit user the top of the panel. */
 export function renderHabitRail() {
   const habits = habitCards().filter((c) => !habitRetired(c));
   if (!habits.length) return null;
 
-  const rail = document.createElement('aside');
+  const rail = document.createElement('section');
   rail.className = 'habit-rail';
   rail.setAttribute('aria-label', 'Habits');
 

@@ -4411,6 +4411,43 @@ try:
         page.select_option("#type-filter", "")
         page.wait_for_timeout(150)
 
+        # ---- The plan (today's shortlist, under the habits) -------------------
+        # This is an end-to-end test. A plan is not a stored list: it is the
+        # cards whose deadline falls inside the chosen horizon. Its box looks
+        # like a habit's on purpose and means something else — a tick finishes
+        # the card, so it moves to Done and leaves the list.
+        page.fill(".quick-add input", "Send the tax forms")
+        page.press(".quick-add input", "Enter")
+        plan_row = lambda: page.locator(".plan-rail .plan-rail-row", has_text="Send the tax forms")
+        check("plan: an undated card is not in today's plan", plan_row().count() == 0)
+
+        page.locator(".card", has_text="Send the tax forms").first.locator(".card-menu-btn").click()
+        item("Deadline").click()
+        item("Today").click()
+        page.wait_for_timeout(150)
+        check("plan: a deadline of today puts the card in today's plan", plan_row().count() == 1)
+
+        # The horizons nest, and the last one is the other half of the board.
+        page.select_option(".plan-rail-pick", "year")
+        page.wait_for_timeout(120)
+        check("plan: a wider horizon still holds what is due today", plan_row().count() == 1)
+        page.select_option(".plan-rail-pick", "dream")
+        page.wait_for_timeout(120)
+        check("plan: a life dream is what carries no date at all",
+              plan_row().count() == 0
+              and page.locator(".plan-rail .plan-rail-row").count() > 0)
+        page.select_option(".plan-rail-pick", "today")
+        page.wait_for_timeout(120)
+
+        plan_row().locator(".plan-box").click()
+        page.wait_for_timeout(150)
+        check("plan: ticking the box moves the card to Done",
+              page.locator('[data-col="answered"] .card', has_text="Send the tax forms").count() == 1)
+        check("plan: a finished card leaves the plan", plan_row().count() == 0)
+        check("plan: the tick reaches the database",
+              wait_until(lambda: any(c["columnId"] == "answered" for c in api_state()["cards"]
+                                     if c["title"] == "Send the tax forms")))
+
         # ---- Several boards --------------------------------------------------
         # Switching reloads the page on purpose (see core/boards.js), so every
         # step here waits for the board to be painted again rather than for a
