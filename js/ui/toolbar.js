@@ -1,3 +1,4 @@
+import { closeRecall } from '../assistant/recall.js';
 import { assistantState, refreshChatSessions, refreshChatTrash, startNewChat } from '../assistant/session.js';
 import { armHistoryIdle, cancelHistoryIdle, closeChatHistory, closeChatRowMenus, extrasOpen, fromChatRowMenu, renderAssistantTools, setChatMenuOpen, setExtrasOpen } from '../assistant/tools.js';
 import { KEY_PREFIX } from '../core/keys.js';
@@ -138,6 +139,21 @@ $('#chat-new').addEventListener('click', () => {
   announce('New chat');
 });
 $('#assistant-extras-btn').addEventListener('click', () => setExtrasOpen(!extrasOpen));
+
+// One row, one thing dropped from it at a time: pressing History, New chat or
+// the gear is a move to THAT tool, so the search fold shuts on the way. A
+// click inside the fold is use of it, and a click outside the row entirely —
+// the transcript, the composer — is none of the row's business and leaves it
+// open, because a search you have to run again because you read your own
+// conversation is not a search. Registered on the row itself, which moves
+// between the app header and the sheet's head but is never rebuilt, so this
+// listener travels with it; the tools' own handlers run first (they are the
+// target, this is the ancestor), and the fold is shut on the live element
+// afterwards rather than by asking for a repaint.
+$('.assistant-tools')?.addEventListener('click', (e) => {
+  if (e.target.closest('.chat-recall')) return;
+  closeRecall();
+});
 // The panel's third way out. On the tools element, which owns both the button
 // and the panel, so crossing from one to the other is never "left".
 $('.assistant-tools').addEventListener('mouseleave', () => {

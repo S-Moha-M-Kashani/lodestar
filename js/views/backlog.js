@@ -1,4 +1,4 @@
-import { filtersActive, matchesFilters } from '../core/cards.js';
+import { cardLabel, filtersActive, matchesFilters } from '../core/cards.js';
 import { catColor, catLabel } from '../core/categories.js';
 import { cardAria, renderQuickAdd, typeBadge } from '../ui/board.js';
 import { sortMenu } from '../ui/card-actions.js';
@@ -57,8 +57,12 @@ function renderBacklogRow(card) {
   if (card.category) row.classList.add('categorized');
   row.setAttribute('aria-label', cardAria(card));
 
-  // No ledger-number cell: the numbers are retired, and a display: none span
-  // would still be a grid item's ghost — the columns below assume it is gone.
+  // The ledger-number cell sits first; a display: none span would still be a
+  // grid item's ghost, so it belongs in the DOM to keep the columns aligned.
+  const rowNum = document.createElement('span');
+  rowNum.className = 'row-num';
+  rowNum.textContent = cardLabel(card);
+
   const badge = typeBadge(card);
 
   const main = document.createElement('div');
@@ -94,7 +98,7 @@ function renderBacklogRow(card) {
     notes.title = 'Has notes';
   }
 
-  row.append(badge, main, notes);
+  row.append(rowNum, badge, main, notes);
   row.addEventListener('click', () => openDialog(card.id));
   row.addEventListener('keydown', (e) => onCardKeydown(e, card.id));
   return row;

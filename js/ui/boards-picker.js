@@ -1,7 +1,7 @@
 import { activeBoard, activeBoardId, boards, createBoard, deleteBoard,
   loadBoards, openBoard, renameBoard, setBoards,
   startLeavingBoard } from '../core/boards.js';
-import { cancelPendingPush } from '../core/sync.js';
+import { cancelPendingPush, flushPendingPush } from '../core/sync.js';
 import { ask, prompt } from './dialogs.js';
 import { $, announce } from './dom.js';
 
@@ -37,14 +37,21 @@ export function initBoardPicker() {
   paintSelect();
 }
 
-/** Leave for another board. The pending save is dropped first: it names the
- *  board being left, and after a delete that board is gone. */
-function leaveFor(id) {
+/** Leave for another board, after the pending save has actually gone.
+ *
+ *  It used to be dropped here, which quietly cost a change made inside the
+ *  150 ms before the switch — and a browser holding unsent work is exactly what
+ *  puts it back on the merge path on its next visit. `flushPendingPush` is a
+ *  no-op once `leavingBoard` is set, which is what still discards the save on
+ *  the delete path below: there the board is about to be gone, and the write
+ *  would arrive as a 400 against something that no longer exists. */
+async function leaveFor(id) {
+  await flushPendingPush();
   cancelPendingPush();
   openBoard(id);
 }
 
-select.addEventListener('change', () => leaveFor(select.value));
+select.addEventListener('change', () => { leaveFor(select.value); });
 
 // The board's own actions — new, rename, delete — are rows of the one
 // Menu ▾ (toolbar.js owns that panel's open/close); this module only wires

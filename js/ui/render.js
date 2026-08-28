@@ -8,6 +8,7 @@ import { dealCards, focusCardId, setCurrentView, setDealCards, setFocusCard, vie
 import { renderCatRail, renderColumn, renderTagBar } from './board.js';
 import { $, announce } from './dom.js';
 import { renderHabitBanner, renderHabitRail } from './habits.js';
+import { renderPlanRail } from './plan.js';
 import { refreshEdits, refreshProposals } from './proposals.js';
 import { renderAreas } from '../views/areas.js';
 import { renderBacklog } from '../views/backlog.js';
@@ -18,6 +19,18 @@ import { renderReview } from '../views/review.js';
 
 // Rendering — the single entry point that paints a view, and the view switch.
 // Every mutation in the app ends in render(); no other module paints #board.
+
+/** The rail beside the board: the habits due, then the plan. Two sections in
+ *  one column, so the day's repetitions and the day's shortlist are read in
+ *  the order they are done in. */
+function boardRail() {
+  const rail = document.createElement('aside');
+  rail.className = 'board-rail';
+  const habits = renderHabitRail();
+  if (habits) rail.appendChild(habits);
+  rail.appendChild(renderPlanRail());
+  return rail;
+}
 
 export function render() {
   const board = $('#board');
@@ -46,11 +59,8 @@ export function render() {
     board.appendChild(renderAssistant());
   } else {
     for (const col of COLUMNS) board.appendChild(renderColumn(col));
-    const rail = renderHabitRail();
-    if (rail) {
-      board.appendChild(rail);
-      board.classList.add('has-habit-rail');
-    }
+    board.appendChild(boardRail());
+    board.classList.add('has-rail');
   }
   renderCatRail();
   renderTagBar();

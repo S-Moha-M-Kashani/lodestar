@@ -35,7 +35,7 @@ import {
   mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync,
   readdirSync, cpSync, copyFileSync, rmSync,
 } from 'node:fs';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -289,19 +289,27 @@ test('server boot migrates a legacy board.db and still serves its cards', async 
 });
 
 // This is a configuration invariant.
-test('.gitignore keeps every Chroma store out of the repository', () => {
-  // *.db already ignores the SQLite files; these lines are what keep the Chroma
-  // stores out, whose files are not *.db and would otherwise be committed.
+test('no database of any kind can be committed', () => {
+  // The rule used to name each store separately, because the sandbox boards
+  // shipped with the repo while the real ones did not. They no longer ship:
+  // a database is one machine's rows and one machine's churn, so the folder is
+  // private wholesale and the exceptions are gone.
   //
-  // It used to be one bare `databases/` line. It is two now because the folder
-  // stopped being uniformly private: the :3001 sandbox's boards ship with the
-  // repo so a checkout gets a working test board, while real/ never leaves this
-  // machine and the test store is 94 MB of derived files a re-index rebuilds.
-  // Asserting each store by name rather than the folder is the point — the risk
-  // was never "the folder is unignored", it was "a store gets committed".
-  const lines = readFileSync(join(ROOT, '.gitignore'), 'utf8').split('\n').map((l) => l.trim());
-  assert.ok(lines.includes('databases/real/'),
-    '.gitignore must ignore databases/real/ — real board, assistant and Chroma data');
-  assert.ok(lines.includes('databases/test/chroma-data-3001/'),
-    '.gitignore must ignore the test Chroma store: derived, and 94 MB of it');
+  // This asserts the effect and not the wording — `git check-ignore` answers
+  // the question the rule exists to answer, and a rewrite of .gitignore that
+  // still ignores everything keeps passing.
+  for (const path of [
+    'databases/real/board.db',
+    'databases/real/assistant.db',
+    'databases/real/chroma-data/anything.bin',
+    'databases/test/board-3001.db',
+    'databases/test/assistant-3001.db',
+    'databases/test/chroma-data-3001/anything.bin',
+  ]) {
+    const r = spawnSync('git', ['check-ignore', '-q', path], { cwd: ROOT });
+    assert.equal(r.status, 0, `${path} must be ignored — no database is ever committed`);
+  }
+  const tracked = spawnSync('git', ['ls-files', 'databases/'], { cwd: ROOT, encoding: 'utf8' });
+  assert.equal(tracked.stdout.trim(), '',
+    'no file under databases/ may be tracked');
 });
