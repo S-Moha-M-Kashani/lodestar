@@ -1,10 +1,15 @@
 #!/bin/sh
-# Refuse to push development to any remote.
+# Refuse to push anything but master.
 #
-# development is the full copy of this project and deliberately local. It
-# carries README-Development.md, ROADMAP-Development.md, 125.md and
-# docs/report/ — working notes and a course report that are meant to stay on
-# this machine. What gets published is master, which drops all of them.
+# The remote is the published record of what works. master is the only branch
+# that is meant to be there: development is the full copy and carries working
+# notes that stay on this machine, and a feature branch is unfinished by
+# definition. So this hook allows exactly two things through — refs/heads/master
+# and version tags (refs/tags/v*) — and refuses every other ref.
+#
+# An allowlist, not a blocklist. A blocklist naming development would let the
+# next branch somebody creates sail past it, which is the failure this shape
+# cannot have.
 #
 # Git runs this hook as `pre-push <remote-name> <remote-url>` with one
 # "<local-ref> <local-sha> <remote-ref> <remote-sha>" line per ref on stdin.
@@ -12,6 +17,10 @@
 #
 # The check is on the *local* ref, so `git push origin development:main` — the
 # same content under another name — is refused too.
+#
+# Consequence worth knowing: `git push --all` always fails while any other
+# branch exists, because one refused ref aborts the whole push. Publish by
+# naming master.
 #
 # Bypassable with --no-verify, as every pre-push hook is. This stops the
 # accident, which is the thing that actually happens.
@@ -22,20 +31,27 @@ current=$(git symbolic-ref --quiet --short HEAD 2>/dev/null)
 
 while read -r local_ref local_sha remote_ref remote_sha; do
 	case "$local_ref" in
-	refs/heads/development)
+	refs/heads/master)
+		continue
+		;;
+	refs/tags/v*)
+		continue
 		;;
 	# `git push <remote> HEAD` names no branch, so resolve HEAD ourselves
 	# rather than let the one shorthand through.
 	HEAD)
-		[ "$current" = development ] || continue
+		[ "$current" = master ] && continue
 		;;
-	*)
+	# A deletion sends the zero sha as the local ref; nothing is published by
+	# it, so it is not this hook's business.
+	"(delete)")
 		continue
 		;;
 	esac
-	echo "refused: development is a local branch and is never pushed." >&2
-	echo "It is the full copy — the dev-only docs and the course report live" >&2
-	echo "there. Publish from master instead." >&2
+	echo "refused: only master is published." >&2
+	echo "The remote is the record of what works. development is the full copy" >&2
+	echo "and stays on this machine; a feature branch is unfinished." >&2
+	echo "Publish with: git push $1 master" >&2
 	echo "(refused push of $local_ref to $1)" >&2
 	exit 1
 done

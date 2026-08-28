@@ -74,7 +74,7 @@ test('the hook refuses to delete development, and nothing else', (t) => {
 });
 
 // This is an integration test (real git, a temporary repo and a bare remote).
-test('the hook refuses to push development, under any name', (t) => {
+test('the hook pushes master and version tags, and refuses everything else', (t) => {
   const dir = repoWithHook();
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const remote = mkdtempSync(join(tmpdir(), 'lodestar-remote-'));
@@ -86,18 +86,35 @@ test('the hook refuses to push development, under any name', (t) => {
 
   const pushed = git(dir, 'push', 'origin', 'development');
   assert.equal(pushed.ok, false, 'pushing development must fail');
-  assert.match(pushed.output, /never pushed/);
+  assert.match(pushed.output, /only master is published/);
 
   // The same content under another name is the same disclosure, so the hook
   // reads the local ref rather than what it would be called on the remote.
-  assert.equal(git(dir, 'push', 'origin', 'development:main').ok, false,
+  assert.equal(git(dir, 'push', 'origin', 'development:master').ok, false,
     'pushing development under another name must fail too');
+
+  // The allowlist is the point: a branch nobody had thought of when the hook
+  // was written is refused by default, where a blocklist would wave it through.
+  git(dir, 'branch', 'feature/whatever');
+  assert.equal(git(dir, 'push', 'origin', 'feature/whatever').ok, false,
+    'an unrelated branch must be refused without being named anywhere');
+
+  // An archive tag points into history that is deliberately unpublished, so
+  // only version tags are let through.
+  git(dir, 'tag', 'archive/something');
+  assert.equal(git(dir, 'push', 'origin', 'archive/something').ok, false,
+    'a non-version tag must be refused');
 
   assert.equal(git(dir, 'push', 'origin', 'master').ok, true,
     'master is the branch that gets published — it must still push');
+  git(dir, 'tag', 'v9.9');
+  assert.equal(git(dir, 'push', 'origin', 'v9.9').ok, true,
+    'a version tag travels with the release it names');
+
   const onRemote = git(remote, 'branch', '--format=%(refname:short)').output;
   assert.match(onRemote, /master/);
   assert.doesNotMatch(onRemote, /development/, 'development must not exist on the remote');
+  assert.doesNotMatch(onRemote, /feature/, 'no feature branch may reach the remote');
 });
 
 // This is a configuration invariant test.
