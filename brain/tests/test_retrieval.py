@@ -31,10 +31,10 @@ MADE_ON = int(datetime(2026, 3, 10, 9, 30, tzinfo=timezone.utc).timestamp() * 10
 LONG_AGO = int(datetime(2024, 7, 1, tzinfo=timezone.utc).timestamp() * 1000)
 
 
-def card(id, title, notes='', tags=None, category=''):
+def card(id, title, notes='', tags=None, category='', plan=''):
     return {'id': id, 'columnId': 'inbox', 'title': title, 'notes': notes,
             'type': 'question', 'category': category, 'importance': '',
-            'urgency': '', 'num': 1, 'tags': tags or [],
+            'urgency': '', 'num': 1, 'tags': tags or [], 'plan': plan,
             'createdAt': MADE_ON, 'updatedAt': MADE_ON}
 
 
@@ -212,6 +212,23 @@ def test_a_card_becomes_one_document_every_filter_can_see():
     assert set(sparse.metadata) == set(doc.metadata) == set(retrieval.CARD_META_KEYS)
     assert sparse.metadata['category'] == ''
     assert sparse.metadata['created_day'] == 0   # outside every real date range
+
+
+# This is a unit test.
+def test_a_plan_is_indexed_as_words_and_as_a_number():
+    # As words, so "what am I planning in March" can match lexically; as a
+    # number, so a time scope is a $gte/$lte pair like the other dates.
+    doc = retrieval.card_document(card('c3', 'Sail an ocean', plan='2031-06'))
+    assert 'plan 2031-06' in doc.page_content
+    assert doc.metadata['plan'] == '2031-06'
+    assert doc.metadata['plan_day'] == 20310600
+
+    # The zero tail sorts before every real day in the period, so a scope over
+    # June 2031 catches this plan as well as the dated ones inside it.
+    assert retrieval.plan_day_int('2031') == 20310000
+    assert retrieval.plan_day_int('2031-06-04') == 20310604
+    assert retrieval.plan_day_int('') == 0
+    assert retrieval.plan_day_int(None) == 0
 
 
 # This is a unit test.

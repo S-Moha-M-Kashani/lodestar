@@ -90,11 +90,26 @@ def test_the_column_enum_is_the_boards_three_columns():
 
 
 # This is a unit test.
-def test_the_card_type_enum_is_the_boards_six_types():
+def test_the_card_type_enum_is_the_boards_five_types():
     tools = tools_by_name()
-    assert TYPES == ['question', 'problem', 'task', 'idea', 'plan', 'habit']
+    # 'plan' was the sixth until 2026-08-28 and is now a date on every card.
+    assert TYPES == ['question', 'problem', 'task', 'idea', 'habit']
     assert _enum(tools['create_card'], 'type') == TYPES
     assert _enum(tools['update_card'], 'type') == TYPES
+
+
+# This is a unit test.
+def test_both_dates_are_offered_where_a_card_is_made_and_edited():
+    tools = tools_by_name()
+    for name in ('create_card', 'update_card'):
+        fields = tools[name].args_schema.model_json_schema()['properties']
+        assert 'deadline' in fields and 'plan' in fields, name
+        # The description has to teach the difference, or the model will file
+        # one as the other. The plan's text says what it is *and* how it relates
+        # to the deadline it must never pass.
+        plan_help = fields['plan']['description'].lower()
+        assert 'means to do it' in plan_help and 'deadline' in plan_help, name
+        assert 'due' in fields['deadline']['description'].lower(), name
 
 
 # This is a unit test.

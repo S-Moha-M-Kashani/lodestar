@@ -22,7 +22,11 @@ from ..board.snapshot import BoardSnapshot, board_of
 from .dual import with_sync_door
 
 COLUMNS = ['inbox', 'in-progress', 'answered']
-TYPES = ['question', 'problem', 'task', 'idea', 'plan', 'habit']
+# 'plan' was a type until 2026-08-28 and is now a date every card can carry (see
+# PLAN_HELP): a plan is not a kind of thought. The Node server still accepts the
+# old word and stores such a card as a task, so an older transcript cannot break
+# a tool call — but nothing here offers it any more.
+TYPES = ['question', 'problem', 'task', 'idea', 'habit']
 # A habit's cadence travels with the proposal; its *history* deliberately does
 # not. There is no tool for ticking a habit — logging a repetition is the user's
 # act, and a record an agent could write into is not a record of anything.
@@ -34,9 +38,16 @@ CATEGORY_HELP = ("a category id from the user's own registry (e.g. work, love, "
                  "health — list_cards shows what's in use), or '' for "
                  "uncategorized")
 FREQUENCY_HELP = 'habits only: which calendar period the count applies to'
+# The plan is when the user means to get to the card, as coarsely as they
+# actually know: a year, a year and month, or a full day. Not a deadline — that
+# is when it is due — and while no plan is set the card's plan follows its
+# deadline on its own.
+PLAN_HELP = ("when the user means to do it: '2027' | '2027-03' | '2027-03-04', "
+             "or '' to leave it following the deadline. Never later than the "
+             "card's deadline")
 
 Column = Literal['inbox', 'in-progress', 'answered']
-CardType = Literal['question', 'problem', 'task', 'idea', 'plan', 'habit']
+CardType = Literal['question', 'problem', 'task', 'idea', 'habit']
 Frequency = Literal['daily', 'weekly', 'monthly', 'yearly', '']
 Rank = Literal['high', 'low', '']
 
@@ -46,7 +57,27 @@ def _brief(c: dict) -> dict:
             'type': c.get('type', 'question'), 'category': c.get('category', ''),
             'importance': c.get('importance', ''),
             'urgency': c.get('urgency', ''), 'tags': c.get('tags') or [],
+            # Both dates, because they answer different questions and the model
+            # is asked not to confuse them: deadline is when it is due, plan is
+            # when the user means to get to it.
+            'deadline': c.get('deadline', ''), 'plan': c.get('plan', ''),
             'notes': c.get('notes', '')}
+
+
+def _plan_error(plan: str, deadline: str) -> str:
+    """The one pair the board refuses to save: a plan whose window opens after
+    the card was already due. Reported to the model rather than proposed, so it
+    can fix the plan (or say the deadline should move) instead of filing a
+    suggestion the user cannot save."""
+    if not plan or not deadline:
+        return ''
+    # The first day the plan covers: a year opens on 1 January, a month on the
+    # 1st, a day is itself.
+    start = {4: f'{plan}-01-01', 7: f'{plan}-01'}.get(len(plan), plan)
+    if start > deadline:
+        return (f'plan {plan} starts after the deadline {deadline} — '
+                'plan it earlier, or suggest moving the deadline first')
+    return ''
 
 
 class ListCardsArgs(BaseModel):
@@ -66,6 +97,8 @@ class CreateCardArgs(BaseModel):
     times_per_period: int = Field(1, ge=1, le=99, description=(
         'habits only: repetitions per period '
         '(2 with frequency "daily" means twice a day)'))
+    deadline: str = Field('', description='when it is due: YYYY-MM-DD, or ""')
+    plan: str = Field('', description=PLAN_HELP)
     tags: list[str] = []
 
 
@@ -78,6 +111,8 @@ class UpdateCardArgs(BaseModel):
     column_id: Column | None = None
     importance: Rank | None = None
     urgency: Rank | None = None
+    deadline: str | None = Field(None, description='when it is due: YYYY-MM-DD, or ""')
+    plan: str | None = Field(None, description=PLAN_HELP)
     tags: list[str] | None = None
 
 
@@ -113,17 +148,27 @@ def make_board_tools(board: BoardClient | BoardSnapshot) -> list[BaseTool]:
     async def create_card(title: str, notes: str = '', type: str = 'question',
                         category: str = '', column_id: str = 'inbox',
                         tags: list | None = None, frequency: str = '',
-                        times_per_period: int = 1,
-                        config: RunnableConfig = None) -> dict:
-        """Propose a new card (question, problem, task, idea, plan or habit).
+                        times_per_period: int = 1, deadline: str = '',
+                        plan: str = '', config: RunnableConfig = None) -> dict:
+        """Propose a new card (question, problem, task, idea or habit).
 
         A habit is something repeated on a schedule — give it a frequency and
-        how many times per period. The user must approve the card before it
-        appears on the board, so tell them you have proposed it — never claim
-        it was added.
+        how many times per period. A plan says when the user means to get to
+        the card ('2027', '2027-03', '2027-03-04'); a deadline says when it is
+        due. The user must approve the card before it appears on the board, so
+        tell them you have proposed it — never claim it was added.
         """
+        bad = _plan_error(plan, deadline)
+        if bad:
+            return {'error': bad}
         card = {'title': title, 'notes': notes, 'type': type,
-                'category': category, 'columnId': column_id, 'tags': tags or []}
+                'category': category, 'columnId': column_id, 'tags': tags or [],
+                'deadline': deadline}
+        # Set only when asked for. Left out, the plan follows the deadline by
+        # itself, which is the behaviour the board already promises.
+        if plan:
+            card['plan'] = plan
+            card['planSrc'] = 'ai'
         # A cadence only means something on a habit; sending one with a question
         # would leave a dormant "2× per day" on a card nobody repeats.
         if type == 'habit':
@@ -139,10 +184,12 @@ def make_board_tools(board: BoardClient | BoardSnapshot) -> list[BaseTool]:
                         type: str | None = None, category: str | None = None,
                         column_id: str | None = None,
                         importance: str | None = None, urgency: str | None = None,
+                        deadline: str | None = None, plan: str | None = None,
                         tags: list | None = None,
                         config: RunnableConfig = None) -> dict:
         """Suggest a change to an existing card (move columns, set type/category,
-        importance/urgency, tags, or add findings to notes).
+        importance/urgency, the deadline, the plan, tags, or add findings to
+        notes).
 
         The change is NOT applied. It goes to the user as a suggestion they open,
         adjust if they want, and save themselves — so say you have suggested an
@@ -160,10 +207,21 @@ def make_board_tools(board: BoardClient | BoardSnapshot) -> list[BaseTool]:
         # model looked, which is a stale-write dressed as an edit.
         named = {'title': title, 'notes': notes, 'type': type,
                  'category': category, 'columnId': column_id,
-                 'importance': importance, 'urgency': urgency, 'tags': tags}
+                 'importance': importance, 'urgency': urgency,
+                 'deadline': deadline, 'plan': plan, 'tags': tags}
         fields = {key: value for key, value in named.items() if value is not None}
         if not fields:
             return {'error': 'name at least one field to change'}
+        # Against the card as it stands, so a plan is checked against the
+        # deadline this call is *not* changing.
+        bad = _plan_error(plan or '',
+                          deadline if deadline is not None else target.get('deadline', ''))
+        if bad:
+            return {'error': bad}
+        # A plan the model chose is the model's, so the deadline stops writing
+        # over it — the same rule the dialog follows when a person picks one.
+        if plan is not None:
+            fields['planSrc'] = 'ai' if plan else 'auto'
         suggestion = await client.create_edit(id, fields)
         # `pending` is the same signal create_card sends, so the model reports a
         # suggestion rather than claiming the board changed.

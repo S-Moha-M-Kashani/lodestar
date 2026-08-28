@@ -34,6 +34,7 @@ from .chat import (LEGACY_BOARD, MEMORY_URL, ChatStore, ensure_database,
                    parse_chroma_url)
 from .chunking import (CARD_META_KEYS, CHUNK_OVERLAP, CHUNK_SIZE, SEPARATORS,
                        card_document, card_text, day_int, flatten_metadata,
+                       plan_day_int,
                        split_text)
 from .embeddings import (BACKEND_DEFAULTS, BACKENDS, DEFAULT_FASTEMBED_MODEL,
                          DEFAULT_LOCAL_MODEL, E5_PREFIXES, EMBED_PREFIXES,
@@ -62,7 +63,7 @@ __all__ = [
     'SentenceTransformerEmbeddings', 'make_embeddings', 'resolve_embed_model',
     # chunking and documents
     'CARD_META_KEYS', 'CHUNK_OVERLAP', 'CHUNK_SIZE', 'SEPARATORS',
-    'card_document', 'card_text', 'day_int', 'flatten_metadata', 'split_text',
+    'card_document', 'card_text', 'day_int', 'plan_day_int', 'flatten_metadata', 'split_text',
     # time scopes
     'DATE_FIELDS', 'ENGLISH_SEASONS', 'JALALI_MONTHS', 'LAST_YEAR', 'SEASONS',
     'TimeScope', 'resolve_time_scope', 'where_clause',
