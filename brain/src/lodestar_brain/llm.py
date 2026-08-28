@@ -71,7 +71,7 @@ def _endpoint(settings: Settings) -> tuple[str, str, int]:
         # this request leaves for localhost, and a real credential must never be
         # sent somewhere it was not issued for, however harmless the listener.
         return settings.ollama_base_url, 'ollama', LOCAL_TIMEOUT
-    # No auto modes (see CLAUDE.md): an unknown backend is an error, not a
+    # No auto modes, by repository rule: an unknown backend is an error, not a
     # silent downgrade to openrouter — which is exactly what it used to be. In
     # particular there is no "local if Ollama is up, remote otherwise": that is
     # the old embedder footgun, one config quietly billing an API on whichever

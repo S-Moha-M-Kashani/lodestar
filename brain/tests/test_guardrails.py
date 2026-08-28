@@ -132,7 +132,7 @@ def test_the_agents_tool_surface_is_closed(monkeypatch):
                 if any(verb in name for verb in forbidden)]
 
 
-# This is a configuration invariant: invariant 2 of the root CLAUDE.md ("the
+# This is a configuration invariant: the durability rule this repo keeps ("the
 # brain never touches SQLite — all writes via the Node API") had no test.
 def test_the_brain_reaches_the_board_only_through_its_http_api():
     """A prompt cannot get at the database, because no code path leads there.
