@@ -1,6 +1,6 @@
 {
   "name": "lodestar",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Lodestar \u2014 your compass for life: capture every open question, prioritize what matters, and never lose one. SQLite-backed so nothing is lost.",
   "type": "module",
   "scripts": {

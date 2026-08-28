@@ -46,7 +46,7 @@ def split_text(text: str) -> list[str]:
 # Every key, on every document. A field only some rows carry turns a `where`
 # clause into a silent partial scan.
 CARD_META_KEYS = ('id', 'num', 'title', 'columnId', 'type', 'category', 'tags',
-                  'created_day', 'updated_day')
+                  'created_day', 'updated_day', 'plan', 'plan_day')
 
 
 def day_int(epoch_ms) -> int:
@@ -60,6 +60,22 @@ def day_int(epoch_ms) -> int:
         return 0
     at = datetime.fromtimestamp(epoch_ms / 1000, tz=timezone.utc)
     return at.year * 10000 + at.month * 100 + at.day
+
+
+def plan_day_int(plan: object) -> int:
+    """A card's plan as a comparable number: 20270304 for a day, 20270300 for
+    'that March', 20270000 for 'some time in 2027'. The zeros are deliberate —
+    they sort before every real day in the period, so a $gte/$lte scope over a
+    month catches the month-precision plans in it as well as the dated ones. 0
+    when there is no plan, which is outside every real range."""
+    if not isinstance(plan, str):
+        return 0
+    parts = plan.split('-')
+    if not parts[0].isdigit() or len(parts[0]) != 4:
+        return 0
+    nums = [int(p) for p in parts[:3] if p.isdigit()]
+    nums += [0] * (3 - len(nums))
+    return nums[0] * 10000 + nums[1] * 100 + nums[2]
 
 
 def _is_scalar(value: object) -> bool:
@@ -92,10 +108,14 @@ def flatten_metadata(metadata: dict) -> dict:
 def card_text(card: dict) -> str:
     """What a card looks like to the retriever: title, notes and tags — the
     words the user actually wrote — plus the type and category labels they
-    filed it under, so "habit" or "love" finds the cards stamped that way."""
+    filed it under, so "habit" or "love" finds the cards stamped that way, and
+    the plan as a phrase, so "what am I planning for March" has something to
+    match on lexically."""
+    plan = card.get('plan') or ''
     parts = [card.get('title') or '', card.get('notes') or '',
              ' '.join(card.get('tags') or []),
-             card.get('type') or '', card.get('category') or '']
+             card.get('type') or '', card.get('category') or '',
+             f'plan {plan}' if plan else '']
     return ' '.join(part for part in parts if part).strip()
 
 
@@ -114,6 +134,8 @@ def card_document(card: dict) -> Document:
         'tags': card.get('tags') or [],
         'created_day': day_int(card.get('createdAt')),
         'updated_day': day_int(card.get('updatedAt')),
+        'plan': card.get('plan') or '',
+        'plan_day': plan_day_int(card.get('plan')),
     })
     # flatten_metadata drops nothing here — every value above is a scalar or a
     # list — but an empty tag list joins to '', so the key set stays complete.

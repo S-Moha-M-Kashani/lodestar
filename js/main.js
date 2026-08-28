@@ -7,6 +7,7 @@ import { initBoardPicker } from './ui/boards-picker.js';
 import { announce } from './ui/dom.js';
 import { CHIME_NAMES, HABIT_MUTE_KEY, habitMuted, playChime, renderHabitBanner,
   setHabitChime, setHabitMuted, syncChimePicker, syncHabitMute } from './ui/habits.js';
+import { setPlanLayout, syncPlanLayoutPicker } from './ui/plan.js';
 import { refreshEdits, refreshProposals } from './ui/proposals.js';
 import { render, syncViewButtons } from './ui/render.js';
 
@@ -78,6 +79,19 @@ for (const name of CHIME_NAMES) {
   });
 }
 syncChimePicker();
+
+// The Plan submenu: whether the rail shows every horizon at once or one at a
+// time. It lives in the menu but belongs to the rail, so it is wired here
+// where the two meet — the same arrangement as the habit sound above.
+for (const name of ['stacked', 'dropdown']) {
+  document.querySelector(`#plan-${name}`)?.addEventListener('click', () => {
+    setPlanLayout(name);
+    syncPlanLayoutPicker();
+    render();
+    announce(`Plan section: ${name}`);
+  });
+}
+syncPlanLayoutPicker();
 
 // A slot time passing is the other moment a habit comes due, so the reminder
 // is re-checked while the board is open, not only when it is opened.

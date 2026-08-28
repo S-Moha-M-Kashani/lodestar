@@ -3,6 +3,7 @@ import { catById, catColor, catLabel, categories } from '../core/categories.js';
 import { PRIO_TITLE, TYPE_META, priorityOf } from '../core/constants.js';
 import { isHabit } from '../core/habits.js';
 import { commit, short } from '../core/history.js';
+import { planConflict } from '../core/plan.js';
 import { filters, nextNum, setDraggedId, state } from '../core/state.js';
 import { sortMenu } from './card-actions.js';
 import { cardMenu, fromCardMenu } from './card-menu.js';
@@ -91,7 +92,7 @@ export function renderQuickAdd() {
     // type filter active, the new card belongs there — and stays visible.
     const card = { id: uid(), columnId: 'inbox', title, notes: '',
       type: filters.type || 'question', category: filters.category,
-      importance: '', urgency: '', deadline: '',
+      importance: '', urgency: '', deadline: '', plan: '', planSrc: 'auto',
       effort: 'medium', control: 'influence', effortSrc: 'default', controlSrc: 'default',
       // Captured while filtered to habits, it is a habit: once a day until
       // the user says otherwise, rather than a habit with no cadence at all.
@@ -137,6 +138,24 @@ function prioBadge(card) {
   badge.textContent = `P${p}`;
   badge.title = PRIO_TITLE[p];
   return badge;
+}
+
+// Plan chip — when the card is meant to happen, at the precision it was
+// planned at ('2028', '2028-03', '2028-03-04'). Marked when the plan starts
+// after the deadline, which is the one pair the dialog refuses to save: a card
+// can still be holding it (an import, a server board, an older browser), and
+// it has to be visible to be fixable.
+function planChip(card) {
+  const chip = document.createElement('span');
+  chip.className = 'card-plan';
+  chip.textContent = `→ ${card.plan}`;
+  if (planConflict(card.plan, card.deadline)) {
+    chip.dataset.conflict = 'true';
+    chip.title = `Planned after the deadline (${card.deadline})`;
+  } else {
+    chip.title = 'Planned for ' + card.plan;
+  }
+  return chip;
 }
 
 // Deadline chip — flagged overdue once the date is behind today.
@@ -195,10 +214,14 @@ function renderCard(card) {
 
   el.append(top, title);
 
-  if (card.category || card.tags.length || card.deadline) {
+  const plan = card.type === 'habit' ? '' : card.plan;
+  if (card.category || card.tags.length || card.deadline || plan) {
     const tags = document.createElement('div');
     tags.className = 'card-tags';
     if (card.deadline) tags.append(deadlineChip(card));
+    // Only when it says something the deadline chip does not: while the plan
+    // is simply following the deadline, one chip is the honest count.
+    if (plan && plan !== card.deadline) tags.append(planChip(card));
     if (card.category) {
       const cat = document.createElement('span');
       cat.className = 'card-cat';

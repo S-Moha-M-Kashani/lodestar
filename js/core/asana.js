@@ -81,7 +81,9 @@ const cardOf = (task) => ({
   // be putting words in the user's mouth.
   type: 'task',
   columnId: columnOf(task),
-  // Left to deadlineVal, which rejects the shape-valid impossibilities.
+  // Left to deadlineVal, which rejects the shape-valid impossibilities. No
+  // plan is set: a card's plan follows its deadline until a person says
+  // otherwise, so an Asana due date arrives as both without a second mapping.
   deadline: text(task.due_on),
   tags: tagsOf(task),
   createdAt: millis(task.created_at),

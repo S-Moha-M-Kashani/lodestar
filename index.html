@@ -258,6 +258,13 @@
                 <button id="toggle-done-col" class="menu-item" aria-pressed="false" title="Hide the Done column on the Board view">Done column</button>
               </div>
             </div>
+            <div class="menu-flyout">
+              <button id="menu-plan" class="menu-item" aria-haspopup="true" aria-expanded="false" title="How the rail's Plan section is laid out">Plan ◂</button>
+              <div id="plan-panel" class="menu-panel flyout-panel" hidden>
+                <button id="plan-stacked" class="menu-item" role="menuitemradio" aria-checked="false" title="Day, week, month, year and dreams all at once">Stacked</button>
+                <button id="plan-dropdown" class="menu-item" role="menuitemradio" aria-checked="false" title="One horizon at a time, picked from a list">Dropdown</button>
+              </div>
+            </div>
             <button id="habit-mute" class="menu-item" aria-pressed="false" title="Sound the reminder when a habit is due">🔊 Habit sound</button>
             <div class="menu-flyout">
               <button id="menu-sound" class="menu-item" aria-haspopup="true" aria-expanded="false" title="Which chime the reminder plays">Sound ◂</button>
@@ -310,7 +317,7 @@
           <option value="problem">! Problems</option>
           <option value="task">✓ Tasks</option>
           <option value="idea">✦ Ideas</option>
-          <option value="plan">→ Plans</option>
+          <option value="dream">☾ Dreams</option>
           <option value="habit">↻ Habits</option>
         </select>
         <select id="prio-filter" aria-label="Filter by priority">
@@ -404,6 +411,27 @@
       <label class="field">Deadline <span class="hint">(optional)</span>
         <input id="card-deadline" type="date">
       </label>
+      <!-- The plan: when you mean to get to it, as coarse or as precise as you
+           actually know. Right to left, each field needs the one to its left —
+           the Month list is dead until a Year is picked, the Day list until a
+           Month is. Empty is a real answer. -->
+      <fieldset id="card-plan" class="plan-fields">
+        <legend>Plan</legend>
+        <div class="field-row">
+          <label class="field">Year
+            <select id="card-plan-year"></select>
+          </label>
+          <label class="field">Month
+            <select id="card-plan-month" disabled></select>
+          </label>
+          <label class="field">Day
+            <select id="card-plan-day" disabled></select>
+          </label>
+        </div>
+        <p id="card-plan-hint" class="field-hint"></p>
+        <p id="card-plan-error" class="field-error" role="alert" hidden></p>
+        <button type="button" id="card-plan-follow" class="btn ghost plan-follow" hidden>↻ follow the deadline</button>
+      </fieldset>
       <div class="field-row">
         <label class="field">Effort
           <select id="card-effort">

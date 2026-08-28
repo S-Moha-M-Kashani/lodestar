@@ -1,6 +1,7 @@
 import { categories, sanitizeCategories } from './categories.js';
 import { COLUMNS, TYPES, priorityOf } from './constants.js';
 import { habitCountVal, habitFreqVal, habitHistoryVal, habitTimesVal } from './habits.js';
+import { planSrcVal, planVal, resolvePlan } from './plan.js';
 import { commit } from './history.js';
 import { filters, state } from './state.js';
 import { columnTitle, getCard } from '../ui/dom.js';
@@ -9,7 +10,12 @@ import { columnTitle, getCard } from '../ui/dom.js';
 // the permanent ledger number, and the two operations that belong to a card
 // rather than to any one view (does it pass the filters, and moving it).
 
-export const typeVal = (t) => (TYPES.includes(t) ? t : 'question');
+// 'plan' was the sixth type until 2026-08-28. A card that still says so — a
+// stored board, an old export, an assistant working from memory — is a task
+// now, and its plan is the date it always had. Coercing it to 'question' (the
+// fallback for real nonsense) would have re-filed years of work as unanswered.
+const LEGACY_TYPES = { plan: 'task' };
+export const typeVal = (t) => (TYPES.includes(t) ? t : LEGACY_TYPES[t] || 'question');
 // Validate against the live registry by default; imports pass the file's own
 // registry so custom categories survive the round trip.
 export const catVal = (c, reg = categories) => (reg.some((x) => x.id === c) ? c : '');
@@ -42,7 +48,8 @@ export function seedCards() {
   const mk = (title, columnId, type, category, tags, importance = '', urgency = '', notes = '') =>
     ({ id: uid(), columnId, title, notes, type, category, importance, urgency,
        effort: 'medium', control: 'influence', effortSrc: 'default', controlSrc: 'default',
-       deadline: '', habitFreq: '', habitCount: 1, habitTimes: [], habitHistory: {},
+       deadline: '', plan: '', planSrc: 'auto',
+       habitFreq: '', habitCount: 1, habitTimes: [], habitHistory: {},
        tags, createdAt: now, updatedAt: now });
   // Seeds span categories, types and all four matrix quadrants, so every view
   // has something to show on a fresh board.
@@ -50,8 +57,8 @@ export function seedCards() {
     mk('What should I build next quarter?', 'inbox', 'question', 'work', ['planning'], 'high', 'low'),
     mk('How do we keep weekday evenings free together?', 'inbox', 'problem', 'love', ['us'], 'high', 'high'),
     mk('Which Stoic should I read after Meditations?', 'inbox', 'question', 'mind', ['reading'], 'low', 'low'),
-    mk('Plan a long weekend in the mountains', 'in-progress', 'plan', 'travel', ['autumn'], 'low', 'high'),
-    mk('Learn the intro to “Blackbird”', 'in-progress', 'plan', 'music', ['guitar']),
+    mk('Plan a long weekend in the mountains', 'in-progress', 'task', 'travel', ['autumn'], 'low', 'high'),
+    mk('Learn the intro to “Blackbird”', 'in-progress', 'task', 'music', ['guitar']),
     mk('Book the dentist check-up', 'answered', 'task', 'health', [], '', '', 'Done — appointment on the 12th.'),
   ].map((c, i) => ({ ...c, num: i + 1 }));
 }
@@ -71,6 +78,8 @@ export const cardLabel = (card) => 'C-' + String(card.num).padStart(3, '0');
 export function sanitizeCard(raw, reg = categories) {
   if (!raw || typeof raw !== 'object' || typeof raw.title !== 'string' || !raw.title.trim()) return null;
   const habitCount = habitCountVal(raw.habitCount);
+  const deadline = deadlineVal(raw.deadline);
+  const planSrc = planSrcVal(raw.planSrc);
   return {
     id: typeof raw.id === 'string' && raw.id ? raw.id : uid(),
     columnId: COLUMNS.some((c) => c.id === raw.columnId) ? raw.columnId : 'inbox',
@@ -84,7 +93,11 @@ export function sanitizeCard(raw, reg = categories) {
     control: controlVal(raw.control),
     effortSrc: srcVal(raw.effortSrc),
     controlSrc: srcVal(raw.controlSrc),
-    deadline: deadlineVal(raw.deadline),
+    deadline,
+    // While nobody has set a plan by hand it *is* the deadline, so a dated card
+    // needs no second act to appear in the plan. See js/core/plan.js.
+    plan: resolvePlan({ plan: planVal(raw.plan), planSrc, deadline }),
+    planSrc,
     habitFreq: habitFreqVal(raw.habitFreq),
     habitCount,
     habitTimes: habitTimesVal(raw.habitTimes, habitCount),
