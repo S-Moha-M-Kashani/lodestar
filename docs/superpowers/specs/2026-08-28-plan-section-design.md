@@ -219,7 +219,8 @@ Following the repo's three layers, and kept small:
 ## Order of work
 
 Each section is one commit on `feature/plan-section`, tests first, node suite
-green before moving on.
+green before moving on. All eight landed on 2026-08-28; the closing run was
+156 node checks, 310 brain tests and 469 end-to-end checks, all green.
 
 1. `core/plan.js` + `core/cards.js` — the field, the validation, the deadline
    link, the sections. Unit tests.
