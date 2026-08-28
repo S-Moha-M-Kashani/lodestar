@@ -1,0 +1,41 @@
+#!/bin/sh
+# Refuse a hand-written commit on master.
+#
+# master is not a branch you commit to. Every commit on it is a release point:
+# a merge whose tree is exactly some development commit's tree, and whose second
+# parent is that commit. That shape is what puts the two branches side by side
+# in the graph, and it is what makes each point on master a state the software
+# actually ran in. One commit typed straight onto master breaks both — the rung
+# is missing and the tree belongs to nothing.
+#
+# So the only thing allowed to write here is `npm run release`, which checks
+# there is something worth releasing and then builds the merge itself. It sets
+# LODESTAR_RELEASE, which is the door out of this hook.
+#
+# Installed under three names, because git asks a different one depending on
+# what is being committed: pre-commit for an ordinary commit, pre-merge-commit
+# for `git merge`, and this same script answers both.
+#
+# Install: npm run hooks
+
+branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null)
+
+case "$branch" in
+master | main) ;;
+*) exit 0 ;;
+esac
+
+[ -n "$LODESTAR_RELEASE" ] && exit 0
+
+echo "refused: master takes release points, not commits." >&2
+echo "" >&2
+echo "Every commit on master is a merge that summarises a run of development" >&2
+echo "commits and carries that commit's tree, so the two branches read side by" >&2
+echo "side and each point on master is a version that ran." >&2
+echo "" >&2
+echo "  npm run release -- --check     what would be released, and whether it is" >&2
+echo "                                 worth releasing" >&2
+echo "  npm run release -- -F msg.txt  build the release point" >&2
+echo "" >&2
+echo "Work goes on development. Bypassable with --no-verify, as every hook is." >&2
+exit 1

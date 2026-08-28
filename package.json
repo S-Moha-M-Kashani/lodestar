@@ -12,7 +12,9 @@
     "backup": "node scripts/backup-db.mjs",
     "test:server": "node scripts/backup-db.mjs && node --test tests/*.test.js",
     "test:all": "node scripts/backup-db.mjs && node --test tests/*.test.js && uv run --project brain pytest brain/tests -v && uv run --with playwright python tests/e2e_test.py",
-    "eval-live": "BRAIN_EVAL_LIVE=1 BRAIN_LLM=claude-cli uv run --project brain pytest brain/tests/evals -m live -v"
+    "eval-live": "BRAIN_EVAL_LIVE=1 BRAIN_LLM=claude-cli uv run --project brain pytest brain/tests/evals -m live -v",
+    "hooks": "node scripts/install-hooks.mjs",
+    "release": "node scripts/release-to-master.mjs"
   },
   "engines": {
     "node": ">=23.4.0"
