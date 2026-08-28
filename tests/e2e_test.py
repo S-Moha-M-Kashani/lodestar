@@ -671,7 +671,7 @@ try:
         page.select_option('[data-col="in-progress"] .sort-select', 'type')
         page.wait_for_timeout(100)
         first_badge = page.locator('[data-col="in-progress"] .card .badge').first
-        check("sort: problem card sorts ahead of plans", "problem" in first_badge.inner_text().lower())
+        check("sort: problem card sorts ahead of tasks", "problem" in first_badge.inner_text().lower())
         check("sort: menu snaps back to its placeholder after sorting",
               page.input_value('[data-col="in-progress"] .sort-select') == "")
 
@@ -703,10 +703,10 @@ try:
               and geom["opacity"] == "1" and geom["tab"] >= 0)
 
         probe().locator(".card-menu-btn").click()
-        check("card menu: the + opens the six actions, and not the card dialog",
+        check("card menu: the + opens the seven actions, and not the card dialog",
               [t.strip() for t in page.locator(
                   ".card-menu-panel:not([hidden]) .menu-item").all_inner_texts()]
-              == ["Edit…", "Category ▸", "Type ▸", "Deadline ▸", "Move to ▸", "Delete"]
+              == ["Edit…", "Category ▸", "Type ▸", "Deadline ▸", "Plan ▸", "Move to ▸", "Delete"]
               and page.locator("#card-dialog[open]").count() == 0)
 
         page.keyboard.press("Escape")
@@ -1596,9 +1596,10 @@ try:
             types_in_order = page.eval_on_selector_all(
                 ".backlog-row .badge",
                 "els => els.map(e => e.className.match(/type-(\\w+)/)[1])")
-            rank = {"question": 0, "problem": 1, "task": 2, "idea": 3, "plan": 4}
+            rank = {"question": 0, "problem": 1, "task": 2, "idea": 3,
+                    "dream": 4, "habit": 5}
             ranks = [rank.get(t, 99) for t in types_in_order]
-            check("backlog: sort-by-type orders rows question→problem→task→idea→plan",
+            check("backlog: sort-by-type orders rows question→…→dream→habit",
                   ranks == sorted(ranks))
         else:
             check("backlog: sort-by-type control present when >1 row", False)
@@ -4411,33 +4412,154 @@ try:
         page.select_option("#type-filter", "")
         page.wait_for_timeout(150)
 
-        # ---- The plan (today's shortlist, under the habits) -------------------
+        # ---- The plan (when a card is meant to happen) ------------------------
         # This is an end-to-end test. A plan is not a stored list: it is the
-        # cards whose deadline falls inside the chosen horizon. Its box looks
-        # like a habit's on purpose and means something else — a tick finishes
-        # the card, so it moves to Done and leaves the list.
+        # partial date each card carries — a year, a year and month, or a day —
+        # read into five groups by how near it is. Its box looks like a habit's
+        # on purpose and means something else: a tick finishes the card, so it
+        # moves to Done and leaves the list.
         page.fill(".quick-add input", "Send the tax forms")
         page.press(".quick-add input", "Enter")
         plan_row = lambda: page.locator(".plan-rail .plan-rail-row", has_text="Send the tax forms")
-        check("plan: an undated card is not in today's plan", plan_row().count() == 0)
+        # Which groups a card is listed under — the headings above its rows.
+        # A list, because a dated dream belongs to two of them.
+        groups_of = lambda title: page.evaluate("""(t) => {
+          const found = [];
+          let group = null;
+          for (const el of document.querySelectorAll('.plan-rail-body > *')) {
+            if (el.classList.contains('plan-group-head')) {
+              group = el.querySelector('.plan-group-title').textContent;
+            } else if (el.textContent.includes(t)) found.push(group);
+          }
+          return found;
+        }""", title)
+        group_of = lambda title: (groups_of(title) or [''])[0]
 
+        check("plan: a card with no plan is not in the block", plan_row().count() == 0)
+
+        # A deadline is enough: nobody has set a plan, so the plan follows it.
         page.locator(".card", has_text="Send the tax forms").first.locator(".card-menu-btn").click()
         item("Deadline").click()
         item("Today").click()
         page.wait_for_timeout(150)
-        check("plan: a deadline of today puts the card in today's plan", plan_row().count() == 1)
+        check("plan: a deadline of today plans the card for today",
+              plan_row().count() == 1 and group_of("Send the tax forms") == "Day")
+        check("plan: the plan reaches the database with the card",
+              wait_until(lambda: any(c.get("plan") == datetime.now().strftime("%Y-%m-%d")
+                                     for c in api_state()["cards"]
+                                     if c["title"] == "Send the tax forms")))
 
-        # The horizons nest, and the last one is the other half of the board.
-        page.select_option(".plan-rail-pick", "year")
+        # Setting one by hand moves the card and takes it off the deadline.
+        page.locator(".card", has_text="Send the tax forms").first.locator(".card-menu-btn").click()
+        item("Plan").click()
+        item("This year").click()
+        page.wait_for_timeout(150)
+        check("plan: a plan set by hand moves the card to its own group",
+              group_of("Send the tax forms") == "Year")
+        check("plan: a hand-set plan is recorded as the user's",
+              wait_until(lambda: any(c.get("planSrc") == "user" and len(c.get("plan", "")) == 4
+                                     for c in api_state()["cards"]
+                                     if c["title"] == "Send the tax forms")))
+
+        # The one save the app refuses. The card is already planned for this
+        # year, so a deadline earlier in it makes the pair impossible.
+        page.locator(".card", has_text="Send the tax forms").first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        check("plan: the dialog offers year, month and day, cascading right",
+              page.locator("#card-plan-year").count() == 1
+              and page.locator("#card-plan-month").count() == 1
+              and page.locator("#card-plan-day").count() == 1)
+        page.fill("#card-deadline", "2026-01-01")
+        page.locator("#card-plan-year").select_option(str(datetime.now().year + 3))
         page.wait_for_timeout(120)
-        check("plan: a wider horizon still holds what is due today", plan_row().count() == 1)
-        page.select_option(".plan-rail-pick", "dream")
-        page.wait_for_timeout(120)
-        check("plan: a life dream is what carries no date at all",
+        check("plan: a plan after the deadline shows the error",
+              page.locator("#card-plan-error").is_visible()
+              and "after the deadline" in page.locator("#card-plan-error").inner_text())
+        page.click('#card-form button[type="submit"]')
+        page.wait_for_timeout(150)
+        check("plan: and the card cannot be saved while it says that",
+              page.locator("#card-dialog[open]").count() == 1)
+        page.click("#card-plan-follow")
+        page.wait_for_timeout(100)
+        check("plan: following the deadline again clears the error",
+              page.locator("#card-plan-error").is_hidden())
+        page.click("#cancel-dialog")
+        page.wait_for_timeout(100)
+
+        # The block is outside the board's filters until asked, and the PLAN
+        # heading is the switch — nothing stands above the list until the
+        # pointer arrives. A category tab that hid half the plan without saying
+        # so was the thing to avoid.
+        page.locator('.cat-tab[data-cat="health"]').click()
+        page.wait_for_timeout(150)
+        check("plan: a board filter does not touch the plan by default",
+              plan_row().count() == 1)
+        check("plan: the heading's pop-up says what a click will do, and hides",
+              page.locator(".plan-title-tip").text_content().strip() == "apply board filters"
+              and not page.locator(".plan-title-tip").is_visible())
+        page.locator(".plan-rail-title").hover()
+        page.wait_for_timeout(200)
+        check("plan: hovering the heading shows it",
+              page.locator(".plan-title-tip").is_visible())
+        page.click(".plan-rail-title")
+        page.wait_for_timeout(150)
+        check("plan: clicking the heading narrows the plan to the filtered cards",
               plan_row().count() == 0
-              and page.locator(".plan-rail .plan-rail-row").count() > 0)
+              and page.get_attribute(".plan-rail-title", "aria-pressed") == "true")
+        check("plan: and the heading says it is filtered",
+              page.locator(".plan-title-mark").text_content().strip() == "filtered"
+              and page.locator(".plan-title-tip").text_content().strip() == "remove board filters")
+        page.click(".plan-rail-title")
+        page.locator(".cat-tab-all").click()
+        page.wait_for_timeout(150)
+        check("plan: clicking it again brings the whole plan back",
+              plan_row().count() == 1
+              and page.locator(".plan-title-mark").text_content().strip() == "")
+
+        # A dream is a kind of card, whatever its dates — so a dated dream is
+        # listed twice: where it happens, and as the dream it is.
+        page.locator(".card", has_text="Send the tax forms").first.locator(".card-menu-btn").click()
+        item("Type").click()
+        page.locator(".card-menu-panel:not([hidden]) .menu-item", has_text="dream").click()
+        page.wait_for_timeout(150)
+        check("plan: a dated dream is listed by its date and again under Dreams",
+              plan_row().count() == 2
+              and groups_of("Send the tax forms") == ["Year", "Dreams"])
+        check("plan: a dream keeps every field a task has, the plan included",
+              page.locator(".card", has_text="Send the tax forms").first
+                  .locator(".badge.type-dream").count() == 1)
+        page.locator(".card", has_text="Send the tax forms").first.locator(".card-menu-btn").click()
+        item("Type").click()
+        page.locator(".card-menu-panel:not([hidden]) .menu-item", has_text="task").click()
+        page.wait_for_timeout(150)
+
+        # One horizon at a time is the other layout, chosen in the ⚙ menu.
+        def pick_plan_layout(which):
+            if page.locator("#menu-panel").is_hidden():
+                page.click("#menu-btn")
+            page.locator("#menu-plan").hover()
+            page.wait_for_timeout(100)
+            page.click(f"#plan-{which}")
+            page.wait_for_timeout(150)
+            page.keyboard.press("Escape")  # the submenu keeps the menu open
+            page.wait_for_timeout(50)
+
+        pick_plan_layout("dropdown")
+        check("plan: the menu switches the block to one horizon at a time",
+              page.locator(".plan-rail-pick").count() == 1)
         page.select_option(".plan-rail-pick", "today")
         page.wait_for_timeout(120)
+        check("plan: today does not hold what is planned for the year",
+              plan_row().count() == 0)
+        page.select_option(".plan-rail-pick", "year")
+        page.wait_for_timeout(120)
+        check("plan: a horizon accumulates the nearer ones", plan_row().count() == 1)
+        page.select_option(".plan-rail-pick", "next")
+        page.wait_for_timeout(120)
+        check("plan: next year is a horizon of its own", plan_row().count() == 1)
+        pick_plan_layout("stacked")
+        check("plan: and back to every group at once",
+              page.locator(".plan-rail-pick").count() == 0)
 
         plan_row().locator(".plan-box").click()
         page.wait_for_timeout(150)

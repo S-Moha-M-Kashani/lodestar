@@ -59,11 +59,12 @@ function wireFlyout(btnSel, panelSel) {
 }
 const setShowOpen = wireFlyout('#menu-show', '#show-panel');
 const setSoundOpen = wireFlyout('#menu-sound', '#sound-panel');
+const setPlanOpen = wireFlyout('#menu-plan', '#plan-panel');
 
 function setMenuOpen(open) {
   menuPanel.hidden = !open;
   menuBtn.setAttribute('aria-expanded', String(open));
-  if (!open) { setShowOpen(false); setSoundOpen(false); }
+  if (!open) { setShowOpen(false); setSoundOpen(false); setPlanOpen(false); }
 }
 
 menuBtn.addEventListener('click', () => setMenuOpen(menuPanel.hidden));
