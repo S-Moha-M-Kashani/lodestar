@@ -1,8 +1,23 @@
 # Lodestar
 
-*Your compass for life!* Lodestar is a kanban-style board that is one dashboard for your whole life — work questions, plans with your partner, sports, music, reading, holidays — everything in one place, so nothing open lives in your head. Local-first and private: vanilla HTML/CSS/JavaScript front end, a tiny zero-dependency Node server persisting to SQLite, and an optional Python "brain" that adds an AI assistant. Out of the box every model runs on your machine and no API key is required.
+*Your compass for life.*
 
-The design is a "card ledger": quad-ruled engineering paper, cards as ruled index cards with permanent ledger IDs (`C-001`, `C-002`, …), card types as ink stamps, and life-area categories as coloured index tabs.
+One board for your whole life — work, love, family, health, mind, music, travel, home, money.
+Every open question, task, habit and dream sits in one place, so none of it has to live in your head.
+
+**What makes it different**
+
+- **Built for a life, not a sprint.** A card is a question, a problem, a task, an idea, a dream or a
+  habit, filed under a life area rather than a project.
+- **Yours, on your machine, keyless.** No account, no cloud, no API key: vanilla HTML/CSS/JavaScript,
+  a zero-dependency Node server, one SQLite file — and by default even the AI models run locally.
+  Clone it and `npm start`; there is no install step and no build step.
+- **The assistant proposes, you decide.** It has no way to write to your board: a card it invents
+  waits for your approval, and an edit it suggests opens in the ordinary card dialog for you to change.
+- **Nothing disappears quietly.** Destroying a card takes two deliberate acts, a save that looks
+  lossy archives to the Trash instead of deleting, and the database keeps backing itself up.
+- **It looks like an engineer's card ledger.** Quad-ruled paper, ruled index cards with permanent IDs
+  (`C-001`, `C-002`, …), card types as ink stamps, life areas as coloured index tabs.
 
 ## Features
 
