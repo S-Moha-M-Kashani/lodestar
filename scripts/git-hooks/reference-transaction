@@ -1,11 +1,10 @@
 #!/bin/sh
 # Refuse to delete refs/heads/development.
 #
-# development is the full copy of this project: it is the only branch that
-# carries README-Development.md, ROADMAP-Development.md, 125.md and
-# docs/report/. master is a published subset, deliberately smaller, so
-# "restore it from master" is not available the way it is for any other
-# branch. Deleting development loses work that exists nowhere else.
+# development is where the work is done, one commit at a time. master keeps
+# only the release points — each one a merge that summarises a run of
+# development commits — so deleting development throws away every step
+# between them, which no other branch can give back.
 #
 # Git runs this hook for every ref transaction, with $1 in
 # prepared|committed|aborted and one "<old> <new> <ref>" line per ref on
@@ -19,6 +18,8 @@
 
 [ "$1" = prepared ] || exit 0
 
+packed="${GIT_DIR:-.git}/packed-refs"
+
 while read -r old new ref; do
 	# A deletion sets the new oid to all zeros. Matching on "any character
 	# that is not 0" rather than a literal 40 zeros keeps this correct
@@ -26,11 +27,19 @@ while read -r old new ref; do
 	case "$new" in
 	*[!0]*) continue ;;
 	esac
+	# `git pack-refs` moves a loose ref into packed-refs and then removes the
+	# loose copy, which arrives here as a deletion — indistinguishable, from
+	# stdin alone, from `git branch -D`. It writes packed-refs first, so a
+	# ref already recorded there at the same oid is being packed, not
+	# deleted, and the branch survives the transaction either way. Without
+	# this every gc and every repack aborts on a branch nobody touched.
+	if [ -f "$packed" ] && grep -qx "$old $ref" "$packed"; then
+		continue
+	fi
 	if [ "$ref" = refs/heads/development ]; then
 		echo "refused: development cannot be deleted." >&2
-		echo "It is the full copy of this project — README-Development.md," >&2
-		echo "ROADMAP-Development.md, 125.md and docs/report/ exist on no" >&2
-		echo "other branch, so master cannot restore it." >&2
+		echo "master keeps only the release points; development is every step" >&2
+		echo "between them, and nothing else can give those back." >&2
 		echo "To override, remove the reference-transaction hook first." >&2
 		exit 1
 	fi
