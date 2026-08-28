@@ -159,7 +159,7 @@ def test_an_explicit_brain_model_survives_the_provider_default():
 
 # This is a unit test.
 def test_factory_raises_on_unknown_provider():
-    # No auto modes (CLAUDE.md): a typo must not silently become openrouter,
+    # No auto modes, by repository rule: a typo must not silently become openrouter,
     # which is what the old create_app branch did.
     with pytest.raises(ValueError, match='typo'):
         make_chat_model(_settings(llm_provider='typo'))

@@ -9,7 +9,7 @@ where same-subject and new-subject messages actually fall.
 
 `-s` matters — the report printed at the end is the point of the run, not the
 pass/fail. Skipped without the extra, because the offline suite deliberately has
-no torch (see the root CLAUDE.md); a calibration that quietly ran against
+no torch, deliberately; a calibration that quietly ran against
 `LexicalHashEmbeddings` would be measuring a hash, which is the category error
 the route already guards against.
 
