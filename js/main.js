@@ -75,6 +75,10 @@ for (const name of CHIME_NAMES) {
   document.querySelector(`#sound-${name}`)?.addEventListener('click', () => {
     setHabitChime(name);
     syncChimePicker();
+    playChime(name);
+  });
+}
+syncChimePicker();
 
 // The Plan submenu: whether the rail shows every horizon at once or one at a
 // time. It lives in the menu but belongs to the rail, so it is wired here
@@ -88,10 +92,6 @@ for (const name of ['stacked', 'dropdown']) {
   });
 }
 syncPlanLayoutPicker();
-    playChime(name);
-  });
-}
-syncChimePicker();
 
 // A slot time passing is the other moment a habit comes due, so the reminder
 // is re-checked while the board is open, not only when it is opened.
