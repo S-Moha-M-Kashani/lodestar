@@ -1,7 +1,7 @@
 import { cardLabel, moveCard } from '../core/cards.js';
 import { catColor } from '../core/categories.js';
 import { KEY_PREFIX } from '../core/keys.js';
-import { PLAN_HORIZONS, planCardsIn, planDay, planHorizonEnd, planHorizonLabel, planHorizonVal } from '../core/plan.js';
+import { PLAN_HORIZONS, planCardsIn, planDay, planHorizonLabel, planHorizonVal } from '../core/plan.js';
 import { state } from '../core/state.js';
 import { announce } from './dom.js';
 import { openDialog } from './edit-dialog.js';
@@ -104,11 +104,9 @@ export function renderPlanRail() {
   title.textContent = 'Plan';
   const sub = document.createElement('p');
   sub.className = 'plan-rail-sub';
-  // The horizon's last day, spelled out: "this month" is a name, a date is the
-  // thing you can act on.
   sub.textContent = horizon === 'dream'
-    ? `${cards.length} undated`
-    : `${cards.length} due · by ${planHorizonEnd(horizon)}`;
+    ? `${cards.length} dreams`
+    : `${cards.length} planned`;
   head.append(title, horizonPicker(), sub);
   section.append(head);
 
