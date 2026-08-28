@@ -502,8 +502,8 @@ try:
 
         # ---- Category rail ---------------------------------------------------
         # The rail always shows: All + every defined category + the ✎ Edit tab.
-        check("categories: rail shows All + all 9 defined areas + Edit",
-              page.locator(".cat-tab").count() == 11
+        check("categories: rail shows All + all 10 defined areas + Edit",
+              page.locator(".cat-tab").count() == 12
               and page.locator(".cat-tab-all").count() == 1
               and page.locator("#edit-cats-btn").count() == 1)
         check("categories: tabs carry no count badge",
@@ -548,14 +548,14 @@ try:
         # ---- Category management (the ✎ Edit tab) -----------------------------
         page.click("#edit-cats-btn")
         page.wait_for_selector("#cats-dialog[open]")
-        check("categories: editor lists all 9 areas, each removable",
-              page.locator("#cats-list .cats-row").count() == 9
-              and page.locator("#cats-list .cats-remove").count() == 9)
+        check("categories: editor lists all 10 areas, each removable",
+              page.locator("#cats-list .cats-row").count() == 10
+              and page.locator("#cats-list .cats-remove").count() == 10)
         page.fill("#cat-add-name", "Reading")
         page.click("#cat-add-btn")
         page.wait_for_timeout(150)
         check("categories: adding 'Reading' puts it in the editor and on the rail",
-              page.locator("#cats-list .cats-row").count() == 10
+              page.locator("#cats-list .cats-row").count() == 11
               and page.locator('.cat-tab[data-cat="reading"]').count() == 1)
         page.wait_for_timeout(600)  # debounced push
         check("categories: the new registry is saved to the database",
@@ -594,7 +594,7 @@ try:
         page.click("#confirm-ok")
         page.wait_for_timeout(150)
         check("categories: removing 'Reading' takes it off the rail again",
-              page.locator("#cats-list .cats-row").count() == 9
+              page.locator("#cats-list .cats-row").count() == 10
               and page.locator('.cat-tab[data-cat="reading"]').count() == 0)
         page.click("#close-cats")
         page.wait_for_timeout(600)
@@ -671,7 +671,7 @@ try:
         page.select_option('[data-col="in-progress"] .sort-select', 'type')
         page.wait_for_timeout(100)
         first_badge = page.locator('[data-col="in-progress"] .card .badge').first
-        check("sort: problem card sorts ahead of plans", "problem" in first_badge.inner_text().lower())
+        check("sort: problem card sorts ahead of tasks", "problem" in first_badge.inner_text().lower())
         check("sort: menu snaps back to its placeholder after sorting",
               page.input_value('[data-col="in-progress"] .sort-select') == "")
 
@@ -1596,9 +1596,9 @@ try:
             types_in_order = page.eval_on_selector_all(
                 ".backlog-row .badge",
                 "els => els.map(e => e.className.match(/type-(\\w+)/)[1])")
-            rank = {"question": 0, "problem": 1, "task": 2, "idea": 3, "plan": 4}
+            rank = {"question": 0, "problem": 1, "task": 2, "idea": 3, "habit": 4}
             ranks = [rank.get(t, 99) for t in types_in_order]
-            check("backlog: sort-by-type orders rows question→problem→task→idea→plan",
+            check("backlog: sort-by-type orders rows question→problem→task→idea→habit",
                   ranks == sorted(ranks))
         else:
             check("backlog: sort-by-type control present when >1 row", False)

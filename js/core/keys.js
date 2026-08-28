@@ -34,3 +34,8 @@ export const HISTORY_LIMIT = 50; // snapshots kept; oldest fall off like a rotat
 // absent from LEGACY_SUFFIXES — it postdates the rename, and a wrong watermark
 // is worse than none: it would claim a sync that never happened.
 export const SYNC_KEY = KEY_PREFIX + 'synced';
+
+// Per board: whether this browser has already added the Dream life area to a
+// registry that predates it. Deliberately absent from LEGACY_SUFFIXES — it
+// postdates the rename and means nothing about an older board.
+export const DREAM_KEY = KEY_PREFIX + 'dream-cat';

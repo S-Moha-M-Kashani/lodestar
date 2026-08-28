@@ -12,13 +12,16 @@ export const COLUMNS = [
 
 // What kind of thing a card is — stamped on the card like the old priority
 // stamp, but neutral ink: colour on this board always means category.
-export const TYPES = ['question', 'problem', 'task', 'idea', 'plan', 'habit'];
+//
+// 'plan' was a sixth type until 2026-08-28 and is now a *date* every card can
+// carry (js/core/plan.js): a plan is not a kind of thought. Cards stamped
+// 'plan' become tasks — see typeVal in js/core/cards.js.
+export const TYPES = ['question', 'problem', 'task', 'idea', 'habit'];
 export const TYPE_META = {
   question: { glyph: '?', label: 'question' },
   problem:  { glyph: '!', label: 'problem' },
   task:     { glyph: '✓', label: 'task' },
   idea:     { glyph: '✦', label: 'idea' },
-  plan:     { glyph: '→', label: 'plan' },
   habit:    { glyph: '↻', label: 'habit' },
 };
 export const TYPE_RANK = Object.fromEntries(TYPES.map((t, i) => [t, i]));

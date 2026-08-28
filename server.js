@@ -82,7 +82,9 @@ const BACKUP_ON_WRITE = process.env.LODESTAR_BACKUP_ON_WRITE !== '0';
 const BACKUP_SCRIPT = join(ROOT, 'scripts', 'backup-db.mjs');
 
 const COLUMN_IDS = ['inbox', 'in-progress', 'answered'];
-const TYPES = ['question', 'problem', 'task', 'idea', 'plan', 'habit'];
+// 'plan' was a type until 2026-08-28 and is now a date on every card; a card
+// still arriving as one is stored as a task (typeVal below).
+const TYPES = ['question', 'problem', 'task', 'idea', 'habit'];
 
 // Categories are the user's own registry (id + label + oklch hue), stored in
 // their own table and editable from the app. These defaults seed an empty DB.
@@ -96,6 +98,7 @@ const DEFAULT_CATEGORIES = [
   { id: 'travel', label: 'Travel', h: 200 },
   { id: 'home', label: 'Home', h: 90 },
   { id: 'money', label: 'Money', h: 40 },
+  { id: 'dream', label: 'Dream', h: 310 },
 ];
 const CAT_LIMIT = 24;
 const catSlug = (s) =>

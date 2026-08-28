@@ -1,8 +1,8 @@
 import { DEFAULT_BOARD_ID, activeBoardId, boardSuffix } from './boards.js';
 import { parseState, seedCards } from './cards.js';
-import { setCategories } from './categories.js';
+import { migrateDream, setCategories } from './categories.js';
 import { COLUMNS, VIEWS } from './constants.js';
-import { STORAGE_KEY, VIEW_KEY } from './keys.js';
+import { DREAM_KEY, STORAGE_KEY, VIEW_KEY } from './keys.js';
 
 // The board's shared mutable state — the one module every other one reads.
 //
@@ -28,7 +28,8 @@ function loadState() {
     const json = localStorage.getItem(STORAGE_KEY + boardSuffix);
     if (json) {
       const saved = parseState(json);
-      if (saved.categories) setCategories(saved.categories);
+      // A board saved before Dream existed gains it here, once.
+      if (saved.categories) setCategories(migrateDream(saved.categories, DREAM_KEY + boardSuffix));
       loadedFromStorage = true;
       return saved;
     }
