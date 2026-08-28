@@ -9,6 +9,20 @@ import { render } from '../ui/render.js';
 const recallState = { open: false, query: '', matches: null, memory: true,
                       busy: false, failed: false, focused: false };
 
+/** Shut the fold, if it is open. Reports whether it was.
+ *
+ *  Applied to the live <details> as well as to the state: the panel is only
+ *  rebuilt by renderAssistantTools(), and a caller shutting the fold as a side
+ *  effect of pressing something else must not have to repaint the row to make
+ *  it happen. */
+export function closeRecall() {
+  if (!recallState.open) return false;
+  recallState.open = false;
+  const box = document.querySelector('.chat-recall');
+  if (box) box.open = false;
+  return true;
+}
+
 export function renderRecallPanel() {
   const box = document.createElement('details');
   box.className = 'chat-recall';
