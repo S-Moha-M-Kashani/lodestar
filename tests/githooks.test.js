@@ -64,6 +64,15 @@ test('the hook refuses to delete development, and nothing else', (t) => {
   assert.equal(forced.ok, false, 'update-ref -d must be refused too');
   assert.equal(git(dir, 'rev-parse', '--verify', 'refs/heads/development').ok, true);
 
+  // Packing moves a loose ref into packed-refs and then removes the loose
+  // copy, which reaches the hook as a deletion of development. Refusing it
+  // aborts every gc and every repack on a branch nobody asked to delete —
+  // this repo did exactly that until the hook learned to tell them apart.
+  assert.equal(git(dir, 'pack-refs', '--all').ok, true,
+    'packing refs must not read as deleting development');
+  assert.equal(git(dir, 'rev-parse', '--verify', 'refs/heads/development').ok, true,
+    'development must still exist after being packed');
+
   // A hook that refused everything would pass every assertion above, so prove
   // ordinary ref work is untouched: another branch deletes, and commits land.
   git(dir, 'branch', 'feature/other');
