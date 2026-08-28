@@ -1,6 +1,7 @@
 import { cardLabel, catVal, deadlineVal, moveCard, typeVal } from '../core/cards.js';
 import { catColor, catLabel, categories } from '../core/categories.js';
 import { COLUMNS, TYPES, TYPE_META } from '../core/constants.js';
+import { planConflict, planDay } from '../core/plan.js';
 import { pad2 } from '../core/habits.js';
 import { commit, short } from '../core/history.js';
 import { setFocusCard } from '../core/state.js';
@@ -186,11 +187,14 @@ const isoIn = (days) => {
 // --------------------------------------------------------------------------
 
 function paintRoot(cardId, panel) {
+  const card = getCard(cardId);
   panel.replaceChildren(
     mkItem('Edit…', () => { closeCardMenus(); openDialog(cardId); }),
     mkItem('Category ▸', () => paintCategories(cardId, panel)),
     mkItem('Type ▸', () => paintTypes(cardId, panel)),
     mkItem('Deadline ▸', () => paintDeadlines(cardId, panel)),
+    // A habit repeats on its own calendar and has no plan to set.
+    ...(card && card.type === 'habit' ? [] : [mkItem('Plan ▸', () => paintPlans(cardId, panel))]),
     mkItem('Move to ▸', () => paintColumns(cardId, panel)),
     mkItem('Delete', () => { closeCardMenus(); deleteCard(cardId); }, { danger: true }),
   );
@@ -247,11 +251,53 @@ function paintDeadlines(cardId, panel) {
     ...DEADLINES.map(([label, days]) => {
       const date = isoIn(days);
       return mkItem(label,
-        () => quickEdit(cardId, (c) => { c.deadline = deadlineVal(date); }, date),
+        () => quickEdit(cardId, (c) => {
+          c.deadline = deadlineVal(date);
+          // While the plan is following the deadline it moves with it.
+          if (c.planSrc !== 'user' && c.planSrc !== 'ai') c.plan = c.deadline;
+        }, date),
         { current: card.deadline === date });
     }),
-    mkItem('No deadline', () => quickEdit(cardId, (c) => { c.deadline = ''; }, 'no deadline'),
+    mkItem('No deadline', () => quickEdit(cardId, (c) => {
+      c.deadline = '';
+      if (c.planSrc !== 'user' && c.planSrc !== 'ai') c.plan = '';
+    }, 'no deadline'),
       { current: !card.deadline }),
+  ];
+  paintSub(cardId, panel, rows);
+}
+
+// The plan, at the three precisions the dialog offers, computed when the entry
+// is picked so a board left open overnight never plans for yesterday. Each
+// entry refuses rather than committing when it would land after the deadline —
+// the same rule the dialog enforces, in the faster way in.
+function paintPlans(cardId, panel) {
+  const card = getCard(cardId);
+  if (!card) return;
+  const today = planDay();
+  const choices = [
+    ['Today', today],
+    ['This month', today.slice(0, 7)],
+    ['This year', today.slice(0, 4)],
+  ];
+  const rows = [
+    ...choices.map(([label, plan]) => mkItem(
+      label,
+      () => {
+        if (planConflict(plan, card.deadline)) {
+          closeCardMenus();
+          announce(`“${short(card.title)}” is due ${card.deadline} — a plan for ${plan} would start after that.`);
+          return;
+        }
+        quickEdit(cardId, (c) => { c.plan = plan; c.planSrc = 'user'; }, `plan ${plan}`);
+      },
+      { current: card.plan === plan },
+    )),
+    mkItem('No plan', () => quickEdit(cardId, (c) => { c.plan = ''; c.planSrc = 'user'; }, 'no plan'),
+      { current: !card.plan && card.planSrc === 'user' }),
+    mkItem('Follow the deadline',
+      () => quickEdit(cardId, (c) => { c.planSrc = 'auto'; c.plan = c.deadline; }, 'the deadline'),
+      { current: card.planSrc === 'auto' }),
   ];
   paintSub(cardId, panel, rows);
 }

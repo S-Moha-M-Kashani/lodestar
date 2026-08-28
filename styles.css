@@ -3808,3 +3808,48 @@ button.chat-source-card {
   color: var(--ink-soft);
   min-height: 1em;
 }
+
+/* --- The plan on a card --------------------------------------------------- */
+
+/* The plan fieldset in the dialog: three dropdowns that assemble one date,
+   each dead until the one to its left has an answer. */
+.plan-fields {
+  margin: 0 0 14px;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--card-line);
+  border-radius: var(--radius);
+}
+.plan-fields legend {
+  padding: 0 4px;
+  font-family: var(--display);
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.plan-fields select:disabled { opacity: 0.45; cursor: not-allowed; }
+.plan-fields.has-error { border-color: var(--high); }
+.plan-follow {
+  margin-top: 8px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+/* The one save the app refuses, so it is stated rather than hinted. */
+.field-error {
+  margin: 6px 0 0;
+  font-family: var(--body);
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--high);
+}
+
+/* The chip on the card face, in the card's own ink like the other chips. */
+.card-plan {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+.card-plan[data-conflict="true"] {
+  color: var(--high);
+  text-decoration: underline wavy;
+}
