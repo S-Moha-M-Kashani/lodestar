@@ -93,7 +93,7 @@ test('a plan that starts after the deadline is a contradiction', () => {
 });
 
 // This is a unit test.
-test('every planned card has exactly one home in the rail', () => {
+test('a plan lands in the nearest calendar frame that fits it', () => {
   const s = (plan, over) => planSection(card('x', plan, over), AT);
 
   // Overdue is nearest, whatever precision it was planned at — it needs
@@ -109,11 +109,18 @@ test('every planned card has exactly one home in the rail', () => {
   assert.equal(s('2026-09-01'), 'year');
   assert.equal(s('2026-09'), 'year');
   assert.equal(s('2026'), 'year');
-  assert.equal(s('2030-05-01'), 'year');
 
-  // A dream is a life-size want, not a date, so its category decides.
-  assert.equal(s('2026-08-26', { category: 'dream' }), 'dreams');
-  assert.equal(s('', { category: 'dream' }), 'dreams');
+  // Next year is its own frame, and it takes the years after it too — the
+  // rows carry their own dates, so a plan for 2030 says so.
+  assert.equal(s('2027'), 'next');
+  assert.equal(s('2027-03'), 'next');
+  assert.equal(s('2027-01-01'), 'next');
+  assert.equal(s('2030-05-01'), 'next');
+
+  // A dream is filed by its date like anything else. Being a dream puts it in
+  // the Dreams list as well, which planGroups does — not this.
+  assert.equal(s('2026-08-26', { type: 'dream' }), 'day');
+  assert.equal(s('', { type: 'dream' }), '');
 
   // Nothing to show: no plan, already done, or a habit (it has its own strip).
   assert.equal(s(''), '');
@@ -122,14 +129,17 @@ test('every planned card has exactly one home in the rail', () => {
 });
 
 // This is a unit test.
-test('stacked lists each card once; a horizon accumulates', () => {
+test('a dream is listed by its date and again as a dream', () => {
   const cards = [
     card('year', '2026-12-01'),
     card('today', '2026-08-26'),
     card('overdue', '2026-07-01'),
     card('week', '2026-08-29'),
     card('month', '2026-08-31'),
-    card('dream', '', { category: 'dream' }),
+    card('next', '2027-06'),
+    card('dated dream', '2026-08-31', { type: 'dream' }),
+    card('open dream', '', { type: 'dream' }),
+    card('done dream', '2026-08-31', { type: 'dream', columnId: 'answered' }),
     card('unplanned', ''),
   ];
 
@@ -137,16 +147,32 @@ test('stacked lists each card once; a horizon accumulates', () => {
   assert.deepEqual(groups.map((g) => g.id), PLAN_SECTIONS.map((s) => s.id));
   assert.deepEqual(
     Object.fromEntries(groups.map((g) => [g.id, g.cards.map((c) => c.id)])),
-    { day: ['overdue', 'today'], week: ['week'], month: ['month'],
-      year: ['year'], dreams: ['dream'] },
+    {
+      day: ['overdue', 'today'],
+      week: ['week'],
+      // The dated dream is here *and* below: it is a want with a date, and
+      // both facts are worth seeing.
+      month: ['month', 'dated dream'],
+      year: ['year'],
+      next: ['next'],
+      // Nearest first here too: a dream with a date is nearer than an
+      // open-ended one.
+      dreams: ['dated dream', 'open dream'],
+    },
   );
+  // A finished dream is finished, in both lists.
+  assert.ok(!JSON.stringify(groups).includes('done dream'));
 
   // Read one horizon at a time and the nearer ones come with it.
   assert.deepEqual(planCardsIn(cards, 'today', AT).map((c) => c.id), ['overdue', 'today']);
   assert.deepEqual(planCardsIn(cards, 'week', AT).map((c) => c.id), ['overdue', 'today', 'week']);
   assert.deepEqual(planCardsIn(cards, 'month', AT).map((c) => c.id),
-    ['overdue', 'today', 'week', 'month']);
+    ['overdue', 'today', 'week', 'month', 'dated dream']);
   assert.deepEqual(planCardsIn(cards, 'year', AT).map((c) => c.id),
-    ['overdue', 'today', 'week', 'month', 'year']);
-  assert.deepEqual(planCardsIn(cards, 'dream', AT).map((c) => c.id), ['dream']);
+    ['overdue', 'today', 'week', 'month', 'dated dream', 'year']);
+  assert.deepEqual(planCardsIn(cards, 'next', AT).map((c) => c.id),
+    ['overdue', 'today', 'week', 'month', 'dated dream', 'year', 'next']);
+  // The dreams horizon is the whole life area, dated or not.
+  assert.deepEqual(planCardsIn(cards, 'dream', AT).map((c) => c.id),
+    ['dated dream', 'open dream']);
 });

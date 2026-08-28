@@ -19,14 +19,19 @@ import { render } from './render.js';
 // leaves the list.
 //
 // Two layouts, because the same list answers two different questions. Stacked
-// shows day, week, month, year and dreams at once — the whole horizon, each
-// card in exactly one place. Dropdown shows one horizon at a time, and then it
-// accumulates: "this week" includes today. Which one you get is a setting in
-// the ⚙ menu, not a guess.
+// shows day, week, month, year, next year and dreams at once — the whole
+// horizon. Dropdown shows one at a time, and then it accumulates: "this week"
+// includes today. Which one you get is a setting in the ⚙ menu, not a guess.
+//
+// Dreams is a kind of card rather than a distance, so a dream planned for this
+// month appears twice: in the month, because that is when it happens, and among
+// the dreams, because that is what it is.
 //
 // And the block is outside the board's filters by default. The point of a plan
 // is to see the day whole; a category tab left on an hour ago would quietly
-// hide half of it. `apply board filters` is the one button that opts in.
+// hide half of it. The PLAN heading is the switch that opts in — hovering it
+// says what a click will do, and while the filters are applied the heading
+// says so, because a filtered plan must never look like the whole plan.
 
 const LAYOUT_KEY = KEY_PREFIX + 'plan-layout';
 const HORIZON_KEY = KEY_PREFIX + 'plan-horizon';
@@ -86,17 +91,37 @@ function horizonPicker() {
   return pick;
 }
 
-function filterToggle() {
+/** The heading, which is also the filter switch. No standing button: the plan
+ *  is a list to read, and a control parked above it earned its space only when
+ *  someone reaches for it. */
+function filterHeading() {
+  const heading = document.createElement('h2');
+  heading.className = 'plan-rail-heading';
+
   const btn = document.createElement('button');
   btn.type = 'button';
-  btn.className = 'plan-filter-toggle' + (useFilters ? ' on' : '');
-  btn.textContent = 'apply board filters';
+  btn.className = 'plan-rail-title' + (useFilters ? ' filtered' : '');
   btn.setAttribute('aria-pressed', String(useFilters));
-  btn.title = useFilters
-    ? 'The plan is showing only cards the board filters keep'
-    : 'Narrow the plan with the board’s search, tabs and filters';
+  btn.setAttribute('aria-label', useFilters
+    ? 'Board filters are applied to the plan — show the whole plan again'
+    : 'Apply the board’s filters to the plan');
+
+  const word = document.createElement('span');
+  word.className = 'plan-title-word';
+  word.textContent = 'Plan';
+  // Shown only while filtered, so a short list is never a mystery.
+  const mark = document.createElement('span');
+  mark.className = 'plan-title-mark';
+  mark.textContent = useFilters ? 'filtered' : '';
+  // The pop-up: what the click does, on hover and on keyboard focus.
+  const tip = document.createElement('span');
+  tip.className = 'plan-title-tip';
+  tip.textContent = useFilters ? 'remove board filters' : 'apply board filters';
+
+  btn.append(word, mark, tip);
   btn.addEventListener('click', () => setUseFilters(!useFilters));
-  return btn;
+  heading.append(btn);
+  return heading;
 }
 
 /** The date a row shows, at the precision it was planned at. Today's own date
@@ -173,12 +198,8 @@ export function renderPlanRail() {
 
   const head = document.createElement('div');
   head.className = 'plan-rail-head';
-  const title = document.createElement('h2');
-  title.className = 'plan-rail-title';
-  title.textContent = 'Plan';
-  head.append(title);
+  head.append(filterHeading());
   if (planLayout === 'dropdown') head.append(horizonPicker());
-  head.append(filterToggle());
   section.append(head);
 
   const body = document.createElement('div');
@@ -204,9 +225,11 @@ export function renderPlanRail() {
     empty.className = 'plan-rail-empty';
     empty.textContent = useFilters
       ? 'Nothing planned matches the board filters.'
-      : planLayout === 'dropdown'
-        ? `Nothing planned for ${planHorizonLabel(horizon).toLowerCase()}.`
-        : 'Nothing planned yet. Give a card a plan from its ＋ menu.';
+      : planLayout !== 'dropdown'
+        ? 'Nothing planned yet. Give a card a plan from its ＋ menu.'
+        : horizon === 'dream'
+          ? 'No dreams yet. Stamp a card ☾ dream.'
+          : `Nothing planned for ${planHorizonLabel(horizon).toLowerCase()}.`;
     body.append(empty);
   }
 

@@ -90,10 +90,11 @@ def test_the_column_enum_is_the_boards_three_columns():
 
 
 # This is a unit test.
-def test_the_card_type_enum_is_the_boards_five_types():
+def test_the_card_type_enum_is_the_boards_six_types():
     tools = tools_by_name()
-    # 'plan' was the sixth until 2026-08-28 and is now a date on every card.
-    assert TYPES == ['question', 'problem', 'task', 'idea', 'habit']
+    # 'plan' was one of the six until 2026-08-28 and is now a date on every
+    # card; 'dream' took its place in the list.
+    assert TYPES == ['question', 'problem', 'task', 'idea', 'dream', 'habit']
     assert _enum(tools['create_card'], 'type') == TYPES
     assert _enum(tools['update_card'], 'type') == TYPES
 

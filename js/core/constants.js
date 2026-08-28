@@ -13,15 +13,22 @@ export const COLUMNS = [
 // What kind of thing a card is — stamped on the card like the old priority
 // stamp, but neutral ink: colour on this board always means category.
 //
-// 'plan' was a sixth type until 2026-08-28 and is now a *date* every card can
-// carry (js/core/plan.js): a plan is not a kind of thought. Cards stamped
-// 'plan' become tasks — see typeVal in js/core/cards.js.
-export const TYPES = ['question', 'problem', 'task', 'idea', 'habit'];
+// 'plan' was a type until 2026-08-28 and is now a *date* every card can carry
+// (js/core/plan.js): a plan is not a kind of thought, it is when you mean to do
+// one. Cards stamped 'plan' become tasks — see typeVal in js/core/cards.js.
+//
+// 'dream' took its place in the list: a life-size want. It is a type and not a
+// life area on purpose — a dream still belongs to travel, or love, or home, and
+// a card cannot be two categories. It carries every field a task does, the plan
+// included, and the rail lists dreams as their own group as well as under the
+// date they are planned for.
+export const TYPES = ['question', 'problem', 'task', 'idea', 'dream', 'habit'];
 export const TYPE_META = {
   question: { glyph: '?', label: 'question' },
   problem:  { glyph: '!', label: 'problem' },
   task:     { glyph: '✓', label: 'task' },
   idea:     { glyph: '✦', label: 'idea' },
+  dream:    { glyph: '☾', label: 'dream' },
   habit:    { glyph: '↻', label: 'habit' },
 };
 export const TYPE_RANK = Object.fromEntries(TYPES.map((t, i) => [t, i]));

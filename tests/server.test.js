@@ -17,7 +17,7 @@ test('GET /api/state returns version, cards, seeded categories', async () => {
     const body = await res.json();
     assert.equal(body.version, 1);
     assert.ok(Array.isArray(body.cards));
-    assert.equal(body.categories.length, 10); // seeded defaults, Dream included
+    assert.equal(body.categories.length, 9); // seeded defaults
     assert.ok(body.categories.some((c) => c.id === 'work'));
   } finally { await s.stop(); }
 });

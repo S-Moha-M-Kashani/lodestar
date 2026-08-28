@@ -87,7 +87,7 @@ const COLUMN_IDS = ['inbox', 'in-progress', 'answered'];
 // working from memory — is stored as a task with its dates intact; coercing it
 // to 'question' (the fallback for real nonsense) would have re-filed years of
 // work as unanswered. Mirrors typeVal in js/core/cards.js.
-const TYPES = ['question', 'problem', 'task', 'idea', 'habit'];
+const TYPES = ['question', 'problem', 'task', 'idea', 'dream', 'habit'];
 const LEGACY_TYPES = { plan: 'task' };
 const typeVal = (t) => (TYPES.includes(t) ? t : LEGACY_TYPES[t] || 'question');
 
@@ -103,7 +103,6 @@ const DEFAULT_CATEGORIES = [
   { id: 'travel', label: 'Travel', h: 200 },
   { id: 'home', label: 'Home', h: 90 },
   { id: 'money', label: 'Money', h: 40 },
-  { id: 'dream', label: 'Dream', h: 310 },
 ];
 const CAT_LIMIT = 24;
 const catSlug = (s) =>

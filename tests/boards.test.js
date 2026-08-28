@@ -209,7 +209,7 @@ test('chats belong to a board and a board only ever sees its own', async () => {
 test('the category registry is per board', async () => {
   const s = await startServer();
   try {
-    const DEFAULT_IDS = ['work', 'love', 'family', 'health', 'mind', 'music', 'travel', 'home', 'money', 'dream'];
+    const DEFAULT_IDS = ['work', 'love', 'family', 'health', 'mind', 'music', 'travel', 'home', 'money'];
     const putState = (body, board) => fetch(
       s.base + '/api/state' + (board ? `?board=${board}` : ''),
       { method: 'PUT', headers: json, body: JSON.stringify({ version: 1, ...body }) });

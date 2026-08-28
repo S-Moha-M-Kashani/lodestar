@@ -279,6 +279,7 @@ function paintPlans(cardId, panel) {
     ['Today', today],
     ['This month', today.slice(0, 7)],
     ['This year', today.slice(0, 4)],
+    ['Next year', String(Number(today.slice(0, 4)) + 1)],
   ];
   const rows = [
     ...choices.map(([label, plan]) => mkItem(

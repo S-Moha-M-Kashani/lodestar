@@ -1294,14 +1294,70 @@ body[data-view="board"] .cards { min-height: 0; }
 }
 
 .plan-rail-head { margin-bottom: 8px; }
-.plan-rail-title {
+/* The heading is the filter switch: nothing stands above the list until the
+   pointer arrives, and then a pop-up says what a click will do. */
+.plan-rail-heading {
+  position: relative;
   margin: 0;
+  font-weight: inherit;
+}
+.plan-rail-title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 0;
   font-family: var(--display);
   font-size: 13px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
 }
 .plan-rail-title::before { content: "→ "; color: var(--ink-soft); }
+.plan-rail-title:hover .plan-title-word,
+.plan-rail-title:focus-visible .plan-title-word { text-decoration: underline dotted; }
+.plan-rail-title:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 2px; }
+
+/* While the filters are on, the heading says so — a short plan must never
+   look like the whole plan. */
+.plan-title-mark {
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.06em;
+  text-transform: lowercase;
+  color: var(--paper);
+  background: var(--ink-soft);
+  border-radius: 2px;
+  padding: 1px 4px;
+}
+.plan-title-mark:empty { display: none; }
+
+/* The pop-up. Absent from the layout entirely, so the list starts where the
+   heading ends whether or not anyone is hovering. */
+.plan-title-tip {
+  position: absolute;
+  top: calc(100% + 3px);
+  left: 0;
+  z-index: 3;
+  padding: 3px 6px;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  white-space: nowrap;
+  color: var(--ink);
+  background: var(--card);
+  border: 1px solid var(--card-line);
+  border-radius: 2px;
+  box-shadow: var(--shadow-card);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.12s ease;
+}
+.plan-rail-title:hover .plan-title-tip,
+.plan-rail-title:focus-visible .plan-title-tip { opacity: 1; visibility: visible; }
 
 .plan-rail-pick {
   margin-top: 5px;
@@ -1316,31 +1372,6 @@ body[data-view="board"] .cards { min-height: 0; }
   cursor: pointer;
 }
 .plan-rail-pick:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 1px; }
-
-/* The opt-in to the board's filters. Off it is a quiet word; on it is inked
-   like a pressed tab, because a filtered plan must never look like the whole
-   plan. */
-.plan-filter-toggle {
-  margin-top: 5px;
-  width: 100%;
-  padding: 3px 4px;
-  font-family: var(--mono);
-  font-size: 9.5px;
-  letter-spacing: 0.02em;
-  color: var(--ink-soft);
-  background: transparent;
-  border: 1px dotted var(--card-line);
-  border-radius: 2px;
-  cursor: pointer;
-}
-.plan-filter-toggle:hover { color: var(--ink); border-color: var(--ink-soft); }
-.plan-filter-toggle.on {
-  color: var(--paper);
-  background: var(--ink-soft);
-  border-style: solid;
-  border-color: transparent;
-}
-.plan-filter-toggle:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 1px; }
 
 /* A group inside the plan: Day, Week, Month, Year, Dreams. Ruled like a
    ledger's sub-total line, so the eye can skip a whole horizon. */

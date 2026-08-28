@@ -14,9 +14,6 @@ const DEFAULT_CATEGORIES = [
   { id: 'travel', label: 'Travel', h: 200 },
   { id: 'home',   label: 'Home',   h: 90 },
   { id: 'money',  label: 'Money',  h: 40 },
-  // A dream is a life area like the others, and the rail's Dreams section is
-  // this category — a want with no date is still a want.
-  { id: 'dream',  label: 'Dream',  h: 310 },
 ];
 export const CAT_LIMIT = 24;
 // Hues a new category can be inked in, spread around the oklch wheel.
@@ -59,22 +56,4 @@ export function sanitizeCategories(raw) {
   // An array in is an array out — [] included, since a registry someone emptied
   // is a real state to keep. Only a missing/non-array field returns null.
   return out;
-}
-
-/** Dream arrived on 2026-08-28, so boards saved before it have no such life
- *  area and no way to reach the rail's Dreams section. This adds it once per
- *  board and remembers having done so, because the registry is the user's own:
- *  a Dream they remove has to stay removed, and forcing it into every
- *  sanitizeCategories would also have turned a deliberately emptied registry
- *  back into a populated one. */
-export function migrateDream(reg, doneKey) {
-  if (!Array.isArray(reg)) return reg;
-  try {
-    if (localStorage.getItem(doneKey) === '1') return reg;
-    localStorage.setItem(doneKey, '1');
-  } catch (_) {
-    return reg; // private mode: better to skip than to re-add on every load
-  }
-  if (reg.some((c) => c.id === 'dream') || reg.length >= CAT_LIMIT) return reg;
-  return [...reg, { id: 'dream', label: 'Dream', h: 310 }];
 }

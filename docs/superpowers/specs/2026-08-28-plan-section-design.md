@@ -16,12 +16,15 @@ So:
 - **Every card gets a plan** — a year, a year+month, or a year+month+day.
   Questions, problems, tasks and ideas all can be planned; habits cannot,
   because a habit already repeats on a calendar of its own.
-- **`dream` becomes a category**, and the rail's Dreams section is that
-  category — not, as in the first cut, "any card without a date".
+- **`dream` becomes a card type** — the sixth, in the place `plan` left. It is
+  a type and not a life area on purpose: a dream still belongs to travel, or
+  love, or home, and a card has only one category to spend. A dream carries
+  every field a task does, the plan included.
 - **The rail's Plan block** shows the planned cards grouped by how near they
-  are: Day, Week, Month, Year, Dreams. Ticking a card's box finishes it.
-- **The Plan block ignores the board's filters** until you press *apply board
-  filters*.
+  are: Day, Week, Month, Year, Next year, Dreams. Ticking a card's box finishes
+  it.
+- **The Plan block ignores the board's filters** until you click its PLAN
+  heading, which is the switch.
 
 ## Decisions already taken
 
@@ -30,6 +33,8 @@ So:
 | Cards stamped `plan` | become `task`, every other field kept |
 | Deadline ↔ plan | the deadline fills the plan; a hand-edited plan is yours from then on and the deadline never overwrites it again. Setting a plan never moves the deadline. |
 | Rail layout | **both**, chosen in the ⚙ menu: `Plan ◂ → Stacked · Dropdown`. Stacked is the default. |
+| Dream | a card *type*, not a life area — and a dated dream is listed twice: under its date, and under Dreams |
+| The filter switch | no standing button: the PLAN heading is the control. Hovering it pops up what a click will do; while the filters are applied the heading is marked `filtered` |
 
 ## Data model
 
@@ -115,15 +120,21 @@ fits, so nothing is listed twice:
 
 | Section | Holds |
 | --- | --- |
-| `DAY` | day-precision plans dated **today or earlier** (overdue is nearest, never dropped) |
+| `DAY` | plans dated **today or earlier** (overdue is nearest, never dropped — at any precision) |
 | `WEEK` | day-precision plans later in this ISO week (Mon–Sun, the week habits already count) |
 | `MONTH` | plans landing in this calendar month — day-precision beyond this week, or month-precision for this month |
-| `YEAR` | every other planned card: later months of this year, year-precision plans, and anything in a later year (the row shows its year) |
-| `DREAMS` | `category === 'dream'`, whatever its dates — a dream is a life-size want, not a date |
+| `YEAR` | the rest of this calendar year: later months, and a year-precision plan for this year |
+| `NEXT YEAR` | next year — and the years after it, whose rows carry their own dates |
+| `DREAMS` | every dream (`type === 'dream'`), dated or not |
+
+Dreams is the one list a card can be in **as well as** another: a dream planned
+for March is listed under the month, because that is when it happens, and under
+Dreams, because that is what it is. Every other card has exactly one home.
 
 In **dropdown** mode the horizons are cumulative instead, which is what the
 words mean when read one at a time: *today* = DAY; *this week* = DAY+WEEK;
-*this month* = +MONTH; *this year* = +YEAR; *dreams* = DREAMS alone.
+*this month* = +MONTH; *this year* = +YEAR; *next year* = +NEXT YEAR; *life
+dream* = DREAMS alone.
 
 Excluded everywhere: cards in Done (`columnId === 'answered'`), habits, and
 cards with no plan at all (a dream needs no plan to be listed).
@@ -132,10 +143,15 @@ cards with no plan at all (a dream needs no plan to be listed).
 
 The Plan block is deliberately outside the board's filter chain: the point of
 a plan is to see the day whole, and a category tab left on from an hour ago
-would silently hide half of it. One toggle in the block's head —
-`apply board filters`, off by default, remembered per browser — runs each row
-through the existing `matchesFilters()` when on, and says so in a word
-underneath so a short list is never a mystery.
+would silently hide half of it.
+
+The switch is the **PLAN heading itself** — there is no standing button, because
+the plan is a list to read and a control parked above it earns its space only
+when someone reaches for it. Hovering (or focusing) the heading pops up what a
+click will do, `apply board filters` / `remove board filters`; while they are
+applied the heading wears a small `filtered` mark, so a short list is never a
+mystery. Off by default, remembered per browser, and it runs each row through
+the existing `matchesFilters()`.
 
 ## What changes, file by file
 
@@ -144,10 +160,10 @@ underneath so a short list is never a mystery.
 - `core/constants.js` — `TYPES` loses `'plan'`; `TYPE_META.plan` goes.
 - `core/cards.js` — `sanitizeCard` gains `plan`/`planSrc`, migrates
   `type: 'plan' → 'task'`, and applies the deadline link. Seeds re-typed.
-- `core/categories.js` — `dream` joins `DEFAULT_CATEGORIES` (hue 285, and
-  `mind` moves off 295 by nothing — hues may repeat, so no other change), plus
-  a one-time registry migration so boards saved before today gain the category
-  instead of losing every dream card's colour.
+- `core/constants.js` — `dream` joins `TYPES` and `TYPE_META` (glyph `☾`), in
+  the place `plan` left. The life-area registry is untouched: an early cut of
+  this made Dream a category, and it was wrong — a dream needs its own life
+  area, not to spend one.
 - `core/plan.js` — rewritten: `planVal`, `planPrecision`, `planFromDeadline`,
   `planSection` (the table above), `planGroups(cards, …)` for stacked mode and
   `planCardsIn(cards, horizon, …)` for dropdown mode. Still imports nothing, so

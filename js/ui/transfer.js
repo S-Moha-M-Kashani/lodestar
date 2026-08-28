@@ -201,8 +201,8 @@ const IMPORT_SCHEMA = `{
   {
     "title": "The card's text (required)",
     "columnId": "inbox | in-progress | answered",
-    "type": "question | problem | task | idea | habit",
-    "category": "one of your category ids — work, love, family, health, mind, music, travel, home, money, dream by default  (optional)",
+    "type": "question | problem | task | idea | dream | habit",
+    "category": "one of your category ids — work, love, family, health, mind, music, travel, home, money by default  (optional)",
     "importance": "high | low  (optional — for the Matrix)",
     "urgency": "high | low  (optional — for the Matrix)",
     "effort": "low | medium | high  (optional — defaults to medium)",

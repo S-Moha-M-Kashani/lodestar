@@ -502,8 +502,8 @@ try:
 
         # ---- Category rail ---------------------------------------------------
         # The rail always shows: All + every defined category + the ✎ Edit tab.
-        check("categories: rail shows All + all 10 defined areas + Edit",
-              page.locator(".cat-tab").count() == 12
+        check("categories: rail shows All + all 9 defined areas + Edit",
+              page.locator(".cat-tab").count() == 11
               and page.locator(".cat-tab-all").count() == 1
               and page.locator("#edit-cats-btn").count() == 1)
         check("categories: tabs carry no count badge",
@@ -548,14 +548,14 @@ try:
         # ---- Category management (the ✎ Edit tab) -----------------------------
         page.click("#edit-cats-btn")
         page.wait_for_selector("#cats-dialog[open]")
-        check("categories: editor lists all 10 areas, each removable",
-              page.locator("#cats-list .cats-row").count() == 10
-              and page.locator("#cats-list .cats-remove").count() == 10)
+        check("categories: editor lists all 9 areas, each removable",
+              page.locator("#cats-list .cats-row").count() == 9
+              and page.locator("#cats-list .cats-remove").count() == 9)
         page.fill("#cat-add-name", "Reading")
         page.click("#cat-add-btn")
         page.wait_for_timeout(150)
         check("categories: adding 'Reading' puts it in the editor and on the rail",
-              page.locator("#cats-list .cats-row").count() == 11
+              page.locator("#cats-list .cats-row").count() == 10
               and page.locator('.cat-tab[data-cat="reading"]').count() == 1)
         page.wait_for_timeout(600)  # debounced push
         check("categories: the new registry is saved to the database",
@@ -594,7 +594,7 @@ try:
         page.click("#confirm-ok")
         page.wait_for_timeout(150)
         check("categories: removing 'Reading' takes it off the rail again",
-              page.locator("#cats-list .cats-row").count() == 10
+              page.locator("#cats-list .cats-row").count() == 9
               and page.locator('.cat-tab[data-cat="reading"]').count() == 0)
         page.click("#close-cats")
         page.wait_for_timeout(600)
@@ -1596,9 +1596,10 @@ try:
             types_in_order = page.eval_on_selector_all(
                 ".backlog-row .badge",
                 "els => els.map(e => e.className.match(/type-(\\w+)/)[1])")
-            rank = {"question": 0, "problem": 1, "task": 2, "idea": 3, "habit": 4}
+            rank = {"question": 0, "problem": 1, "task": 2, "idea": 3,
+                    "dream": 4, "habit": 5}
             ranks = [rank.get(t, 99) for t in types_in_order]
-            check("backlog: sort-by-type orders rows question→problem→task→idea→habit",
+            check("backlog: sort-by-type orders rows question→…→dream→habit",
                   ranks == sorted(ranks))
         else:
             check("backlog: sort-by-type control present when >1 row", False)
@@ -4420,16 +4421,19 @@ try:
         page.fill(".quick-add input", "Send the tax forms")
         page.press(".quick-add input", "Enter")
         plan_row = lambda: page.locator(".plan-rail .plan-rail-row", has_text="Send the tax forms")
-        # Which group a row sits under — the heading above it in the block.
-        group_of = lambda title: page.evaluate("""(t) => {
+        # Which groups a card is listed under — the headings above its rows.
+        # A list, because a dated dream belongs to two of them.
+        groups_of = lambda title: page.evaluate("""(t) => {
+          const found = [];
           let group = null;
           for (const el of document.querySelectorAll('.plan-rail-body > *')) {
             if (el.classList.contains('plan-group-head')) {
               group = el.querySelector('.plan-group-title').textContent;
-            } else if (el.textContent.includes(t)) return group;
+            } else if (el.textContent.includes(t)) found.push(group);
           }
-          return '';
+          return found;
         }""", title)
+        group_of = lambda title: (groups_of(title) or [''])[0]
 
         check("plan: a card with no plan is not in the block", plan_row().count() == 0)
 
@@ -4482,32 +4486,51 @@ try:
         page.click("#cancel-dialog")
         page.wait_for_timeout(100)
 
-        # The block is outside the board's filters until asked. A category tab
-        # that hid half the plan without saying so was the thing to avoid.
+        # The block is outside the board's filters until asked, and the PLAN
+        # heading is the switch — nothing stands above the list until the
+        # pointer arrives. A category tab that hid half the plan without saying
+        # so was the thing to avoid.
         page.locator('.cat-tab[data-cat="health"]').click()
         page.wait_for_timeout(150)
         check("plan: a board filter does not touch the plan by default",
               plan_row().count() == 1)
-        page.click(".plan-filter-toggle")
+        check("plan: the heading's pop-up says what a click will do, and hides",
+              page.locator(".plan-title-tip").text_content().strip() == "apply board filters"
+              and not page.locator(".plan-title-tip").is_visible())
+        page.locator(".plan-rail-title").hover()
+        page.wait_for_timeout(200)
+        check("plan: hovering the heading shows it",
+              page.locator(".plan-title-tip").is_visible())
+        page.click(".plan-rail-title")
         page.wait_for_timeout(150)
-        check("plan: 'apply board filters' narrows it to the filtered cards",
+        check("plan: clicking the heading narrows the plan to the filtered cards",
               plan_row().count() == 0
-              and page.get_attribute(".plan-filter-toggle", "aria-pressed") == "true")
-        page.click(".plan-filter-toggle")
+              and page.get_attribute(".plan-rail-title", "aria-pressed") == "true")
+        check("plan: and the heading says it is filtered",
+              page.locator(".plan-title-mark").text_content().strip() == "filtered"
+              and page.locator(".plan-title-tip").text_content().strip() == "remove board filters")
+        page.click(".plan-rail-title")
         page.locator(".cat-tab-all").click()
         page.wait_for_timeout(150)
-        check("plan: pressing it again brings the whole plan back", plan_row().count() == 1)
+        check("plan: clicking it again brings the whole plan back",
+              plan_row().count() == 1
+              and page.locator(".plan-title-mark").text_content().strip() == "")
 
-        # Dreams is the Dream life area, whatever its dates.
+        # A dream is a kind of card, whatever its dates — so a dated dream is
+        # listed twice: where it happens, and as the dream it is.
         page.locator(".card", has_text="Send the tax forms").first.locator(".card-menu-btn").click()
-        item("Category").click()
-        item("Dream").click()
+        item("Type").click()
+        page.locator(".card-menu-panel:not([hidden]) .menu-item", has_text="dream").click()
         page.wait_for_timeout(150)
-        check("plan: a card in the Dream area is listed under Dreams",
-              group_of("Send the tax forms") == "Dreams")
+        check("plan: a dated dream is listed by its date and again under Dreams",
+              plan_row().count() == 2
+              and groups_of("Send the tax forms") == ["Year", "Dreams"])
+        check("plan: a dream keeps every field a task has, the plan included",
+              page.locator(".card", has_text="Send the tax forms").first
+                  .locator(".badge.type-dream").count() == 1)
         page.locator(".card", has_text="Send the tax forms").first.locator(".card-menu-btn").click()
-        item("Category").click()
-        item("No category").click()
+        item("Type").click()
+        page.locator(".card-menu-panel:not([hidden]) .menu-item", has_text="task").click()
         page.wait_for_timeout(150)
 
         # One horizon at a time is the other layout, chosen in the ⚙ menu.
@@ -4531,6 +4554,9 @@ try:
         page.select_option(".plan-rail-pick", "year")
         page.wait_for_timeout(120)
         check("plan: a horizon accumulates the nearer ones", plan_row().count() == 1)
+        page.select_option(".plan-rail-pick", "next")
+        page.wait_for_timeout(120)
+        check("plan: next year is a horizon of its own", plan_row().count() == 1)
         pick_plan_layout("stacked")
         check("plan: and back to every group at once",
               page.locator(".plan-rail-pick").count() == 0)

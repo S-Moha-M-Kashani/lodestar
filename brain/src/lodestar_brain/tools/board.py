@@ -25,8 +25,9 @@ COLUMNS = ['inbox', 'in-progress', 'answered']
 # 'plan' was a type until 2026-08-28 and is now a date every card can carry (see
 # PLAN_HELP): a plan is not a kind of thought. The Node server still accepts the
 # old word and stores such a card as a task, so an older transcript cannot break
-# a tool call — but nothing here offers it any more.
-TYPES = ['question', 'problem', 'task', 'idea', 'habit']
+# a tool call — but nothing here offers it any more. 'dream' took its place: a
+# life-size want, with every field a task has, the plan included.
+TYPES = ['question', 'problem', 'task', 'idea', 'dream', 'habit']
 # A habit's cadence travels with the proposal; its *history* deliberately does
 # not. There is no tool for ticking a habit — logging a repetition is the user's
 # act, and a record an agent could write into is not a record of anything.
@@ -47,7 +48,7 @@ PLAN_HELP = ("when the user means to do it: '2027' | '2027-03' | '2027-03-04', "
              "card's deadline")
 
 Column = Literal['inbox', 'in-progress', 'answered']
-CardType = Literal['question', 'problem', 'task', 'idea', 'habit']
+CardType = Literal['question', 'problem', 'task', 'idea', 'dream', 'habit']
 Frequency = Literal['daily', 'weekly', 'monthly', 'yearly', '']
 Rank = Literal['high', 'low', '']
 
@@ -150,13 +151,14 @@ def make_board_tools(board: BoardClient | BoardSnapshot) -> list[BaseTool]:
                         tags: list | None = None, frequency: str = '',
                         times_per_period: int = 1, deadline: str = '',
                         plan: str = '', config: RunnableConfig = None) -> dict:
-        """Propose a new card (question, problem, task, idea or habit).
+        """Propose a new card (question, problem, task, idea, dream or habit).
 
         A habit is something repeated on a schedule — give it a frequency and
-        how many times per period. A plan says when the user means to get to
-        the card ('2027', '2027-03', '2027-03-04'); a deadline says when it is
-        due. The user must approve the card before it appears on the board, so
-        tell them you have proposed it — never claim it was added.
+        how many times per period. A dream is a life-size want; it can carry a
+        plan like anything else. A plan says when the user means to get to the
+        card ('2027', '2027-03', '2027-03-04'); a deadline says when it is due.
+        The user must approve the card before it appears on the board, so tell
+        them you have proposed it — never claim it was added.
         """
         bad = _plan_error(plan, deadline)
         if bad:
