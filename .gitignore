@@ -49,8 +49,6 @@ docs/report/
 docs/superpowers/plans/
 README-Development.md
 ROADMAP-Development.md
-125.md
 .vscode/
 .ruff_cache/
 .pytest_cache/
-
