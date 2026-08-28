@@ -126,9 +126,62 @@ test('the hook pushes master and version tags, and refuses everything else', (t)
   assert.doesNotMatch(onRemote, /feature/, 'no feature branch may reach the remote');
 });
 
+// This is an integration test (real git against a temporary repository).
+test('master takes release points, not hand-written commits', (t) => {
+  const dir = repoWithHook();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  for (const name of ['pre-commit', 'pre-merge-commit']) {
+    copyFileSync(join(ROOT, 'scripts', 'git-hooks', 'pre-commit'), join(dir, '.git', 'hooks', name));
+    chmodSync(join(dir, '.git', 'hooks', name), 0o755);
+  }
+
+  const typed = git(dir, 'commit', '-q', '--allow-empty', '-m', 'feat: typed straight onto master');
+  assert.equal(typed.ok, false, 'a hand-written commit on master must be refused');
+  assert.match(typed.output, /release points, not commits/);
+
+  // `git merge` asks pre-merge-commit, not pre-commit — a guard installed under
+  // one name only would wave the whole of development through.
+  git(dir, 'checkout', '-q', 'development');
+  git(dir, 'commit', '-q', '--allow-empty', '-m', 'feat: work');
+  git(dir, 'checkout', '-q', 'master');
+  assert.equal(git(dir, 'merge', '--no-ff', '--no-edit', 'development').ok, false,
+    'merging into master by hand must be refused too');
+
+  // The release script is the door out, and development is untouched.
+  git(dir, 'checkout', '-q', 'development');
+  assert.equal(git(dir, 'commit', '-q', '--allow-empty', '-m', 'feat: more work').ok, true,
+    'development must still accept commits');
+});
+
+// This is an integration test (real git against a temporary repository).
+test('a commit message may not credit a tool, ramble, or skip its type', (t) => {
+  const dir = repoWithHook();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  copyFileSync(join(ROOT, 'scripts', 'git-hooks', 'commit-msg'), join(dir, '.git', 'hooks', 'commit-msg'));
+  chmodSync(join(dir, '.git', 'hooks', 'commit-msg'), 0o755);
+  const commit = (msg) => git(dir, 'commit', '-q', '--allow-empty', '-m', msg);
+
+  // The rule this repository was rewritten to enforce.
+  assert.equal(commit('feat: a thing\n\nCo-Authored-By: Claude <noreply@anthropic.com>').ok,
+    false, 'no model may be credited as an author');
+  assert.equal(commit('feat: a thing\n\n🤖 Generated with a tool').ok,
+    false, 'no commit may announce that a tool wrote it');
+
+  assert.equal(commit('a thing happened').ok, false, 'the subject needs a type');
+  assert.equal(commit(`feat: ${'x'.repeat(80)}`).ok, false, 'the subject has a length limit');
+  assert.equal(commit('feat: a thing\n\n' + 'a line\n'.repeat(20)).ok, false,
+    'the body has a length limit — a design note belongs in docs/');
+
+  // A hook that refused everything would pass all of the above.
+  assert.equal(commit('feat(ui): a thing\n\nOne plain sentence about it.\nWhy: because.').ok,
+    true, 'a message that follows the rules must land');
+  assert.equal(commit("Merge branch 'feature/x'").ok, true, 'a merge subject is exempt');
+  assert.equal(commit('Revert "feat: a thing"').ok, true, 'a revert subject is exempt');
+});
+
 // This is a configuration invariant test.
 test('the repository has the hooks installed, and tracks their source', () => {
-  for (const hook of ['reference-transaction', 'pre-push']) {
+  for (const hook of ['reference-transaction', 'pre-push', 'pre-commit', 'commit-msg']) {
     assert.equal(git(ROOT, 'ls-files', '--error-unmatch', `scripts/git-hooks/${hook}`).ok,
       true, `${hook} must be tracked, or a fresh clone cannot restore it`);
   }
