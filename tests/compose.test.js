@@ -20,6 +20,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { resolveBoardDb, resolveAssistantDb } from '../scripts/db-location.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (...p) => readFileSync(join(ROOT, ...p), 'utf8');
@@ -104,21 +105,40 @@ test('every file the server serves is inside the mounted tree', () => {
 });
 
 // This is a configuration invariant.
-test('the database still lives on its own named volume, not the source tree', () => {
-  // The durability promise: adding a source mount must not displace board-data,
-  // and BOARD_DB must stay on it — a tree mount is read-only, so a board.db
-  // pointed inside it would fail to open at all.
+test('the container and a native npm start open the same two database files', () => {
+  // The 2026-08-30 defect: BOARD_DB pointed into a Docker-owned volume while
+  // `npm start` opened databases/real/board.db, so :3000 served whichever
+  // stack was started last. The browser's cache refilled the cards and could
+  // not refill the boards, so two of them were simply gone.
   const block = serviceBlock('lodestar');
-  assert.ok(
-    mountsOf(block).includes('board-data:/data'),
-    'the board-data volume mount is gone — board.db would live inside the ' +
-      'container and vanish on the next rebuild',
-  );
-  assert.match(
-    block,
-    /BOARD_DB:\s*\/data\/board\.db/,
-    'BOARD_DB no longer points into the mounted volume',
-  );
+  const mounts = mountsOf(block);
+
+  assert.ok(!mounts.includes('board-data:/data'),
+    'the container still has its own private board volume');
+  assert.ok(!/\nvolumes:\n[\s\S]*?^ {2}board-data:/m.test(read('docker-compose.yml')),
+    'board-data is still declared — a later edit could mount it again');
+
+  // The data mount must be writable: the tree mount is :ro, and a board.db
+  // reached only through that one could not be opened for writing at all.
+  const data = mounts.find((m) => m.split(':')[1] === '/data');
+  assert.ok(data, `nothing is mounted at /data, got [${mounts.join(', ')}]`);
+  assert.ok(!data.endsWith(':ro'), `the data mount "${data}" is read-only`);
+
+  // The real invariant, asked of the path resolver rather than of a string:
+  // whatever the container opens must be the same host file `npm start` opens.
+  const hostDir = join(ROOT, data.split(':')[0]);
+  for (const [key, resolve] of [['BOARD_DB', resolveBoardDb],
+    ['ASSISTANT_DB', resolveAssistantDb]]) {
+    const m = block.match(new RegExp(`^\\s*${key}:\\s*(\\S+)\\s*$`, 'm'));
+    assert.ok(m, `the service sets no ${key}, so it falls back to a path ` +
+      `inside the read-only tree mount`);
+    const inContainer = m[1];
+    assert.ok(inContainer.startsWith('/data/'),
+      `${key} is "${inContainer}", which is not on the data mount`);
+    assert.equal(join(hostDir, inContainer.slice('/data/'.length)),
+      resolve({ root: ROOT, env: {} }),
+      `${key} does not resolve to the file a native npm start opens`);
+  }
 });
 
 // The brain has the same bake-in drift, but cannot take the same whole-tree
