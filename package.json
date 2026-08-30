@@ -10,6 +10,7 @@
     "chroma": "docker compose up -d chroma",
     "chroma-test": "docker compose up -d chroma-test",
     "backup": "node scripts/backup-db.mjs",
+    "postgres:schema": "docker exec -i ${LODESTAR_PG_CONTAINER:-postgres} psql \"${LODESTAR_PG_URL:?set LODESTAR_PG_URL to the lodestar connection string}\" -v ON_ERROR_STOP=1 -f - < scripts/postgres/001-schema.sql",
     "test:server": "node scripts/backup-db.mjs && node --test tests/*.test.js",
     "test:all": "node scripts/backup-db.mjs && node --test tests/*.test.js && uv run --project brain pytest brain/tests -v && uv run --with playwright python tests/e2e_test.py",
     "eval-live": "BRAIN_EVAL_LIVE=1 BRAIN_LLM=claude-cli uv run --project brain pytest brain/tests/evals -m live -v",
