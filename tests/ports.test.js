@@ -34,6 +34,13 @@ const PROJECT_CHROMA_PORT = 8003;
 const TEST_CHROMA_PORT = 8004;
 const MAIN_BRAIN_PORT = 9000;
 const MAIN_BOARD_PORT = 3000;
+// The shared Postgres, on its canonical port. This project does not run it —
+// it is its own compose project, so that no application's `docker compose down
+// -v` can destroy another application's rows (tests/postgres.test.js pins that
+// absence). What is recorded here is that 5432 is spoken for: nothing this
+// repo starts may bind it, or the board would take the database's port and
+// every project on that server would lose its connection at once.
+const POSTGRES_PORT = 5432;
 
 const portOf = (script, re) => {
   const m = scripts[script].match(re);
@@ -82,6 +89,7 @@ test('every long-running port is distinct', () => {
     ...CHROMA_PORTS,
     PROJECT_CHROMA_PORT,
     TEST_CHROMA_PORT,
+    POSTGRES_PORT,
   ];
   assert.equal(
     new Set(ports).size,
@@ -164,6 +172,21 @@ test('npm run chroma delegates to the compose service instead of respelling it',
   assert.match(scripts.chroma, /chroma/);
   assert.ok(!/docker run|-p |--publish|:\d{4}/.test(scripts.chroma),
     'the chroma script respells the port or mount — the compose service is the one definition');
+});
+
+// This is a configuration invariant.
+test('nothing this repo starts binds the shared database port', () => {
+  // Reserving 5432 rather than publishing it: the server is another project's,
+  // and a service here that took its port would break every project on it, not
+  // just this one.
+  const compose = read('docker-compose.yml');
+  const published = [...compose.matchAll(/"(\d+):\d+"/g)].map((m) => Number(m[1]));
+  assert.ok(!published.includes(POSTGRES_PORT),
+    `docker-compose.yml publishes :${POSTGRES_PORT}, which the shared Postgres owns`);
+  for (const script of Object.values(scripts)) {
+    assert.ok(!new RegExp(`\\b(?:PORT=|--port\\s+|:)${POSTGRES_PORT}\\b`).test(script),
+      `an npm script binds or dials :${POSTGRES_PORT}: ${script.slice(0, 60)}…`);
+  }
 });
 
 // This is a configuration invariant.
