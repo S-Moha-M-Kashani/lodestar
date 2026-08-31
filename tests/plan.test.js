@@ -170,8 +170,11 @@ test('a dream is listed by its date and again as a dream', () => {
     ['overdue', 'today', 'week', 'month', 'dated dream']);
   assert.deepEqual(planCardsIn(cards, 'year', AT).map((c) => c.id),
     ['overdue', 'today', 'week', 'month', 'dated dream', 'year']);
-  assert.deepEqual(planCardsIn(cards, 'next', AT).map((c) => c.id),
-    ['overdue', 'today', 'week', 'month', 'dated dream', 'year', 'next']);
+  // Next year is the exception, and it is the one the accumulation made
+  // useless: with nothing planned for 2027 it repeated 'This year' word for
+  // word, so the two entries in the picker answered the same question. It
+  // shows next year and the years after it, alone.
+  assert.deepEqual(planCardsIn(cards, 'next', AT).map((c) => c.id), ['next']);
   // The dreams horizon is the whole life area, dated or not.
   assert.deepEqual(planCardsIn(cards, 'dream', AT).map((c) => c.id),
     ['dated dream', 'open dream']);

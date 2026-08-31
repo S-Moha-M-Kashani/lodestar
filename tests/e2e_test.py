@@ -4554,12 +4554,47 @@ try:
         page.select_option(".plan-rail-pick", "year")
         page.wait_for_timeout(120)
         check("plan: a horizon accumulates the nearer ones", plan_row().count() == 1)
+        # Next year is the one horizon that does NOT accumulate. It used to,
+        # and with nothing planned for next year the picker then offered two
+        # entries that painted the identical list. The card is planned for this
+        # year, so next year must be empty and say so.
         page.select_option(".plan-rail-pick", "next")
         page.wait_for_timeout(120)
-        check("plan: next year is a horizon of its own", plan_row().count() == 1)
+        check("plan: next year holds only next year, not everything nearer",
+              plan_row().count() == 0
+              and "next year" in page.locator(".plan-rail-empty").inner_text().lower())
         pick_plan_layout("stacked")
         check("plan: and back to every group at once",
               page.locator(".plan-rail-pick").count() == 0)
+
+        # A plan longer than the window has to be reachable. The board view is
+        # a 100vh flex column with `overflow: hidden`, so rows the rail cannot
+        # fit were cut off the bottom of the screen with nothing to scroll.
+        # Shrink the window rather than invent thirty cards: the overflow is
+        # the same overflow, and it leaves no rows behind for the next test.
+        page.set_viewport_size({"width": 1200, "height": 320})
+        page.wait_for_timeout(250)
+        reach_last_row = """() => {
+          const rows = document.querySelectorAll('.plan-rail-row');
+          const last = rows[rows.length - 1];
+          if (!last) return 'no rows';
+          // The scrollbar has to be one the user could have used: a box that
+          // is programmatically scrollable but painted `overflow: hidden` is
+          // exactly the state being fixed.
+          let box = last.parentElement;
+          const scrolls = (el) => ['auto', 'scroll'].includes(getComputedStyle(el).overflowY);
+          while (box && box !== document.body && !scrolls(box)) box = box.parentElement;
+          if (!box || box === document.body) return 'nothing scrolls';
+          box.scrollTop = box.scrollHeight;
+          const row = last.getBoundingClientRect();
+          const view = box.getBoundingClientRect();
+          return row.bottom <= Math.min(view.bottom, window.innerHeight) + 1
+            ? 'ok' : 'out of reach';
+        }"""
+        check("plan: a rail taller than the window scrolls instead of being cut off",
+              page.evaluate(reach_last_row) == "ok")
+        page.set_viewport_size({"width": 1200, "height": 800})
+        page.wait_for_timeout(250)
 
         plan_row().locator(".plan-box").click()
         page.wait_for_timeout(150)
