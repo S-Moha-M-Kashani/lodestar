@@ -48,7 +48,10 @@ export function mergeSqliteBoard({ from, into }) {
       dst.exec('COMMIT');
       return { boards, cards, categories };
     } catch (err) {
-      dst.exec('ROLLBACK');
+      // The rollback can itself throw — most often because the transaction is
+      // already gone — and that error would then hide the one that explains the
+      // failure. The original is what propagates.
+      try { dst.exec('ROLLBACK'); } catch { /* keep `err` */ }
       throw err;
     } finally {
       dst.close();
