@@ -37,9 +37,15 @@ export function mergeSqliteBoard({ from, into }) {
   try {
     // Opening dst nested inside src's try/finally: if it throws (destination
     // locked, missing directory, corrupt file), src still gets closed.
-    const dst = new DatabaseSync(into);
+    // `timeout` lets a blocked write wait instead of failing outright — this
+    // script can run against the live board while a server holds it open.
+    const dst = new DatabaseSync(into, { timeout: 5000 });
     try {
-      dst.exec('BEGIN');
+      // `BEGIN IMMEDIATE`, not a bare `BEGIN` (see server.js:275): a deferred
+      // transaction only takes its write lock on the first write, by which
+      // point it has already read, and SQLite refuses to make it WAIT there —
+      // it returns SQLITE_BUSY at once and the timeout above never gets a say.
+      dst.exec('BEGIN IMMEDIATE');
       // Boards first: a card carries a board_id, and inserting the parent first
       // keeps the foreign key satisfiable where one is enforced.
       const boards = copyMissing(src, dst, 'boards', ['id']);

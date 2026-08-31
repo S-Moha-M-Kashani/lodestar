@@ -204,27 +204,42 @@ const PG_URL = process.env.LODESTAR_PG_URL
   || 'postgresql://lodestar@localhost:5432/lodestar';
 const PG_CONTAINER = process.env.LODESTAR_PG_CONTAINER || 'postgres';
 
+// The connection string never appears in an argument vector, on either path:
+// `sh -c` reads it out of the environment (`docker exec -e NAME` with no value
+// forwards this process's own env into the container), so `ps` never sees it
+// — same reason as tests/migrate.test.js's `inContainer`/`psql`. Small local
+// copy rather than a shared import: two call sites do not earn an abstraction.
+const PG_ENV = { ...process.env, LODESTAR_PG_URL: PG_URL };
+
 function query(sql) {
   const onPath = spawnSync('psql', ['--version'], { encoding: 'utf8' }).status === 0;
+  const env = { ...PG_ENV, LODESTAR_SQL: sql };
   return onPath
-    ? spawnSync('psql', [PG_URL, '-At', '-c', sql], { encoding: 'utf8' })
-    : spawnSync('docker', ['exec', '-i', PG_CONTAINER, 'psql', PG_URL, '-At', '-c', sql],
-      { encoding: 'utf8' });
+    ? spawnSync('sh', ['-c', 'psql "$LODESTAR_PG_URL" -At -c "$LODESTAR_SQL"'],
+      { encoding: 'utf8', env })
+    : spawnSync('docker',
+      ['exec', '-i', '-e', 'LODESTAR_PG_URL', '-e', 'LODESTAR_SQL', PG_CONTAINER,
+        'sh', '-c', 'psql "$LODESTAR_PG_URL" -At -c "$LODESTAR_SQL"'],
+      { encoding: 'utf8', env });
 }
+
+// psql echoes its connection info into some errors — same reason
+// tests/migrate.test.js redacts before printing a failure message.
+const redact = (text) => (text || '').replace(/\w+:\/\/\S+/g, '<redacted-url>');
 
 const unreachable = () => query('SELECT 1').status !== 0;
 
 // This is an integration test: it drives the real server.
 test('every mirrored table exists in the running database', { timeout: 60_000 }, (t) => {
   if (unreachable()) {
-    t.skip(`no Postgres at ${PG_URL} — start the shared server and run ` +
+    t.skip(`no Postgres at ${redact(PG_URL)} — start the shared server and run ` +
       '`npm run postgres:schema`');
     return;
   }
   const listed = query(
     "SELECT table_schema || '.' || table_name FROM information_schema.tables " +
     "WHERE table_schema IN ('board', 'assistant') ORDER BY 1");
-  assert.equal(listed.status, 0, `could not list tables: ${listed.stderr}`);
+  assert.equal(listed.status, 0, `could not list tables: ${redact(listed.stderr)}`);
   const live = new Set(listed.stdout.trim().split('\n'));
   for (const [table, { schema }] of postgresSchema()) {
     assert.ok(live.has(`${schema}.${table}`),
@@ -248,7 +263,7 @@ test('a row written before a redeploy is still there after it', { timeout: 180_0
     return;
   }
   if (unreachable()) {
-    t.skip(`no Postgres at ${PG_URL}`);
+    t.skip(`no Postgres at ${redact(PG_URL)}`);
     return;
   }
   const id = 'redeploy-probe';
@@ -256,14 +271,14 @@ test('a row written before a redeploy is still there after it', { timeout: 180_0
   const wrote = query(
     `INSERT INTO board.boards (id, name, position, created_at, updated_at)
      VALUES ('${id}', 'probe', 0, 1, 1)`);
-  assert.equal(wrote.status, 0, `could not write: ${wrote.stderr}`);
+  assert.equal(wrote.status, 0, `could not write: ${redact(wrote.stderr)}`);
 
   // Not `restart`: replacing the container is what a redeploy actually does,
   // and it is the step that proves the rows are on a volume that outlives it.
   const up = spawnSync('docker',
     ['compose', '-f', composeFile, 'up', '-d', '--force-recreate', 'postgres'],
     { encoding: 'utf8' });
-  assert.equal(up.status, 0, `could not recreate the container: ${up.stderr}`);
+  assert.equal(up.status, 0, `could not recreate the container: ${redact(up.stderr)}`);
   for (let i = 0; i < 90 && unreachable(); i++) spawnSync('sleep', ['1']);
 
   const back = query(`SELECT name FROM board.boards WHERE id = '${id}'`);

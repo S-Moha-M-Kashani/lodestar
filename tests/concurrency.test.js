@@ -51,14 +51,20 @@ test('two servers writing one board file lose neither save nor process',
       // Interleaved on purpose: whichever process is committing, the other is
       // reading or writing. Before the fix this is where SQLITE_BUSY surfaced
       // as `400 "Invalid JSON: database is locked"` and the save vanished.
-      const rounds = [];
+      // Each round is awaited before the next starts — the final assertion
+      // below checks a specific last value, and that is only guaranteed by
+      // issue order when this test itself provides it; firing all 48 requests
+      // unawaited would leave that order up to the HTTP client instead.
+      const results = [];
       for (let i = 0; i < 12; i += 1) {
-        rounds.push(put(a.base, [{ id: `a${i}`, columnId: 'inbox', title: `A ${i}` }], boardA.id));
-        rounds.push(put(b.base, [{ id: `b${i}`, columnId: 'inbox', title: `B ${i}` }], boardB.id));
-        rounds.push(fetch(`${a.base}/api/trash?board=${boardB.id}`));
-        rounds.push(fetch(`${b.base}/api/state?board=${boardA.id}`));
+        const round = await Promise.all([
+          put(a.base, [{ id: `a${i}`, columnId: 'inbox', title: `A ${i}` }], boardA.id),
+          put(b.base, [{ id: `b${i}`, columnId: 'inbox', title: `B ${i}` }], boardB.id),
+          fetch(`${a.base}/api/trash?board=${boardB.id}`),
+          fetch(`${b.base}/api/state?board=${boardA.id}`),
+        ]);
+        results.push(...round);
       }
-      const results = await Promise.all(rounds);
       for (const r of results) {
         assert.equal(r.status, 200,
           `a request failed with ${r.status}: ${JSON.stringify(await r.json())}`);
@@ -99,3 +105,37 @@ test('a throwing route answers 500 and the server keeps serving', async () => {
     await s.stop();
   }
 });
+
+// This is an integration test: a store error must never be relabeled a bad request.
+test('PUT /api/state answers 500 for a store error, 400 only for bad JSON',
+  { timeout: 15_000 }, async () => {
+    const s = await startServer();
+    try {
+      // The case this catch must keep: a genuinely malformed body is still 400.
+      const bad = await fetch(s.base + '/api/state',
+        { method: 'PUT', headers: json, body: '{not json' });
+      assert.equal(bad.status, 400);
+      assert.match((await bad.json()).error, /^Invalid JSON: /);
+
+      // Hold the write lock from a second connection on the same file, past the
+      // server's 5 s busy timeout, so writeBoard's own `BEGIN IMMEDIATE` throws a
+      // real SQLITE_BUSY error — not a SyntaxError. Before the fix, this route's
+      // catch relabeled every non-parse error "Invalid JSON" and answered 400;
+      // it must now reach the handler-level catch and answer a generic 500.
+      const locker = new DatabaseSync(s.dbPath);
+      locker.exec('BEGIN IMMEDIATE');
+      try {
+        const res = await fetch(s.base + '/api/state',
+          { method: 'PUT', headers: json, body: JSON.stringify({ version: 1, cards: [] }) });
+        assert.equal(res.status, 500, 'a lock held past the timeout must be a 500, not a 400');
+        assert.deepEqual(await res.json(), { error: 'Server error' },
+          'a store error must never be reported as "Invalid JSON"');
+        assert.equal(s.proc.exitCode, null, 'the server died on a locked write');
+      } finally {
+        locker.exec('COMMIT');
+        locker.close();
+      }
+    } finally {
+      await s.stop();
+    }
+  });

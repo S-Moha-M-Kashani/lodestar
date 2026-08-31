@@ -258,7 +258,12 @@ mkdirSync(dirname(DB_PATH), { recursive: true });
 // runs a third server on :3005. node:sqlite's default busy timeout is 0 and its
 // default journal is rollback, which together mean a reader that arrives during
 // another process's commit gets SQLITE_BUSY immediately — surfacing as a save
-// silently refused with `400 "Invalid JSON: database is locked"`.
+// silently refused with `400 "Invalid JSON: database is locked"`. That
+// mislabeling is a second bug, fixed separately at every `Invalid JSON` catch
+// below (`if (!(err instanceof SyntaxError) && !err.badRequest) throw err`): a
+// store error is no longer reported as a bad request, even if it does outlast
+// the timeout. `readBody`'s own payload-too-large rejection is exempted by
+// that same `badRequest` flag — it is the caller's fault, not the store's.
 //
 // `timeout` makes a blocked statement wait instead of failing, and WAL is the
 // part that actually fixes it: with a write-ahead log a reader and a writer
@@ -1522,7 +1527,15 @@ function readBody(req) {
     let data = '';
     req.on('data', (chunk) => {
       data += chunk;
-      if (data.length > 5_000_000) reject(new Error('Payload too large')); // ~5 MB guard
+      if (data.length > 5_000_000) { // ~5 MB guard
+        // Marked, not just thrown: every `Invalid JSON` catch below re-throws
+        // anything that is not a body-shape problem so a store error reaches
+        // the handler-level catch as a 500 — but this one is the caller's
+        // fault, same as a syntax error, and must stay a 400 like it always was.
+        const err = new Error('Payload too large');
+        err.badRequest = true;
+        reject(err);
+      }
     });
     req.on('end', () => resolve(data));
     req.on('error', reject);
@@ -1554,6 +1567,7 @@ async function handleRequest(req, res) {
         if (!board) return sendJson(res, 400, { error: 'A board needs a non-empty name' });
         return sendJson(res, 200, { board });
       } catch (err) {
+        if (!(err instanceof SyntaxError) && !err.badRequest) throw err;
         return sendJson(res, 400, { error: 'Invalid JSON: ' + err.message });
       }
     }
@@ -1598,6 +1612,7 @@ async function handleRequest(req, res) {
           ? sendJson(res, 200, { board })
           : sendJson(res, 400, { error: 'A board needs a non-empty name' });
       } catch (err) {
+        if (!(err instanceof SyntaxError) && !err.badRequest) throw err;
         return sendJson(res, 400, { error: 'Invalid JSON: ' + err.message });
       }
     }
@@ -1658,6 +1673,7 @@ async function handleRequest(req, res) {
         if (created > 0) backupAfterNewCards();
         return;
       } catch (err) {
+        if (!(err instanceof SyntaxError) && !err.badRequest) throw err;
         return sendJson(res, 400, { error: 'Invalid JSON: ' + err.message });
       }
     }
@@ -1693,6 +1709,7 @@ async function handleRequest(req, res) {
         }
         return sendJson(res, 200, { messages: saved });
       } catch (err) {
+        if (!(err instanceof SyntaxError) && !err.badRequest) throw err;
         return sendJson(res, 400, { error: 'Invalid JSON: ' + err.message });
       }
     }
@@ -1773,6 +1790,7 @@ async function handleRequest(req, res) {
         }
         return sendJson(res, 200, { session });
       } catch (err) {
+        if (!(err instanceof SyntaxError) && !err.badRequest) throw err;
         return sendJson(res, 400, { error: 'Invalid JSON: ' + err.message });
       }
     }
@@ -1796,6 +1814,7 @@ async function handleRequest(req, res) {
         if (!proposal) return sendJson(res, 400, { error: 'A proposal needs a title' });
         return sendJson(res, 200, proposal);
       } catch (err) {
+        if (!(err instanceof SyntaxError) && !err.badRequest) throw err;
         return sendJson(res, 400, { error: 'Invalid JSON: ' + err.message });
       }
     }
@@ -1820,6 +1839,7 @@ async function handleRequest(req, res) {
         // No backup: nothing changed, so there is nothing to snapshot.
         return sendJson(res, 200, stored);
       } catch (err) {
+        if (!(err instanceof SyntaxError) && !err.badRequest) throw err;
         return sendJson(res, 400, { error: 'Invalid JSON: ' + err.message });
       }
     }
@@ -1960,9 +1980,15 @@ async function handleRequest(req, res) {
 // would throw inside the catch itself.
 const server = createServer((req, res) => {
   handleRequest(req, res).catch((err) => {
-    console.error(`Unhandled error for ${req.method} ${req.url}:`, err);
-    if (res.headersSent) res.destroy();
-    else sendJson(res, 500, { error: 'Server error' });
+    try {
+      console.error(`Unhandled error for ${req.method} ${req.url}:`, err);
+      if (res.headersSent) res.destroy();
+      else sendJson(res, 500, { error: 'Server error' });
+    } catch (e) {
+      // The catch of last resort must not itself throw: that would be a fresh
+      // unhandled rejection, the exact crash this handler exists to prevent.
+      console.error(e);
+    }
   });
 });
 
