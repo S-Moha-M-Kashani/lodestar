@@ -17,7 +17,8 @@
 //
 // Like js/core/merge.js this module imports nothing, so node can test it.
 
-// The rail read one horizon at a time: each one accumulates the nearer ones.
+// The rail read one horizon at a time: the near ones accumulate, 'next' and
+// 'dream' stand alone (see HORIZON_SECTIONS).
 export const PLAN_HORIZONS = [
   { id: 'today', label: 'Today' },
   { id: 'week', label: 'This week' },
@@ -39,14 +40,21 @@ export const PLAN_SECTIONS = [
   { id: 'dreams', label: 'Dreams' },
 ];
 
-// Which sections a horizon shows. 'dream' stands alone: it is every dream on
-// the board, dated or not, so it is never part of a nearer accumulation.
+// Which sections a horizon shows. The near ones accumulate — "this week"
+// includes today, because a week you cannot see today in is not this week.
+//
+// 'next' does not, and that is the one exception. Accumulating it made the
+// picker offer two entries that answered the same question: with nothing
+// planned for next year, "Next year" repeated "This year" row for row, and a
+// board where most years are empty is the normal case. It is the only frame
+// whose whole point is what is NOT in the nearer ones. 'dream' stands alone
+// too: it is every dream on the board, dated or not.
 const HORIZON_SECTIONS = {
   today: ['day'],
   week: ['day', 'week'],
   month: ['day', 'week', 'month'],
   year: ['day', 'week', 'month', 'year'],
-  next: ['day', 'week', 'month', 'year', 'next'],
+  next: ['next'],
   dream: ['dreams'],
 };
 

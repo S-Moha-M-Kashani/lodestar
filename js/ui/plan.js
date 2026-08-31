@@ -20,8 +20,10 @@ import { render } from './render.js';
 //
 // Two layouts, because the same list answers two different questions. Stacked
 // shows day, week, month, year, next year and dreams at once — the whole
-// horizon. Dropdown shows one at a time, and then it accumulates: "this week"
-// includes today. Which one you get is a setting in the ⚙ menu, not a guess.
+// horizon. Dropdown shows one at a time, and the near ones accumulate: "this
+// week" includes today. Next year does not, because a frame that repeated this
+// year's rows was a second entry answering the first one's question. Which
+// layout you get is a setting in the ⚙ menu, not a guess.
 //
 // Dreams is a kind of card rather than a distance, so a dream planned for this
 // month appears twice: in the month, because that is when it happens, and among
