@@ -234,7 +234,41 @@ const safeJson = (json, fallback) => {
 // BOARD_DB at /home/data (persistent storage) which may not exist on first boot.
 mkdirSync(dirname(DB_PATH), { recursive: true });
 
-const db = new DatabaseSync(DB_PATH);
+// One file, several writers. Since 2026-08-31 the composed container and a
+// native `npm start` open the SAME databases/real/board.db (before that they
+// each had their own copy, so contention was impossible), and this machine also
+// runs a third server on :3005. node:sqlite's default busy timeout is 0 and its
+// default journal is rollback, which together mean a reader that arrives during
+// another process's commit gets SQLITE_BUSY immediately — surfacing as a save
+// silently refused with `400 "Invalid JSON: database is locked"`.
+//
+// `timeout` makes a blocked statement wait instead of failing, and WAL is the
+// part that actually fixes it: with a write-ahead log a reader and a writer
+// coexist, so only writer-against-writer ever waits. WAL is a property of the
+// file, not of the connection — it survives in the header once set, and every
+// later opener inherits it.
+// The third part of the same fix lives at every write instead: `BEGIN
+// IMMEDIATE`, not a bare `BEGIN`. A deferred transaction takes its write lock
+// only when the first write arrives, by which point it has already read — and
+// SQLite refuses to make it WAIT there, because two transactions each holding a
+// read snapshot and each waiting to upgrade is a deadlock. It returns
+// SQLITE_BUSY at once and the timeout below never gets a say. Taking the lock
+// up front is what makes the timeout mean anything, and it is why this file has
+// no bare `BEGIN` left. Measured: with WAL and a 5 s timeout but a deferred
+// BEGIN, tests/concurrency.test.js still failed with "database is locked".
+//
+// Five seconds: long enough to sit out any commit this server makes (they are
+// single-statement writes over a few thousand rows), short enough that a truly
+// stuck peer surfaces as an error rather than a hung browser.
+const BUSY_TIMEOUT_MS = 5000;
+
+const openDb = (path) => {
+  const opened = new DatabaseSync(path, { timeout: BUSY_TIMEOUT_MS });
+  opened.exec('PRAGMA journal_mode = WAL');
+  return opened;
+};
+
+const db = openDb(DB_PATH);
 
 // The boards themselves. Created and seeded BEFORE `cards`, because a card's
 // board_id references this table and the very first card must have a board to
@@ -388,7 +422,7 @@ function seedCategories(boardId) {
 if (hadCategoriesTable
     && !db.prepare('PRAGMA table_info(categories)').all().some((c) => c.name === 'board_id')) {
   const shared = db.prepare('SELECT id, label, h, position FROM categories ORDER BY position ASC').all();
-  db.exec('BEGIN');
+  db.exec('BEGIN IMMEDIATE');
   try {
     db.exec('DROP TABLE categories');
     db.exec(`
@@ -422,7 +456,7 @@ function readCategories(boardId) {
 /** Replace one board's registry — it's config, not card data, so unlike cards
  *  it has no soft-delete: removing a category never touches any card row. */
 function writeCategories(cats, boardId) {
-  db.exec('BEGIN');
+  db.exec('BEGIN IMMEDIATE');
   try {
     db.prepare('DELETE FROM categories WHERE board_id = ?').run(boardId);
     const insert = db.prepare('INSERT INTO categories (board_id, id, label, h, position) VALUES (?, ?, ?, ?, ?)');
@@ -455,7 +489,7 @@ function mergeCategories(cats, boardId) {
   if (!missing.length) return;
   const next = db.prepare('SELECT COALESCE(MAX(position), -1) AS p FROM categories WHERE board_id = ?').get(boardId).p;
   const insert = db.prepare('INSERT INTO categories (board_id, id, label, h, position) VALUES (?, ?, ?, ?, ?)');
-  db.exec('BEGIN');
+  db.exec('BEGIN IMMEDIATE');
   try {
     missing.forEach((c, i) => insert.run(boardId, c.id, c.label, c.h, next + 1 + i));
     db.exec('COMMIT');
@@ -603,7 +637,7 @@ function purgeBoard(id) {
   if (!stamped) return null;
 
   const sessions = chatDb.prepare('SELECT id FROM sessions WHERE board_id = ?').all(id).map((r) => r.id);
-  chatDb.exec('BEGIN');
+  chatDb.exec('BEGIN IMMEDIATE');
   try {
     for (const sessionId of sessions) {
       chatDb.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
@@ -616,7 +650,7 @@ function purgeBoard(id) {
   }
 
   let cards = 0;
-  db.exec('BEGIN');
+  db.exec('BEGIN IMMEDIATE');
   try {
     db.prepare(`DELETE FROM card_edits WHERE card_id IN (SELECT id FROM cards WHERE board_id = ?)`).run(id);
     cards = db.prepare('DELETE FROM cards WHERE board_id = ?').run(id).changes;
@@ -653,7 +687,9 @@ function purgeBoard(id) {
 
 const ASSISTANT_DB_PATH = resolveAssistantDb({ root: ROOT, env: process.env });
 mkdirSync(dirname(ASSISTANT_DB_PATH), { recursive: true });
-const chatDb = new DatabaseSync(ASSISTANT_DB_PATH);
+// Same treatment as the board, for the same reason: two stacks now open this
+// one file, and the chat record is written on every turn.
+const chatDb = openDb(ASSISTANT_DB_PATH);
 chatDb.exec(`
   CREATE TABLE IF NOT EXISTS messages (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -734,7 +770,7 @@ const chatTitleFrom = (content) =>
     const first = orphans[0];
     const last = orphans[orphans.length - 1];
     const id = 'legacy-' + first.created_at;
-    chatDb.exec('BEGIN');
+    chatDb.exec('BEGIN IMMEDIATE');
     try {
       // Dated by its own messages, not by the migration: a chat that claims to
       // have started the moment you upgraded is a chat you cannot find again.
@@ -913,7 +949,7 @@ function appendChatMessages(list, sessionId, boardId) {
     INSERT INTO messages (session_id, role, content, created_at, steps, usage, cost)
     VALUES (?, ?, ?, ?, ?, ?, ?)`);
   const saved = [];
-  chatDb.exec('BEGIN');
+  chatDb.exec('BEGIN IMMEDIATE');
   try {
     const existing = chatDb.prepare('SELECT id FROM sessions WHERE id = ?').get(id);
     const stamps = list.map((m) => m.createdAt ?? Date.now());
@@ -1134,7 +1170,7 @@ function writeBoard(cards, boardId) {
   // boards. Moving one is a feature with its own questions to answer, not a
   // side effect of a save.
 
-  db.exec('BEGIN');
+  db.exec('BEGIN IMMEDIATE');
   try {
     // `AND pending = 0` is load-bearing: the browser cannot see proposals, so it
     // never sends them, and without this clause every save would archive them.
@@ -1233,7 +1269,7 @@ function mergeBoard(cards, boardId) {
   `);
 
   let created = 0;
-  db.exec('BEGIN');
+  db.exec('BEGIN IMMEDIATE');
   try {
     for (const c of clean) {
       const row = rows.get(c.id);
@@ -1475,7 +1511,9 @@ function readBody(req) {
   });
 }
 
-const server = createServer(async (req, res) => {
+/** Route one request. Every throw in here is caught by the one handler below;
+ *  see the note there for why that catch is not optional. */
+async function handleRequest(req, res) {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const path = url.pathname;
 
@@ -1886,6 +1924,28 @@ const server = createServer(async (req, res) => {
   }
 
   res.writeHead(404, { 'Content-Type': 'text/plain' }).end('Not found');
+}
+
+// One catch over the whole router, and it is load-bearing rather than tidy.
+// The router is an async function, so anything it throws becomes a rejected
+// promise; since Node 15 an unhandled rejection TERMINATES THE PROCESS. So a
+// single bad request — `GET /api/boards/%E0%A4%A`, where decodeURIComponent
+// throws URIError, or any statement that meets a busy database — used to take
+// the server down and every other in-flight request with it. Catching here
+// turns that into one failed request, which is the property worth having.
+//
+// The client is told nothing but "Server error": an exception's message can
+// carry a filesystem path or a connection string, and the browser is not where
+// that belongs. The detail is logged instead — a silent catch would trade a
+// loud crash for an invisible bug. `headersSent` is checked because a route
+// may already have streamed (the SSE proxy does), and writing a second time
+// would throw inside the catch itself.
+const server = createServer((req, res) => {
+  handleRequest(req, res).catch((err) => {
+    console.error(`Unhandled error for ${req.method} ${req.url}:`, err);
+    if (res.headersSent) res.destroy();
+    else sendJson(res, 500, { error: 'Server error' });
+  });
 });
 
 server.listen(PORT, () => {
