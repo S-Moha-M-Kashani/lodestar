@@ -190,10 +190,16 @@ test('applying the schema names no credentials', () => {
 // The claims that need the real server. Both skip when it is not reachable.
 // ---------------------------------------------------------------------------
 
-// No driver: this project has zero npm dependencies and is not growing one for
-// two tests. psql on the host is used when present, otherwise the psql inside
-// the server's own container — so neither a host install nor this repo owning
-// the service is required. No default password: an unreachable server skips.
+// No driver — and the reason is no longer "this project has zero npm
+// dependencies", because it now has one: `pg`, added for the migration script.
+// The decision stands on its own ground. What these two tests check is the
+// SCHEMA and the server's independence from it, so they need a client, not a
+// binding; shelling out to psql keeps them runnable with no install step at
+// all, which is what makes them work on a fresh clone and in CI where the
+// driver may not be there yet. psql on the host is used when present, otherwise
+// the psql inside the server's own container — so neither a host install nor
+// this repo owning the service is required. No default password: an unreachable
+// server skips.
 const PG_URL = process.env.LODESTAR_PG_URL
   || 'postgresql://lodestar@localhost:5432/lodestar';
 const PG_CONTAINER = process.env.LODESTAR_PG_CONTAINER || 'postgres';

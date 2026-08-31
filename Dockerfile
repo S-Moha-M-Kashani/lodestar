@@ -1,6 +1,10 @@
 # Lodestar — runs the SQLite-backed server. Node 23.4+ is required for the
-# built-in node:sqlite module; there are no npm dependencies, so there is no
-# install step. The board itself lives on a mounted volume (see
+# built-in node:sqlite module. There is still no install step here, but the
+# reason changed on 2026-08-31: the repo now has one npm dependency (`pg`, for
+# the migration script) and server.js does not import it. The moment the server
+# itself reaches for `pg`, this image owes an `npm ci` — deliberately not added
+# yet, because it lands with the read-only tree mount and a container rebuild to
+# verify, not with a comment. The board itself lives on a mounted volume (see
 # docker-compose.yml), never inside the container, so data survives rebuilds.
 FROM node:24-slim
 
