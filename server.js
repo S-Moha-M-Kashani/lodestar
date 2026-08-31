@@ -30,8 +30,26 @@ import { dirname, join, normalize } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { resolveBoardDb, resolveAssistantDb } from './scripts/db-location.mjs';
+import { chooseBackend } from './db/backend.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
+
+// Which store this process opens. Asked here, at boot, because a seam nothing
+// calls is not a seam: until this line existed, LODESTAR_DB_BACKEND=postgres
+// was accepted, logged nowhere, and served SQLite — a recognised value falling
+// back in silence, which is the exact failure the seam was written to prevent,
+// reached from the other side. `postgres` therefore RAISES rather than
+// proceeding: there is no Postgres store yet, and the honest answer to "open
+// Postgres" is a refusal naming the phase that will make it possible.
+const DB_BACKEND = chooseBackend(process.env);
+if (DB_BACKEND !== 'sqlite') {
+  throw new Error(
+    `LODESTAR_DB_BACKEND=${DB_BACKEND} is a real backend but the ${DB_BACKEND} `
+    + 'store is not wired up yet — server.js still reads and writes SQLite '
+    + 'only. Wiring it is the store phase of the Postgres migration (the data '
+    + 'is already mirrored by scripts/sqlite-to-postgres.mjs). Unset '
+    + 'LODESTAR_DB_BACKEND, or set it to sqlite, to boot.');
+}
 // `|| 3000` would be wrong here: PORT=0 is a real request — it asks the kernel
 // for any free port, which is how the tests start servers that cannot collide —
 // and zero is falsy, so it used to arrive as 3000 and bind the dev board's port.
@@ -1954,5 +1972,8 @@ server.listen(PORT, () => {
   // free port, which is how the test harness starts a dozen servers at once
   // without them fighting over a number somebody guessed.
   const { port } = server.address();
-  console.log(`Lodestar running at http://localhost:${port}  (db: ${DB_PATH})`);
+  // The backend is named in the log because "which store am I actually
+  // writing to" must be answerable without reading the environment back.
+  console.log(
+    `Lodestar running at http://localhost:${port}  (backend: ${DB_BACKEND}, db: ${DB_PATH})`);
 });

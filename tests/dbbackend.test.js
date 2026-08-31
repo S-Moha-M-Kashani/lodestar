@@ -1,7 +1,14 @@
 // tests/dbbackend.test.js — which store server.js opens.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { chooseBackend, BACKENDS } from '../db/backend.mjs';
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 // This is a unit test.
 test('the default is sqlite, and it is chosen by absence not by fallback', () => {
@@ -29,7 +36,11 @@ test('an unknown backend raises, and never falls back', () => {
     /postgress/, 'the message must quote what was actually set');
   assert.throws(() => chooseBackend({ LODESTAR_DB_BACKEND: 'postgress' }),
     /sqlite/, 'the message must list the backends that do exist');
-  assert.throws(() => chooseBackend({ LODESTAR_DB_BACKEND: 'auto' }), /auto/);
+  // Matched on the ECHOED input, not on the word "auto": every message this
+  // function throws ends "There is deliberately no auto mode", so a bare /auto/
+  // passed for any input at all and asserted nothing about this one.
+  assert.throws(() => chooseBackend({ LODESTAR_DB_BACKEND: 'auto' }), /is "auto"/,
+    'the message must quote the input, which is what makes it a diagnosis');
 });
 
 // This is a unit test.
@@ -42,3 +53,32 @@ test('postgres requires a connection string, and says so at boot', () => {
     chooseBackend({ LODESTAR_DB_BACKEND: 'postgres', LODESTAR_PG_URL: 'postgresql://x/y' }),
     'postgres');
 });
+
+// This is an integration test: it boots the real server.js.
+test('server.js asks the seam at boot, and refuses a backend it cannot open',
+  { timeout: 20_000 }, () => {
+    // The seam had exactly one caller — this file — so setting the variable did
+    // nothing at all. What must be true now: `postgres` is recognised AND
+    // refused (there is no Postgres store yet), the refusal says so, and the
+    // default boot names the store it opened.
+    const dir = mkdtempSync(join(tmpdir(), 'lodestar-backend-'));
+    const base = { ...process.env, PORT: '0', LODESTAR_BACKUP_ON_WRITE: '0',
+      BOARD_DB: join(dir, 'board.db'), ASSISTANT_DB: join(dir, 'assistant.db') };
+    const boot = (env, timeout = 15_000) => spawnSync('node', ['server.js'],
+      { cwd: ROOT, encoding: 'utf8', timeout, env: { ...base, ...env } });
+
+    const refused = boot({ LODESTAR_DB_BACKEND: 'postgres',
+      LODESTAR_PG_URL: 'postgresql://x/y' });
+    assert.notEqual(refused.status, 0, 'the server booted on a store it has not got');
+    assert.match(refused.stderr, /not wired up yet/);
+
+    const typo = boot({ LODESTAR_DB_BACKEND: 'postgress' });
+    assert.notEqual(typo.status, 0, 'a typo booted the server on SQLite in silence');
+    assert.match(typo.stderr, /postgress/);
+
+    // sqlite proceeds, and says which store it opened. Killed by the spawn's
+    // own timeout, since a server that boots never exits on its own.
+    const ok = boot({ LODESTAR_DB_BACKEND: 'sqlite' }, 3000);
+    assert.match(ok.stdout, /backend: sqlite/);
+    rmSync(dir, { recursive: true, force: true });
+  });
