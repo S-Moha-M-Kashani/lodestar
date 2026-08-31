@@ -46,14 +46,18 @@ function resolveDb({ root, env, envKey, filename, olderHomes }) {
   // explicitly always wins, which is why the check sits below that branch; it
   // sits above the migration too, so a scratch run can never move a legacy file.
   //
-  // The brackets are load-bearing, not a style choice: the invariant test
+  // The brackets used to be load-bearing rather than a style choice: the
+  // invariant test
   // brain/tests/test_config.py::test_env_example_documents_every_variable_the_code_reads
-  // scans scripts/*.mjs for env reads, and its pattern recognises the
-  // bracket-and-quotes form but not property access. Tidied into a dot, this
-  // read goes invisible to it and the .env.example entry below then fails as
-  // "in .env.example, read by nothing". That scanner reads this file as text,
-  // so a comment spelling either form out literally would itself be counted —
-  // which is why this one describes the shapes instead of quoting them.
+  // scans this directory for env reads, and its pattern recognised the
+  // bracket-and-quotes form but not a plain property read — so tidying this
+  // into a dot made the read invisible and the .env.example entry below then
+  // failed as "in .env.example, read by nothing". On 2026-08-31 that hole was
+  // closed (db/backend.mjs reads a parameter by property and lost both its
+  // variables to it), so the scanner now sees either shape and this form is
+  // simply the one that was here. That scanner reads this file as text, so a
+  // comment spelling either form out literally would itself be counted — which
+  // is why this one describes the shapes instead of quoting them.
   if (env['LODESTAR_REFUSE_REAL_DB']) {
     throw new Error(
       `refusing to open databases/real/${filename}: LODESTAR_REFUSE_REAL_DB is `

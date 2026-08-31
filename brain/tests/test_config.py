@@ -277,15 +277,20 @@ def test_no_whisper_model_is_named_anywhere_in_the_code():
     assert named == []
 
 
-# How this repo reads the environment: three shapes in Python, three in
+# How this repo reads the environment: three shapes in Python, four in
 # JavaScript. `envKey:` is the odd one — scripts/db-location.mjs takes the name
 # as data, so a pattern that only matched `process.env.X` would miss BOARD_DB.
+# The last alternative is the plain-property read on an environment PARAMETER
+# rather than on process.env: db/backend.mjs takes `env` as an argument so it
+# can be unit-tested with a literal, and both variables of the storage seam were
+# invisible here until that shape was recognised.
 _ENV_READS = re.compile(r"""
     (?:os\.environ|environ|env)\.get\(\s*['"]([A-Z][A-Z0-9_]{2,})['"]
   | (?:os\.environ|environ|env)\[\s*['"]([A-Z][A-Z0-9_]{2,})['"]\s*\]
   | getenv\(\s*['"]([A-Z][A-Z0-9_]{2,})['"]
   | process\.env\.([A-Z][A-Z0-9_]{2,})
   | process\.env\[\s*['"]([A-Z][A-Z0-9_]{2,})['"]\s*\]
+  | (?:os\.environ|environ|env)\.([A-Z][A-Z0-9_]{2,})
   | envKey:\s*['"]([A-Z][A-Z0-9_]{2,})['"]
 """, re.VERBOSE)
 
@@ -309,6 +314,11 @@ def test_env_example_documents_every_variable_the_code_reads():
     """
     root = Path(__file__).resolve().parents[2]
     sources = [root / 'server.js', *sorted((root / 'scripts').glob('*.mjs')),
+               # db/ was a blind spot from the day it was created: the storage
+               # seam reads two variables nobody could have discovered from
+               # .env.example, and this test — the only thing that would have
+               # said so — was not looking at the directory.
+               *sorted((root / 'db').glob('*.mjs')),
                *sorted((root / 'brain' / 'src').rglob('*.py')),
                *sorted((root / 'brain' / 'tests' / 'evals').rglob('*.py'))]
     read = {name for path in sources

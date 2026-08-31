@@ -1,10 +1,28 @@
 // scripts/sqlite-to-postgres.mjs — move the two SQLite records into Postgres.
 //
-// One-time, and safe to run twice: every insert is ON CONFLICT DO NOTHING, so
-// a second run reports zeros rather than doubling the board. It reads the
-// column list from SQLite at runtime instead of naming columns here, because
-// this file must not become a third place the schema is written down —
-// scripts/postgres/001-schema.sql and server.js are already two.
+// One-time. Safe to run twice in the sense that it cannot corrupt anything —
+// every insert is ON CONFLICT DO NOTHING, so a second run reports zeros rather
+// than doubling the board. It is NOT a way to catch Postgres up: DO NOTHING
+// carries no edits and no deletions made in SQLite since the first run. What
+// Postgres holds is a point-in-time snapshot, and it goes stale from the moment
+// this finishes; a re-run adds rows that are new and leaves every changed or
+// deleted row exactly as the first run left it. Refreshing it is a cut-over
+// with the writers stopped, not a repeat of this script.
+//
+// It reads the column list from SQLite at runtime instead of naming columns
+// here, because this file must not become a third place the schema is written
+// down — scripts/postgres/001-schema.sql and server.js are already two.
+//
+// Alternatives considered — why this does NOT intersect columns against the
+// destination, unlike scripts/merge-sqlite-board.mjs, which does. That script
+// crosses two SQLite files that may sit at different migration levels (a
+// container's copy against the working tree's), so the shared columns are all
+// it can honestly carry and skipping the rest is right. This one crosses into a
+// schema that tests/postgres.test.js pins column-for-column against server.js.
+// A column SQLite has and Postgres lacks is therefore not a version skew to
+// route around — it is the mirror having drifted, and the insert failing loudly
+// inside the transaction is the correct outcome. Intersecting here would
+// migrate the board minus that column and report success.
 //
 // Soft-deleted rows travel too. They are the Trash, and a migration that
 // dropped them would quietly destroy the only copy of everything the user had
@@ -59,13 +77,23 @@ export async function migrate({ boardDb, assistantDb, pgUrl, schemas = {} }) {
     // advance the sequence. Left alone, the next insert reuses id 1 and fails
     // on the primary key — the migration would look clean and break the first
     // chat message afterwards.
+    // The third argument is `is_called`, and it is why this is not the two-arg
+    // form. With two arguments the sequence is marked as having ALREADY handed
+    // out that value, so on an EMPTY messages table `COALESCE(MAX(id), 1)`
+    // would burn id 1 and the first chat message ever written would be id 2.
+    // Passing `MAX(id) IS NOT NULL` says "1 has not been used yet" for an empty
+    // table and "everything up to MAX has" for a populated one.
     await client.query(
       `SELECT setval(pg_get_serial_sequence('${assistant}.messages', 'id'),
-                     COALESCE((SELECT MAX(id) FROM ${assistant}.messages), 1))`);
+                     COALESCE((SELECT MAX(id) FROM ${assistant}.messages), 1),
+                     (SELECT MAX(id) FROM ${assistant}.messages) IS NOT NULL)`);
     await client.query('COMMIT');
     return added;
   } catch (err) {
-    await client.query('ROLLBACK');
+    // The rollback is itself a query and can fail — a dropped connection is
+    // the usual reason — and its error would then replace the one that
+    // actually explains what went wrong. The original always propagates.
+    try { await client.query('ROLLBACK'); } catch { /* keep `err` */ }
     throw err;
   } finally {
     await client.end();

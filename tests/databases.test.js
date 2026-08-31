@@ -242,10 +242,14 @@ test('server boot migrates a legacy board.db and still serves its cards', async 
   assert.ok(existsSync(legacy), 'seeding produced a legacy board.db');
 
   // A copy of the server in the temp root, so its ROOT is the temp root and
-  // the real repo's files are never in reach. server.js has zero npm
-  // dependencies, so the copy is self-sufficient.
+  // the real repo's files are never in reach. server.js imports no npm package,
+  // so the copy is self-sufficient once its own local modules travel with it:
+  // scripts/ for the path resolver and db/ for the storage seam it asks at boot.
+  // Miss one and the boot fails here with an empty stdout, which is exactly how
+  // this test caught db/ being added.
   copyFileSync(join(ROOT, 'server.js'), join(tmpRoot, 'server.js'));
   cpSync(join(ROOT, 'scripts'), join(tmpRoot, 'scripts'), { recursive: true });
+  cpSync(join(ROOT, 'db'), join(tmpRoot, 'db'), { recursive: true });
 
   // PORT=0: the kernel picks a free one and the server reports it, the same way
   // the shared harness does. A port derived from the clock collides with
