@@ -33,6 +33,8 @@ const board = (id, name) =>
 const card = (id, boardId, title) =>
   ['INSERT INTO cards (id, board_id, column_id, title, created_at, updated_at) ' +
    'VALUES (?, ?, \'inbox\', ?, 1, 1)', id, boardId, title];
+const category = (boardId, id, label, h) =>
+  ['INSERT INTO categories (board_id, id, label, h) VALUES (?, ?, ?, ?)', boardId, id, label, h];
 
 // This is a unit test: two temporary SQLite files, no server.
 test('a stranded board and its cards are added, and nothing is overwritten', () => {
@@ -74,6 +76,33 @@ test('a card whose board is missing is still rescued, never dropped', () => {
   const db = new DatabaseSync(into, { readOnly: true });
   assert.equal(db.prepare('SELECT board_id FROM cards WHERE id = ?').get('c-orphan').board_id,
     'b-vanished', 'the card kept its board id rather than being re-homed silently');
+  db.close();
+});
+
+// This is a unit test.
+test('categories are keyed by (board_id, id): the same id on a different board is not a duplicate', () => {
+  // categories has no Trash, so a wrong key here is unrecoverable. A
+  // single-column `id` key would see 'health' already exists (under b-a) and
+  // wrongly skip inserting the different board's own 'health' row (b-b) —
+  // the exact case this test pins down.
+  const dir = mkdtempSync(join(tmpdir(), 'mergedb-'));
+  const from = join(dir, 'stranded.db');
+  const into = join(dir, 'real.db');
+  make(from, [board('b-a', 'A'), board('b-b', 'B'),
+    category('b-a', 'health', 'Health', 10), category('b-b', 'health', 'Health', 10)]);
+  make(into, [board('b-a', 'A'), board('b-b', 'B'),
+    category('b-a', 'health', 'Health', 10)]);
+
+  const added = mergeSqliteBoard({ from, into });
+  assert.equal(added.categories, 1,
+    'only the genuinely new (board_id, id) pair is added; the (b-a, health) duplicate is skipped');
+
+  const db = new DatabaseSync(into, { readOnly: true });
+  assert.deepEqual(
+    db.prepare('SELECT board_id, id FROM categories ORDER BY board_id').all()
+      .map((r) => ({ board_id: r.board_id, id: r.id })),
+    [{ board_id: 'b-a', id: 'health' }, { board_id: 'b-b', id: 'health' }],
+    'both boards keep their own health category; neither was doubled or dropped');
   db.close();
 });
 

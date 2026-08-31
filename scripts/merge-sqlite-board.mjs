@@ -34,22 +34,27 @@ function copyMissing(src, dst, table, keyCols) {
 /** Merge `from` into `into`, additively. Returns the counts actually added. */
 export function mergeSqliteBoard({ from, into }) {
   const src = new DatabaseSync(from, { readOnly: true });
-  const dst = new DatabaseSync(into);
   try {
-    dst.exec('BEGIN');
-    // Boards first: a card carries a board_id, and inserting the parent first
-    // keeps the foreign key satisfiable where one is enforced.
-    const boards = copyMissing(src, dst, 'boards', ['id']);
-    const cards = copyMissing(src, dst, 'cards', ['id']);
-    const categories = copyMissing(src, dst, 'categories', ['board_id', 'id']);
-    dst.exec('COMMIT');
-    return { boards, cards, categories };
-  } catch (err) {
-    dst.exec('ROLLBACK');
-    throw err;
+    // Opening dst nested inside src's try/finally: if it throws (destination
+    // locked, missing directory, corrupt file), src still gets closed.
+    const dst = new DatabaseSync(into);
+    try {
+      dst.exec('BEGIN');
+      // Boards first: a card carries a board_id, and inserting the parent first
+      // keeps the foreign key satisfiable where one is enforced.
+      const boards = copyMissing(src, dst, 'boards', ['id']);
+      const cards = copyMissing(src, dst, 'cards', ['id']);
+      const categories = copyMissing(src, dst, 'categories', ['board_id', 'id']);
+      dst.exec('COMMIT');
+      return { boards, cards, categories };
+    } catch (err) {
+      dst.exec('ROLLBACK');
+      throw err;
+    } finally {
+      dst.close();
+    }
   } finally {
     src.close();
-    dst.close();
   }
 }
 
