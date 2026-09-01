@@ -137,6 +137,15 @@ test('a database and a private name are caught in history, not just in the tree'
     const clean = hygiene({ cwd: dir, refs: ['clean'], names: FAKE_NAME });
     assert.equal(clean.ok, true, `a rewritten ref must pass:\n${clean.output}`);
     assert.match(clean.output, /clean/, 'a pass must record which refs it checked');
+
+    // A mistyped tag is the likeliest way an operator calls this wrongly, and
+    // a stack trace on the way to a release reads like the check ran and
+    // something else broke.
+    const typo = hygiene({ cwd: dir, refs: ['v9.9.9'], names: FAKE_NAME });
+    assert.equal(typo.ok, false, 'an unknown ref must refuse');
+    assert.match(typo.output, /is not a ref/, 'it must say the ref is unknown');
+    assert.doesNotMatch(typo.output, /at .*release-hygiene\.mjs/,
+      'it must refuse cleanly, not with a stack trace');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
