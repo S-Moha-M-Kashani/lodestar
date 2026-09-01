@@ -107,7 +107,10 @@ const projectChromaHostPort = () => {
   const block = read('docker-compose.yml').match(
     /\n  chroma:\n([\s\S]*?)(?=\n  \S|\n\S|$)/);
   assert.ok(block, 'docker-compose.yml has no chroma service');
-  const m = block[1].match(/"(\d+):(\d+)"/);
+  // The host side now carries a "127.0.0.1:" prefix — that is the loopback
+  // boundary, asserted in tests/compose.test.js; here it is just something to
+  // read past on the way to the port number.
+  const m = block[1].match(/"(?:127\.0\.0\.1:)?(\d+):(\d+)"/);
   assert.ok(m, 'could not read a port mapping out of the chroma service');
   return Number(m[1]);
 };
@@ -128,7 +131,10 @@ const testChromaHostPort = () => {
   const block = read('docker-compose.yml').match(
     /\n  chroma-test:\n([\s\S]*?)(?=\n  \S|\n\S|$)/);
   assert.ok(block, 'docker-compose.yml has no chroma-test service');
-  const m = block[1].match(/"(\d+):(\d+)"/);
+  // The host side now carries a "127.0.0.1:" prefix — that is the loopback
+  // boundary, asserted in tests/compose.test.js; here it is just something to
+  // read past on the way to the port number.
+  const m = block[1].match(/"(?:127\.0\.0\.1:)?(\d+):(\d+)"/);
   assert.ok(m, 'could not read a port mapping out of the chroma-test service');
   return Number(m[1]);
 };

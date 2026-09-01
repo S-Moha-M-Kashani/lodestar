@@ -109,6 +109,11 @@ class Settings:
     grader: str = 'llm'
     grade_threshold: float = 0.4
     board_api_url: str = 'http://127.0.0.1:3000'
+    # The board's shared service token. Empty by default, which is what every
+    # unit test and eval wants — they answer their own mocked board — and what
+    # a real run must NOT have: a brain with no token gets 401 from a board
+    # that is doing its job.
+    board_api_token: str = ''
     # Chroma server for chat memory. '' = off, so Settings built directly in
     # code (unit tests, evals) reach no store at all; 'memory' = in-process
     # client; any http(s) url = the real server. load_settings pairs the
@@ -220,6 +225,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         grader=env.get('BRAIN_GRADER', 'llm'),
         grade_threshold=float(env.get('BRAIN_GRADE_THRESHOLD', '0.4')),
         board_api_url=board_api_url,
+        board_api_token=env.get('BOARD_API_TOKEN', ''),
         # The project's own Chroma (compose service `chroma`, npm run chroma) —
         # :8003 because 8001/8002 belong to the unrelated ~/vectordb-lab stack.
         chroma_url=env.get('BRAIN_CHROMA_URL', 'http://localhost:8003'),

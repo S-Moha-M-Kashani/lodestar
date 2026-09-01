@@ -323,7 +323,9 @@ test('the test Chroma persists to databases/test, physically apart from the real
 
 // This is a configuration invariant.
 test('the composed brain dials the project Chroma service, and only after it starts', () => {
-  const mapping = serviceBlock('chroma').match(/"(\d+):(\d+)"/);
+  // The host side carries the loopback prefix now (see the publication test
+  // below); the container port is what this test is about.
+  const mapping = serviceBlock('chroma').match(/"(?:127\.0\.0\.1:)?(\d+):(\d+)"/);
   assert.ok(mapping, 'could not read a port mapping out of the chroma service');
   const pinned = brainEnvPin('BRAIN_CHROMA_URL');
   assert.ok(
@@ -421,4 +423,56 @@ test('both chroma services pin one exact image version, never latest', () => {
     'a service other than chroma and chroma-test runs the chroma image — ' +
       'every declaration has to be pinned, or that one moves',
   );
+});
+
+// This is a configuration invariant. Docker publishes a port by writing its
+// own nat rules, which is why a bare "3000:3000" is not merely "the default":
+// it opens the port on every interface AND routes around the host firewall, so
+// the board answered every peer on university Wi-Fi through a machine whose
+// firewall was on. The loopback prefix is the whole boundary for the composed
+// stack, since the app inside the container must bind 0.0.0.0 for Docker to
+// reach it at all.
+test('every published host port binds loopback, and none is bare', () => {
+  const yaml = read('docker-compose.yml');
+  // Lines under a `ports:` key, ignoring comments — i.e. actual mappings.
+  const mappings = [...yaml.matchAll(/^\s+- "([^"]+)"$/gm)]
+    .map((m) => m[1])
+    .filter((v) => /^[\d.:]+$/.test(v));
+  assert.ok(mappings.length >= 3,
+    `expected the three published services, found ${mappings.length}`);
+  for (const mapping of mappings) {
+    assert.ok(mapping.startsWith('127.0.0.1:'),
+      `"${mapping}" publishes on every interface — prefix it with 127.0.0.1:`);
+    // host:container, both present: "127.0.0.1:3000" alone would publish a
+    // random host port, which is a different bug wearing the same prefix.
+    assert.equal(mapping.split(':').length, 3, `"${mapping}" is not host:container`);
+  }
+});
+
+// This is a configuration invariant. The container is the one place a loopback
+// bind is wrong — Docker forwards to the container's own address — so the
+// override and the Host allowlist entry travel together with the compose-only
+// hostname the brain dials. Miss either and the stack starts and then refuses
+// every request it receives, which reads as "the brain is down".
+test('the composed board binds every interface inside its own namespace', () => {
+  const block = serviceBlock('lodestar');
+  assert.match(block, /LODESTAR_BIND: 0\.0\.0\.0/,
+    'the composed board binds loopback inside the container, where nothing can reach it');
+  assert.match(block, /LODESTAR_ALLOWED_HOSTS: lodestar:3000/,
+    'the brain dials http://lodestar:3000 and the Host allowlist must know that name');
+  // Internal service-to-service URLs are unchanged by any of this.
+  assert.match(serviceBlock("brain"), /BOARD_API_URL: http:\/\/lodestar:3000/);
+  assert.match(block, /AGENT_URL: http:\/\/brain:9000/);
+});
+
+// This is a configuration invariant.
+test('the composed stack refuses to start without a password verifier', () => {
+  const block = serviceBlock('lodestar');
+  // `:?` and not `:-`: a default here would be a board on the network with no
+  // password, which is the exact state this whole change exists to end.
+  assert.match(block, /LODESTAR_AUTH_PASSWORD_HASH: \$\{LODESTAR_AUTH_PASSWORD_HASH:\?/,
+    'compose supplies a fallback for the password hash — it must fail instead');
+  assert.match(block, /LODESTAR_SERVICE_TOKEN: \$\{LODESTAR_SERVICE_TOKEN:-\}/);
+  assert.match(serviceBlock("brain"), /BOARD_API_TOKEN: \$\{LODESTAR_SERVICE_TOKEN:-\}/,
+    'the brain and the board must share one service token');
 });
