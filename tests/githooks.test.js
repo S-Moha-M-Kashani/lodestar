@@ -14,7 +14,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, copyFileSync, chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, copyFileSync, chmodSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -232,7 +232,20 @@ test('the repository has the hooks installed, and tracks their source', () => {
     assert.equal(git(ROOT, 'ls-files', '--error-unmatch', `scripts/git-hooks/${hook}`).ok,
       true, `${hook} must be tracked, or a fresh clone cannot restore it`);
   }
-  // The installed copy lives in .git/hooks so it applies whichever branch is
-  // checked out — including master, which does not carry the tracked file.
-  assert.equal(git(ROOT, 'rev-parse', '--verify', 'refs/heads/development').ok, true);
+  // The rest of this asserts the *machine*, not the published artifact, and
+  // development is the way to tell them apart: it never leaves this laptop, so
+  // a clone of master cannot have it. Asserting its existence unconditionally
+  // made the public repository's own suite impossible to pass — on a fresh
+  // clone of the published repo this was the one red test, and CI runs on
+  // every push. Absence is the expected state there, not a failure.
+  if (!git(ROOT, 'rev-parse', '--verify', 'refs/heads/development').ok) return;
+
+  // On the development machine, being installed is what the test's name
+  // claims and what actually protects anything: the copy under .git/hooks is
+  // the one git runs, and it applies whichever branch is checked out —
+  // including master, which does not carry the tracked file.
+  for (const hook of ['reference-transaction', 'pre-push', 'pre-commit', 'commit-msg']) {
+    assert.ok(existsSync(join(ROOT, '.git', 'hooks', hook)),
+      `${hook} must be installed in .git/hooks — run: npm run hooks`);
+  }
 });
