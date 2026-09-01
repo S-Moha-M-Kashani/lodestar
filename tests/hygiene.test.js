@@ -27,6 +27,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { prohibitedPath } from '../scripts/release-hygiene.mjs';
@@ -34,9 +35,13 @@ import { prohibitedPath } from '../scripts/release-hygiene.mjs';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CHECK = join(ROOT, 'scripts', 'release-hygiene.mjs');
 
-// A synthetic name that exists nowhere in this project, so a run against the
-// real repository exercises the identifier scan without a real one on disk.
-const FAKE_NAME = 'Zarvanmehr';
+// A stand-in identifier, minted per run rather than written down. It has to be
+// absent from the repository for the real-repo case below to mean anything —
+// and a constant here could not be, because this file is one of the files the
+// scan reads. Written as a literal it passed while the file was still
+// uncommitted and went red the moment it was released: the gate found its own
+// test. So the value never exists as source text.
+const FAKE_NAME = `Q${randomUUID().replace(/-/g, '')}`;
 
 function git(cwd, ...args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: 'pipe' });
