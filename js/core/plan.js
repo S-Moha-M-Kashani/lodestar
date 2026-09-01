@@ -171,9 +171,11 @@ export function planSection(card, at = new Date()) {
   return plan <= planEnd(month) ? 'month' : far;
 }
 
-// Nearest date first, then the ledger number — the order a plan is read in.
+// Nearest deadline first, then the ledger number — the order a plan is read in.
+// Sorts by end date: last day of year/month or the day itself. Overdue cards
+// sort as today (grouped in the 'day' section by planSection).
 const byWhen = (a, b) =>
-  (planStart(resolvePlan(a)) || '9999').localeCompare(planStart(resolvePlan(b)) || '9999')
+  (planEnd(resolvePlan(a)) || '9999').localeCompare(planEnd(resolvePlan(b)) || '9999')
   || (a.num || 0) - (b.num || 0);
 
 /** Every section with its cards, for the stacked layout. `pass` is the caller's
