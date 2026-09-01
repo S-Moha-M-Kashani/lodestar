@@ -144,6 +144,18 @@ function main(argv) {
     console.error('usage: release-hygiene.mjs [--repo <dir>] <ref>...');
     return 2;
   }
+  // A ref that does not resolve must refuse, not crash: an operator who
+  // mistypes a tag is the likeliest caller, and a stack trace on the way to a
+  // release reads like the check ran and something else broke.
+  for (const ref of refs) {
+    try {
+      git(cwd, 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`);
+    } catch {
+      console.error(`refused: '${ref}' is not a ref in ${cwd}.`);
+      return 2;
+    }
+  }
+
   const names = privateNames();
   if (names.length === 0) {
     console.error('refused: set LODESTAR_PRIVATE_NAMES to the identifiers this '
