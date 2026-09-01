@@ -4922,6 +4922,64 @@ try:
         for e in provoked:
             errors.remove(e)
 
+        # ---- The Assistant widget: one conversation, two shells --------------
+        # This is an end-to-end test.
+        # The Assistant used to be a screen you had to leave the board for. The
+        # widget is the same conversation docked in the corner of whatever view
+        # you are on, and the properties worth testing are the ones that make it
+        # a second *shell* rather than a second chat: it is closed until asked
+        # for, it is reachable from every view, and there is never more than one
+        # of it in the document — two `#chat-input`s would be invalid HTML and
+        # would break every selector this suite already depends on.
+        WIDGET_KEY = "lodestar:widget"
+        page.evaluate("key => localStorage.removeItem(key)", WIDGET_KEY)
+        page.reload()
+        page.wait_for_selector("#board")
+        check("widget: the launcher is in the header on the Board",
+              page.locator("#assistant-launcher").count() == 1
+              and page.locator("#assistant-launcher").is_visible())
+        # Closed by default: an existing user meets no change until they ask for
+        # one, and an assistant that opens itself over the work is the mental
+        # load this whole change exists to remove.
+        check("widget: nothing is shown until the launcher is used",
+              not page.locator("#assistant-widget").is_visible())
+        page.click("#assistant-launcher")
+        page.wait_for_selector("#assistant-widget .chat-log")
+        check("widget: the launcher opens a docked card with the composer focused",
+              page.locator("#assistant-widget").is_visible()
+              and page.locator("#assistant-widget #chat-input").count() == 1
+              and page.evaluate("() => document.activeElement.id") == "chat-input")
+        # The board is still there, and still the board: the widget floats over
+        # it rather than replacing it.
+        check("widget: the view underneath is untouched",
+              page.locator("#board .card").count() > 0
+              and page.get_attribute('.view-switch button[data-view="board"]',
+                                     "aria-pressed") == "true")
+        # One #chat-input, in every state either shell can be in. This is the
+        # duplicate-shell guard: it passes today (there is one sheet and no
+        # widget), and it is what fails the moment both paint at once.
+        one_input = lambda: page.locator("#chat-input").count() == 1
+        board_open = one_input()
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector(".assistant-sheet #chat-input")
+        view_open = one_input()
+        check("widget: exactly one message input exists in every state",
+              board_open and view_open
+              and not page.locator("#assistant-widget").is_visible())
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector("#assistant-widget .chat-log")
+        check("widget: leaving the Assistant view hands the conversation back",
+              one_input()
+              and page.locator("#assistant-widget #chat-input").count() == 1)
+        # Escape closes the innermost thing that is open — with no panel of its
+        # own showing, that is the widget itself — and the caret goes back to
+        # the control that opened it rather than to the top of the page.
+        page.locator("#assistant-widget #chat-input").focus()
+        page.keyboard.press("Escape")
+        check("widget: Escape closes it and returns focus to the launcher",
+              wait_until(lambda: not page.locator("#assistant-widget").is_visible())
+              and page.evaluate("() => document.activeElement.id") == "assistant-launcher")
+
         # ---- The reminder fires from the background ---------------------------
         # This is an end-to-end test. A habit slot arriving while the page
         # just sits there must show the banner and chime on its own — no

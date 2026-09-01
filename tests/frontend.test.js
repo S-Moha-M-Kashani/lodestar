@@ -105,3 +105,20 @@ test('the server serves every module in the graph as JavaScript', async () => {
     }
   } finally { await s.stop(); }
 });
+
+// This is a unit test.
+//
+// The two shells the Assistant now has are each reached from exactly one
+// place, and neither is imported by anything the other tests would notice: the
+// widget is wired into render(), the shared chrome only into the two shells.
+// The orphan check above would catch a module nothing imports, but not the
+// reverse mistake — a shell deleted, or quietly folded back into sheet.js,
+// leaving the widget's markup in index.html with nothing driving it. Naming
+// them here is what makes that a failing test rather than a dead launcher.
+test('both assistant shells are reachable from main.js', () => {
+  const { reached } = walk();
+  const have = new Set([...reached].map((f) => relative(ROOT, f)));
+  for (const mod of ['js/assistant/widget.js', 'js/assistant/chrome.js']) {
+    assert.ok(have.has(mod), `${mod} is not reachable from js/main.js`);
+  }
+});
