@@ -30,8 +30,26 @@ import { dirname, join, normalize } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { resolveBoardDb, resolveAssistantDb } from './scripts/db-location.mjs';
+import { chooseBackend } from './db/backend.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
+
+// Which store this process opens. Asked here, at boot, because a seam nothing
+// calls is not a seam: until this line existed, LODESTAR_DB_BACKEND=postgres
+// was accepted, logged nowhere, and served SQLite — a recognised value falling
+// back in silence, which is the exact failure the seam was written to prevent,
+// reached from the other side. `postgres` therefore RAISES rather than
+// proceeding: there is no Postgres store yet, and the honest answer to "open
+// Postgres" is a refusal naming the phase that will make it possible.
+const DB_BACKEND = chooseBackend(process.env);
+if (DB_BACKEND !== 'sqlite') {
+  throw new Error(
+    `LODESTAR_DB_BACKEND=${DB_BACKEND} is a real backend but the ${DB_BACKEND} `
+    + 'store is not wired up yet — server.js still reads and writes SQLite '
+    + 'only. Wiring it is the store phase of the Postgres migration (the data '
+    + 'is already mirrored by scripts/sqlite-to-postgres.mjs). Unset '
+    + 'LODESTAR_DB_BACKEND, or set it to sqlite, to boot.');
+}
 // `|| 3000` would be wrong here: PORT=0 is a real request — it asks the kernel
 // for any free port, which is how the tests start servers that cannot collide —
 // and zero is falsy, so it used to arrive as 3000 and bind the dev board's port.
@@ -234,7 +252,46 @@ const safeJson = (json, fallback) => {
 // BOARD_DB at /home/data (persistent storage) which may not exist on first boot.
 mkdirSync(dirname(DB_PATH), { recursive: true });
 
-const db = new DatabaseSync(DB_PATH);
+// One file, several writers. Since 2026-08-31 the composed container and a
+// native `npm start` open the SAME databases/real/board.db (before that they
+// each had their own copy, so contention was impossible), and this machine also
+// runs a third server on :3005. node:sqlite's default busy timeout is 0 and its
+// default journal is rollback, which together mean a reader that arrives during
+// another process's commit gets SQLITE_BUSY immediately — surfacing as a save
+// silently refused with `400 "Invalid JSON: database is locked"`. That
+// mislabeling is a second bug, fixed separately at every `Invalid JSON` catch
+// below (`if (!(err instanceof SyntaxError) && !err.badRequest) throw err`): a
+// store error is no longer reported as a bad request, even if it does outlast
+// the timeout. `readBody`'s own payload-too-large rejection is exempted by
+// that same `badRequest` flag — it is the caller's fault, not the store's.
+//
+// `timeout` makes a blocked statement wait instead of failing, and WAL is the
+// part that actually fixes it: with a write-ahead log a reader and a writer
+// coexist, so only writer-against-writer ever waits. WAL is a property of the
+// file, not of the connection — it survives in the header once set, and every
+// later opener inherits it.
+// The third part of the same fix lives at every write instead: `BEGIN
+// IMMEDIATE`, not a bare `BEGIN`. A deferred transaction takes its write lock
+// only when the first write arrives, by which point it has already read — and
+// SQLite refuses to make it WAIT there, because two transactions each holding a
+// read snapshot and each waiting to upgrade is a deadlock. It returns
+// SQLITE_BUSY at once and the timeout below never gets a say. Taking the lock
+// up front is what makes the timeout mean anything, and it is why this file has
+// no bare `BEGIN` left. Measured: with WAL and a 5 s timeout but a deferred
+// BEGIN, tests/concurrency.test.js still failed with "database is locked".
+//
+// Five seconds: long enough to sit out any commit this server makes (they are
+// single-statement writes over a few thousand rows), short enough that a truly
+// stuck peer surfaces as an error rather than a hung browser.
+const BUSY_TIMEOUT_MS = 5000;
+
+const openDb = (path) => {
+  const opened = new DatabaseSync(path, { timeout: BUSY_TIMEOUT_MS });
+  opened.exec('PRAGMA journal_mode = WAL');
+  return opened;
+};
+
+const db = openDb(DB_PATH);
 
 // The boards themselves. Created and seeded BEFORE `cards`, because a card's
 // board_id references this table and the very first card must have a board to
@@ -388,7 +445,7 @@ function seedCategories(boardId) {
 if (hadCategoriesTable
     && !db.prepare('PRAGMA table_info(categories)').all().some((c) => c.name === 'board_id')) {
   const shared = db.prepare('SELECT id, label, h, position FROM categories ORDER BY position ASC').all();
-  db.exec('BEGIN');
+  db.exec('BEGIN IMMEDIATE');
   try {
     db.exec('DROP TABLE categories');
     db.exec(`
@@ -422,7 +479,7 @@ function readCategories(boardId) {
 /** Replace one board's registry — it's config, not card data, so unlike cards
  *  it has no soft-delete: removing a category never touches any card row. */
 function writeCategories(cats, boardId) {
-  db.exec('BEGIN');
+  db.exec('BEGIN IMMEDIATE');
   try {
     db.prepare('DELETE FROM categories WHERE board_id = ?').run(boardId);
     const insert = db.prepare('INSERT INTO categories (board_id, id, label, h, position) VALUES (?, ?, ?, ?, ?)');
@@ -455,7 +512,7 @@ function mergeCategories(cats, boardId) {
   if (!missing.length) return;
   const next = db.prepare('SELECT COALESCE(MAX(position), -1) AS p FROM categories WHERE board_id = ?').get(boardId).p;
   const insert = db.prepare('INSERT INTO categories (board_id, id, label, h, position) VALUES (?, ?, ?, ?, ?)');
-  db.exec('BEGIN');
+  db.exec('BEGIN IMMEDIATE');
   try {
     missing.forEach((c, i) => insert.run(boardId, c.id, c.label, c.h, next + 1 + i));
     db.exec('COMMIT');
@@ -603,7 +660,7 @@ function purgeBoard(id) {
   if (!stamped) return null;
 
   const sessions = chatDb.prepare('SELECT id FROM sessions WHERE board_id = ?').all(id).map((r) => r.id);
-  chatDb.exec('BEGIN');
+  chatDb.exec('BEGIN IMMEDIATE');
   try {
     for (const sessionId of sessions) {
       chatDb.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
@@ -616,7 +673,7 @@ function purgeBoard(id) {
   }
 
   let cards = 0;
-  db.exec('BEGIN');
+  db.exec('BEGIN IMMEDIATE');
   try {
     db.prepare(`DELETE FROM card_edits WHERE card_id IN (SELECT id FROM cards WHERE board_id = ?)`).run(id);
     cards = db.prepare('DELETE FROM cards WHERE board_id = ?').run(id).changes;
@@ -653,7 +710,9 @@ function purgeBoard(id) {
 
 const ASSISTANT_DB_PATH = resolveAssistantDb({ root: ROOT, env: process.env });
 mkdirSync(dirname(ASSISTANT_DB_PATH), { recursive: true });
-const chatDb = new DatabaseSync(ASSISTANT_DB_PATH);
+// Same treatment as the board, for the same reason: two stacks now open this
+// one file, and the chat record is written on every turn.
+const chatDb = openDb(ASSISTANT_DB_PATH);
 chatDb.exec(`
   CREATE TABLE IF NOT EXISTS messages (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -734,7 +793,7 @@ const chatTitleFrom = (content) =>
     const first = orphans[0];
     const last = orphans[orphans.length - 1];
     const id = 'legacy-' + first.created_at;
-    chatDb.exec('BEGIN');
+    chatDb.exec('BEGIN IMMEDIATE');
     try {
       // Dated by its own messages, not by the migration: a chat that claims to
       // have started the moment you upgraded is a chat you cannot find again.
@@ -913,7 +972,7 @@ function appendChatMessages(list, sessionId, boardId) {
     INSERT INTO messages (session_id, role, content, created_at, steps, usage, cost)
     VALUES (?, ?, ?, ?, ?, ?, ?)`);
   const saved = [];
-  chatDb.exec('BEGIN');
+  chatDb.exec('BEGIN IMMEDIATE');
   try {
     const existing = chatDb.prepare('SELECT id FROM sessions WHERE id = ?').get(id);
     const stamps = list.map((m) => m.createdAt ?? Date.now());
@@ -1134,7 +1193,7 @@ function writeBoard(cards, boardId) {
   // boards. Moving one is a feature with its own questions to answer, not a
   // side effect of a save.
 
-  db.exec('BEGIN');
+  db.exec('BEGIN IMMEDIATE');
   try {
     // `AND pending = 0` is load-bearing: the browser cannot see proposals, so it
     // never sends them, and without this clause every save would archive them.
@@ -1233,7 +1292,7 @@ function mergeBoard(cards, boardId) {
   `);
 
   let created = 0;
-  db.exec('BEGIN');
+  db.exec('BEGIN IMMEDIATE');
   try {
     for (const c of clean) {
       const row = rows.get(c.id);
@@ -1468,14 +1527,24 @@ function readBody(req) {
     let data = '';
     req.on('data', (chunk) => {
       data += chunk;
-      if (data.length > 5_000_000) reject(new Error('Payload too large')); // ~5 MB guard
+      if (data.length > 5_000_000) { // ~5 MB guard
+        // Marked, not just thrown: every `Invalid JSON` catch below re-throws
+        // anything that is not a body-shape problem so a store error reaches
+        // the handler-level catch as a 500 — but this one is the caller's
+        // fault, same as a syntax error, and must stay a 400 like it always was.
+        const err = new Error('Payload too large');
+        err.badRequest = true;
+        reject(err);
+      }
     });
     req.on('end', () => resolve(data));
     req.on('error', reject);
   });
 }
 
-const server = createServer(async (req, res) => {
+/** Route one request. Every throw in here is caught by the one handler below;
+ *  see the note there for why that catch is not optional. */
+async function handleRequest(req, res) {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const path = url.pathname;
 
@@ -1498,6 +1567,7 @@ const server = createServer(async (req, res) => {
         if (!board) return sendJson(res, 400, { error: 'A board needs a non-empty name' });
         return sendJson(res, 200, { board });
       } catch (err) {
+        if (!(err instanceof SyntaxError) && !err.badRequest) throw err;
         return sendJson(res, 400, { error: 'Invalid JSON: ' + err.message });
       }
     }
@@ -1542,6 +1612,7 @@ const server = createServer(async (req, res) => {
           ? sendJson(res, 200, { board })
           : sendJson(res, 400, { error: 'A board needs a non-empty name' });
       } catch (err) {
+        if (!(err instanceof SyntaxError) && !err.badRequest) throw err;
         return sendJson(res, 400, { error: 'Invalid JSON: ' + err.message });
       }
     }
@@ -1602,6 +1673,7 @@ const server = createServer(async (req, res) => {
         if (created > 0) backupAfterNewCards();
         return;
       } catch (err) {
+        if (!(err instanceof SyntaxError) && !err.badRequest) throw err;
         return sendJson(res, 400, { error: 'Invalid JSON: ' + err.message });
       }
     }
@@ -1637,6 +1709,7 @@ const server = createServer(async (req, res) => {
         }
         return sendJson(res, 200, { messages: saved });
       } catch (err) {
+        if (!(err instanceof SyntaxError) && !err.badRequest) throw err;
         return sendJson(res, 400, { error: 'Invalid JSON: ' + err.message });
       }
     }
@@ -1717,6 +1790,7 @@ const server = createServer(async (req, res) => {
         }
         return sendJson(res, 200, { session });
       } catch (err) {
+        if (!(err instanceof SyntaxError) && !err.badRequest) throw err;
         return sendJson(res, 400, { error: 'Invalid JSON: ' + err.message });
       }
     }
@@ -1740,6 +1814,7 @@ const server = createServer(async (req, res) => {
         if (!proposal) return sendJson(res, 400, { error: 'A proposal needs a title' });
         return sendJson(res, 200, proposal);
       } catch (err) {
+        if (!(err instanceof SyntaxError) && !err.badRequest) throw err;
         return sendJson(res, 400, { error: 'Invalid JSON: ' + err.message });
       }
     }
@@ -1764,6 +1839,7 @@ const server = createServer(async (req, res) => {
         // No backup: nothing changed, so there is nothing to snapshot.
         return sendJson(res, 200, stored);
       } catch (err) {
+        if (!(err instanceof SyntaxError) && !err.badRequest) throw err;
         return sendJson(res, 400, { error: 'Invalid JSON: ' + err.message });
       }
     }
@@ -1886,6 +1962,34 @@ const server = createServer(async (req, res) => {
   }
 
   res.writeHead(404, { 'Content-Type': 'text/plain' }).end('Not found');
+}
+
+// One catch over the whole router, and it is load-bearing rather than tidy.
+// The router is an async function, so anything it throws becomes a rejected
+// promise; since Node 15 an unhandled rejection TERMINATES THE PROCESS. So a
+// single bad request — `GET /api/boards/%E0%A4%A`, where decodeURIComponent
+// throws URIError, or any statement that meets a busy database — used to take
+// the server down and every other in-flight request with it. Catching here
+// turns that into one failed request, which is the property worth having.
+//
+// The client is told nothing but "Server error": an exception's message can
+// carry a filesystem path or a connection string, and the browser is not where
+// that belongs. The detail is logged instead — a silent catch would trade a
+// loud crash for an invisible bug. `headersSent` is checked because a route
+// may already have streamed (the SSE proxy does), and writing a second time
+// would throw inside the catch itself.
+const server = createServer((req, res) => {
+  handleRequest(req, res).catch((err) => {
+    try {
+      console.error(`Unhandled error for ${req.method} ${req.url}:`, err);
+      if (res.headersSent) res.destroy();
+      else sendJson(res, 500, { error: 'Server error' });
+    } catch (e) {
+      // The catch of last resort must not itself throw: that would be a fresh
+      // unhandled rejection, the exact crash this handler exists to prevent.
+      console.error(e);
+    }
+  });
 });
 
 server.listen(PORT, () => {
@@ -1894,5 +1998,8 @@ server.listen(PORT, () => {
   // free port, which is how the test harness starts a dozen servers at once
   // without them fighting over a number somebody guessed.
   const { port } = server.address();
-  console.log(`Lodestar running at http://localhost:${port}  (db: ${DB_PATH})`);
+  // The backend is named in the log because "which store am I actually
+  // writing to" must be answerable without reading the environment back.
+  console.log(
+    `Lodestar running at http://localhost:${port}  (backend: ${DB_BACKEND}, db: ${DB_PATH})`);
 });

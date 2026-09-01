@@ -1226,6 +1226,20 @@ body[data-view="board"] .cards { min-height: 0; }
   border-left: 1px dashed var(--line);
 }
 
+/* The rail scrolls itself, exactly as .cards does for a column. On the board
+   the body is a 100vh flex column with overflow:hidden, so a rail longer than
+   the window was cut off at the bottom of the screen with no scrollbar
+   anywhere to reach the rest — a plan of thirty cards ended at whatever row
+   the window stopped on. min-height:0 is the load-bearing half: a stretched
+   grid item's automatic minimum is its content, so without it the box grows to
+   fit the list and there is nothing left to overflow. */
+body[data-view="board"] .board-rail {
+  min-height: 0;
+  max-height: 100%;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
 .habit-rail-head { margin-bottom: 10px; }
 .habit-rail-title {
   margin: 0;

@@ -170,9 +170,64 @@ test('a dream is listed by its date and again as a dream', () => {
     ['overdue', 'today', 'week', 'month', 'dated dream']);
   assert.deepEqual(planCardsIn(cards, 'year', AT).map((c) => c.id),
     ['overdue', 'today', 'week', 'month', 'dated dream', 'year']);
-  assert.deepEqual(planCardsIn(cards, 'next', AT).map((c) => c.id),
-    ['overdue', 'today', 'week', 'month', 'dated dream', 'year', 'next']);
+  // Next year is the exception, and it is the one the accumulation made
+  // useless: with nothing planned for 2027 it repeated 'This year' word for
+  // word, so the two entries in the picker answered the same question. It
+  // shows next year and the years after it, alone.
+  assert.deepEqual(planCardsIn(cards, 'next', AT).map((c) => c.id), ['next']);
   // The dreams horizon is the whole life area, dated or not.
   assert.deepEqual(planCardsIn(cards, 'dream', AT).map((c) => c.id),
     ['dated dream', 'open dream']);
+});
+
+// This is a unit test.
+test('cards sort by deadline: nearest last day first, then card number', () => {
+  // Year-only plans sort by their last day (12-31), month-only by last day of month.
+  const cards = [
+    card('plan-2027', '2027', { num: 1 }),        // deadline: 2027-12-31
+    card('plan-2025', '2025', { num: 2 }),        // deadline: 2025-12-31 (overdue)
+    card('plan-2026-12', '2026-12', { num: 3 }),  // deadline: 2026-12-31
+    card('plan-2026-07', '2026-07', { num: 4 }),  // deadline: 2026-07-31 (overdue)
+    card('plan-2026-08-20', '2026-08-20', { num: 5 }), // deadline: 2026-08-20 (overdue)
+    card('plan-2026-08-26', '2026-08-26', { num: 6 }), // deadline: 2026-08-26 (today)
+    card('plan-2026-09-10', '2026-09-10', { num: 7 }), // deadline: 2026-09-10
+  ];
+
+  // Sort by deadline nearest first: overdue grouped as today, then by date
+  const sorted = planGroups(cards, AT);
+  const dayCards = sorted[0].cards.map((c) => c.id);
+  const yearCards = sorted[3].cards.map((c) => c.id);
+  const nextCards = sorted[4].cards.map((c) => c.id);
+
+  // Day section: overdue comes before today (sorted by deadline)
+  assert.deepEqual(dayCards, [
+    'plan-2025', 'plan-2026-07', 'plan-2026-08-20', 'plan-2026-08-26',
+  ]);
+
+  // Year section: sorted by deadline (end date)
+  // plan-2026-09-10 ends 2026-09-10, plan-2026-12 ends 2026-12-31
+  assert.deepEqual(yearCards, [
+    'plan-2026-09-10', 'plan-2026-12',
+  ]);
+
+  // Next section: plan-2027 ends 2027-12-31
+  assert.deepEqual(nextCards, ['plan-2027']);
+
+  // Within same precision, earlier deadlines come first
+  const samePrecision = [
+    card('late-sep', '2026-09-15', { num: 1 }),
+    card('early-sep', '2026-09-05', { num: 2 }),
+    card('mid-sep', '2026-09-10', { num: 3 }),
+  ];
+  const result = planCardsIn(samePrecision, 'year', AT).map((c) => c.id);
+  assert.deepEqual(result, ['early-sep', 'mid-sep', 'late-sep']);
+
+  // Tie-breaking by card number
+  const sameDateDifferentNum = [
+    card('num-3', '2026-09-10', { num: 3 }),
+    card('num-1', '2026-09-10', { num: 1 }),
+    card('num-2', '2026-09-10', { num: 2 }),
+  ];
+  const tieResult = planCardsIn(sameDateDifferentNum, 'year', AT).map((c) => c.id);
+  assert.deepEqual(tieResult, ['num-1', 'num-2', 'num-3']);
 });

@@ -17,9 +17,11 @@
 // future edit that reintroduces the drift fails here instead of on :3000.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
+import { resolveBoardDb, resolveAssistantDb } from '../scripts/db-location.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (...p) => readFileSync(join(ROOT, ...p), 'utf8');
@@ -104,21 +106,55 @@ test('every file the server serves is inside the mounted tree', () => {
 });
 
 // This is a configuration invariant.
-test('the database still lives on its own named volume, not the source tree', () => {
-  // The durability promise: adding a source mount must not displace board-data,
-  // and BOARD_DB must stay on it — a tree mount is read-only, so a board.db
-  // pointed inside it would fail to open at all.
+test('the container and a native npm start open the same two database files', () => {
+  // The 2026-08-30 defect: BOARD_DB pointed into a Docker-owned volume while
+  // `npm start` opened databases/real/board.db, so :3000 served whichever
+  // stack was started last. The browser's cache refilled the cards and could
+  // not refill the boards, so two of them were simply gone.
   const block = serviceBlock('lodestar');
-  assert.ok(
-    mountsOf(block).includes('board-data:/data'),
-    'the board-data volume mount is gone — board.db would live inside the ' +
-      'container and vanish on the next rebuild',
-  );
-  assert.match(
-    block,
-    /BOARD_DB:\s*\/data\/board\.db/,
-    'BOARD_DB no longer points into the mounted volume',
-  );
+  const mounts = mountsOf(block);
+
+  assert.ok(!mounts.includes('board-data:/data'),
+    'the container still has its own private board volume');
+  assert.ok(!/\nvolumes:\n[\s\S]*?^ {2}board-data:/m.test(read('docker-compose.yml')),
+    'board-data is still declared — a later edit could mount it again');
+
+  // The data mount must be writable: the tree mount is :ro, and a board.db
+  // reached only through that one could not be opened for writing at all.
+  const data = mounts.find((m) => m.split(':')[1] === '/data');
+  assert.ok(data, `nothing is mounted at /data, got [${mounts.join(', ')}]`);
+  assert.ok(!data.endsWith(':ro'), `the data mount "${data}" is read-only`);
+
+  // The real invariant, asked of the path resolver rather than of a string:
+  // whatever the container opens must be the same host file `npm start` opens.
+  //
+  // The resolver is run against an EMPTY temporary root, never against this
+  // repo. Asked about a repo where databases/real/board.db is absent but a
+  // legacy databases/board.db or root-level board.db is present, it does not
+  // answer — it PERFORMS the one-time move, backup and renameSync included.
+  // A configuration-invariant test that reads two text files must not migrate
+  // anybody's database. Both sides are then compared repo-relative, so the
+  // question being asked is unchanged: the resolver still names the path, and
+  // no literal appears here.
+  const hostDir = join(ROOT, data.split(':')[0]);
+  const scratch = mkdtempSync(join(tmpdir(), 'lodestar-compose-'));
+  try {
+    for (const [key, resolve] of [['BOARD_DB', resolveBoardDb],
+      ['ASSISTANT_DB', resolveAssistantDb]]) {
+      const m = block.match(new RegExp(`^\\s*${key}:\\s*(\\S+)\\s*$`, 'm'));
+      assert.ok(m, `the service sets no ${key}, so it falls back to a path ` +
+        `inside the read-only tree mount`);
+      const inContainer = m[1];
+      assert.ok(inContainer.startsWith('/data/'),
+        `${key} is "${inContainer}", which is not on the data mount`);
+      assert.equal(
+        relative(ROOT, join(hostDir, inContainer.slice('/data/'.length))),
+        relative(scratch, resolve({ root: scratch, env: {} })),
+        `${key} does not resolve to the file a native npm start opens`);
+    }
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
 });
 
 // The brain has the same bake-in drift, but cannot take the same whole-tree

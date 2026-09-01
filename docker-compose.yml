@@ -6,13 +6,19 @@ services:
     ports:
       - "3000:3000"
     environment:
-      # The SQLite database lives on the named volume below, so questions persist
-      # across restarts, upgrades, and rebuilds. Removing the volume
-      # (`docker volume rm`) is the only thing that erases them.
+      # Both records live in databases/real/, the same two files `npm start`
+      # opens. They used to differ: BOARD_DB pointed into a Docker-owned volume
+      # and ASSISTANT_DB was unset, so the container wrote the board to a
+      # private copy and opened the real chat record read-only through the tree
+      # mount below. On 2026-08-30 that cost two boards.
       BOARD_DB: /data/board.db
+      ASSISTANT_DB: /data/assistant.db
       AGENT_URL: http://brain:9000
     volumes:
-      - board-data:/data
+      # Writable, unlike the tree mount: this is the one path the container is
+      # allowed to write back through, and a database opened through a :ro
+      # mount cannot be opened for writing at all.
+      - ./databases/real:/data
       # Serve the working tree, not the copy baked in at build time. Without this
       # the container keeps serving the frontend it was built with — the API and
       # the board stay current, so the staleness shows up only as views quietly
@@ -134,6 +140,3 @@ services:
       IS_PERSISTENT: "TRUE"
       ANONYMIZED_TELEMETRY: "FALSE"
     restart: unless-stopped
-
-volumes:
-  board-data:

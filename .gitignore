@@ -15,7 +15,10 @@ tests/artifacts/
 node_modules/
 *.db
 *.db-journal
+# WAL leaves two sidecars, not one: the log and the shared-memory index. The
+# second only started appearing when the server switched the journal to WAL.
 *.db-wal
+*.db-shm
 # No database is ever committed — not the real board, not the sandbox, not the
 # derived vector stores. They are one machine's rows and one machine's churn,
 # and a repository is not where either belongs.
@@ -49,8 +52,8 @@ docs/report/
 docs/superpowers/plans/
 README-Development.md
 ROADMAP-Development.md
-125.md
 .vscode/
 .ruff_cache/
 .pytest_cache/
-
+openspec/
+.agents/
