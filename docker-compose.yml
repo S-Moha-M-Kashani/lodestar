@@ -4,8 +4,34 @@ services:
   lodestar:
     build: .
     ports:
-      - "3000:3000"
+      # 127.0.0.1 on the host side, and it is the security boundary of this
+      # whole stack. A bare "3000:3000" tells Docker to listen on every
+      # interface — so on university Wi-Fi the board answered any peer who
+      # knew the laptop's address, and it did so THROUGH the host firewall,
+      # since Docker publishes by writing its own nat rules. Every published
+      # port below carries the same prefix, and tests/compose.test.js fails on
+      # any that does not.
+      - "127.0.0.1:3000:3000"
     environment:
+      # The one caller of this switch, and the reason it exists. Docker
+      # forwards a published port to the CONTAINER's address, so a server that
+      # binds 127.0.0.1 inside its own network namespace is reachable by
+      # nothing at all — not the host mapping above, not the brain. The
+      # loopback boundary therefore moves up one level, to the mapping above.
+      # Outside a container this variable puts the board on the Wi-Fi; there is
+      # no reason to set it there.
+      LODESTAR_BIND: 0.0.0.0
+      # Inside the network the brain dials http://lodestar:3000, a name the
+      # Host allowlist cannot derive from a port. Exact match, one name.
+      LODESTAR_ALLOWED_HOSTS: lodestar:3000
+      # No default and no fallback: `docker compose up` stops with this name in
+      # the error rather than starting a board anyone on the network can read.
+      # Make one with `npm run auth:setup` and put it in .env.
+      LODESTAR_AUTH_PASSWORD_HASH: ${LODESTAR_AUTH_PASSWORD_HASH:?run npm run auth:setup and put the printed line in .env}
+      # Shared with the brain below, which is the only non-human caller of the
+      # board API. Empty means the brain cannot reach the board at all, which
+      # is the safe direction to fail in.
+      LODESTAR_SERVICE_TOKEN: ${LODESTAR_SERVICE_TOKEN:-}
       # Both records live in databases/real/, the same two files `npm start`
       # opens. They used to differ: BOARD_DB pointed into a Docker-owned volume
       # and ASSISTANT_DB was unset, so the container wrote the board to a
@@ -55,6 +81,10 @@ services:
       BRAIN_EMBEDDER: ${BRAIN_EMBEDDER:-sentence-transformers}
       BRAIN_TRANSCRIBER: ${BRAIN_TRANSCRIBER:-openrouter}
       BOARD_API_URL: http://lodestar:3000
+      # The board requires a login now, and the brain is not a person. It gets
+      # a token rather than the user's password, so the plaintext lives in one
+      # head and in no service's environment.
+      BOARD_API_TOKEN: ${LODESTAR_SERVICE_TOKEN:-}
       # Chat memory lives on this stack's own chroma service below — one store,
       # shared with a native brain through the published host port. Set
       # BRAIN_CHROMA_URL=memory to run without it (memory is then per-boot).
@@ -115,7 +145,10 @@ services:
     # It is not the image version and has never been a Docker Hub tag.
     image: chromadb/chroma:1.5.9@sha256:1e0b73a187a28757c572acba508c46f48c9e8b0acaf5c20e6d95cdedce1acdf6
     ports:
-      - "8003:8000"
+      # Loopback on the host side, like every other published port here: a
+      # vector store reachable from the Wi-Fi hands out the same private life
+      # the board does, one chunk at a time.
+      - "127.0.0.1:8003:8000"
     volumes:
       - ./databases/real/chroma-data:/data
     environment:
@@ -133,7 +166,7 @@ services:
     # reason: a twin on another version rehearses nothing.
     image: chromadb/chroma:1.5.9@sha256:1e0b73a187a28757c572acba508c46f48c9e8b0acaf5c20e6d95cdedce1acdf6
     ports:
-      - "8004:8000"
+      - "127.0.0.1:8004:8000"
     volumes:
       - ./databases/test/chroma-data-3001:/data
     environment:

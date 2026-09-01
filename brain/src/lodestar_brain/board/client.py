@@ -30,13 +30,23 @@ class BoardClient:
     itself never comes from the model: it rides the agent's run config.
     """
 
-    def __init__(self, base_url: str, timeout: float = 10.0):
+    def __init__(self, base_url: str, timeout: float = 10.0, token: str = ''):
         self.base_url = base_url.rstrip('/')
         self.timeout = timeout
+        # The board requires a login now, even over loopback, and the brain is
+        # not a person: it presents a shared service token rather than the
+        # user's password, so the plaintext lives in one head and in no
+        # service's environment. Empty means no header at all — and therefore
+        # 401 on every call, which is the right direction to fail in. A board
+        # that answers an unconfigured brain is a board that answers anything.
+        self._token = token.strip()
 
     @staticmethod
     def _scope(board_id: str = '') -> dict:
         return {'board': board_id} if board_id else {}
+
+    def _headers(self) -> dict:
+        return {'Authorization': f'Bearer {self._token}'} if self._token else {}
 
     async def _get(self, path: str, params: dict | None = None) -> dict:
         # Reads are idempotent, so a transient failure gets one retry
@@ -45,7 +55,8 @@ class BoardClient:
         async def attempt() -> dict:
             async with httpx.AsyncClient(timeout=self.timeout) as http:
                 res = await http.get(f'{self.base_url}{path}',
-                                     params=params or {})
+                                     params=params or {},
+                                     headers=self._headers())
             res.raise_for_status()
             return res.json()
         return await aretry(attempt)
@@ -56,7 +67,8 @@ class BoardClient:
         # edit), and a retried write is a duplicate.
         async with httpx.AsyncClient(timeout=self.timeout) as http:
             res = await http.post(f'{self.base_url}{path}', json=json,
-                                  params=params or {})
+                                  params=params or {},
+                                  headers=self._headers())
         res.raise_for_status()
         return res.json()
 

@@ -40,7 +40,8 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveBoardDb, resolveAssistantDb } from '../scripts/db-location.mjs';
-import { startServer, waitForLine } from './helpers/server-harness.mjs';
+import { startServer, waitForLine, authEnv, authorize, forget }
+  from './helpers/server-harness.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -244,12 +245,15 @@ test('server boot migrates a legacy board.db and still serves its cards', async 
   // A copy of the server in the temp root, so its ROOT is the temp root and
   // the real repo's files are never in reach. server.js imports no npm package,
   // so the copy is self-sufficient once its own local modules travel with it:
-  // scripts/ for the path resolver and db/ for the storage seam it asks at boot.
-  // Miss one and the boot fails here with an empty stdout, which is exactly how
-  // this test caught db/ being added.
+  // scripts/ for the path resolver, db/ for the storage seam it asks at boot,
+  // and auth/ for the trust boundary it decides there. Miss one and the boot
+  // fails here with an empty stdout, which is exactly how this test caught db/
+  // being added — and, on 2026-09-01, auth/.
   copyFileSync(join(ROOT, 'server.js'), join(tmpRoot, 'server.js'));
+  copyFileSync(join(ROOT, 'login.html'), join(tmpRoot, 'login.html'));
   cpSync(join(ROOT, 'scripts'), join(tmpRoot, 'scripts'), { recursive: true });
   cpSync(join(ROOT, 'db'), join(tmpRoot, 'db'), { recursive: true });
+  cpSync(join(ROOT, 'auth'), join(tmpRoot, 'auth'), { recursive: true });
 
   // PORT=0: the kernel picks a free one and the server reports it, the same way
   // the shared harness does. A port derived from the clock collides with
@@ -258,7 +262,7 @@ test('server boot migrates a legacy board.db and still serves its cards', async 
     cwd: tmpRoot,
     env: {
       ...process.env, PORT: '0', NODE_NO_WARNINGS: '1',
-      LODESTAR_BACKUP_ON_WRITE: '0', ...safeEnv(tmpRoot),
+      LODESTAR_BACKUP_ON_WRITE: '0', ...safeEnv(tmpRoot), ...authEnv(),
       BOARD_DB: '', // empty means unset here: the default path must apply
       ASSISTANT_DB: '', // same — the default real/ path must apply
       // This is the one test in the repo that deliberately wants the default
@@ -269,10 +273,14 @@ test('server boot migrates a legacy board.db and still serves its cards', async 
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   proc.stderr.on('data', () => {});
+  // Declared out here so the cleanup below can forget this server's session:
+  // ports are reused, and a stale entry would hand the next server on this
+  // port a cookie it never issued.
+  let port = 0;
   try {
     const [, bound] = await waitForLine(
       proc, /Lodestar running at http:\/\/localhost:(\d+)\b/);
-    const port = Number(bound);
+    port = Number(bound);
 
     assert.ok(existsSync(join(tmpRoot, 'databases', 'real', 'board.db')),
       'the board now lives in databases/real/');
@@ -280,6 +288,8 @@ test('server boot migrates a legacy board.db and still serves its cards', async 
     assert.ok(existsSync(join(tmpRoot, 'databases', 'real', 'assistant.db')),
       'the chat record is created beside the board, in databases/real/');
 
+    // Spawned outside startServer, so this one logs in for itself.
+    await authorize(`http://127.0.0.1:${port}`);
     const state = await (await fetch(`http://127.0.0.1:${port}/api/state`)).json();
     assert.deepEqual(state.cards.map((c) => c.title), ['Survives the move']);
 
@@ -287,6 +297,7 @@ test('server boot migrates a legacy board.db and still serves its cards', async 
       .filter((f) => f.startsWith('board-') && f.endsWith('.db'));
     assert.equal(backups.length, 1, 'the boot migration backed up before moving');
   } finally {
+    forget(`http://127.0.0.1:${port}`);
     proc.kill('SIGKILL');
     try { rmSync(tmpRoot, { recursive: true, force: true }); } catch {}
   }

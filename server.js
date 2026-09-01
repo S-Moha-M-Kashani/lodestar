@@ -29,6 +29,11 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
+import {
+  parsePasswordHash, verifyPassword, secretEquals, hostAllowed, provenanceOf,
+  parseCookies, sessionCookie, clearedCookie, SessionStore, LoginThrottle,
+  SESSION_COOKIE, ABSOLUTE_MS,
+} from './auth/local-auth.mjs';
 import { resolveBoardDb, resolveAssistantDb } from './scripts/db-location.mjs';
 import { chooseBackend } from './db/backend.mjs';
 
@@ -50,6 +55,83 @@ if (DB_BACKEND !== 'sqlite') {
     + 'is already mirrored by scripts/sqlite-to-postgres.mjs). Unset '
     + 'LODESTAR_DB_BACKEND, or set it to sqlite, to boot.');
 }
+// --------------------------------------------------------------------------
+// The local trust boundary, decided at boot
+// --------------------------------------------------------------------------
+//
+// Until 2026-09-01 this server listened on every interface and asked nothing of
+// anybody: a laptop on university Wi-Fi served the owner's whole private life
+// to any peer who knew its address, and any page in any tab could read and
+// rewrite the board across origins. Three things replace that, and all three
+// are decided here, before a single database file is opened — a server that
+// cannot protect the board must not get as far as touching it.
+//
+// The decisions themselves are in auth/local-auth.mjs, which knows nothing
+// about HTTP and is unit-tested as values (tests/auth.test.js).
+
+// Where the listener binds. Loopback by default and deliberately not a
+// convenience switch: LODESTAR_BIND exists for ONE caller, a container, whose
+// app must bind its own 0.0.0.0 because Docker forwards to the container's IP
+// and a loopback bind inside it is reachable by nothing at all. The boundary
+// there moves up one level to the host publication, which compose pins to
+// "127.0.0.1:3000:3000". Setting this to 0.0.0.0 outside a container puts the
+// board on the Wi-Fi, and no amount of login makes that a good idea.
+const BIND = process.env.LODESTAR_BIND || '127.0.0.1';
+
+// Host values this service answers to, beyond the loopback names it derives
+// from the port it actually binds. Comma-separated, exact matches only. The
+// one real user is compose again: inside the network the brain dials
+// http://lodestar:3000, a name no loopback rule can predict.
+const ALLOWED_HOSTS = (process.env.LODESTAR_ALLOWED_HOSTS || '')
+  .split(',').map((h) => h.trim()).filter(Boolean);
+
+// There is exactly one legal value, and that is the point. An auth mode with an
+// `off` in it is a foot-gun with a documented name: the day something goes
+// wrong at 1 a.m. it gets set, and it never gets unset. If a bypass is ever
+// genuinely needed it can be its own reviewed change, with its own reasons —
+// never an implicit fallback reached by mistyping this variable.
+const AUTH_MODE = (process.env.LODESTAR_AUTH_MODE || 'required').trim();
+if (AUTH_MODE !== 'required') {
+  throw new Error(
+    `LODESTAR_AUTH_MODE is "${AUTH_MODE}"; the only supported value is `
+    + '"required". There is deliberately no way to switch authentication off.');
+}
+
+const PASSWORD_HASH = (process.env.LODESTAR_AUTH_PASSWORD_HASH || '').trim();
+if (!parsePasswordHash(PASSWORD_HASH)) {
+  // Missing and malformed are told apart HERE and only here. A login response
+  // must not distinguish them — that would tell a guesser whether the server is
+  // even configured — but an operator reading a boot failure needs to know
+  // which of the two they are looking at.
+  throw new Error(
+    (PASSWORD_HASH ? 'LODESTAR_AUTH_PASSWORD_HASH is set but is not a hash '
+                     + 'this server can read'
+                   : 'LODESTAR_AUTH_PASSWORD_HASH is not set')
+    + ' — refusing to open the board without a way to protect it. Make one '
+    + 'with:\n\n    npm run auth:setup\n\nand put the printed line in .env '
+    + '(git-ignores it already).');
+}
+
+// A second credential, for one caller that is not a person: the brain, which
+// reads cards and posts proposals over the same API the browser uses. It gets
+// a token rather than the user's password, so the plaintext lives in exactly
+// one head and no second service's environment. Absent = no service caller;
+// present and short = a token that would not survive being guessed, which is
+// worth refusing at boot rather than discovering later.
+const SERVICE_TOKEN = (process.env.LODESTAR_SERVICE_TOKEN || '').trim();
+if (SERVICE_TOKEN && SERVICE_TOKEN.length < 32) {
+  throw new Error(
+    'LODESTAR_SERVICE_TOKEN is shorter than 32 characters. Generate one with: '
+    + "node -e \"console.log(require('crypto').randomBytes(32).toString('base64url'))\"");
+}
+
+const sessions = new SessionStore();
+// Overridable only because a test that waits a real minute to prove a lockout
+// is a test nobody runs; the default is the one the server ships with.
+const loginThrottle = new LoginThrottle({
+  lockoutMs: Number(process.env.LODESTAR_LOGIN_LOCKOUT_MS) || undefined,
+});
+
 // `|| 3000` would be wrong here: PORT=0 is a real request — it asks the kernel
 // for any free port, which is how the tests start servers that cannot collide —
 // and zero is falsy, so it used to arrive as 3000 and bind the dev board's port.
@@ -1477,8 +1559,17 @@ function backupAfterNewCards() {
  * second step ("delete from History") and the only operation that truly erases
  * data. Returns true if a row was removed.
  */
+// The only statement in this file that truly erases a card, and the predicate
+// is half of the promise: `deleted_at IS NOT NULL` means a card can be
+// destroyed only after it has been put in the Trash. Without it this route
+// deleted by id alone, so a single mistaken call — a stale browser, a typo in
+// curl, a future caller that thinks DELETE means "remove from the board" —
+// erased a live card with no second step and no way back. The browser has
+// always asked twice; that was never a guarantee, because the browser is not a
+// security boundary and never was the only thing that can call this.
 function purgeCard(id) {
-  return db.prepare('DELETE FROM cards WHERE id = ?').run(id).changes > 0;
+  return db.prepare('DELETE FROM cards WHERE id = ? AND deleted_at IS NOT NULL')
+    .run(id).changes > 0;
 }
 
 // --------------------------------------------------------------------------
@@ -1542,11 +1633,158 @@ function readBody(req) {
   });
 }
 
+// --------------------------------------------------------------------------
+// The boundary, as it runs
+// --------------------------------------------------------------------------
+
+// The port this process actually bound. PORT is what was asked for; with
+// PORT=0 the kernel answers with something else, and it is the answer the Host
+// allowlist has to compare against. Set once, in the listen callback, which is
+// before any request can arrive.
+let activePort = PORT;
+
+// The four public surfaces, and there are deliberately only four: the login
+// page, the two calls that start and end a session, and a liveness ping that
+// says nothing but "this process is up". Everything else — every board and
+// chat route, the assistant proxy, index.html, every ES module under js/ —
+// is behind the session.
+const LOGIN_PAGE = '/login';
+const PUBLIC_PATHS = new Set([LOGIN_PAGE, '/api/login', '/api/logout', '/api/health']);
+
+const boundary = () => ({ port: activePort, extra: ALLOWED_HOSTS });
+
+function sendText(res, status, text, headers = {}) {
+  res.writeHead(status, { 'Content-Type': 'text/plain; charset=utf-8', ...headers });
+  res.end(text);
+}
+
+/** Who is asking: 'session' for a logged-in browser, 'service' for the brain,
+ *  or null. Deliberately returns one of three values and not a reason — the
+ *  caller has nothing useful to do with "the cookie was expired" that it would
+ *  not also do with "there was no cookie", and telling them apart in a
+ *  response is how a login boundary starts leaking. */
+function identify(req) {
+  const header = req.headers.authorization || '';
+  if (header.startsWith('Bearer ')) {
+    // Only ever consulted when a token is configured, so an unset
+    // LODESTAR_SERVICE_TOKEN cannot be matched by sending an empty Bearer.
+    return SERVICE_TOKEN && secretEquals(header.slice(7).trim(), SERVICE_TOKEN)
+      ? 'service' : null;
+  }
+  const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
+  return token && sessions.verify(token) ? 'session' : null;
+}
+
+/** POST /api/login. One body field, one of three outcomes, and the failure
+ *  says the same thing whatever went wrong. */
+async function handleLogin(req, res) {
+  const wait = loginThrottle.retryAfter();
+  if (wait > 0) {
+    return sendJson(res, 429, { error: 'Too many attempts' },
+      { 'Retry-After': String(wait) });
+  }
+  let password = '';
+  try {
+    password = String(JSON.parse(await readBody(req))?.password ?? '');
+  } catch {
+    // A malformed body is a failed attempt like any other: an attacker must
+    // not be able to probe the throttle for free by sending junk.
+    password = '';
+  }
+  if (!verifyPassword(password, PASSWORD_HASH)) {
+    loginThrottle.recordFailure();
+    // Nothing about which part failed, and — obviously, but it has been got
+    // wrong in real code — nothing echoing what was typed.
+    return sendJson(res, 401, { error: 'Login failed' });
+  }
+  loginThrottle.recordSuccess();
+  const token = sessions.create();
+  // The raw token appears here, in this header, and nowhere else in the
+  // process: the store keeps only its sha256, and no log line ever sees it.
+  res.writeHead(200, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Set-Cookie': sessionCookie(token, { maxAgeMs: ABSOLUTE_MS }),
+  });
+  return res.end(JSON.stringify({ ok: true }));
+}
+
+function handleLogout(req, res) {
+  sessions.revoke(parseCookies(req.headers.cookie)[SESSION_COOKIE]);
+  res.writeHead(200, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Set-Cookie': clearedCookie(),
+  });
+  return res.end(JSON.stringify({ ok: true }));
+}
+
 /** Route one request. Every throw in here is caught by the one handler below;
  *  see the note there for why that catch is not optional. */
 async function handleRequest(req, res) {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const path = url.pathname;
+
+  // 1. Is this request even addressed to us? A page on any domain can point
+  // that domain at 127.0.0.1 and have the browser connect here — DNS
+  // rebinding — but it cannot forge the Host header its browser sends. So the
+  // allowlist runs first, before the router, before a row is read and before a
+  // body is even accepted: a rejected alias must not be able to observe that a
+  // route exists, let alone reach it. 403 rather than 404, because pretending
+  // not to exist would be a lie the local browser also has to believe.
+  if (!hostAllowed(req.headers.host, boundary())) {
+    return sendText(res, 403, 'Forbidden');
+  }
+
+  // 2. The four public surfaces.
+  if (path === '/api/health') {
+    // Liveness and nothing else: no version, no board, no backend, no
+    // configuration. A health endpoint is the one thing that answers before
+    // login, so it must be worth nothing to whoever asks.
+    return sendJson(res, 200, { ok: true });
+  }
+  if (path === '/api/login' && req.method === 'POST') return handleLogin(req, res);
+  if (path === '/api/logout' && req.method === 'POST') return handleLogout(req, res);
+
+  // 3. The session. Everything from here down is private.
+  const who = identify(req);
+  if (path === LOGIN_PAGE) {
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      return sendJson(res, 405, { error: 'Method not allowed' });
+    }
+    // Already logged in: send them to the board rather than to a form they
+    // have no reason to fill in again.
+    if (who) return res.writeHead(302, { Location: '/' }).end();
+    try {
+      const body = await readFile(join(ROOT, 'login.html'));
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      return res.end(body);
+    } catch {
+      return sendText(res, 500, 'Login page missing');
+    }
+  }
+  if (!who) {
+    // A browser asking for the app gets the door; everything else gets a
+    // status it can act on. Neither carries a byte of board, chat or
+    // configuration, which is the whole requirement: the login boundary must
+    // not leak through the thing that reports it.
+    if ((req.method === 'GET' || req.method === 'HEAD')
+        && (path === '/' || path === '/index.html')) {
+      return res.writeHead(302, { Location: LOGIN_PAGE }).end();
+    }
+    return sendJson(res, 401, { error: 'Unauthorized' });
+  }
+
+  // 4. Where an authenticated mutation came from. SameSite=Strict already
+  // means a cross-site page's request carries no cookie, so this is the second
+  // of two independent defences rather than the only one — and it is the one
+  // that still holds if a browser ever disagrees with us about what "site"
+  // means. A missing Origin AND Referer is allowed on purpose: that is a
+  // non-browser client, and it has already had to authenticate to get here.
+  if (req.method === 'POST' || req.method === 'PUT'
+      || req.method === 'PATCH' || req.method === 'DELETE') {
+    if (provenanceOf(req.headers, boundary()) === 'blocked') {
+      return sendJson(res, 403, { error: 'Forbidden' });
+    }
+  }
 
   // Which board this request is about, for every route that reads or writes
   // board data. Absent means the default board, so every caller written before
@@ -1992,14 +2230,24 @@ const server = createServer((req, res) => {
   });
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, BIND, () => {
   // The port the OS actually gave us, not the one we asked for. They differ for
   // exactly one caller and it matters there: PORT=0 lets the kernel hand out a
   // free port, which is how the test harness starts a dozen servers at once
   // without them fighting over a number somebody guessed.
   const { port } = server.address();
+  // Which is also the only port the Host allowlist may accept, so it is
+  // learned here rather than read from PORT: with PORT=0 the two differ, and
+  // an allowlist built on the *requested* port would reject every request the
+  // test harness makes.
+  activePort = port;
   // The backend is named in the log because "which store am I actually
   // writing to" must be answerable without reading the environment back.
   console.log(
     `Lodestar running at http://localhost:${port}  (backend: ${DB_BACKEND}, db: ${DB_PATH})`);
+  // Said out loud because it is the security property of this process, and the
+  // one thing an operator must be able to confirm without reading the source.
+  console.log(BIND === '127.0.0.1'
+    ? '  bound to 127.0.0.1 — reachable from this machine only; login required'
+    : `  bound to ${BIND} — NOT loopback-only; every interface can reach this port`);
 });
