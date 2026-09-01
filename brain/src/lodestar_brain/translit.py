@@ -125,7 +125,7 @@ typed "mahsa".
 
 *Why the obvious option fails.* The obvious option is a single canonical
 romanisation (or an LLM call). Persian writes no short vowels, so
-«مهسا» romanises to "prya"/"pria" — never the "mahsa" a human types — and
+«مهسا» romanises to "mhsa" — never the "mahsa" a human types — and
 string-equality fails silently. An LLM call would translate well but puts a
 model on the hot path of every keystroke-cheap search and is gone when the
 brain runs offline.

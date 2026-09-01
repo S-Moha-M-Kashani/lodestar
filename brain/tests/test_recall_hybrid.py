@@ -190,10 +190,10 @@ def test_chat_search_returns_nothing_when_nothing_matches():
 # This is an integration test.
 @respx.mock
 def test_recall_says_nothing_rather_than_noise():
-    """The reproduction for the mahsa screenshot on the :3001 sandbox: a
-    board with no mahsa anywhere returned ten irrelevant rows. A query that
-    matches nothing must say so — the UI already renders the empty list as
-    'Nothing recorded about that yet.'"""
+    """The reproduction for the cross-script recall screenshot on the
+    :3001 sandbox: a board naming nobody by that name returned ten
+    irrelevant rows. A query that matches nothing must say so — the UI
+    already renders the empty list as 'Nothing recorded about that yet.'"""
     respx.get(f'{BOARD}/api/state').mock(return_value=httpx.Response(200, json={
         'cards': [
             {'id': 'c1', 'num': 1, 'title': 'Book the August ferry crossing',
