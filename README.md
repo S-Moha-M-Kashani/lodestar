@@ -97,4 +97,5 @@ npm run test:all                                    # all of the above
 
 ## License
 
-All rights reserved.
+Proprietary — all rights reserved; published for portfolio and demonstration
+purposes only. See [`LICENSE`](LICENSE).
