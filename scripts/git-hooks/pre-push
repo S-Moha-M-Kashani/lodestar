@@ -29,18 +29,46 @@
 
 current=$(git symbolic-ref --quiet --short HEAD 2>/dev/null)
 
+# Second gate, on what a ref *holds* rather than what it is called. The
+# allowlist passes refs/tags/v*, and the school submission tag v1.1 matches it
+# while carrying 464 versions of files under databases/ — one machine's rows,
+# published by a name that looks like every other release. Naming that one tag
+# would move the hole to the next tag cut off the wrong commit, so the question
+# asked here is whether any commit the ref can reach ever held a database. It
+# walks history and not the tip, because deleting the file in a later commit
+# leaves the blob reachable and is exactly what people do instead of a rewrite.
+holds_private_data() {
+	git rev-list --objects "$1" 2>/dev/null \
+		| cut -d' ' -f2- \
+		| grep -qE '(^|/)(databases|backups)/|\.(db|sqlite|sqlite3)(-wal|-shm|-journal)?$'
+}
+
+refuse_private_data() {
+	echo "refused: $1 reaches a commit holding private data." >&2
+	echo "Something under databases/ or backups/, or a database file, is in the" >&2
+	echo "history this push would publish — deleting it in a later commit does" >&2
+	echo "not help, the objects stay reachable. Rewrite the history first:" >&2
+	echo "  LODESTAR_PRIVATE_NAMES=... npm run hygiene" >&2
+	exit 1
+}
+
 while read -r local_ref local_sha remote_ref remote_sha; do
 	case "$local_ref" in
 	refs/heads/master)
+		holds_private_data "$local_sha" && refuse_private_data "$local_ref"
 		continue
 		;;
 	refs/tags/v*)
+		holds_private_data "$local_sha" && refuse_private_data "$local_ref"
 		continue
 		;;
 	# `git push <remote> HEAD` names no branch, so resolve HEAD ourselves
 	# rather than let the one shorthand through.
 	HEAD)
-		[ "$current" = master ] && continue
+		if [ "$current" = master ]; then
+			holds_private_data "$local_sha" && refuse_private_data HEAD
+			continue
+		fi
 		;;
 	# A deletion sends the zero sha as the local ref; nothing is published by
 	# it, so it is not this hook's business.

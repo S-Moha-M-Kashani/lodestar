@@ -14,7 +14,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, copyFileSync, chmodSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, copyFileSync, chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -124,6 +124,53 @@ test('the hook pushes master and version tags, and refuses everything else', (t)
   assert.match(onRemote, /master/);
   assert.doesNotMatch(onRemote, /development/, 'development must not exist on the remote');
   assert.doesNotMatch(onRemote, /feature/, 'no feature branch may reach the remote');
+});
+
+// This is an integration test (real git, a temporary repo and a bare remote).
+test('a ref whose history holds a database is refused however it is named', (t) => {
+  // The allowlist passes `refs/tags/v*`, and the school submission tag `v1.1`
+  // matches it while carrying 464 versions of files under databases/. Naming
+  // that one tag would only move the hole to the next tag somebody cuts off
+  // the wrong commit, so the hook asks what a ref *contains*, not what it is
+  // called: a name is a claim, and the objects are the disclosure.
+  const dir = repoWithHook();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const remote = mkdtempSync(join(tmpdir(), 'lodestar-remote-'));
+  t.after(() => rmSync(remote, { recursive: true, force: true }));
+  git(remote, 'init', '-q', '--bare');
+  git(dir, 'remote', 'add', 'origin', remote);
+  copyFileSync(join(ROOT, 'scripts', 'git-hooks', 'pre-push'), join(dir, '.git', 'hooks', 'pre-push'));
+  chmodSync(join(dir, '.git', 'hooks', 'pre-push'), 0o755);
+
+  mkdirSync(join(dir, 'databases'), { recursive: true });
+  writeFileSync(join(dir, 'databases', 'board.db'), 'SQLite format 3\0rows');
+  git(dir, 'add', '-A', '-f');
+  git(dir, 'commit', '-q', '-m', 'the incident');
+  git(dir, 'tag', 'v1.1');
+
+  const tagged = git(dir, 'push', 'origin', 'v1.1');
+  assert.equal(tagged.ok, false,
+    'a version tag carrying a database must be refused despite matching the allowlist');
+  assert.match(tagged.output, /databases/, 'the refusal must say what it found');
+
+  // Deleting the database in a later commit is what the tidy-up reflex does,
+  // and it publishes the blob just the same: master still reaches it.
+  git(dir, 'rm', '-q', '-r', 'databases');
+  git(dir, 'commit', '-q', '-m', 'chore: drop the databases');
+  assert.equal(git(dir, 'push', 'origin', 'master').ok, false,
+    'a branch that once held a database must be refused too');
+
+  // And the hook still publishes a history that never held one, or a guard
+  // that refused every push would pass both assertions above.
+  git(dir, 'checkout', '-q', '--orphan', 'clean');
+  git(dir, 'rm', '-r', '-q', '--cached', '.');
+  writeFileSync(join(dir, 'README.md'), 'A board.\n');
+  git(dir, 'add', '-A');
+  git(dir, 'commit', '-q', '-m', 'a clean start');
+  git(dir, 'branch', '-M', 'clean', 'publishable');
+  git(dir, 'checkout', '-q', '-B', 'master', 'publishable');
+  assert.equal(git(dir, 'push', 'origin', 'master', '--force').ok, true,
+    'a clean master must still publish');
 });
 
 // This is an integration test (real git against a temporary repository).
