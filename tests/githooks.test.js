@@ -14,7 +14,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, copyFileSync, chmodSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, copyFileSync, chmodSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -126,6 +126,53 @@ test('the hook pushes master and version tags, and refuses everything else', (t)
   assert.doesNotMatch(onRemote, /feature/, 'no feature branch may reach the remote');
 });
 
+// This is an integration test (real git, a temporary repo and a bare remote).
+test('a ref whose history holds a database is refused however it is named', (t) => {
+  // The allowlist passes `refs/tags/v*`, and the school submission tag `v1.1`
+  // matches it while carrying 464 versions of files under databases/. Naming
+  // that one tag would only move the hole to the next tag somebody cuts off
+  // the wrong commit, so the hook asks what a ref *contains*, not what it is
+  // called: a name is a claim, and the objects are the disclosure.
+  const dir = repoWithHook();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const remote = mkdtempSync(join(tmpdir(), 'lodestar-remote-'));
+  t.after(() => rmSync(remote, { recursive: true, force: true }));
+  git(remote, 'init', '-q', '--bare');
+  git(dir, 'remote', 'add', 'origin', remote);
+  copyFileSync(join(ROOT, 'scripts', 'git-hooks', 'pre-push'), join(dir, '.git', 'hooks', 'pre-push'));
+  chmodSync(join(dir, '.git', 'hooks', 'pre-push'), 0o755);
+
+  mkdirSync(join(dir, 'databases'), { recursive: true });
+  writeFileSync(join(dir, 'databases', 'board.db'), 'SQLite format 3\0rows');
+  git(dir, 'add', '-A', '-f');
+  git(dir, 'commit', '-q', '-m', 'the incident');
+  git(dir, 'tag', 'v1.1');
+
+  const tagged = git(dir, 'push', 'origin', 'v1.1');
+  assert.equal(tagged.ok, false,
+    'a version tag carrying a database must be refused despite matching the allowlist');
+  assert.match(tagged.output, /databases/, 'the refusal must say what it found');
+
+  // Deleting the database in a later commit is what the tidy-up reflex does,
+  // and it publishes the blob just the same: master still reaches it.
+  git(dir, 'rm', '-q', '-r', 'databases');
+  git(dir, 'commit', '-q', '-m', 'chore: drop the databases');
+  assert.equal(git(dir, 'push', 'origin', 'master').ok, false,
+    'a branch that once held a database must be refused too');
+
+  // And the hook still publishes a history that never held one, or a guard
+  // that refused every push would pass both assertions above.
+  git(dir, 'checkout', '-q', '--orphan', 'clean');
+  git(dir, 'rm', '-r', '-q', '--cached', '.');
+  writeFileSync(join(dir, 'README.md'), 'A board.\n');
+  git(dir, 'add', '-A');
+  git(dir, 'commit', '-q', '-m', 'a clean start');
+  git(dir, 'branch', '-M', 'clean', 'publishable');
+  git(dir, 'checkout', '-q', '-B', 'master', 'publishable');
+  assert.equal(git(dir, 'push', 'origin', 'master', '--force').ok, true,
+    'a clean master must still publish');
+});
+
 // This is an integration test (real git against a temporary repository).
 test('master takes release points, not hand-written commits', (t) => {
   const dir = repoWithHook();
@@ -185,7 +232,20 @@ test('the repository has the hooks installed, and tracks their source', () => {
     assert.equal(git(ROOT, 'ls-files', '--error-unmatch', `scripts/git-hooks/${hook}`).ok,
       true, `${hook} must be tracked, or a fresh clone cannot restore it`);
   }
-  // The installed copy lives in .git/hooks so it applies whichever branch is
-  // checked out — including master, which does not carry the tracked file.
-  assert.equal(git(ROOT, 'rev-parse', '--verify', 'refs/heads/development').ok, true);
+  // The rest of this asserts the *machine*, not the published artifact, and
+  // development is the way to tell them apart: it never leaves this laptop, so
+  // a clone of master cannot have it. Asserting its existence unconditionally
+  // made the public repository's own suite impossible to pass — on a fresh
+  // clone of the published repo this was the one red test, and CI runs on
+  // every push. Absence is the expected state there, not a failure.
+  if (!git(ROOT, 'rev-parse', '--verify', 'refs/heads/development').ok) return;
+
+  // On the development machine, being installed is what the test's name
+  // claims and what actually protects anything: the copy under .git/hooks is
+  // the one git runs, and it applies whichever branch is checked out —
+  // including master, which does not carry the tracked file.
+  for (const hook of ['reference-transaction', 'pre-push', 'pre-commit', 'commit-msg']) {
+    assert.ok(existsSync(join(ROOT, '.git', 'hooks', hook)),
+      `${hook} must be installed in .git/hooks — run: npm run hooks`);
+  }
 });

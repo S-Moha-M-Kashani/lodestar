@@ -163,7 +163,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # otherwise keeps shipping traces (middleware/tracing.py).
     configure_tracing(settings)
 
-    board = BoardClient(settings.board_api_url)
+    board = BoardClient(settings.board_api_url,
+                        token=settings.board_api_token)
     # One snapshot behind all three board-reading tools, which is what makes a
     # turn that reaches for three of them fetch `/api/state` once. The routes
     # below deliberately keep the bare client: they are not a turn, and nothing

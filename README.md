@@ -38,10 +38,23 @@ Needs **Node 23.4+** (for built-in `node:sqlite`) and, for the Assistant, **uv**
 ```sh
 git clone https://github.com/S-Moha-M-Kashani/lodestar.git
 cd lodestar
+npm run auth:setup                       # once — prints a line for .env
 npm start                                # the board on http://localhost:3000
 ```
 
-That is the whole setup — there is nothing to install and nothing to build. The server has zero dependencies and the frontend is native ES modules, so there is no `npm install` step and no bundler.
+`npm run auth:setup` asks for a password without echoing it and prints one line
+(`LODESTAR_AUTH_PASSWORD_HASH=…`) to put in `.env`; the server refuses to boot
+without it. Apart from that there is nothing to install and nothing to build:
+the server has zero dependencies and the frontend is native ES modules, so
+there is no `npm install` step and no bundler.
+
+**Lodestar answers on this computer only, and asks for the password even
+there.** It listens on `127.0.0.1`, refuses any `Host` other than the local
+ones, and puts every board and chat route behind a session — so a peer on the
+same university or café Wi-Fi cannot reach it at all. There is no LAN mode and
+no "trusted network" detection; to use the board from another device, forward
+the loopback port over Tailscale/WireGuard or an SSH tunnel and log in as
+usual. [`docs/security.md`](docs/security.md) covers all of it.
 
 For the **Assistant**, start the brain (port 9000) in a second terminal:
 

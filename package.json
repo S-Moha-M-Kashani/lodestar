@@ -1,6 +1,6 @@
 {
   "name": "lodestar",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Lodestar — your compass for life: capture every open question, prioritize what matters, and never lose one. SQLite-backed so nothing is lost.",
   "type": "module",
   "scripts": {
@@ -15,7 +15,9 @@
     "test:all": "npm ci --prefer-offline --no-audit --fund=false && node scripts/backup-db.mjs && node --test tests/*.test.js && uv run --project brain pytest brain/tests -v && uv run --with playwright python tests/e2e_test.py",
     "eval-live": "BRAIN_EVAL_LIVE=1 BRAIN_LLM=claude-cli uv run --project brain pytest brain/tests/evals -m live -v",
     "hooks": "node scripts/install-hooks.mjs",
-    "release": "node scripts/release-to-master.mjs"
+    "hygiene": "node scripts/release-hygiene.mjs master $(git tag --list 'v*' --merged master)",
+    "release": "node scripts/release-to-master.mjs",
+    "auth:setup": "node scripts/set-password.mjs"
   },
   "engines": {
     "node": ">=23.4.0"

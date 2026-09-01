@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chooseBackend, BACKENDS } from '../db/backend.mjs';
+import { authEnv } from './helpers/server-harness.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -62,7 +63,11 @@ test('server.js asks the seam at boot, and refuses a backend it cannot open',
     // refused (there is no Postgres store yet), the refusal says so, and the
     // default boot names the store it opened.
     const dir = mkdtempSync(join(tmpdir(), 'lodestar-backend-'));
+    // authEnv: the server refuses to boot without a password verifier now, so
+    // every spawn in this file would otherwise fail for a reason that has
+    // nothing to do with the storage seam it is about.
     const base = { ...process.env, PORT: '0', LODESTAR_BACKUP_ON_WRITE: '0',
+      ...authEnv(),
       BOARD_DB: join(dir, 'board.db'), ASSISTANT_DB: join(dir, 'assistant.db') };
     const boot = (env, timeout = 15_000) => spawnSync('node', ['server.js'],
       { cwd: ROOT, encoding: 'utf8', timeout, env: { ...base, ...env } });

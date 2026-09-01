@@ -6,9 +6,12 @@ the board actually persists to (and deletes from) the database.
 
     uv run --with playwright python tests/e2e_test.py
 """
+import base64
+import hashlib
 import json
 import os
 import re
+import secrets
 import socket
 import subprocess
 import sys
@@ -48,6 +51,66 @@ with open(CLAUDE_CLI_STUB, "w") as _stub_file:
     _stub_file.write("#!/bin/sh\nexit 0\n")
 os.chmod(CLAUDE_CLI_STUB, 0o755)
 NO_CODEX_CLI = os.path.join(CLI_BIN_DIR, "no-such-codex")
+
+# ---------------------------------------------------------------------------
+# The login this run has to get through
+# ---------------------------------------------------------------------------
+#
+# The board asks for a password now, even on loopback, and refuses to boot
+# without a verifier. Both credentials below are minted fresh for this process:
+# nothing plaintext is written into a tracked file, and there is no test-only
+# bypass anywhere in the server to lean on — this suite logs in exactly the way
+# a person does, which is also the only way to prove the door works.
+TEST_PASSWORD = secrets.token_urlsafe(18)
+SERVICE_TOKEN = secrets.token_urlsafe(32)
+
+
+def _password_hash(password):
+    """The same one-line scrypt verifier auth/local-auth.mjs mints and reads:
+    scrypt$1$N$r$p$salt$key, base64url, unpadded."""
+    salt = secrets.token_bytes(16)
+    key = hashlib.scrypt(password.encode(), salt=salt, n=16384, r=8, p=1, dklen=32)
+    b64 = lambda raw: base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+    return f"scrypt$1$16384$8$1${b64(salt)}${b64(key)}"
+
+
+PASSWORD_HASH = _password_hash(TEST_PASSWORD)
+SESSION_COOKIE = ""  # set by log_in() once the server is up
+
+
+class _BoardSession(urllib.request.BaseHandler):
+    """Attach this run's session cookie to the board's own port and to nothing
+    else. Every urlopen below was written before there was a login; rather than
+    thread a header through thirty call sites, it is added here, scoped to the
+    one origin this suite started."""
+
+    def http_request(self, req):
+        if SESSION_COOKIE and req.host in (f"localhost:{PORT}", f"127.0.0.1:{PORT}"):
+            req.add_unredirected_header("Cookie", SESSION_COOKIE)
+        return req
+
+
+urllib.request.install_opener(urllib.request.build_opener(_BoardSession()))
+
+
+def log_in():
+    """Exchange the password for a session, exactly as the login page does."""
+    global SESSION_COOKIE
+    req = urllib.request.Request(
+        URL + "/api/login", method="POST",
+        data=json.dumps({"password": TEST_PASSWORD}).encode(),
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=5) as r:
+        SESSION_COOKIE = r.headers["Set-Cookie"].split(";")[0]
+    return SESSION_COOKIE
+
+
+def authenticate(context):
+    """Give a browser context the session, so its pages open the board rather
+    than the login page."""
+    name, _, value = SESSION_COOKIE.partition("=")
+    context.add_cookies([{"name": name, "value": value,
+                          "domain": "localhost", "path": "/"}])
 
 
 def snapshots():
@@ -239,13 +302,20 @@ def start_server():
              # tests/server.test.js on its own tuned bucket, and the 429 the UI
              # has to explain to the user is provoked here by a mocked route.
              "LODESTAR_AGENT_BURST": "100000",
-             "LODESTAR_AGENT_PER_MIN": "100000"},
+             "LODESTAR_AGENT_PER_MIN": "100000",
+             # The board refuses to boot without a verifier, and the brain
+             # below is not a person: it presents the shared service token.
+             "LODESTAR_AUTH_PASSWORD_HASH": PASSWORD_HASH,
+             "LODESTAR_SERVICE_TOKEN": SERVICE_TOKEN},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
     for _ in range(100):
         try:
-            urllib.request.urlopen(URL + "/api/state", timeout=1)
+            # /api/health, not /api/state: the board is private before login
+            # and would answer 401 here for ever. Liveness is the one thing a
+            # readiness probe is entitled to.
+            urllib.request.urlopen(URL + "/api/health", timeout=1)
             return proc
         except Exception:
             time.sleep(0.1)
@@ -271,6 +341,7 @@ def start_brain():
         env={**os.environ, "BRAIN_LLM": "fake", "BRAIN_EMBEDDER": "fake",
              "BRAIN_TRANSCRIBER": "fake",
              "BOARD_API_URL": f"http://127.0.0.1:{PORT}",
+             "BOARD_API_TOKEN": SERVICE_TOKEN,
              # in-process Chroma: e2e must not depend on the Docker server,
              # and must never write into the user's real chat memory
              "BRAIN_CHROMA_URL": "memory",
@@ -429,6 +500,7 @@ def backup_db():
 
 backup_db()
 server = start_server()
+log_in()
 brain = start_brain()
 browser = None
 try:
@@ -437,6 +509,7 @@ try:
         context = browser.new_context(
             viewport={"width": 1440, "height": 900}, accept_downloads=True
         )
+        authenticate(context)
         context.grant_permissions(
             ["clipboard-read", "clipboard-write", "microphone"], origin=URL)
         # Keep the run network-free and deterministic: force the Overview map onto
@@ -463,6 +536,34 @@ try:
         def menu_click(action_sel):
             page.click("#menu-btn")
             page.click(action_sel)
+
+        # ── The door ────────────────────────────────────────────────────────
+        # Every other context in this file is handed a session, so this is the
+        # only place the login is exercised the way a person meets it: an
+        # unauthenticated browser asking for the board. Done in its own context
+        # so nothing here leaks a cookie into the run that follows.
+        locked = browser.new_context(viewport={"width": 900, "height": 700})
+        locked_page = locked.new_page()
+        locked_page.goto(URL)
+        check("login: the board redirects a stranger to the login page",
+              locked_page.url.endswith("/login")
+              and locked_page.is_visible("#password"))
+        check("login: no board markup is served before login",
+              not locked_page.is_visible(".card") and "C-001" not in locked_page.content())
+
+        locked_page.fill("#password", "not the password")
+        locked_page.click("#go")
+        locked_page.wait_for_selector("#err:not(:empty)")
+        check("login: a wrong password is refused, and says only that",
+              locked_page.inner_text("#err").strip() == "Login failed."
+              and locked_page.url.endswith("/login"))
+
+        locked_page.fill("#password", TEST_PASSWORD)
+        locked_page.click("#go")
+        locked_page.wait_for_selector(".card", timeout=10000)
+        check("login: the right password opens the board",
+              locked_page.url.rstrip("/") == URL.rstrip("/"))
+        locked.close()
 
         page.goto(URL)
         page.wait_for_selector(".card")
@@ -1979,6 +2080,7 @@ try:
               any(c["title"] == "PERSIST-MARKER-alpha" for c in api_state()["cards"]))
 
         fresh = browser.new_context(viewport={"width": 1200, "height": 800})
+        authenticate(fresh)
         fresh_page = fresh.new_page()
         fresh_page.goto(URL)
         fresh_page.wait_for_selector(".card")
@@ -2003,6 +2105,7 @@ try:
             "type": "task", "num": 900, "createdAt": 1, "updatedAt": 1,
         }]
         stale = browser.new_context(viewport={"width": 1200, "height": 800})
+        authenticate(stale)
         stale.add_init_script("window.QBOARD_DISABLE_SEMANTIC = true;")
         stale.add_init_script(
             "localStorage.setItem('lodestar:v1', JSON.stringify(%s));"
@@ -2041,6 +2144,7 @@ try:
         # state, model picks. So the migration copies rather than moves, and a
         # value changed since migrating must survive the next boot.
         mig = browser.new_context(viewport={"width": 1200, "height": 800})
+        authenticate(mig)
         mig_page = mig.new_page()
         mig_page.goto(URL)
         mig_page.wait_for_selector(".card")
@@ -2110,10 +2214,17 @@ try:
 
         stop_server(server)
         server = start_server()
+        # Sessions live in the server's memory and die with it — deliberately,
+        # and asserted in tests/boundary.test.js. So a restart means logging in
+        # again and handing the running context the new cookie; the old one is
+        # now exactly as good as a stranger's.
+        log_in()
+        authenticate(context)
         check("db: data survived a full server restart",
               any(c["title"] == "RESTART-MARKER-beta" for c in api_state()["cards"]))
 
         after = browser.new_context(viewport={"width": 1200, "height": 800})
+        authenticate(after)
         after_page = after.new_page()
         after_page.goto(URL)
         after_page.wait_for_selector(".card")
@@ -4819,6 +4930,7 @@ try:
         # interval fires as the clock is pushed past the slot. Its own
         # context, so the mocked clock cannot leak into the main page.
         bg = browser.new_context(viewport={"width": 1440, "height": 900})
+        authenticate(bg)
         bg.add_init_script("window.QBOARD_DISABLE_SEMANTIC = true;")
         bg_page = bg.new_page()
         bg_page.clock.install()

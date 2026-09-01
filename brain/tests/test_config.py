@@ -319,6 +319,10 @@ def test_env_example_documents_every_variable_the_code_reads():
                # .env.example, and this test — the only thing that would have
                # said so — was not looking at the directory.
                *sorted((root / 'db').glob('*.mjs')),
+               # auth/ is the trust boundary, and the same blind spot db/ was:
+               # a variable that decides whether the board asks for a password
+               # is the last one that should be undiscoverable.
+               *sorted((root / 'auth').glob('*.mjs')),
                *sorted((root / 'brain' / 'src').rglob('*.py')),
                *sorted((root / 'brain' / 'tests' / 'evals').rglob('*.py'))]
     read = {name for path in sources
