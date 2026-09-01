@@ -380,3 +380,48 @@ test('an authenticated mutation is refused when it comes from somewhere else', a
     assert.equal((await wipe({})).status, 200);
   } finally { await s.stop(); }
 });
+
+// --------------------------------------------------------------------------
+// 4. Trash-first deletion
+// --------------------------------------------------------------------------
+
+// This is an integration test. DELETE /api/cards/:id is the one statement in
+// the whole server that truly erases a card, and it used to delete by id
+// alone: the two-step promise lived entirely in the browser's confirm dialog,
+// which is not a boundary and is not the only caller.
+test('a card can be purged only after it is in the Trash', async () => {
+  const s = await startServer();
+  try {
+    await seed(s.base, [
+      { id: 'live', columnId: 'inbox', title: 'Still working on it' },
+      { id: 'doomed', columnId: 'inbox', title: 'On its way out' },
+    ]);
+
+    const purge = (id) => fetch(s.base + '/api/cards/' + id, { method: 'DELETE' });
+
+    // A live card: the call is answered, and reports that nothing was purged.
+    const onLive = await purge('live');
+    assert.equal(onLive.status, 200);
+    assert.deepEqual(await onLive.json(), { ok: false });
+    assert.deepEqual(await titles(s.base), ['On its way out', 'Still working on it'],
+      'a live card was destroyed by a single call');
+
+    // A card nobody has ever heard of changes nothing either.
+    assert.deepEqual(await (await purge('never-existed')).json(), { ok: false });
+    assert.equal((await titles(s.base)).length, 2);
+
+    // Soft-delete 'doomed' the way the browser does — by omitting it — then
+    // purge it for real.
+    await seed(s.base, [{ id: 'live', columnId: 'inbox', title: 'Still working on it' }]);
+    const trash = await (await fetch(s.base + '/api/trash')).json();
+    assert.deepEqual(trash.cards.map((c) => c.id), ['doomed']);
+
+    const first = await purge('doomed');
+    assert.deepEqual(await first.json(), { ok: true });
+    assert.deepEqual((await (await fetch(s.base + '/api/trash')).json()).cards, []);
+
+    // Purging it again is a no-op, not an error and not a second deletion.
+    assert.deepEqual(await (await purge('doomed')).json(), { ok: false });
+    assert.deepEqual(await titles(s.base), ['Still working on it']);
+  } finally { await s.stop(); }
+});

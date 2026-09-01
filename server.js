@@ -1559,8 +1559,17 @@ function backupAfterNewCards() {
  * second step ("delete from History") and the only operation that truly erases
  * data. Returns true if a row was removed.
  */
+// The only statement in this file that truly erases a card, and the predicate
+// is half of the promise: `deleted_at IS NOT NULL` means a card can be
+// destroyed only after it has been put in the Trash. Without it this route
+// deleted by id alone, so a single mistaken call — a stale browser, a typo in
+// curl, a future caller that thinks DELETE means "remove from the board" —
+// erased a live card with no second step and no way back. The browser has
+// always asked twice; that was never a guarantee, because the browser is not a
+// security boundary and never was the only thing that can call this.
 function purgeCard(id) {
-  return db.prepare('DELETE FROM cards WHERE id = ?').run(id).changes > 0;
+  return db.prepare('DELETE FROM cards WHERE id = ? AND deleted_at IS NOT NULL')
+    .run(id).changes > 0;
 }
 
 // --------------------------------------------------------------------------
