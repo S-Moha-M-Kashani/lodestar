@@ -26,9 +26,16 @@ entity may, without prior written permission from the Author:
 
 PERMITTED USE
 
-Viewing this code for personal educational reference is permitted,
-provided no portion is copied, stored, or reproduced beyond what your
-browser or Git client ordinarily caches.
+Viewing this code for personal educational reference is permitted.
+
+Cloning this repository and running it, unmodified, on your own machine in
+order to evaluate it is also permitted. The copy a Git clone makes on your
+own computer, and the local database that running it creates, are within
+this permission and are not "copying" under reservation 2 above.
+
+That is the extent of the permission. It does not extend to running this
+software for anyone else or as a service, to using any portion of it in
+another project, to modifying it, or to redistributing it in any form.
 
 NO WARRANTY
 

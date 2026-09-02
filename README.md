@@ -5,6 +5,10 @@
 One board for your whole life — work, love, family, health, mind, music, travel, home, money.
 Every open question, task, habit and dream sits in one place, so none of it has to live in your head.
 
+![Lodestar's Board view: three columns — Inbox, In Progress, Done — holding six cards, each with a
+ledger number, a neutral type stamp and a coloured life-area label, above a rail of nine life-area
+tabs.](docs/img/hero.png)
+
 **What makes it different**
 
 - **Built for a life, not a sprint.** A card is a question, a problem, a task, an idea, a dream or a
@@ -30,6 +34,21 @@ Every open question, task, habit and dream sits in one place, so none of it has 
 - **Quick capture, search, filters, tags**, and a pro/con balance sheet on any card tagged `decision`
 - **Undo & History**: every change is logged and any logged state can be restored, git-style
 - **Four themes**, following your system preference until you pick one
+
+## A look at it
+
+Every shot below is a real screenshot from the end-to-end test suite or a live
+recording — none is a mockup. The card text in them comes from the six seed
+cards the app ships with and from the demo board in `sample-overview.json`, both
+already in this repository, so none of it is anyone's real board. Details of
+each image, and what it is evidence for, are in
+[`docs/img/README.md`](docs/img/README.md).
+
+| | |
+| --- | --- |
+| ![The Areas view: a nine-spoke radar wheel labelled Work, Love, Family, Health, Mind, Music, Travel, Home, Money, with per-area tiles below showing open counts, how long each has been carried, and a sparkline.](docs/img/areas.png) **Areas** — nine life areas side by side. A lopsided wheel means a starved corner. | ![The Matrix view: four Eisenhower quadrants — Answer now, Schedule, Delegate, Drop — each holding a category-coloured dot, with a per-area colour legend above.](docs/img/matrix.png) **Matrix** — importance against urgency, placed by the card's own fields. |
+| ![The same board grown to 62 cards across nine life areas, with a "1 habit due" banner at the top, a Habits rail on the right, and an open habit card showing a 21-day completion tape.](docs/img/board-habits.png) **Habits** — a due banner, a rail, and a 21-day tape per habit. | ![The Review view scrolled to Today's Resurfacing: three long-untouched cards, each offering "Still matters", "Open" and "To Trash", above a "Stamp the review done" button.](docs/img/review.png) **Review** — three old thoughts re-met on purpose: keep, open, or let go. |
+| ![The Board History dialog listing timestamped changes newest first with a Restore button on each, one row marked CURRENT, and a Deleted cards section explaining that "Delete permanently" is the only thing that truly erases a card.](docs/img/history.png) **History** — every change logged and restorable; only *Delete permanently* really erases. | ![The Categories dialog listing ten life areas, each in its own colour with its card count and a Remove button, plus a new-category field and a row of colour swatches.](docs/img/categories.png) **Life areas** — yours to name and colour; removing one never deletes its cards. |
 
 ## Run it
 
@@ -95,7 +114,103 @@ The Assistant view talks to the brain — one function-calling agent that resear
 
 It cannot put a card on your board by itself: a card it invents is a **proposal**, held off the board until you approve it, and an edit it suggests opens in the ordinary card dialog for you to change and apply. Deleting is yours alone. A mic beside Send dictates into the composer — locally by default (Parakeet on Apple Silicon), and the transcript is editable text, never auto-sent.
 
+![Fifteen seconds of the Assistant: a question is typed, the reply streams in, a proposed card
+appears headed "PROPOSED — 1 CARD AWAITING YOUR APPROVAL" with Reject and Approve, Approve is
+pressed, and the card appears on the Board as C-061 "Book a dentist appointment" in
+Health.](docs/img/approval-gate.gif)
+
+*The gate in motion, recorded against a live model.* The assistant answers, proposes a card, and
+stops. Nothing reaches the board until **Approve** is pressed — and then it arrives as an ordinary
+card with a ledger number of its own. The still version, and what was recorded to make it, are in
+[`docs/img/README.md`](docs/img/README.md).
+
 Privacy is a design rule, not a setting: conversations are never sent to any tracing or analytics service, web snippets and recalled text are fenced as data rather than instructions before the model reads them, and every link a web search returns is safety-checked before the model may cite it.
+
+## Why I built this
+
+Every tool I tried was built for work. They assume a project, a sprint, a
+deadline — and the things that actually take up room in a head are not shaped
+like that. *"How do we support mum's move this autumn?"* is not a ticket. It is
+a question that will sit unresolved for months, that belongs beside a guitar I
+mean to restring and a deploy that keeps failing on Fridays, and that no
+kanban board has a column for. So the things I most needed to stop carrying
+were the things no tool would hold, and they stayed in my head.
+
+Lodestar is the tool that holds them. A card can be a *question* with no answer
+yet, and that is a legitimate state to be in rather than a task nobody has
+started. Nine life areas sit at the same level, so work cannot quietly take the
+whole board. Nothing is ever deleted by accident, because the whole promise
+falls apart the first time it loses something. And it runs on my own machine
+with no account and no cloud, because a board holding this much of a private
+life should not be somewhere else.
+
+The AI part came last and deliberately weakest: it can read everything and
+write nothing. See below.
+
+## How it's built
+
+Three services, each degrading cleanly when the next one is absent:
+
+- **The browser** — vanilla HTML, CSS and JavaScript as 51 native ES modules,
+  no framework, no bundler, no build step. `index.html` loads one entry point.
+- **The board server** (`:3000`) — the whole backend in one file of raw
+  `node:http` and `node:sqlite`, with **one** npm dependency (`pg`, and only
+  because Postgres has no equivalent in the standard library). It owns the
+  SQLite databases, serves the frontend, and proxies the assistant so the API
+  key never reaches the browser.
+- **The brain** (`:9000`) — a Python FastAPI service wrapping one LangGraph
+  agent: tools, hybrid retrieval over your cards, and chat memory in
+  [Chroma](https://www.trychroma.com/) (`:8003`) when it is running.
+
+Four things are worth more than the diagram:
+
+- **The assistant has no write path to the board at all.** Not a permission it
+  is denied — the set of mutating tools is empty and the brain's board client
+  carries no save method. A card it invents is a row waiting for your click.
+- **Every backend is a seam chosen by an environment variable, and none has an
+  `auto` mode.** Chat model, embedder, reranker, relevance gate, transcriber,
+  search, link safety, tracing. An unknown value raises at boot rather than
+  quietly picking something — because a config that silently transcribed
+  privately on one machine and billed a paid API on another is a bug this
+  project already shipped once.
+- **The prompt-injection defence is a fence, and its measurement is published
+  rather than implied**: 3 of 12 hostile payloads got through on
+  `openai/gpt-5-nano` — 25%, all three in the card-notes channel. Written down
+  because a security claim with no number behind it is marketing.
+- **The server owns the board whenever it answers.** Two laptops and one board
+  server once cost 24 cards; the protocol that replaced that is a hash of the
+  exact bytes a client was sent, and it is the most carefully argued code here.
+
+Full detail, with a link to the source or test behind every claim:
+**[`ARCHITECTURE.md`](ARCHITECTURE.md)**, and the fourteen dated design records
+in [`docs/decisions/`](docs/decisions/) — each written before its code and kept
+afterwards, several carrying an amendment saying where reality disagreed.
+
+## Contributing, and your own data
+
+This is a personal project under a proprietary licence, so there is no
+contribution process and no pull requests. Issues pointing out a bug or a wrong
+claim are welcome.
+
+**If you do run a copy, two things matter:**
+
+- **Never put a real database or a real conversation anywhere near a commit,
+  an issue, or a screenshot.** `databases/` and `backups/` are ignored
+  wholesale, every test entry point backs up `board.db` before it runs, and
+  [`scripts/release-hygiene.mjs`](scripts/release-hygiene.mjs) scans a branch's
+  whole *history* — not just its current tree — for database paths and for
+  identifiers you name, refusing to pass if it finds any. A file deleted in a
+  later commit is still reachable from the branch; that gate exists because the
+  tidy-up commit is what people do instead of a rewrite and it looks identical
+  from outside.
+- **The security boundary is loopback plus a password**, and it is not a
+  suggestion: the server binds `127.0.0.1`, allows an exact set of `Host`
+  values rather than a pattern, and fails to boot if the password hash is
+  missing or malformed. [`docs/security.md`](docs/security.md) explains what
+  that does and does not protect, and what to do instead of exposing a port.
+
+Before publishing anything, [`docs/release-checklist.md`](docs/release-checklist.md)
+lists every gate with the command that checks it.
 
 ## Tests
 
@@ -112,3 +227,11 @@ npm run test:all                                    # all of the above
 
 Proprietary — all rights reserved; published for portfolio and demonstration
 purposes only. See [`LICENSE`](LICENSE).
+
+**You may clone this repository and run it on your own machine**, exactly as
+*Run it* above describes. That permission is granted deliberately and it is the
+whole of it: a life dashboard you cannot run is a screenshot.
+
+**Everything else is reserved.** Not for use in another project, commercial or
+not; not to be modified, redistributed, or run as a service for anyone else.
+For anything beyond your own local copy, ask: s.moha.m.kashani@gmail.com
