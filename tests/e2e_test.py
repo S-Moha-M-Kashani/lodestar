@@ -182,6 +182,41 @@ def wait_for_capture(page, box, n=1, timeout=20.0):
         lambda: page.locator(".chat-log").count() >= 0 and len(box) >= n, timeout)
 
 
+def add_card(page, title):
+    """Create a card the way a person now does: the create control, the dialog,
+    a title, Save.
+
+    The Inbox form this replaces was one input and one Enter, so thirteen call
+    sites spelled the act out twice each. There is a dialog in the middle of it
+    now, and the wait that matters is the last one: the save commits and only
+    then re-renders the board, so returning on the dialog closing would hand a
+    caller a board that has not repainted yet. `wait_until` rather than
+    `wait_for_selector`, so a card that never arrives is the red line of the
+    check that wanted it instead of a TimeoutError that abandons every check
+    after it."""
+    page.click("#new-card-btn")
+    page.wait_for_selector("#card-dialog[open]")
+    page.fill("#card-title", title)
+    page.click("#save-card")
+    wait_until(lambda: page.locator('[data-col="inbox"] .card',
+                                    has_text=title).count() >= 1)
+
+
+def open_details(page):
+    """Open the card dialog's settings fold if it is shut.
+
+    Category, importance, urgency, deadline, plan, effort, control and tags all
+    live behind it now, and Playwright's fill/click/select_option each wait for
+    visibility — so a call site that reaches one of those fields without this
+    raises a TimeoutError, which abandons every check after it rather than
+    failing one. Clicks the real summary rather than setting `open` from script,
+    because that is the control a person uses. Idempotent on purpose: the dialog
+    opens the fold by itself for a card that already carries a setting, and a
+    blind click would then shut the very block the caller needs."""
+    if page.locator("#card-details[open]").count() == 0:
+        page.click("#card-details > summary")
+    page.wait_for_selector("#card-details[open]")
+
 def open_meta(page):
     """Unfold the evidence strip under the newest reply.
 
@@ -743,12 +778,11 @@ try:
         check("categories: the removal is saved to the database",
               not any(c.get("id") == "reading" for c in api_state().get("categories", [])))
 
-        # ---- Quick add ------------------------------------------------------
+        # ---- New card -------------------------------------------------------
         before_snapshots = len(snapshots())
-        page.fill(".quick-add input", "What is speculative decoding?")
-        page.press(".quick-add input", "Enter")
+        add_card(page, "What is speculative decoding?")
         first = page.locator('[data-col="inbox"] .card .card-title').first
-        check("quick-add: new question at top of Inbox",
+        check("new card: the saved card is at the top of Inbox",
               first.inner_text() == "What is speculative decoding?")
 
         # Capturing a thought in the UI snapshots the database — the whole point
@@ -761,6 +795,7 @@ try:
         page.wait_for_selector("#card-dialog[open]")
         page.fill("#card-notes", "Draft tokens from a small model, verify with the big one.")
         page.locator('.type-picker label:has(input[value="problem"])').click()
+        open_details(page)
         page.locator('.category-picker label:has(input[value="work"])').click()
         page.fill("#card-tags", "inference, decoding")
         page.click('#card-form button[type="submit"]')
@@ -823,8 +858,7 @@ try:
         # four middle entries are quick-edits that change one field in place,
         # and Delete is the ordinary soft delete. It runs on a card of its own
         # and ends by deleting it, so the board it hands on is the one it found.
-        page.fill(".quick-add input", "Menu probe card")
-        page.press(".quick-add input", "Enter")
+        add_card(page, "Menu probe card")
         probe = lambda: page.locator(".card", has_text="Menu probe card").first
         # Only ever one panel is open, so every menu locator is scoped to the
         # visible one rather than to a card that may have moved column.
@@ -845,10 +879,11 @@ try:
               and geom["opacity"] == "1" and geom["tab"] >= 0)
 
         probe().locator(".card-menu-btn").click()
-        check("card menu: the + opens the seven actions, and not the card dialog",
+        check("card menu: the + opens the eight actions, and not the card dialog",
               [t.strip() for t in page.locator(
                   ".card-menu-panel:not([hidden]) .menu-item").all_inner_texts()]
-              == ["Edit…", "Category ▸", "Type ▸", "Deadline ▸", "Plan ▸", "Move to ▸", "Delete"]
+              == ["Edit…", "Duplicate", "Category ▸", "Type ▸", "Deadline ▸",
+                  "Plan ▸", "Move to ▸", "Delete"]
               and page.locator("#card-dialog[open]").count() == 0)
 
         page.keyboard.press("Escape")
@@ -859,6 +894,51 @@ try:
         page.locator('[data-col="inbox"] .column-title').click()
         check("card menu: Escape (focus back on the +) and an outside click both dismiss it",
               escaped and page.locator(".card-menu-panel:not([hidden])").count() == 0)
+
+        # At most one card's menu is ever open. There is one panel per card in
+        # the markup, so "the menu moved" is really "the other one was closed
+        # first" — and if closeCardMenus were dropped from the open path, two
+        # panels would stand open at once with the second card's on top, which
+        # looks right and is not. So the open panel's own card is read back,
+        # not just counted. The second card is found by index rather than by a
+        # title this block would then have to keep in step with the seed data.
+        other_idx = page.evaluate("""() => [...document.querySelectorAll('.card')]
+            .findIndex(c => c.querySelector('.card-title').textContent
+                            !== 'Menu probe card')""")
+        second = page.locator(".card").nth(other_idx)
+        second_title = second.locator(".card-title").inner_text()
+        probe().click(button="right")
+        page.wait_for_selector(".card-menu-panel:not([hidden])")
+        second.click(button="right")
+        page.wait_for_timeout(120)
+        owner = page.evaluate("""() => {
+          const p = document.querySelector('.card-menu-panel:not([hidden])');
+          return p ? p.closest('.card').querySelector('.card-title').textContent : null;
+        }""")
+        check("card menu: right-clicking a second card moves the one panel to it",
+              page.locator(".card-menu-panel:not([hidden])").count() == 1
+              and owner == second_title)
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(80)
+
+        # A right-click inside an open panel is use, not a fresh open. The
+        # regression the module header describes: every listener that has to
+        # tell "the menu" from "the card underneath it" gets it wrong at least
+        # once, and here it would repaint the panel back to its root — throwing
+        # the user out of the submenu they had just stepped into. A submenu is
+        # what makes that visible, since the root repainted looks identical to
+        # the root left alone.
+        probe().click(button="right")
+        page.wait_for_selector(".card-menu-panel:not([hidden])")
+        item("Category").click()
+        in_submenu = item("‹ Back").count() == 1
+        page.locator(".card-menu-panel:not([hidden])").click(button="right")
+        page.wait_for_timeout(120)
+        check("card menu: a right-click inside the panel leaves its submenu showing",
+              in_submenu and item("‹ Back").count() == 1
+              and item("Edit…").count() == 0)
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(80)
 
         probe().locator(".card-menu-btn").click()
         item("Category").click()
@@ -892,12 +972,20 @@ try:
               page.locator('[data-col="answered"] .card',
                            has_text="Menu probe card").count() == 1)
 
-        page.wait_for_timeout(500)  # debounced push
-        saved = [c for c in api_state()["cards"] if c["title"] == "Menu probe card"]
+        # Waited for, not slept through. The push is debounced, so a fixed 500ms
+        # is long enough on an idle machine and a flake on a busy one — which is
+        # exactly the proxy-condition wait that wait_until's own docstring names
+        # as the source of both of this suite's real flakes. Caught it doing it.
+        def quick_edits_saved():
+            rows = [c for c in api_state()["cards"] if c["title"] == "Menu probe card"]
+            if len(rows) != 1:
+                return False
+            c = rows[0]
+            return (c["category"] == "health" and c["type"] == "idea"
+                    and c["deadline"] == today and c["columnId"] == "answered")
+
         check("card menu: every quick-edit reached the database",
-              len(saved) == 1 and saved[0]["category"] == "health"
-              and saved[0]["type"] == "idea" and saved[0]["deadline"] == today
-              and saved[0]["columnId"] == "answered")
+              wait_until(quick_edits_saved, timeout=8))
 
         # The regression this control most easily causes: the whole card is one
         # click target, and a menu inside it must not swallow that or fire it.
@@ -1824,6 +1912,7 @@ try:
         page.wait_for_selector("#board.board")
         page.locator('.card', has_text="speculative decoding").first.click()
         page.wait_for_selector("#card-dialog[open]")
+        open_details(page)
         page.select_option("#card-importance", "high")
         page.select_option("#card-urgency", "low")
         page.click('#card-form button[type="submit"]')
@@ -1861,6 +1950,7 @@ try:
         def set_judgements(title, importance, urgency, deadline=None):
             page.locator('.card', has_text=title).first.click()
             page.wait_for_selector("#card-dialog[open]")
+            open_details(page)
             page.select_option("#card-importance", importance)
             page.select_option("#card-urgency", urgency)
             if deadline is not None:
@@ -2089,11 +2179,11 @@ try:
         page.wait_for_timeout(100)
 
         # ---- Decisional-balance preview ---------------------------------------
-        page.fill(".quick-add input", "Should we adopt the new framework?")
-        page.press(".quick-add input", "Enter")
+        add_card(page, "Should we adopt the new framework?")
         page.wait_for_timeout(150)
         page.locator('[data-col="inbox"] .card', has_text="new framework").first.click()
         page.wait_for_selector("#card-dialog[open]")
+        open_details(page)
         page.fill("#card-tags", "decision")
         page.fill("#card-notes", "+ faster builds\n+ better types\n- migration cost\n- team ramp-up")
         page.dispatch_event("#card-notes", "input")
@@ -2106,34 +2196,55 @@ try:
         page.click("#cancel-dialog")
         page.wait_for_timeout(100)
 
-        # ---- Quick-add: empty input and adding inside an open drawer ---------
+        # ---- New card: an empty title, and adding inside an open drawer -----
         count_now = page.locator(".card").count()
-        page.press(".quick-add input", "Enter")
+        page.click("#new-card-btn")
+        page.wait_for_selector("#card-dialog[open]")
+        page.click("#save-card")
         page.wait_for_timeout(80)
-        check("quick-add: empty input adds nothing and keeps focus in the input",
+        # #card-title is `required`, so the browser refuses the submit: nothing
+        # is written and the draft is still on screen to finish or abandon.
+        check("new card: an empty title adds nothing and leaves the dialog open",
               page.locator(".card").count() == count_now
-              and page.evaluate(
-                  "document.activeElement === document.querySelector('.quick-add input')"))
+              and page.locator("#card-dialog[open]").count() == 1)
+        page.click("#cancel-dialog")
+        page.wait_for_timeout(100)
 
         # A capture written inside an open category drawer belongs to that
         # drawer — it inherits the category and must never vanish behind the filter.
         page.locator('.cat-tab[data-cat="love"]').click()
         page.wait_for_timeout(100)
         love_before = page.locator(".card").count()
-        page.fill(".quick-add input", "Plan a surprise picnic FILTER-MARKER")
-        page.press(".quick-add input", "Enter")
+        add_card(page, "Plan a surprise picnic FILTER-MARKER")
         page.wait_for_timeout(100)
         marker = page.locator(".card", has_text="FILTER-MARKER")
-        check("quick-add: a card added inside an open drawer stays visible",
+        check("new card: one added inside an open drawer stays visible",
               page.locator(".card").count() == love_before + 1 and marker.count() == 1)
-        check("quick-add: it inherits the drawer's category",
+        check("new card: it inherits the drawer's category",
               marker.first.locator(".card-cat").inner_text() == "Love")
         page.locator(".cat-tab-all").click()
         page.wait_for_timeout(100)
 
+        # ...and the three filters that would hide it are cleared by the save.
+        # The category and type filters are deliberately NOT cleared — the card
+        # inherits those instead, which is the check just above — so this uses
+        # the search box: the easiest of the three to set, and the one whose own
+        # value says whether it was reset. Without the clearing block the card
+        # is written and then hidden by the search it was written under, which
+        # is "never lose a thought" failing in the quietest possible way.
+        page.fill("#search", "zzz-no-card-carries-this-word")
+        page.wait_for_timeout(150)
+        check("new card: a search that hides every card still offers the create control",
+              page.locator(".card").count() == 0
+              and page.locator("#new-card-btn").is_visible())
+        add_card(page, "SEARCH-CLEAR-probe")
+        page.wait_for_timeout(150)
+        check("new card: saving clears the search that would have hidden the card",
+              page.input_value("#search") == ""
+              and page.locator(".card", has_text="SEARCH-CLEAR-probe").count() == 1)
+
         # ---- Database persistence (the whole point of the server) -----------
-        page.fill(".quick-add input", "PERSIST-MARKER-alpha")
-        page.press(".quick-add input", "Enter")
+        add_card(page, "PERSIST-MARKER-alpha")
         page.wait_for_timeout(500)
         check("db: new question written to the database",
               any(c["title"] == "PERSIST-MARKER-alpha" for c in api_state()["cards"]))
@@ -2265,8 +2376,7 @@ try:
         page.click("#close-history")
 
         # ---- Survives a server restart (proves on-disk SQLite) --------------
-        page.fill(".quick-add input", "RESTART-MARKER-beta")
-        page.press(".quick-add input", "Enter")
+        add_card(page, "RESTART-MARKER-beta")
         page.wait_for_timeout(500)
         check("db: restart marker saved before restart",
               any(c["title"] == "RESTART-MARKER-beta" for c in api_state()["cards"]))
@@ -3417,13 +3527,15 @@ try:
               any(c["title"] == "A thought I do not want" for c in api_trash()["cards"]))
 
         # ---- Suggested edits: the agent asks, the user saves -----------------
+        # This is an end-to-end test.
         # The guardrail that replaced the one ungated write. A suggestion changes
         # nothing on its own; the user opens it, may adjust it, and their own save
         # is what applies it. So the assertions are in that order: unchanged,
         # then reviewable, then applied only after a save.
         target = api_state()["cards"][0]
         api_suggest_edit(target["id"], {"title": "A title the agent suggested",
-                                       "columnId": "in-progress"})
+                                       "columnId": "in-progress",
+                                       "deadline": "2027-03-04"})
         # Away and back: setView refreshes the waiting lists on entry, and the
         # previous block left us already on the Assistant, where a click is a
         # no-op. A suggestion made by a real chat turn arrives on its own flag.
@@ -3435,7 +3547,10 @@ try:
               and page.locator(".suggestion-review").count() == 1
               and page.locator(".suggestion-dismiss").count() == 1)
         check("edits: the row says what would change, without opening it",
-              "in progress" in page.inner_text(".suggestion-change").lower())
+              "in progress" in page.inner_text(".suggestion-change").lower()
+              # Every field the suggestion names has to be named here too, or
+              # the row invites the user to review a change it never mentioned.
+              and "2027-03-04" in page.inner_text(".suggestion-change"))
         check("edits: the card is untouched while the suggestion waits",
               next(c for c in api_state()["cards"]
                    if c["id"] == target["id"])["title"] == target["title"])
@@ -3447,6 +3562,13 @@ try:
         page.wait_for_selector("#card-dialog[open]")
         check("edits: reviewing opens the card with the suggestion filled in",
               page.input_value("#card-title") == "A title the agent suggested")
+        # The deadline used to be painted from the stored card while every other
+        # field came from the suggestion, so the reviewer read the old date,
+        # pressed Save, and wrote the old date back — the suggestion dropped
+        # with no error anywhere. The fold is forced open for a review, which is
+        # why this needs no open_details.
+        check("edits: a suggested deadline is what the reviewer is shown",
+              page.input_value("#card-deadline") == "2027-03-04")
         # The user's own wording wins — that is the whole point of reviewing.
         page.fill("#card-title", "A title I chose myself")
         page.click("#card-form button[type=submit]")
@@ -3459,6 +3581,8 @@ try:
         check("edits: saving applies what the USER left in the form", applied)
         check("edits: a suggested column move rides along with the save",
               wait_until(lambda: saved_card()["columnId"] == "in-progress"))
+        check("edits: the deadline the reviewer approved is the one saved",
+              wait_until(lambda: saved_card()["deadline"] == "2027-03-04"))
         check("edits: the answered suggestion leaves the list",
               len(api_edits()["edits"]) == 0)
 
@@ -3473,6 +3597,43 @@ try:
               len(api_edits()["edits"]) == 0
               and next(c for c in api_state()["cards"]
                        if c["id"] == target["id"])["notes"] != "notes the agent wanted")
+
+        # The second half of the dialog's fold predicate:
+        # `cardHasDetails(shown) || Boolean(reviewingEditId)`. Every review
+        # above lands on a seed card that already carries settings, so the FIRST
+        # clause is true there and the second could be deleted without a single
+        # red line — while a suggested change to a folded setting would then be
+        # approved unseen. This one reviews a card straight out of add_card,
+        # which carries nothing folded at all, and the suggestion names `notes`,
+        # a field that lives outside the fold, so the card-plus-suggestion
+        # overlay cannot make the first clause true either. The card's emptiness
+        # is asserted rather than assumed: a stray filter leaking a category
+        # into a future add_card would otherwise make this check vacuous.
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector("#board.board")
+        add_card(page, "EDIT-probe bare card")
+        wait_until(lambda: any(c["title"] == "EDIT-probe bare card"
+                               for c in api_state()["cards"]))
+        bare = next((c for c in api_state()["cards"]
+                     if c["title"] == "EDIT-probe bare card"), None)
+        nothing_folded = bare is not None and not (
+            bare.get("category") or bare.get("importance") or bare.get("urgency")
+            or bare.get("deadline") or bare.get("tags")
+            or bare.get("planSrc") != "auto" or bare.get("effortSrc") != "default"
+            or bare.get("controlSrc") != "default")
+        api_suggest_edit(bare["id"], {"notes": "a note the agent wanted"})
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector(".suggestion")
+        page.click(".suggestion-review")
+        page.wait_for_selector("#card-dialog[open]")
+        check("edits: a review opens the fold even on a card with nothing folded",
+              nothing_folded
+              and page.locator("#card-details[open]").count() == 1
+              and page.locator("#card-tags").is_visible())
+        page.click("#cancel-dialog")
+        page.wait_for_timeout(100)
+        page.click(".suggestion-dismiss")
+        page.wait_for_function("document.querySelectorAll('.suggestion').length === 0")
 
         # ---- Assistant model settings ----------------------------------------
         # A "Models" panel with two pickers (text, omni) plus a fixed embedder
@@ -4320,13 +4481,13 @@ try:
         check("sample: board intact after reload", page.locator(".card").count() == len(sample["cards"]))
 
         # ---- Editor: effort & control --------------------------------------
-        page.fill(".quick-add input", "EFFORT-CONTROL-probe")
-        page.press(".quick-add input", "Enter")
+        add_card(page, "EFFORT-CONTROL-probe")
         page.locator('[data-col="inbox"] .card', has_text="EFFORT-CONTROL-probe").first.click()
         page.wait_for_selector("#card-dialog[open]")
         check("editor: effort & control default to the middle of the scale",
               page.input_value("#card-effort") == "medium"
               and page.input_value("#card-control") == "influence")
+        open_details(page)
         page.select_option("#card-effort", "low")
         page.select_option("#card-control", "act")
         page.click('#card-form button[type="submit"]')
@@ -4494,6 +4655,7 @@ try:
         page.wait_for_timeout(100)
         page.locator('[data-col="inbox"] .card').first.click()
         page.wait_for_selector("#card-dialog[open]")
+        open_details(page)
         page.locator('.category-picker label:has(input[value="photography"])').click()
         page.click('#card-form button[type="submit"]')
         page.wait_for_timeout(100)
@@ -4543,18 +4705,27 @@ try:
         check("board: the third column is labelled Done",
               page.locator('[data-col="answered"] .column-title').text_content() == "Done")
 
-        page.fill(".quick-add input", "Meditate")
-        page.press(".quick-add input", "Enter")
+        add_card(page, "Meditate")
         habit_card = page.locator('[data-col="inbox"] .card', has_text="Meditate").first
         habit_card.click()
         page.wait_for_selector("#card-dialog[open]")
         check("habit: the cadence fields are hidden until the card is a habit",
               page.locator("#card-habit[hidden]").count() == 1)
         page.locator('.type-picker label:has(input[value="habit"])').click()
+        # is_visible(), not `#card-habit:not([hidden])`: the attribute stays
+        # absent whatever happens to the fieldset's surroundings, so an
+        # attribute check would pass just as happily with the cadence moved
+        # inside the collapsed fold and invisible. "Meditate" carries nothing
+        # folded, so the fold is shut here — which is what makes this the
+        # spec's assertion: the cadence appears beside the stamp that governs
+        # it, without the user opening the block.
         check("habit: stamping Habit reveals the cadence fields",
-              page.locator("#card-habit:not([hidden])").count() == 1)
+              page.locator("#card-habit").is_visible()
+              and page.locator("#card-habit-freq").is_visible()
+              and page.locator("#card-details[open]").count() == 0)
         page.select_option("#card-habit-freq", "daily")
         page.fill("#card-habit-count", "2")
+        open_details(page)
         page.locator('.category-picker label:has(input[value="health"])').click()
         page.click('#card-form button[type="submit"]')
 
@@ -4716,7 +4887,7 @@ try:
               and page.evaluate("localStorage.getItem('lodestar:habitChime')") == "bell"
               and page.get_attribute("#sound-bell", "aria-checked") == "true")
         page.reload()
-        page.wait_for_selector(".quick-add input")
+        page.wait_for_selector("#new-card-btn")
         page.click("#menu-btn")
         page.hover("#menu-sound")
         page.wait_for_timeout(150)
@@ -4770,14 +4941,161 @@ try:
         page.select_option("#type-filter", "")
         page.wait_for_timeout(150)
 
+        # ---- The card dialog's settings fold ---------------------------------
+        # This is an end-to-end test. Everything but the card, its notes and its
+        # type folds away, so the dialog a capture faces is three fields instead
+        # of eleven. The fold then opens itself for any card that already holds
+        # one of the folded settings — a short dialog must never hide a category
+        # somebody chose. Collapsing is not clearing: a save made with the block
+        # shut has to write exactly the values it is holding.
+        add_card(page, "FOLD-probe bare")
+        page.locator('.card', has_text="FOLD-probe bare").first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        check("fold: a bare card opens with its settings folded away",
+              page.locator("#card-details[open]").count() == 0
+              and page.locator("#card-title").is_visible()
+              and page.locator("#card-notes").is_visible()
+              and page.locator(".type-picker").is_visible()
+              and not page.locator("#card-tags").is_visible())
+        open_details(page)
+        page.locator('.category-picker label:has(input[value="work"])').click()
+        page.fill("#card-tags", "folded, probe")
+        page.click("#save-card")
+        page.wait_for_timeout(250)
+
+        page.locator('.card', has_text="FOLD-probe bare").first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        check("fold: a card that already carries a setting opens with it showing",
+              page.locator("#card-details[open]").count() == 1
+              and page.locator("#card-tags").is_visible())
+        page.click("#card-details > summary")
+        page.wait_for_selector("#card-details:not([open])")
+        page.fill("#card-title", "FOLD-probe renamed")
+        page.click("#save-card")
+        wait_until(lambda: page.locator('.card', has_text="FOLD-probe renamed").count() == 1)
+        page.wait_for_timeout(700)
+        folded = next((c for c in api_state()["cards"]
+                       if c["title"] == "FOLD-probe renamed"), None)
+        check("fold: a save made with the block shut keeps every folded value",
+              folded is not None and folded.get("category") == "work"
+              and folded.get("tags") == ["folded", "probe"])
+
+        # ---- Duplicate: a copy of the card, never a copy of its record -------
+        # This is an end-to-end test. A duplicate is a draft like any other: it
+        # exists when it is saved, so cancelling costs no ledger number. It
+        # carries the cadence, which is the habit's design, and never the
+        # completions, which are its record — a copy that inherited a year of
+        # ticks would be a record of things that did not happen, the same reason
+        # the agent is given no tool to tick a habit.
+        add_card(page, "DUP-probe stretch")
+        page.locator('.card', has_text="DUP-probe stretch").first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        page.locator('.type-picker label:has(input[value="habit"])').click()
+        page.select_option("#card-habit-freq", "daily")
+        page.fill("#card-habit-count", "1")
+        # A category, so the copy carries a *folded* setting and its draft opens
+        # showing it. The cadence alone would not: those fields sit outside the
+        # fold beside the stamp that governs them, so nothing is hidden and
+        # `cardHasDetails` rightly leaves the block shut.
+        open_details(page)
+        page.locator('.category-picker label:has(input[value="health"])').click()
+        page.click("#save-card")
+        page.wait_for_timeout(250)
+        src = lambda: page.locator('.card', has_text="DUP-probe stretch").first
+        # Punched to completion, so this habit stops being due and cannot banner
+        # over a later block's clicks.
+        # Punching itself is already covered above; here it is setup, and the
+        # last check re-reads this card's history from the database anyway.
+        src().locator(".habit-punch .punch-box:not(.done)").first.click()
+        page.wait_for_timeout(250)
+
+        # Right-click, deliberately: the accelerator and the + drop one panel.
+        src().click(button="right")
+        page.wait_for_selector(".card-menu-panel:not([hidden])")
+        no_dialog_yet = page.locator("#card-dialog[open]").count() == 0
+        item("Duplicate").click()
+        page.wait_for_selector("#card-dialog[open]")
+        # text_content(), not inner_text(): `#card-form h2` is uppercased in CSS,
+        # so inner_text() reports what is painted ("NEW CARD") rather than what
+        # the dialog set. Split in two, because a single seven-part condition
+        # says only that one of seven things broke.
+        check("duplicate: right-click opens a draft prefilled from the card",
+              no_dialog_yet
+              and page.input_value("#card-title") == "DUP-probe stretch"
+              and page.locator("#card-details[open]").count() == 1)
+        check("duplicate: the dialog says it is creating, not editing",
+              page.locator("#dialog-title").text_content().strip() == "New card"
+              and page.locator("#save-card").text_content().strip() == "Add card"
+              and not page.locator("#delete-card").is_visible()
+              and page.locator('.card', has_text="DUP-probe stretch").count() == 1)
+        page.fill("#card-title", "DUP-probe copy")
+        page.click("#save-card")
+        wait_until(lambda: page.locator('.card', has_text="DUP-probe copy").count() == 1)
+        page.wait_for_timeout(700)
+        cards = api_state()["cards"]
+        titles = [c["title"] for c in cards]
+        source = next((c for c in cards if c["title"] == "DUP-probe stretch"), None)
+        copy = next((c for c in cards if c["title"] == "DUP-probe copy"), None)
+        check("duplicate: the copy keeps the cadence, earns a number, inherits no history",
+              source is not None and copy is not None
+              and copy["habitFreq"] == source["habitFreq"]
+              and copy["habitCount"] == source["habitCount"]
+              and copy["columnId"] == source["columnId"]
+              and copy["num"] != source["num"]
+              and copy["category"] == source["category"] == "health"
+              and copy["habitHistory"] == {}
+              and source["habitHistory"] != {}
+              and titles.index("DUP-probe copy") == titles.index("DUP-probe stretch") + 1)
+        # Retire the copy: it has no completions, so it would be due and would
+        # banner over every board open in the blocks below.
+        page.locator('.card', has_text="DUP-probe copy").first.click(button="right")
+        page.wait_for_selector(".card-menu-panel:not([hidden])")
+        item("Move to").click()
+        item("Done").click()
+        page.wait_for_timeout(250)
+
+        # A cancelled draft writes nothing and burns no ledger number — the
+        # design's central argument, and nothing pinned it. Cheap insurance
+        # rather than a live risk: `num` is `nextNum()` = max(num) + 1, derived
+        # at the save from the board itself, so there is no counter a cancel
+        # could advance. What it would catch is the rejected alternative
+        # creeping back — create the card first and delete it on cancel, which
+        # burns a permanent number, writes two undo entries for one act and
+        # leaves a Trash entry to clean up. Both doors into a draft are tried,
+        # because only the create control's one goes through blankDraft.
+        expected_num = max(c["num"] for c in api_state()["cards"]) + 1
+        page.click("#new-card-btn")
+        page.wait_for_selector("#card-dialog[open]")
+        page.fill("#card-title", "CANCEL-probe blank draft")
+        open_details(page)
+        page.locator('.category-picker label:has(input[value="work"])').click()
+        page.click("#cancel-dialog")
+        page.wait_for_timeout(150)
+        page.locator('.card', has_text="DUP-probe stretch").first.click(button="right")
+        page.wait_for_selector(".card-menu-panel:not([hidden])")
+        item("Duplicate").click()
+        page.wait_for_selector("#card-dialog[open]")
+        page.fill("#card-title", "CANCEL-probe duplicate")
+        page.click("#cancel-dialog")
+        page.wait_for_timeout(150)
+        add_card(page, "CANCEL-probe kept")
+        page.wait_for_timeout(700)
+        after_cancels = api_state()["cards"]
+        kept = next((c for c in after_cancels
+                     if c["title"] == "CANCEL-probe kept"), None)
+        check("duplicate: a cancelled draft writes no card and burns no number",
+              not any(c["title"].startswith("CANCEL-probe blank")
+                      or c["title"] == "CANCEL-probe duplicate"
+                      for c in after_cancels)
+              and kept is not None and kept["num"] == expected_num)
+
         # ---- The plan (when a card is meant to happen) ------------------------
         # This is an end-to-end test. A plan is not a stored list: it is the
         # partial date each card carries — a year, a year and month, or a day —
         # read into five groups by how near it is. Its box looks like a habit's
         # on purpose and means something else: a tick finishes the card, so it
         # moves to Done and leaves the list.
-        page.fill(".quick-add input", "Send the tax forms")
-        page.press(".quick-add input", "Enter")
+        add_card(page, "Send the tax forms")
         plan_row = lambda: page.locator(".plan-rail .plan-rail-row", has_text="Send the tax forms")
         # Which groups a card is listed under — the headings above its rows.
         # A list, because a dated dream belongs to two of them.
@@ -4827,6 +5145,7 @@ try:
               page.locator("#card-plan-year").count() == 1
               and page.locator("#card-plan-month").count() == 1
               and page.locator("#card-plan-day").count() == 1)
+        open_details(page)
         page.fill("#card-deadline", "2026-01-01")
         page.locator("#card-plan-year").select_option(str(datetime.now().year + 3))
         page.wait_for_timeout(120)
@@ -4837,6 +5156,38 @@ try:
         page.wait_for_timeout(150)
         check("plan: and the card cannot be saved while it says that",
               page.locator("#card-dialog[open]").count() == 1)
+
+        # The same refusal from a COLLAPSED fold — the case the one-line
+        # `$('#card-details').open = true` in edit-dialog.js exists for. Without
+        # it the message and the year select are both inside a closed <details>:
+        # the error is invisible, focus() on an element in a closed fold is a
+        # no-op, and Save simply appears to do nothing at all.
+        #
+        # The fold is collapsed by hand here rather than found shut on open, and
+        # it has to be. A conflict needs a deadline in the form, and any card
+        # carrying a deadline makes `cardHasDetails` true, so the fold opens
+        # itself on every card that could produce one — "shut on open AND
+        # conflicting on save" is unreachable by construction. Collapsing it is
+        # the reachable half of the same scenario and fails in the same way.
+        page.click("#card-details > summary")
+        page.wait_for_selector("#card-details:not([open])")
+        page.click('#card-form button[type="submit"]')
+        page.wait_for_timeout(200)
+        check("plan: a refusal from a collapsed fold opens it and focuses the plan",
+              page.locator("#card-details[open]").count() == 1
+              and page.evaluate("() => document.activeElement.id") == "card-plan-year")
+        check("plan: and that refusal says why, where it can be read",
+              page.locator("#card-plan-error").is_visible()
+              and "after the deadline" in page.locator("#card-plan-error").inner_text())
+        check("plan: the refused save wrote nothing to the card",
+              page.locator("#card-dialog[open]").count() == 1
+              and all(c.get("deadline") != "2026-01-01"
+                      for c in api_state()["cards"]
+                      if c["title"] == "Send the tax forms"))
+        # Reopen the fold whatever the checks found, so the two clicks below
+        # reach visible controls instead of raising a TimeoutError that would
+        # abandon every check after this block.
+        open_details(page)
         page.click("#card-plan-follow")
         page.wait_for_timeout(100)
         check("plan: following the deadline again clears the error",
@@ -4978,7 +5329,7 @@ try:
             page.wait_for_function(
                 "name => document.querySelector('#board-select')"
                 "?.selectedOptions[0]?.textContent.includes(name)", arg=name)
-            page.wait_for_selector(".quick-add input")
+            page.wait_for_selector("#new-card-btn")
 
         def fill_prompt(text):
             page.fill("#prompt-input", text)
@@ -4995,8 +5346,7 @@ try:
               page.locator(".card").count() == 0
               and "Getaway" in page.locator("#board-select").inner_text())
 
-        page.fill(".quick-add input", "Book the ferry")
-        page.press(".quick-add input", "Enter")
+        add_card(page, "Book the ferry")
         page.wait_for_timeout(400)
         new_id = page.evaluate("() => document.querySelector('#board-select').value")
         check("boards: a card saved here lands on this board alone",
@@ -5097,7 +5447,7 @@ try:
                       "() => localStorage.getItem('e2e:prompt-close')") == "ok")))
 
         # Cancel still cancels: by the button, and by Escape.
-        page.wait_for_selector(".quick-add input")
+        page.wait_for_selector("#new-card-btn")
         name_before = selected_board_name()
         board_menu("#board-rename")
         prompt_open = wait_until(
@@ -5148,15 +5498,13 @@ try:
         # Force the next debounced PUT /api/state to fail.
         n_before = len(errors)
         page.route("**/api/state*", block_state_put)
-        page.fill(".quick-add input", "Trigger an offline push")
-        page.press(".quick-add input", "Enter")
+        add_card(page, "Trigger an offline push")
         page.wait_for_timeout(400)  # debounce is 150ms + failure
         check("offline: PUT failure announces the local-save message",
               "saved locally" in page.locator("#live-region").inner_text())
         # Recovery: stop aborting, trigger another push, expect the reconnect message.
         page.unroute("**/api/state*", block_state_put)
-        page.fill(".quick-add input", "Trigger a reconnect push")
-        page.press(".quick-add input", "Enter")
+        add_card(page, "Trigger a reconnect push")
         page.wait_for_timeout(400)
         check("offline: a later successful push announces reconnection",
               "Reconnected" in page.locator("#live-region").inner_text())
@@ -5450,7 +5798,7 @@ try:
         # A turn of each kind, taken through the widget so the trace and the
         # shell that links to it are exercised together.
         page.locator('.view-switch button[data-view="board"]').click()
-        page.wait_for_selector(".quick-add input")
+        page.wait_for_selector("#new-card-btn")
         if not page.locator("#assistant-widget").is_visible():
             page.click("#assistant-launcher")
         page.wait_for_selector("#assistant-widget .chat-log")
@@ -5465,7 +5813,12 @@ try:
         # tool call, so the tape has an ai → tool → ai stretch in it.
         page.fill("#chat-input", "add: a card the trace can show")
         page.click("#chat-send")
-        wait_until(lambda: not page.locator("#chat-input").is_disabled(), timeout=25)
+        # Asserted, not merely awaited. This wait's result used to be discarded,
+        # so a second turn slower than its deadline let the block read a tape
+        # holding only the first turn — and the two checks below then failed
+        # describing the tape rather than the turn that never landed.
+        second_turn = wait_until(
+            lambda: not page.locator("#chat-input").is_disabled(), timeout=40)
         session_id = page.evaluate("() => localStorage.getItem('lodestar:chat-session')")
 
         # The widget's own way in — developer-only, and it carries the session id
@@ -5481,6 +5834,24 @@ try:
         _, headers, tape = dev_get(
             f"/dev/trace?session={urllib.parse.quote(session_id)}", dev_cookie)
         roles = re.findall(r'<div class="entry" data-role="(\w+)"', tape)
+        # Named separately so a failure says which half broke. Filing never
+        # raises by design (`file_trace` logs and returns, so a debugging aid
+        # cannot 500 the turn it describes) — which means a turn that was never
+        # filed is indistinguishable from a tape read too early unless the two
+        # are asserted apart.
+        # KNOWN FAILING, and deliberately left red rather than removed: after a
+        # tool-calling turn taken through the *widget*, `#chat-input` is still
+        # disabled 40s later, so `assistantState.busy` never returned to false —
+        # the brain finished (the check below finds both envelopes filed) but the
+        # browser's stream never settled. The same turn through the Assistant
+        # sheet settles, so this looks specific to the widget shell.
+        # It was invisible until 2026-09-02 because this wait's result was
+        # discarded; asserting it is what found it. Unrelated to the card-draft
+        # change that surfaced it, and it wants its own investigation — a check
+        # that lies would cost more than one that is honestly red.
+        check("trace: the tool-calling turn finished", second_turn)
+        check("trace: both turns were filed",
+              tape.count('class="prompt"') == 2)
         check("trace: the tape holds the human, system, ai and tool messages"
               " the brain sent",
               headers.get("Cache-Control") == "no-store"
@@ -5488,8 +5859,13 @@ try:
               and "tool" in roles and roles.count("system") == 2
               and "trace this ordinary turn" in tape
               and "create_card" in tape)
+        # `in` before `index`: a bare .index() on an absent substring raises,
+        # which aborts the whole run instead of reddening one check — the one
+        # thing this suite's collector exists to prevent.
         check("trace: two prompts are two prompt groups, in order",
               tape.count('class="prompt"') == 2
+              and "trace this ordinary turn" in tape
+              and "a card the trace can show" in tape
               and tape.index("trace this ordinary turn")
               < tape.index("a card the trace can show"))
 
@@ -5535,12 +5911,11 @@ try:
         bg_page = bg.new_page()
         bg_page.clock.install()
         bg_page.goto(URL)
-        bg_page.wait_for_selector(".quick-add input")
+        bg_page.wait_for_selector("#new-card-btn")
         bg_page.evaluate("window.addEventListener('lodestar:chime',"
                          " () => localStorage.setItem('e2e:bg-chime', '1'))")
         slot = (datetime.now() + timedelta(minutes=2)).strftime("%H:%M")
-        bg_page.fill(".quick-add input", "Water the plants")
-        bg_page.press(".quick-add input", "Enter")
+        add_card(bg_page, "Water the plants")
         bg_page.locator('[data-col="inbox"] .card',
                         has_text="Water the plants").first.click()
         bg_page.wait_for_selector("#card-dialog[open]")

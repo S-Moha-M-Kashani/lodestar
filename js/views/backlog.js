@@ -1,6 +1,6 @@
 import { cardLabel, filtersActive, matchesFilters } from '../core/cards.js';
 import { catColor, catLabel } from '../core/categories.js';
-import { cardAria, renderQuickAdd, typeBadge } from '../ui/board.js';
+import { cardAria, renderNewCardButton, typeBadge } from '../ui/board.js';
 import { sortMenu } from '../ui/card-actions.js';
 import { columnCards } from '../ui/dom.js';
 import { openDialog } from '../ui/edit-dialog.js';
@@ -30,7 +30,9 @@ export function renderBacklog() {
 
   if (visible.length > 1) head.append(sortMenu('inbox'));
 
-  sheet.append(head, renderQuickAdd());
+  // The same create control the Board shows, not a second one: `#new-card-btn`
+  // is an id, and only one view renders into #board at a time.
+  sheet.append(head, renderNewCardButton());
 
   const list = document.createElement('div');
   list.className = 'backlog-list';
@@ -38,7 +40,7 @@ export function renderBacklog() {
   if (visible.length === 0) {
     const hint = document.createElement('div');
     hint.className = 'empty-hint';
-    hint.textContent = filtersActive() ? 'No cards match' : 'Write down your first card above';
+    hint.textContent = filtersActive() ? 'No cards match' : 'Start your first card above';
     list.append(hint);
   } else {
     for (const card of visible) list.append(renderBacklogRow(card));
