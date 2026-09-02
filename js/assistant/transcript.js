@@ -1,5 +1,7 @@
+import { retryTurn } from './chrome.js';
 import { assistantState, deleteChatMessage } from './session.js';
 import { lastAssistantBubble, streaming } from './streaming.js';
+import { announce } from '../ui/dom.js';
 import { openDialog } from '../ui/edit-dialog.js';
 import { render } from '../ui/render.js';
 
@@ -7,6 +9,11 @@ import { render } from '../ui/render.js';
 // it, and what it cost. Read-only — nothing here talks to the brain.
 
 export function renderChatMessage(msg) {
+  // A failed turn is not a reply the assistant gave, so it is not drawn as
+  // one. It keeps the `.chat-msg.assistant.error` classes — those are
+  // test-stable API and it is still the turn's place in the transcript — and
+  // adds what a banner needs: the whole error, and a way to try again.
+  if (msg.error) return renderErrorBanner(msg);
   const el = document.createElement('div');
   el.className = `chat-msg ${msg.role}${msg.error ? ' error' : ''}`;
   // The text is its own node now: the steps below are elements, and setting
@@ -40,7 +47,20 @@ export function renderChatMessage(msg) {
   const done = msg.steps || [];
   const running = msg.running || [];
   const sources = sourcesOf(done);
-  if (!done.length && !running.length && !sources.length && !msg.usage) return el;
+  const worked = workedRow(msg);
+  const hasEvidence = done.length || running.length || sources.length || msg.usage;
+  if (!hasEvidence && !worked) return el;
+  // A turn with nothing behind it still says what it cost in time and tools —
+  // but it says it as a line, not as a fold: a control that opens onto nothing
+  // is a control that lies about having something.
+  if (!hasEvidence) {
+    const line = document.createElement('p');
+    line.className = 'chat-meta-summary chat-worked-line';
+    line.appendChild(worked);
+    el.appendChild(line);
+    if (assistantState.busy) tickWorked();
+    return el;
+  }
 
   const meta = document.createElement('details');
   meta.className = 'chat-meta';
@@ -49,7 +69,20 @@ export function renderChatMessage(msg) {
   meta.open = running.length > 0;
   const summary = document.createElement('summary');
   summary.className = 'chat-meta-summary';
-  summary.textContent = metaSummary(sources.length, done.length + running.length, msg.usage);
+  // What the turn took, first — it is the one thing every turn can say, and it
+  // is what replaced the anonymous "Thinking…" that used to stand here. The
+  // counts and the token total follow it; nothing that was shown is hidden.
+  if (worked) {
+    summary.appendChild(worked);
+    if (assistantState.busy) tickWorked();
+  }
+  const rest = metaSummary(sources.length, done.length + running.length, msg.usage);
+  if (rest) {
+    const tail = document.createElement('span');
+    tail.className = 'chat-meta-rest';
+    tail.textContent = worked ? ` \u00b7 ${rest}` : rest;
+    summary.appendChild(tail);
+  }
   meta.appendChild(summary);
 
   const evidence = document.createElement('div');
@@ -67,6 +100,146 @@ export function renderChatMessage(msg) {
   el.appendChild(meta);
   return el;
 }
+
+// How long a turn took, and how many tools it ran. One row, and the same words
+// in flight and settled — a turn that is still working counts up instead of
+// claiming a total it does not have yet.
+//
+// This replaced an anonymous busy label. "Thinking…" says nothing a spinner
+// does not; thirteen seconds and two tool calls is the difference between a
+// slow model and a hung one, and it is the first thing anybody asks when a
+// reply takes a while.
+const duration = (ms) => (ms < 60_000
+  ? `${(ms / 1000).toFixed(1)}s`
+  : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`);
+
+/** The row's text for one turn, or '' when the turn was never timed — a
+ *  transcript restored from before this existed, or imported from a file. */
+function workedText(msg) {
+  const tools = (msg.steps || []).length + (msg.running || []).length;
+  if (Number.isFinite(msg.elapsedMs)) {
+    return `Worked for ${duration(msg.elapsedMs)} \u00b7 ${tools} tool${tools === 1 ? '' : 's'}`;
+  }
+  if (Number.isFinite(msg.startedAt)) {
+    return `Working for ${duration(Date.now() - msg.startedAt)}`;
+  }
+  return '';
+}
+
+function workedRow(msg) {
+  const text = workedText(msg);
+  if (!text) return null;
+  const row = document.createElement('span');
+  row.className = 'chat-worked';
+  row.textContent = text;
+  return row;
+}
+
+// The live half of the row, ticked once a second — by writing the text, never
+// by rendering. render() destroys the transcript, the focus and the scroll
+// position; this module already learned that lesson when tokens were painted
+// one render at a time. The timer reads the state on every tick rather than
+// closing over a message or an element, because both are replaced under it by
+// the repaints a streaming turn does make.
+let workedTimer = 0;
+function tickWorked() {
+  if (workedTimer) return;
+  workedTimer = setInterval(() => {
+    const last = assistantState.messages[assistantState.messages.length - 1];
+    const row = document.querySelector('.chat-log .chat-msg.assistant:last-of-type .chat-worked');
+    if (!assistantState.busy || !last || !row) {
+      clearInterval(workedTimer);
+      workedTimer = 0;
+      return;
+    }
+    row.textContent = workedText(last);
+  }, 1000);
+}
+
+/** A failed turn: one line of what went wrong, and the two things a person
+ *  actually wants next — the whole error, and another go.
+ *
+ *  Retry is offered rather than automatic. A turn that failed may have failed
+ *  because it was too long, or because the model is down, and re-sending it on
+ *  the user's behalf spends their quota on a guess.
+ *
+ *  `.chat-msg.assistant.error` is kept: it is what the suite's existing checks
+ *  look for, and this IS the failed turn's place in the transcript. The banner
+ *  is what those classes now draw. */
+function renderErrorBanner(msg) {
+  const el = document.createElement('div');
+  el.className = 'chat-msg assistant error chat-error';
+  el.setAttribute('role', 'alert');
+
+  const icon = document.createElement('span');
+  icon.className = 'chat-error-icon';
+  icon.setAttribute('aria-hidden', 'true');
+  icon.textContent = '\u26a0';
+
+  // `.chat-text` so the friendly line is where every reader — a person, a
+  // screen reader, a test — already looks for what a turn says.
+  const line = document.createElement('p');
+  line.className = 'chat-text chat-error-line';
+  line.textContent = msg.content;
+
+  const full = msg.detail || msg.content;
+  const detail = document.createElement('pre');
+  detail.className = 'chat-error-detail';
+  detail.textContent = full;
+  detail.hidden = true;
+  detail.id = `chat-error-detail-${++errorSeq}`;
+
+  const actions = document.createElement('div');
+  actions.className = 'chat-error-actions';
+
+  const reveal = document.createElement('button');
+  reveal.type = 'button';
+  reveal.className = 'btn ghost chat-error-reveal';
+  reveal.textContent = 'Details';
+  reveal.setAttribute('aria-expanded', 'false');
+  reveal.setAttribute('aria-controls', detail.id);
+  reveal.addEventListener('click', () => {
+    detail.hidden = !detail.hidden;
+    reveal.setAttribute('aria-expanded', String(!detail.hidden));
+  });
+
+  const copy = document.createElement('button');
+  copy.type = 'button';
+  copy.className = 'btn ghost chat-error-copy';
+  copy.textContent = 'Copy';
+  copy.title = 'Copy the full error';
+  copy.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(full);
+      announce('Error copied to clipboard');
+    } catch {
+      // No clipboard permission is not a dead end: unfolding the text leaves
+      // it selectable, which is the manual version of the same thing.
+      detail.hidden = false;
+      reveal.setAttribute('aria-expanded', 'true');
+      announce('Could not copy — the full error is shown instead');
+    }
+  });
+
+  actions.append(reveal, copy);
+  // Only where there is something to re-send. A turn restored from before this
+  // existed carries no message, and a Retry that had nothing to send would be
+  // a button that does nothing.
+  if (msg.retry) {
+    const again = document.createElement('button');
+    again.type = 'button';
+    again.className = 'btn chat-error-retry';
+    again.textContent = 'Retry';
+    again.disabled = assistantState.busy;
+    again.addEventListener('click', () => retryTurn(msg));
+    actions.appendChild(again);
+  }
+
+  el.append(icon, line, actions, detail);
+  return el;
+}
+
+let errorSeq = 0;
 
 // Three decimals, always — a tenth of a cent is the resolution a chat turn
 // lives at, and a fixed width keeps the readout from twitching as the total

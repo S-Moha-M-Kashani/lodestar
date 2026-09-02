@@ -389,6 +389,24 @@ def api_proposals():
         return json.loads(r.read())
 
 
+def api_propose(card):
+    """Stand in for the Assistant proposing a card. Posting straight to
+    /api/proposals is the same door create_card goes through, and it lets a
+    check about the WIDGET's strip be about the strip rather than about
+    persuading a fake model to invent a card."""
+    req = urllib.request.Request(
+        URL + "/api/proposals", method="POST", data=json.dumps(card).encode(),
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=3) as r:
+        return json.loads(r.read())
+
+
+def api_post(path):
+    req = urllib.request.Request(URL + path, method="POST", data=b"")
+    with urllib.request.urlopen(req, timeout=3) as r:
+        return json.loads(r.read())
+
+
 def api_edits():
     with urllib.request.urlopen(URL + "/api/edits", timeout=3) as r:
         return json.loads(r.read())
@@ -3767,6 +3785,141 @@ try:
                 errors.remove(e)
         page.locator('.view-switch button[data-view="board"]').click()
 
+        # ---- The chrome around a turn: banner, Retry, worked-for, footer -----
+        # This is an end-to-end test.
+        # A failed turn used to be a red bubble saying one sentence, with the
+        # real error only in the console and the user's own words gone from the
+        # composer. It is a banner now: one line, the whole error behind a
+        # reveal, a copy, and a Retry that re-sends what they already typed.
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector("#chat-input")
+        # A chat of its own. The transcript above this point is full of turns
+        # the earlier blocks deliberately failed, and "exactly one banner" is
+        # the whole assertion — counted across those it would be meaningless.
+        page.click("#chat-new")
+        page.wait_for_selector(".chat-suggest")
+        n_before = len(errors)
+        n_msgs = page.locator(".chat-msg").count()
+        page.route("**/api/agent/chat/stream", lambda route: route.fulfill(
+            status=502, content_type="application/json",
+            body='{"error":"upstream exploded"}'))
+        page.fill("#chat-input", "banner please")
+        page.click("#chat-send")
+        page.wait_for_selector(".chat-error")
+        banner = page.locator(".chat-error").last
+        check("banner: a failed turn is one banner, not an assistant reply",
+              page.locator(".chat-error").count() == 1
+              and banner.get_attribute("role") == "alert"
+              and banner.locator(".chat-error-retry").count() == 1
+              and "FAKE:" not in page.inner_text(".chat-log"))
+        # The friendly line is what is read; the error as it arrived is behind
+        # Details — which is where the status and the body a bug report needs
+        # actually live.
+        collapsed = banner.locator(".chat-error-line").inner_text()
+        banner.locator(".chat-error-reveal").click()
+        check("banner: the whole error is behind a reveal, the friendly line in front",
+              "unavailable" in collapsed.lower()
+              and wait_until(lambda: banner.locator(".chat-error-detail").is_visible())
+              and "502" in banner.locator(".chat-error-detail").inner_text())
+        # Retry against a stream that now works: one user message, one reply,
+        # and the banner gone. The message is NOT retyped — that is the point.
+        page.unroute("**/api/agent/chat/stream")
+        banner.locator(".chat-error-retry").click()
+        page.wait_for_selector(".chat-msg.assistant:not(.error)")
+        check("banner: Retry re-sends the same message and replaces the banner",
+              wait_until(lambda: page.locator(".chat-error").count() == 0
+                         and "FAKE: banner please" in page.inner_text(".chat-log"))
+              and page.locator(".chat-msg.user", has_text="banner please").count() == 1
+              and page.locator(".chat-msg").count() == n_msgs + 2)
+        for e in [e for e in errors[n_before:] if "502" in e]:
+            errors.remove(e)
+        # A retry that fails again leaves exactly one banner for that turn — not
+        # a column of them, which is what appending would give.
+        n_before = len(errors)
+        page.route("**/api/agent/chat/stream", lambda route: route.fulfill(
+            status=502, content_type="application/json", body='{"error":"still down"}'))
+        page.fill("#chat-input", "fails twice")
+        page.click("#chat-send")
+        page.wait_for_selector(".chat-error")
+        page.locator(".chat-error").last.locator(".chat-error-retry").click()
+        page.wait_for_timeout(600)
+        check("banner: a retry that fails again leaves one banner, not two",
+              page.locator(".chat-error").count() == 1
+              and page.locator(".chat-msg.user", has_text="fails twice").count() == 1)
+        page.unroute("**/api/agent/chat/stream")
+        for e in [e for e in errors[n_before:] if "502" in e]:
+            errors.remove(e)
+        page.reload()   # drop the failed turn from view; the cache keeps it
+        page.wait_for_selector("#board")
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector("#chat-input")
+
+        # What the turn cost in time and tools, on the turn itself. Exact
+        # wording, because "0 tools" and "1 tool" are the two the plural rule
+        # gets wrong and a row that says "1 tools" is the sort of thing nobody
+        # reports and everybody notices.
+        page.fill("#chat-input", "how long did that take")
+        page.click("#chat-send")
+        # Wait for the turn to land before reading the row, and generously: this
+        # is the first turn after a reload, and the row says "Working for …"
+        # while it is in flight — which is correct, and would otherwise read as
+        # a failure of the wording this check is about.
+        landed = wait_until(
+            lambda: "FAKE: how long did that take" in page.inner_text(".chat-log")
+            and not page.locator("#chat-input").is_disabled(), timeout=20)
+        worked = landed and wait_until(
+            lambda: page.locator(".chat-worked").last.inner_text()
+            .startswith("Worked for "))
+        row = (page.locator(".chat-worked").last.inner_text()
+               if page.locator(".chat-worked").count() else "<no row>")
+        check("worked: a settled turn says how long it took and how many tools ran",
+              worked
+              and re.match(r"^Worked for \d+\.\d+s · (0 tools|1 tool|\d+ tools)$", row)
+              is not None)
+        # And the step chips are still reachable from it: the row leads the
+        # evidence strip rather than replacing it.
+        page.route("**/api/agent/chat/stream", lambda route: (
+            route.fulfill(status=200, content_type="text/event-stream",
+                          body=("event: step\ndata: " + json.dumps(
+                              {"tool": "list_cards", "arguments": {}, "result": []})
+                                + "\n\nevent: done\ndata: " + json.dumps(
+                              {"reply": "two tools ran", "steps": [
+                                  {"tool": "list_cards", "arguments": {}, "result": []},
+                                  {"tool": "web_search", "arguments": {}, "result": []}]})
+                                + "\n\n"))))
+        page.fill("#chat-input", "use some tools")
+        page.click("#chat-send")
+        wait_until(lambda: "two tools ran" in page.inner_text(".chat-log"))
+        check("worked: the count is the turn's tools, and the chips stay behind it",
+              wait_until(lambda: page.locator(".chat-worked").last.inner_text()
+                         .endswith("· 2 tools"))
+              and page.locator(".chat-meta").last.locator(".chat-step").count() == 2)
+        page.unroute("**/api/agent/chat/stream")
+
+        # ---- The composer footer: which board, which model, and send ---------
+        # The pick moved out of the ⚙ drawer to where the question is typed. Two
+        # controls over one value: whichever is used, the other has to agree, or
+        # the app is telling two stories about which model just answered.
+        check("footer: the composer names the board the question is answered against",
+              page.locator(".chat-composer .composer-context").count() == 1
+              and page.locator(".chat-composer .composer-context").inner_text().strip()
+              == page.locator("#board-select option:checked").inner_text().strip())
+        # Pick whatever is not currently selected — the list is the brain's, so
+        # naming a slug here would pin the test to one machine's Ollama tags.
+        options = [o.strip() for o in
+                   page.locator("#chat-model option").all_inner_texts()]
+        picked = next((o for o in options
+                       if o != page.input_value("#chat-model")), None)
+        if picked:
+            page.select_option("#chat-model", label=picked)
+        open_models(page)
+        check("footer: a model picked in the footer is the pick the ⚙ panel shows",
+              picked is not None
+              and page.input_value("#chat-model") == picked
+              and page.input_value("#model-text") == picked)
+        page.click("#assistant-extras-btn")   # shut the drawer again
+        page.locator('.view-switch button[data-view="board"]').click()
+
         # ---- Chat transcript survives a reload (Session 6) -------------------
         # This is an end-to-end test.
         # The transcript is the one thing in the Assistant that was still lost on
@@ -4931,6 +5084,17 @@ try:
         # for, it is reachable from every view, and there is never more than one
         # of it in the document — two `#chat-input`s would be invalid HTML and
         # would break every selector this suite already depends on.
+        def set_theme(theme):
+            """Pick a theme the way a person does. The picker is inside the
+            board's ⚙ Menu — a hidden <select> fails Playwright's actionability
+            checks — and the Menu is the board's, so this drops it open, picks,
+            and shuts it again."""
+            if page.locator("#menu-panel").is_hidden():
+                page.click("#menu-btn")
+            page.select_option("#menu-panel #theme-select", theme, timeout=2000)
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(50)
+
         WIDGET_KEY = "lodestar:widget"
         page.evaluate("key => localStorage.removeItem(key)", WIDGET_KEY)
         page.reload()
@@ -4945,10 +5109,15 @@ try:
               not page.locator("#assistant-widget").is_visible())
         page.click("#assistant-launcher")
         page.wait_for_selector("#assistant-widget .chat-log")
+        # wait_until on the focus: opening fires the three requests the
+        # Assistant view fires on entry, and each answer repaints — so the caret
+        # is taken again once they settle rather than once, into a textarea that
+        # is about to be replaced.
         check("widget: the launcher opens a docked card with the composer focused",
               page.locator("#assistant-widget").is_visible()
               and page.locator("#assistant-widget #chat-input").count() == 1
-              and page.evaluate("() => document.activeElement.id") == "chat-input")
+              and wait_until(lambda: page.evaluate(
+                  "() => document.activeElement.id") == "chat-input"))
         # The board is still there, and still the board: the widget floats over
         # it rather than replacing it.
         check("widget: the view underneath is untouched",
@@ -4979,6 +5148,166 @@ try:
         check("widget: Escape closes it and returns focus to the launcher",
               wait_until(lambda: not page.locator("#assistant-widget").is_visible())
               and page.evaluate("() => document.activeElement.id") == "assistant-launcher")
+        # The panels the tools drop belong to the shell hosting them, and the
+        # tools row is ONE wired-once node that moves between the two. Opening
+        # the chats from the widget and then changing the view underneath must
+        # leave both the widget and the panel exactly as they were — that is the
+        # whole reason the node is moved rather than rebuilt.
+        page.click("#assistant-launcher")
+        page.wait_for_selector("#assistant-widget .chat-log")
+        open_chat_history(page)
+        # A repaint of the view underneath must not tear the panel down — that
+        # is what the wired-once tools node buys, and moving it into a second
+        # host is where it could have been lost. Typed rather than clicked: a
+        # click outside the tools is a dismissal by design, and this is about
+        # the repaint, not about the pointer.
+        page.fill("#search", "zzz-no-such-card")
+        page.wait_for_timeout(150)
+        survived = (page.locator("#assistant-widget .chat-history").count() == 1
+                    and page.get_attribute("#chat-history-btn", "aria-expanded") == "true")
+        page.fill("#search", "")
+        page.wait_for_timeout(150)
+        page.fill("#chat-input", "still here")
+        page.locator('.view-switch button[data-view="backlog"]').click()
+        page.wait_for_selector(".backlog-row")
+        check("widget: it survives a repaint and a view switch",
+              survived
+              and page.locator("#assistant-widget").is_visible()
+              and page.locator("#assistant-widget #chat-input").count() == 1
+              and page.input_value("#chat-input") == "still here")
+        page.fill("#chat-input", "")
+        open_chat_history(page)
+        # A panel dropped from a fixed box has to be drawn inside it and has to
+        # be on top. Asked of the browser at the panel's own coordinates rather
+        # than asserted as a z-index: a stacking context is a ceiling for
+        # everything inside it, so a z-index assertion passes against exactly the
+        # bug this is here to catch.
+        topmost = """() => {
+          const p = document.querySelector('#assistant-widget .chat-history');
+          if (!p) return 'no panel';
+          const b = p.getBoundingClientRect();
+          const hit = document.elementFromPoint(b.x + b.width / 2, b.y + 8);
+          return hit && p.contains(hit) ? 'panel' : (hit ? hit.className : 'nothing');
+        }"""
+        on_board = page.evaluate(topmost)
+        # The star sky is the hardest case: there the header and #board both
+        # take a stacking context to clear it, and a panel's own z-index counts
+        # only among its siblings. The picker lives in the board's ⚙ Menu, so
+        # this takes the same detour a person would.
+        set_theme("star")
+        page.wait_for_timeout(700)   # the body background transitions
+        open_chat_history(page)
+        on_star = page.evaluate(topmost)
+        check("widget: its panel is the topmost thing at its own coordinates",
+              on_board == "panel" and on_star == "panel")
+        # One Escape, one layer: the panel, and not the widget under it.
+        page.locator("#chat-history-btn").focus()
+        page.keyboard.press("Escape")
+        check("widget: Escape closes the panel first, the widget second",
+              wait_until(lambda: page.locator(".chat-history").count() == 0)
+              and page.locator("#assistant-widget").is_visible())
+        set_theme("light")
+        page.wait_for_timeout(700)
+
+        # ---- Resize: the size is remembered, and always inside its clamp -----
+        # Asserted on the PERSISTED value and its bounds, never on exact pixels:
+        # a drag lands where the pointer lands, and a test that insists on 480
+        # exactly is a test that fails on a scrollbar.
+        stored = lambda: page.evaluate(
+            "key => JSON.parse(localStorage.getItem(key) || '{}')", WIDGET_KEY)
+        before = stored()
+        grip = page.locator(".widget-resize")
+        box = grip.bounding_box()
+        page.mouse.move(box["x"] + 4, box["y"] + 4)
+        page.mouse.down()
+        page.mouse.move(box["x"] - 120, box["y"] - 90, steps=8)
+        page.mouse.up()
+        after = stored()
+        check("widget: dragging the corner changes the size that is remembered",
+              after.get("w", 0) > before.get("w", 0)
+              and after.get("h", 0) > before.get("h", 0))
+        # Far past the bound, and it stops at the bound rather than growing into
+        # a second window.
+        box = page.locator(".widget-resize").bounding_box()
+        page.mouse.move(box["x"] + 4, box["y"] + 4)
+        page.mouse.down()
+        page.mouse.move(4, 4, steps=10)
+        page.mouse.up()
+        huge = stored()
+        room = page.evaluate("() => [window.innerWidth - 32, window.innerHeight - 32]")
+        check("widget: a drag past the bound stops at the bound, inside the window",
+              300 <= huge.get("w", 0) <= min(720, room[0])
+              and 320 <= huge.get("h", 0) <= min(900, room[1]))
+        # A size remembered from a bigger window opens clamped, not cropped.
+        page.evaluate("key => localStorage.setItem(key, JSON.stringify("
+                      "{ open: true, w: 900, h: 800 }))", WIDGET_KEY)
+        page.reload()
+        page.wait_for_selector("#assistant-widget .chat-log")
+        card = page.locator("#assistant-widget").bounding_box()
+        size = page.evaluate("() => [window.innerWidth, window.innerHeight]")
+        check("widget: a remembered size larger than the window opens clamped",
+              card["width"] <= size[0] and card["height"] <= size[1]
+              and card["x"] >= 0 and card["y"] >= 0)
+
+        # ---- A phone-width window gets a sheet, not a floating card ----------
+        page.set_viewport_size({"width": 380, "height": 720})
+        page.wait_for_timeout(200)
+        card = page.locator("#assistant-widget").bounding_box()
+        # is_visible, not count: nothing repaints on a viewport change — the
+        # size lives on the host and the media query does the rest — so the
+        # handle from the last paint is still in the DOM, and "offers no resize
+        # handle" is a question about what is on screen.
+        check("widget: below the narrow threshold it fills the window and drops"
+              " the handle",
+              card["width"] >= 380 - 40
+              and not page.locator(".widget-resize").is_visible())
+        page.set_viewport_size({"width": 1440, "height": 900})
+        page.wait_for_timeout(200)
+
+        # ---- One conversation, two shells: the draft crosses both ways -------
+        # From the Board, so that what collapse returns to is a fact the check
+        # can name: the view the Assistant was reached from.
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector("#assistant-widget .chat-log")
+        page.fill("#chat-input", "half a thought")
+        page.click("#assistant-expand")
+        page.wait_for_selector(".assistant-sheet #chat-input")
+        expanded = (page.input_value("#chat-input") == "half a thought"
+                    and not page.locator("#assistant-widget").is_visible()
+                    and page.locator("#chat-input").count() == 1)
+        page.click("#assistant-collapse")
+        page.wait_for_selector("#assistant-widget .chat-log")
+        check("widget: expand and collapse carry the chat and the unsent draft",
+              expanded
+              and page.input_value("#chat-input") == "half a thought"
+              and page.locator("#assistant-widget #chat-input").count() == 1
+              and page.get_attribute('.view-switch button[data-view="board"]',
+                                     "aria-pressed") == "true")
+        page.fill("#chat-input", "")
+
+        # ---- What is waiting is visible from the corner, decided in the room -
+        api_propose({"title": "WIDGET-STRIP-probe", "columnId": "inbox"})
+        page.reload()
+        page.wait_for_selector("#assistant-widget .chat-log")
+        strip = wait_until(lambda: page.locator(".widget-approvals").count() == 1)
+        check("widget: a waiting proposal shows a strip and counts on the launcher",
+              strip
+              and "1 item" in page.inner_text(".widget-approvals")
+              and page.locator("#assistant-launcher .view-badge").inner_text().strip()
+              == "1")
+        waiting_id = next(c["id"] for c in api_proposals()["cards"]
+                          if c["title"] == "WIDGET-STRIP-probe")
+        api_post(f"/api/proposals/{waiting_id}/reject")
+        page.reload()
+        page.wait_for_selector("#assistant-widget .chat-log")
+        check("widget: nothing waiting, no strip and no count",
+              wait_until(lambda: page.locator(".widget-approvals").count() == 0)
+              and page.locator("#assistant-launcher .view-badge").count() == 0)
+
+        # Put the world back: closed, and the board in front again.
+        page.evaluate("key => localStorage.removeItem(key)", WIDGET_KEY)
+        page.reload()
+        page.wait_for_selector("#board")
 
         # ---- The reminder fires from the background ---------------------------
         # This is an end-to-end test. A habit slot arriving while the page

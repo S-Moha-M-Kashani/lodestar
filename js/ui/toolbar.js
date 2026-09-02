@@ -1,6 +1,8 @@
 import { closeRecall } from '../assistant/recall.js';
 import { assistantState, refreshChatSessions, refreshChatTrash, startNewChat } from '../assistant/session.js';
 import { armHistoryIdle, cancelHistoryIdle, closeChatHistory, closeChatRowMenus, extrasOpen, fromChatRowMenu, renderAssistantTools, setChatMenuOpen, setExtrasOpen } from '../assistant/tools.js';
+import { widgetShowing } from '../assistant/shell.js';
+import { closeWidget, toggleWidget } from '../assistant/widget.js';
 import { KEY_PREFIX } from '../core/keys.js';
 import { filters } from '../core/state.js';
 import { $, announce } from './dom.js';
@@ -141,6 +143,12 @@ $('#chat-new').addEventListener('click', () => {
 });
 $('#assistant-extras-btn').addEventListener('click', () => setExtrasOpen(!extrasOpen));
 
+// The launcher: one control over two states. On any other view it opens or
+// closes the corner widget; on the Assistant view, where the conversation
+// already has the whole screen, it folds back down instead of offering a
+// second copy of what is in front of you.
+$('#assistant-launcher').addEventListener('click', toggleWidget);
+
 // One row, one thing dropped from it at a time: pressing History, New chat or
 // the gear is a move to THAT tool, so the search fold shuts on the way. A
 // click inside the fold is use of it, and a click outside the row entirely —
@@ -191,7 +199,17 @@ document.addEventListener('keydown', (e) => {
   // whichever ran first would close its own layer and then hand the other a
   // page where nothing was in the way.
   if (closeChatRowMenus({ focusBack: true })) return;
-  if (assistantState.historyOpen) closeChatHistory({ focusBack: true });
+  if (assistantState.historyOpen) { closeChatHistory({ focusBack: true }); return; }
+  // The widget is the outermost layer of the three, so it goes last — and only
+  // when the keypress happened inside it. Escape pressed on the board behind an
+  // open widget is not a request to close the widget, and the two dropdowns
+  // this handler has already dealt with above have to keep their first claim on
+  // the key. The extras drawer and the search fold have their own listeners, so
+  // they are asked here rather than assumed shut.
+  const inWidget = document.activeElement?.closest?.('#assistant-widget');
+  const foldOpen = extrasOpen
+    || document.querySelector('#assistant-widget .chat-recall[open]');
+  if (widgetShowing() && inWidget && !foldOpen) closeWidget();
 });
 document.addEventListener('keydown', (e) => {
   // Only when the menu inside it is already shut, so one Escape closes one
