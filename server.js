@@ -858,6 +858,40 @@ if (!chatColumns.has('steps')) chatDb.exec("ALTER TABLE messages ADD COLUMN step
 if (!chatColumns.has('usage')) chatDb.exec('ALTER TABLE messages ADD COLUMN usage TEXT');
 if (!chatColumns.has('cost')) chatDb.exec('ALTER TABLE messages ADD COLUMN cost REAL');
 
+// The one index the query-plan evidence earned. Measured 2026-09-02 on a fresh
+// schema filled with 20 sessions / 3000 messages, ANALYZE run first, each query
+// prepared and run 200 times.
+//
+// It pays twice over. Reading ONE chat's transcript (`readChatSession`) went
+// from `SCAN messages | USE TEMP B-TREE FOR ORDER BY` to `SEARCH messages USING
+// INDEX messages_session (session_id=?)`, already in the wanted order:
+// 0.295 ms → 0.165 ms a run, 1.8x. And the history panel's list
+// (`readChatSessions`), whose per-chat `COUNT(*)` is a correlated subquery that
+// scanned the whole of `messages` once per session, went 0.588 ms → 0.121 ms,
+// 4.9x. That second number is the whole cost of opening the chats panel, and it
+// grows with the message count — the one number in this schema that only ever
+// goes up.
+//
+// `(session_id, created_at, id)` and not `session_id` alone, because both
+// readers order by exactly that pair. The index then answers the ORDER BY as
+// well as the predicate, which is what makes the temp B-tree disappear rather
+// than merely shrink.
+//
+// NOTHING ELSE, and the negative result is written down here so the next person
+// does not have to measure it again: `cards_board (board_id, position)` does
+// improve `readBoard`'s plan — the temp B-tree goes away — and moves wall clock
+// by 7%, 1.150 ms → 1.071 ms, which is inside the noise, because the query
+// returns 360 of 2000 rows and the `SELECT *` row fetch dominates the scan it
+// saves. On the trash query it buys nothing at all: `ORDER BY deleted_at DESC`
+// needs a sort of its own either way. The rule this change works to is to add
+// only the index the evidence identifies, and that is what "not identified"
+// looks like.
+//
+// After the session_id migration above and never before it: an assistant.db
+// written before sessions existed has no such column yet, and a CREATE INDEX
+// naming one would raise at boot on a database that opens fine today.
+chatDb.exec('CREATE INDEX IF NOT EXISTS messages_session ON messages (session_id, created_at, id)');
+
 // The developer trace: one row per turn, holding the exact list of messages
 // the brain handed the model. Created only when the trace is configured — a
 // board with no dev key stores nothing, which is the strongest version of "the
@@ -1907,6 +1941,109 @@ function sendJson(res, status, body, headers = {}) {
   res.end(text);
 }
 
+// --------------------------------------------------------------------------
+// Conditional reads
+// --------------------------------------------------------------------------
+
+// An ALLOWLIST, named in full here, and deliberately not a middleware that
+// stamps every response on its way out. A validator is a promise that a client
+// may reuse what it already holds, and this server's payloads are somebody's
+// private life: the cost of a wrong entry is not a slow page, it is last week's
+// cards on screen with no way to tell. So a route joins the list only when both
+// of these hold, checked one route at a time by reading it:
+//
+//   1. its validator changes whenever ANYTHING the client can see changes —
+//      not a row count, not a MAX(updated_at); see revOf's own note for why
+//      every aggregate available here has a blind spot that loses a card, and
+//      the same reasoning applies to a validator, and
+//   2. a match can be answered without building the response body.
+//
+// ON the list:
+//   GET /api/state   — the board already computes `rev`, a sha1 of the exact
+//                      bytes the client is sent. That is an ETag in all but
+//                      name and it is the one validator in this file that is
+//                      already contractually blind-spot-free, so it is reused
+//                      rather than a second one invented beside it. What a 304
+//                      skips is the response object, its serialisation and the
+//                      body on the wire; what it cannot skip is the board read
+//                      the validator is derived FROM, and that is the trade
+//                      being made on purpose — a validator cheaper than the
+//                      payload would have to be an aggregate, and revOf's note
+//                      records what that costs. The conditional path therefore
+//                      does strictly less work than the unconditional one ever
+//                      did; it does not do none.
+//   the STATIC files — index.html, styles.css and every js/ module: code
+//                      shipped with the server, hashed from the exact bytes
+//                      just read off disk. Forty-odd modules revalidate on
+//                      every reload and none of them carries user data.
+//
+// OFF the list, each for a reason:
+//   /api/trash, /api/proposals, /api/edits, /api/boards, /api/boards/trash —
+//     mutable card and board state with no version of its own. Minting one
+//     means hashing the payload, and unlike /api/state there is no existing
+//     hash to reuse, so it would be new work on the common path to save bytes
+//     on a read nobody makes in a loop.
+//   every /api/chat/* read — the same, and worse: the chat record is what the
+//     durability promise is about, a soft-delete has to disappear from a read
+//     the moment it happens, and this is the surface where being subtly stale
+//     would be least visible. It stays uncached, which is the spec's second
+//     requirement rather than an omission.
+//   /api/trace/status and every other trace response — `no-store` is that
+//     surface's rule (a trace is read to see the state a turn is in NOW), and
+//     the most a validator could save there is one request per session.
+//   /api/health and /login — the public paths, one small fixed body each.
+//
+// Removing '/api/state' from this set is the whole feature-disable path for
+// that route: the header stops being sent and the 304 stops being possible,
+// with no other edit.
+const VALIDATED_READS = new Set(['/api/state', ...Object.keys(STATIC)]);
+
+/**
+ * Does this request already hold the version we were about to send?
+ *
+ * The allowlist is checked in HERE rather than at each call site, so a route
+ * cannot acquire a validator by someone remembering to ask for one.
+ *
+ * `If-None-Match` may carry a list, and `*` means "any version at all, if you
+ * have one". Comparison is weak per RFC 9110 — a `W/` prefix is stripped from
+ * both sides — which changes nothing today, since every tag this server mints
+ * is strong, and stops a proxy that weakened one from silently missing.
+ */
+function notModified(req, path, tag) {
+  if (!VALIDATED_READS.has(path) || !tag) return false;
+  const header = req.headers['if-none-match'];
+  if (!header) return false;
+  const bare = (t) => t.trim().replace(/^W\//, '');
+  const wanted = bare(tag);
+  return header.split(',').some((candidate) => {
+    const one = bare(candidate);
+    return one === '*' || one === wanted;
+  });
+}
+
+/** A validator over exact bytes. sha1 and 16 hex chars for revOf's reason:
+ *  this is a change-detector, never a security claim. */
+const etagOf = (bytes) => `"${createHash('sha1').update(bytes).digest('hex').slice(0, 16)}"`;
+
+/** `no-cache` is the other half of the contract and is not optional. It does
+ *  not mean "do not store"; it means "never reuse this without asking me
+ *  first", which is exactly what makes an ETag safe on a board that changes.
+ *  Without it a cache is free to apply its own heuristic freshness to a 200
+ *  carrying no directives, and the ETag would then have made staleness more
+ *  likely rather than less. */
+const REVALIDATE = { 'Cache-Control': 'no-cache' };
+
+/** 304, and nothing whatsoever else: no body and no Content-Type, because a
+ *  not-modified response carrying a payload has already spent everything the
+ *  conditional request asked to save. The validator is echoed, since a client
+ *  that gets a 304 goes on using the copy it holds and the tag it holds with
+ *  it. Node knows a 304 has no body, so no length or encoding header is
+ *  written either. */
+function sendNotModified(res, tag) {
+  res.writeHead(304, { ETag: tag, ...REVALIDATE });
+  res.end();
+}
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let data = '';
@@ -2248,7 +2385,16 @@ async function handleRequest(req, res) {
   if (path === '/api/state') {
     if (boardId === null) return noSuchBoard();
     if (req.method === 'GET') {
-      return sendJson(res, 200, boardWithRev(boardId));
+      // The rev is the validator — see VALIDATED_READS for why this route is
+      // the one board read that may carry one, and what a 304 here does and
+      // does not save.
+      const board = boardWithRev(boardId);
+      // The tag IS the rev, quoted — not a second hash of it. One value, so a
+      // client can compare what it sent on a PUT with what it holds as a
+      // validator and see the same string.
+      const tag = `"${board.rev}"`;
+      if (notModified(req, path, tag)) return sendNotModified(res, tag);
+      return sendJson(res, 200, board, { ETag: tag, ...REVALIDATE });
     }
     if (req.method === 'PUT') {
       try {
@@ -2570,7 +2716,13 @@ async function handleRequest(req, res) {
     const [file, type] = entry;
     try {
       const body = await readFile(join(ROOT, normalize(file)));
-      res.writeHead(200, { 'Content-Type': type });
+      // Hashed from the bytes just read, never from mtime and size: an editor
+      // that rewrites a module to the same length inside one filesystem tick
+      // would leave that pair unchanged and pin a stale module in the browser
+      // of whoever is developing the app.
+      const tag = etagOf(body);
+      if (notModified(req, path, tag)) return sendNotModified(res, tag);
+      res.writeHead(200, { 'Content-Type': type, ETag: tag, ...REVALIDATE });
       return res.end(body);
     } catch {
       res.writeHead(404).end('Not found');
