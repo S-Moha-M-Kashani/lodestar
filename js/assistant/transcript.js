@@ -76,7 +76,16 @@ export function renderChatMessage(msg) {
     summary.appendChild(worked);
     if (assistantState.busy) tickWorked();
   }
-  const rest = metaSummary(sources.length, done.length + running.length, msg.usage);
+  // The tool count is passed only when `worked` is absent. That row already
+  // ends in it — "Worked for 17.2s · 2 tools" — and handing the same number to
+  // metaSummary as well printed it twice in one strip: "Worked for 17.2s · 2
+  // tools · 1 source · 2 tools · 14,090 tokens". It went unseen because the
+  // e2e checks read `.chat-worked`, which is correct on its own; the duplicate
+  // only exists in the two spans joined. An untimed turn — one restored from
+  // before the row existed, or imported — has no `worked`, and there the count
+  // is the only place the tools are named, so it still goes here.
+  const rest = metaSummary(sources.length, worked ? 0 : done.length + running.length,
+    msg.usage);
   if (rest) {
     const tail = document.createElement('span');
     tail.className = 'chat-meta-rest';

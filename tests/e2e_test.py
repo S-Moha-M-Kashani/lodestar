@@ -3925,6 +3925,14 @@ try:
               wait_until(lambda: page.locator(".chat-worked").last.inner_text()
                          .endswith("· 2 tools"))
               and page.locator(".chat-meta").last.locator(".chat-step").count() == 2)
+        # And it is named once. The row and the counts are two spans in one
+        # strip, and both used to carry the tool count — "Worked for 17.2s · 2
+        # tools · 1 source · 2 tools · 14,090 tokens". Reading `.chat-worked`
+        # alone cannot see that, which is why the assert is on the whole
+        # summary and why it is here rather than in a test of its own.
+        check("worked: the tool count is named once, not once per span",
+              page.locator(".chat-meta-summary").last.inner_text()
+              .count(" tools") == 1)
         page.unroute("**/api/agent/chat/stream")
 
         # ---- The composer footer: which board, which model, and send ---------
