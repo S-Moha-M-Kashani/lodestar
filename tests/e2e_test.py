@@ -2436,9 +2436,20 @@ try:
         # check used to pass on the count race above, reading the previous turn's
         # already-finished strip instead of this one's.
         folded = page.locator(".chat-meta").last
+        # Waited on the settled row itself — "Worked for", past tense — rather
+        # than on the word "tool" appearing somewhere in the strip. Those used
+        # to be the same wait by accident: the counts tail carried the tool
+        # count too, so "tool" showed up the moment a tool started running. It
+        # is named once now, by the row, so the substring only arrives when the
+        # turn settles, and a machine under load could reach the deadline with
+        # the answer already on screen. This says what the comment above always
+        # meant, and asserts the count in the strip separately.
         settled_meta = wait_until(
             lambda: folded.locator(".chat-meta-summary").count() == 1
-            and "tool" in folded.locator(".chat-meta-summary").inner_text())
+            and folded.locator(".chat-worked").count() == 1
+            and folded.locator(".chat-worked").inner_text().startswith("Worked for"))
+        settled_meta = settled_meta and "tool" in folded.locator(
+            ".chat-meta-summary").inner_text()
         check("assistant: the evidence under a reply is folded until asked for",
               settled_meta and not folded.locator(".chat-steps").is_visible())
         open_meta(page)
