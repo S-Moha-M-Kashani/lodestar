@@ -114,14 +114,18 @@ The Assistant view talks to the brain — one function-calling agent that resear
 
 It cannot put a card on your board by itself: a card it invents is a **proposal**, held off the board until you approve it, and an edit it suggests opens in the ordinary card dialog for you to change and apply. Deleting is yours alone. A mic beside Send dictates into the composer — locally by default (Parakeet on Apple Silicon), and the transcript is editable text, never auto-sent.
 
-![Fifteen seconds of the Assistant: a question is typed, the reply streams in, a proposed card
-appears headed "PROPOSED — 1 CARD AWAITING YOUR APPROVAL" with Reject and Approve, Approve is
-pressed, and the card appears on the Board as C-061 "Book a dentist appointment" in
-Health.](docs/img/approval-gate.gif)
+![The Assistant view: a question asking for a new task card, the assistant's reply saying it has
+proposed one, and above it a dashed panel headed "PROPOSED — 1 CARD AWAITING YOUR APPROVAL" holding
+the card "Book a dentist appointment" with Reject and Approve buttons.](docs/img/assistant.png)
 
-*The gate in motion, recorded against a live model.* The assistant answers, proposes a card, and
-stops. Nothing reaches the board until **Approve** is pressed — and then it arrives as an ordinary
-card with a ledger number of its own. The still version, and what was recorded to make it, are in
+![Fifteen seconds of the same thing: a question is typed, the reply streams in, the proposed card
+appears, Approve is pressed, and the card lands on the Board as C-061 "Book a dentist appointment"
+in Health.](docs/img/approval-gate.gif)
+
+*The gate, still and then in motion, both recorded against a live model.* The assistant answers,
+proposes a card, and stops. Nothing reaches the board until **Approve** is pressed — and then it
+arrives as an ordinary card with a ledger number of its own. What was recorded to make these, and
+why it had to be a live model rather than the test suite's fake one, is in
 [`docs/img/README.md`](docs/img/README.md).
 
 Privacy is a design rule, not a setting: conversations are never sent to any tracing or analytics service, web snippets and recalled text are fenced as data rather than instructions before the model reads them, and every link a web search returns is safety-checked before the model may cite it.
