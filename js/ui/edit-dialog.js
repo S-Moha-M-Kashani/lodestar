@@ -1,10 +1,12 @@
 import { assistantState } from '../assistant/session.js';
-import { cardLabel, catVal, controlVal, deadlineVal, effortVal, iuVal, typeVal } from '../core/cards.js';
+import { cardLabel, catVal, controlVal, deadlineVal, effortVal, iuVal, matchesFilters, typeVal, uid } from '../core/cards.js';
 import { catColor, categories } from '../core/categories.js';
 import { COLUMNS, TYPES, TYPE_META } from '../core/constants.js';
+import { blankDraft, cardHasDetails, draftFrom } from '../core/draft.js';
 import { habitCountVal, habitFreqVal, habitTimesVal } from '../core/habits.js';
 import { planConflict, planSrcVal, planVal } from '../core/plan.js';
 import { commit, short } from '../core/history.js';
+import { filters, nextNum, state } from '../core/state.js';
 import { deleteCard } from './card-actions.js';
 import { $, announce, columnTitle, getCard } from './dom.js';
 import { discardEdit, reviewingEditId, setReviewingEditId } from './proposals.js';
@@ -15,6 +17,13 @@ import { discardEdit, reviewingEditId, setReviewingEditId } from './proposals.js
 const dialog = $('#card-dialog');
 const form = $('#card-form');
 let editingId = null;
+// Create mode: the card-shaped object being composed, and — for a Duplicate —
+// the id of the card it was copied from. The source's id is held here and not
+// as a field on the draft, because the draft object itself is what gets spliced
+// into state.cards on save and sent to the server: a `fromId` riding along
+// would be a field nothing reads and `cleanCard` would have to learn to drop.
+let draft = null;
+let sourceId = null;
 
 // The type picker is built once (types are fixed); the category picker is
 // rebuilt on every open, because the registry is the user's to change.
@@ -202,6 +211,54 @@ function updateBalancePreview() {
 $('#card-notes').addEventListener('input', updateBalancePreview);
 $('#card-tags').addEventListener('input', updateBalancePreview);
 
+/** The dialog's chrome, set from the mode on *every* open rather than only in
+ *  create mode. A draft that hid Delete and the meta line and left them hidden
+ *  would leave the next card it opened with no way to delete it and no history
+ *  to read; a heading is only ever right for the mode that last wrote it. */
+function paintMode(creating) {
+  $('#dialog-title').textContent = creating ? 'New card' : 'Edit card';
+  $('#save-card').textContent = creating ? 'Add card' : 'Save changes';
+  // A draft has no number, no column it has ever been in and no dates.
+  $('#card-meta').hidden = creating;
+  $('#delete-card').hidden = creating;
+}
+
+/** Paint every field of the form from the card being shown.
+ *
+ *  One argument: `shown` is a card, an unsaved draft, or a card with an
+ *  Assistant suggestion laid over it (`{ ...card, ...suggested }`), which
+ *  already falls back to the stored value for every field the suggestion does
+ *  not name. It took two until 2026-09-02, with the deadline painted from the
+ *  stored record — so a suggested due date was shown as the card's old one and
+ *  the save wrote the old one back, dropping the suggestion in silence. A
+ *  reviewer approves what the form says, so the form has to say what is being
+ *  suggested; no field here may come from anywhere else. */
+function paintForm(shown) {
+  rebuildCategoryPicker();
+  $('#card-title').value = shown.title;
+  $('#card-notes').value = shown.notes;
+  $('#card-tags').value = (shown.tags || []).join(', ');
+  updateBalancePreview();
+  $('#card-importance').value = iuVal(shown.importance);
+  $('#card-urgency').value = iuVal(shown.urgency);
+  $('#card-deadline').value = deadlineVal(shown.deadline);
+  $('#card-effort').value = effortVal(shown.effort);
+  $('#card-control').value = controlVal(shown.control);
+  for (const radio of form.elements.type) radio.checked = radio.value === shown.type;
+  for (const radio of form.elements.category) radio.checked = radio.value === (shown.category || '');
+  // A card being stamped Habit for the first time starts at once a day.
+  $('#card-habit-freq').value = shown.habitFreq || 'daily';
+  $('#card-habit-count').value = String(shown.habitCount || 1);
+  $('#card-habit-times').value = shown.habitTimes.join(', ');
+  planSrcNow = planSrcVal(shown.planSrc);
+  paintPlan(shown.plan);
+  syncHabitFields();
+  // The details fold: derived here on every open and stored nowhere, so it
+  // cannot go stale against the card in front of it. A suggested edit forces it
+  // open — a change to a folded setting must never be approved unseen.
+  $('#card-details').open = cardHasDetails(shown) || Boolean(reviewingEditId);
+}
+
 // `suggested` prefills the form with an Assistant suggestion instead of what
 // the card currently says. It fills the *form*, deliberately, and not the card:
 // the values are a draft the user can change or abandon, and until they submit
@@ -211,25 +268,8 @@ export function openDialog(cardId, suggested = null) {
   if (!card) return;
   editingId = cardId;
   const shown = suggested ? { ...card, ...suggested } : card;
-  rebuildCategoryPicker();
-  $('#card-title').value = shown.title;
-  $('#card-notes').value = shown.notes;
-  $('#card-tags').value = (shown.tags || []).join(', ');
-  updateBalancePreview();
-  $('#card-importance').value = iuVal(shown.importance);
-  $('#card-urgency').value = iuVal(shown.urgency);
-  $('#card-deadline').value = deadlineVal(card.deadline);
-  $('#card-effort').value = effortVal(card.effort);
-  $('#card-control').value = controlVal(card.control);
-  for (const radio of form.elements.type) radio.checked = radio.value === shown.type;
-  for (const radio of form.elements.category) radio.checked = radio.value === (shown.category || '');
-  // A card being stamped Habit for the first time starts at once a day.
-  $('#card-habit-freq').value = card.habitFreq || 'daily';
-  $('#card-habit-count').value = String(card.habitCount || 1);
-  $('#card-habit-times').value = card.habitTimes.join(', ');
-  planSrcNow = planSrcVal(shown.planSrc ?? card.planSrc);
-  paintPlan(shown.plan ?? card.plan);
-  syncHabitFields();
+  paintMode(false);
+  paintForm(shown);
   const fmt = (ts) => new Date(ts).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
   $('#card-meta').textContent =
     `${cardLabel(card)} · in ${columnTitle(card.columnId)} · added ${fmt(card.createdAt)} · updated ${fmt(card.updatedAt)}`;
@@ -237,50 +277,97 @@ export function openDialog(cardId, suggested = null) {
   $('#card-title').focus();
 }
 
+/** Create mode: the dialog opens on a draft the board has never seen.
+ *
+ *  Nothing reaches `state.cards`, no ledger number is earned and no undo entry
+ *  is written until `submit` — so Cancel leaves the board untouched. Creating
+ *  the card first and deleting it on cancel was the alternative, and it burns a
+ *  permanent `num` on an abandoned capture, records two undo entries for one
+ *  act, and turns a cancel into a Trash entry somebody has to clean up.
+ *
+ *  `source` is the card a Duplicate was asked for; `draftFrom` decides which of
+ *  its fields travel (and that its completion history does not). */
+export function openNewCard(source = null) {
+  editingId = null;
+  sourceId = source ? source.id : null;
+  // A blank capture inherits the drawer it was written in: with a category tab
+  // or type filter open, the card belongs there. That was the quick-add form's
+  // one good idea, and here the inherited values are visible and changeable
+  // before the save. An unfiltered board reads '' on both, which blankDraft
+  // turns into the standing defaults.
+  draft = source
+    ? draftFrom(source)
+    : blankDraft({ type: filters.type, category: filters.category });
+  paintMode(true);
+  paintForm(draft);
+  dialog.showModal();
+  $('#card-title').focus();
+}
+
+/** Write the form into a card-shaped object — the one place on this board a
+ *  card is built from form input. The Inbox's quick-add form used to be a
+ *  second one, and two construction sites meant two answers to the question of
+ *  which fields a card even has. `card` is either the live card being edited or
+ *  the dialog's unsaved draft, and nothing here needs to know which. */
+function readForm(card) {
+  card.title = $('#card-title').value.trim() || card.title;
+  card.notes = $('#card-notes').value;
+  card.type = typeVal(form.elements.type.value);
+  // Written only for a habit, so editing an ordinary card can never touch
+  // a cadence — or a history — it was not asked about.
+  if (card.type === 'habit') {
+    card.habitFreq = habitFreqVal($('#card-habit-freq').value) || 'daily';
+    card.habitCount = habitCountVal($('#card-habit-count').value);
+    card.habitTimes = readHabitTimes(card.habitCount);
+  }
+  card.category = catVal(form.elements.category.value);
+  card.importance = iuVal($('#card-importance').value);
+  card.urgency = iuVal($('#card-urgency').value);
+  card.deadline = deadlineVal($('#card-deadline').value);
+  // A habit's plan is left exactly as it was: its fields are hidden, so the
+  // dialog was never asked about them.
+  if (card.type !== 'habit') {
+    card.planSrc = planSrcVal(planSrcNow);
+    card.plan = card.planSrc === 'auto' ? card.deadline : readPlan();
+  }
+  // A changed effort/control is a human judgment — record the provenance so
+  // the brain's future estimator knows never to overwrite it. A draft is
+  // compared against the values it was opened with, so a duplicate keeps the
+  // provenance it copied and a blank capture left alone stays at 'default'.
+  const effort = effortVal($('#card-effort').value);
+  if (effort !== effortVal(card.effort)) { card.effort = effort; card.effortSrc = 'user'; }
+  const control = controlVal($('#card-control').value);
+  if (control !== controlVal(card.control)) { card.control = control; card.controlSrc = 'user'; }
+  card.tags = $('#card-tags').value
+    .split(',')
+    .map((t) => t.trim().toLowerCase())
+    .filter(Boolean);
+}
+
 form.addEventListener('submit', (e) => {
   e.preventDefault();
   const card = getCard(editingId);
+  // The card being saved, or the draft standing in for one until it is.
+  const subject = card ?? draft;
+  if (!subject) { dialog.close(); return; }
   // The one save this app refuses: a plan that starts after the deadline is a
   // promise to begin after the thing was already due. Nothing is written, the
   // error stands under the fieldset, and the focus goes to the field that can
-  // fix it.
-  if (card && card.type !== 'habit' && planConflict(readPlan(), deadlineVal($('#card-deadline').value))) {
+  // fix it — but the plan fieldset now lives inside the details fold, and
+  // focus() on an element inside a closed <details> does nothing, so from a
+  // collapsed dialog this refusal showed no message and moved no caret: Save
+  // appeared to do nothing at all. The fold is opened first. And the type is
+  // read off the draft as well as the card, because a guard written against
+  // `card` alone skipped the check entirely for every new card.
+  if (subject.type !== 'habit' && planConflict(readPlan(), deadlineVal($('#card-deadline').value))) {
+    $('#card-details').open = true;
     syncPlanFields();
     announce($('#card-plan-error').textContent);
     planYear.focus();
     return;
   }
   if (card) {
-    card.title = $('#card-title').value.trim() || card.title;
-    card.notes = $('#card-notes').value;
-    card.type = typeVal(form.elements.type.value);
-    // Written only for a habit, so editing an ordinary card can never touch
-    // a cadence — or a history — it was not asked about.
-    if (card.type === 'habit') {
-      card.habitFreq = habitFreqVal($('#card-habit-freq').value) || 'daily';
-      card.habitCount = habitCountVal($('#card-habit-count').value);
-      card.habitTimes = readHabitTimes(card.habitCount);
-    }
-    card.category = catVal(form.elements.category.value);
-    card.importance = iuVal($('#card-importance').value);
-    card.urgency = iuVal($('#card-urgency').value);
-    card.deadline = deadlineVal($('#card-deadline').value);
-    // A habit's plan is left exactly as it was: its fields are hidden, so the
-    // dialog was never asked about them.
-    if (card.type !== 'habit') {
-      card.planSrc = planSrcVal(planSrcNow);
-      card.plan = card.planSrc === 'auto' ? card.deadline : readPlan();
-    }
-    // A changed effort/control is a human judgment — record the provenance so
-    // the brain's future estimator knows never to overwrite it.
-    const effort = effortVal($('#card-effort').value);
-    if (effort !== effortVal(card.effort)) { card.effort = effort; card.effortSrc = 'user'; }
-    const control = controlVal($('#card-control').value);
-    if (control !== controlVal(card.control)) { card.control = control; card.controlSrc = 'user'; }
-    card.tags = $('#card-tags').value
-      .split(',')
-      .map((t) => t.trim().toLowerCase())
-      .filter(Boolean);
+    readForm(card);
     // The dialog has no column control, so a suggested move is carried here.
     // Read from the suggestion rather than the form for that one field.
     const reviewed = assistantState.edits.find((e) => e.id === reviewingEditId);
@@ -293,6 +380,53 @@ form.addEventListener('submit', (e) => {
     // only record of what was asked, and losing it before the save landed
     // would leave the user with neither.
     if (reviewingEditId) discardEdit(reviewingEditId, 'Suggestion applied and saved');
+  } else {
+    // A capture with nothing written in it is not a card. The field is
+    // `required`, so the browser refuses an empty one by itself; trimming the
+    // value back into it is what makes whitespace count as empty too, and
+    // reportValidity then says so in the browser's own words, leaving no
+    // custom validity state behind for the next save to clear.
+    const title = $('#card-title');
+    title.value = title.value.trim();
+    if (!title.value) { title.reportValidity(); return; }
+    readForm(draft);
+    // Only now does the draft become a card. The number is earned at the save,
+    // which is why a cancelled capture leaves no gap in the ledger.
+    const now = Date.now();
+    draft.id = uid();
+    draft.num = nextNum();
+    draft.createdAt = now;
+    draft.updatedAt = now;
+    // A duplicate joins its source: the same column (copied by `draftFrom`) and
+    // the place immediately after it, so the copy appears beside what it came
+    // from. Every other capture goes to the top of the Inbox, where one is
+    // looked for — and so does a duplicate whose source was deleted while the
+    // copy was being written, rather than landing at array index 0.
+    const after = sourceId ? state.cards.findIndex((c) => c.id === sourceId) : -1;
+    if (after !== -1) {
+      state.cards.splice(after + 1, 0, draft);
+    } else {
+      // An ordinary capture, and — when a Duplicate's source vanished while the
+      // copy was being written (a delete in another tab, a cross-machine adopt)
+      // — an ordinary capture completely. The column has to be reset too, not
+      // just the index: `draftFrom` copied the source's `columnId`, so leaving
+      // it put the card at an arbitrary position inside a column it was never
+      // placed in, which is not what the fallback below says it does.
+      draft.columnId = 'inbox';
+      const firstInbox = state.cards.findIndex((c) => c.columnId === 'inbox');
+      state.cards.splice(firstInbox === -1 ? state.cards.length : firstInbox, 0, draft);
+    }
+    // A search, tag or priority filter could still hide the fresh card —
+    // clear those so the capture never vanishes silently.
+    if (!matchesFilters(draft)) {
+      filters.search = '';
+      filters.tags.clear();
+      filters.prio = '';
+      $('#search').value = '';
+      $('#prio-filter').value = '';
+    }
+    commit(`Added ${cardLabel(draft)} “${short(draft.title)}”`);
+    announce(`Added “${draft.title}” to ${columnTitle(draft.columnId)}`);
   }
   dialog.close();
 });
@@ -305,4 +439,11 @@ $('#delete-card').addEventListener('click', () => {
   deleteCard(id);
 });
 
-dialog.addEventListener('close', () => { editingId = null; setReviewingEditId(null); });
+// Nothing about one opening survives into the next: a draft left behind here
+// would be the `subject` of a later edit-mode save whose card had vanished.
+dialog.addEventListener('close', () => {
+  editingId = null;
+  draft = null;
+  sourceId = null;
+  setReviewingEditId(null);
+});

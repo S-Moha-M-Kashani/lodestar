@@ -1534,11 +1534,19 @@ function confirmProposal(id) {
   return row.board_id;
 }
 
-// Fields a suggestion may name. The same set `update_card` has always been able
-// to touch, so a suggestion is not a new way into anything — habit history and
-// the ledger number are absent here exactly as they are absent there.
+// Fields a suggestion may name — the set `update_card` can touch, so a
+// suggestion is not a new way into anything: habit history and the ledger
+// number are absent here exactly as they are absent there.
+//
+// `deadline` was missing until 2026-09-02, and the tool has advertised it all
+// along: the model named a due date, this filter dropped it, and the Assistant
+// then said it had suggested one when nothing had been stored. A suggestion
+// naming only a deadline was a 400 the user never saw. `plan` is still absent
+// deliberately — a suggested plan needs `planSrc` to say a person chose it, or
+// the save resolves the plan back to the deadline and discards it, and whether
+// a suggestion may claim that provenance is its own question.
 const EDITABLE_FIELDS = ['title', 'notes', 'type', 'category', 'columnId',
-  'importance', 'urgency', 'tags'];
+  'importance', 'urgency', 'deadline', 'tags'];
 
 /**
  * Store a suggested edit. Returns null when there is nothing to suggest or

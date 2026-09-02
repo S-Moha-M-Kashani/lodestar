@@ -782,33 +782,34 @@ body[data-view="board"] .cards { min-height: 0; }
 }
 .sort-select:hover { color: var(--ink); background: var(--card); border-color: var(--line); }
 
-.quick-add {
-  display: flex;
-  gap: 6px;
-  padding: 0 0 12px;
-}
-
-.quick-add input {
-  flex: 1;
-  min-width: 0;
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 7px 10px;
-  font-size: 13px;
-}
-.quick-add input::placeholder { color: var(--ink-soft); }
-
-.quick-add button {
-  border: 1px dashed var(--line);
+/* The create control, at the head of the Inbox where the capture form used to
+   be: the dashed outline of a card not written yet, full width so it reads as
+   an invitation rather than as one more button in the header — the same dashed
+   1.5px frame as .empty-hint below, which draws the same "nothing here yet".
+   No `display` is declared on purpose: the column is a flex container, so a
+   button blockifies by itself, and declaring one would put this rule in the
+   `[hidden]` trap that .assistant-tools and #assistant-widget document.
+   Keyboard focus comes from the global button :focus-visible outline. */
+.new-card-btn {
+  width: 100%;
+  margin: 0 0 12px;
   background: transparent;
-  color: var(--ink-soft);
+  border: 1.5px dashed var(--line);
   border-radius: var(--radius);
-  padding: 0 11px;
-  font-size: 16px;
-  line-height: 1;
+  color: var(--ink-soft);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: 0.03em;
+  text-align: center;
+  padding: 9px 12px;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
 }
-.quick-add button:hover { color: var(--col-accent); border-color: var(--col-accent); }
+
+.new-card-btn:hover {
+  color: var(--col-accent);
+  border-color: var(--col-accent);
+  background: color-mix(in srgb, var(--col-accent) 5%, transparent);
+}
 
 .cards {
   flex: 1;
@@ -2025,6 +2026,44 @@ dialog::backdrop {
   margin: 0 0 16px;
 }
 .field-hint strong { color: var(--ink); font-weight: 600; }
+
+/* The settings fold in the card dialog. Native <details>, so the label, the
+   keyboard behaviour and the open/closed ARIA state are the browser's and only
+   the look is ours. It draws as a rule across the dialog rather than as a box,
+   because the Plan fieldset it holds already draws a frame of its own, and a
+   box inside a box inside a dialog reads as clutter. The dialog's width is a
+   fixed min(540px, …), so opening the fold cannot move it.
+   No `display` is set on the summary: anything other than the UA's `list-item`
+   takes the disclosure triangle away with it. */
+.card-details {
+  margin: 0 0 15px;
+  border-top: 1px solid var(--card-line);
+}
+
+.card-details-summary {
+  cursor: pointer;
+  padding: 12px 2px;
+  font-family: var(--display);
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+
+.card-details-summary:hover { color: var(--ink-blue); }
+.card-details-summary:focus-visible {
+  outline: 2px solid var(--ink-blue);
+  outline-offset: 2px;
+}
+
+/* The hint is a lower-case aside, not part of the label being shouted. */
+.card-details-summary .hint {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--ink-soft);
+}
 
 /* Type & category pickers — choose by stamping / by tab colour */
 .type-picker,

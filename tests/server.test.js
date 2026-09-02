@@ -1196,8 +1196,12 @@ test('POST /api/edits stores a suggestion and changes no card', async () => {
   try {
     await putCards(s.base, [{ id: 'a', title: 'Renew the passport', columnId: 'inbox' }]);
 
+    // The deadline is in here because it used to be filtered out: `update_card`
+    // has always offered it, so the model named a due date and the suggestion
+    // arrived carrying nothing about it.
     const res = await postEdit(s.base, {
-      cardId: 'a', fields: { title: 'Renew it before June', columnId: 'in-progress' },
+      cardId: 'a',
+      fields: { title: 'Renew it before June', columnId: 'in-progress', deadline: '2027-03-04' },
     });
     assert.equal(res.status, 200);
     const stored = await res.json();
@@ -1213,7 +1217,7 @@ test('POST /api/edits stores a suggestion and changes no card', async () => {
     assert.equal(pending.edits.length, 1);
     assert.equal(pending.edits[0].cardId, 'a');
     assert.deepEqual(pending.edits[0].fields,
-      { title: 'Renew it before June', columnId: 'in-progress' });
+      { title: 'Renew it before June', columnId: 'in-progress', deadline: '2027-03-04' });
   } finally { await s.stop(); }
 });
 

@@ -1,21 +1,20 @@
-import { cardLabel, filtersActive, matchesFilters, uid } from '../core/cards.js';
+import { cardLabel, filtersActive, matchesFilters } from '../core/cards.js';
 import { catById, catColor, catLabel, categories } from '../core/categories.js';
 import { PRIO_TITLE, TYPE_META, priorityOf } from '../core/constants.js';
 import { isHabit } from '../core/habits.js';
-import { commit, short } from '../core/history.js';
 import { planConflict } from '../core/plan.js';
-import { filters, nextNum, setDraggedId, state } from '../core/state.js';
+import { filters, setDraggedId, state } from '../core/state.js';
 import { sortMenu } from './card-actions.js';
-import { cardMenu, fromCardMenu } from './card-menu.js';
+import { cardMenu, fromCardMenu, openCardMenu } from './card-menu.js';
 import { openCatsDialog } from './cats-dialog.js';
 import { clearDropIndicator, wireDropZone } from './dnd.js';
-import { $, announce, columnCards, columnTitle } from './dom.js';
-import { openDialog } from './edit-dialog.js';
+import { $, columnCards, columnTitle } from './dom.js';
+import { openDialog, openNewCard } from './edit-dialog.js';
 import { habitCardParts } from './habits.js';
 import { onCardKeydown } from './keyboard.js';
 import { render } from './render.js';
 
-// The Board view: a column and its cards, the quick-add form, the card itself,
+// The Board view: a column and its cards, the create control, the card itself,
 // and the two rails — categories and tags — that filter what it shows.
 
 export function renderColumn(col) {
@@ -43,7 +42,7 @@ export function renderColumn(col) {
 
   section.append(header);
 
-  if (col.id === 'inbox') section.append(renderQuickAdd());
+  if (col.id === 'inbox') section.append(renderNewCardButton());
 
   const cardsEl = document.createElement('div');
   cardsEl.className = 'cards';
@@ -51,7 +50,7 @@ export function renderColumn(col) {
 
   if (visible.length === 0) {
     const emptyCopy = {
-      'inbox': 'Capture anything above — a question, a task, an idea',
+      'inbox': 'Start a card above — a question, a task, an idea',
       'in-progress': 'Drag a card here when you start on it',
       'answered': 'Finished and answered cards land here',
     };
@@ -68,55 +67,20 @@ export function renderColumn(col) {
   return section;
 }
 
-export function renderQuickAdd() {
-  const form = document.createElement('form');
-  form.className = 'quick-add';
-
-  const input = document.createElement('input');
-  input.type = 'text';
-  input.placeholder = 'Write down anything on your mind…';
-  input.setAttribute('aria-label', 'Add a card to the Inbox');
-
+// The create control, at the head of the Inbox. It builds nothing: the dialog
+// holds the one card-construction path, so a capture that is cancelled halfway
+// burns no ledger number, writes no undo entry and leaves no Trash row behind.
+// No argument — a draft with no source starts empty and inherits the drawer it
+// was opened in, which is the dialog's decision to make, not this button's.
+export function renderNewCardButton() {
   const btn = document.createElement('button');
-  btn.type = 'submit';
-  btn.textContent = '+';
-  btn.setAttribute('aria-label', 'Add card');
-
-  form.append(input, btn);
-  form.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const title = input.value.trim();
-    if (!title) { input.focus(); return; } // nothing to add — put the cursor back
-    const now = Date.now();
-    // A capture inherits the drawer it was written in: with a category tab or
-    // type filter active, the new card belongs there — and stays visible.
-    const card = { id: uid(), columnId: 'inbox', title, notes: '',
-      type: filters.type || 'question', category: filters.category,
-      importance: '', urgency: '', deadline: '', plan: '', planSrc: 'auto',
-      effort: 'medium', control: 'influence', effortSrc: 'default', controlSrc: 'default',
-      // Captured while filtered to habits, it is a habit: once a day until
-      // the user says otherwise, rather than a habit with no cadence at all.
-      habitFreq: filters.type === 'habit' ? 'daily' : '',
-      habitCount: 1, habitTimes: [], habitHistory: {},
-      num: nextNum(), tags: [], createdAt: now, updatedAt: now };
-    // New captures go to the top of the Inbox
-    const firstInbox = state.cards.findIndex((c) => c.columnId === 'inbox');
-    state.cards.splice(firstInbox === -1 ? state.cards.length : firstInbox, 0, card);
-    // A search, tag or priority filter could still hide the fresh card —
-    // clear those so the capture never vanishes silently.
-    if (!matchesFilters(card)) {
-      filters.search = '';
-      filters.tags.clear();
-      filters.prio = '';
-      $('#search').value = '';
-      $('#prio-filter').value = '';
-    }
-    commit(`Added ${cardLabel(card)} “${short(title)}”`);
-    announce(`Added “${title}” to Inbox`);
-    const fresh = $('#board .quick-add input');
-    if (fresh) fresh.focus();
-  });
-  return form;
+  btn.type = 'button';
+  btn.id = 'new-card-btn';
+  btn.className = 'new-card-btn';
+  btn.textContent = '+ New card';
+  btn.setAttribute('aria-label', 'Add a card to the Inbox');
+  btn.addEventListener('click', () => openNewCard());
+  return btn;
 }
 
 // Rubber-stamp badge for a card's type — always neutral ink.
@@ -240,10 +204,11 @@ function renderCard(card) {
   if (isHabit(card)) habitCardParts(card, el);
 
   // The whole card is one click target, and the actions menu now lives inside
-  // it: a click or a key the menu owns must not also do the card's thing.
-  // Without these three guards the + opens the edit dialog behind its own
-  // panel, Enter on the + does the same, and a press on a menu row drags the
-  // card out of its column.
+  // it: a click, a key or a right-click the menu owns must not also do the
+  // card's thing. Without these four guards the + opens the edit dialog behind
+  // its own panel, Enter on the + does the same, a right-click on an open panel
+  // repaints it back to its root and throws away the submenu the user had just
+  // stepped into, and a press on a menu row drags the card out of its column.
   el.addEventListener('click', (e) => {
     if (fromCardMenu(e)) return;
     openDialog(card.id);
@@ -251,6 +216,17 @@ function renderCard(card) {
   el.addEventListener('keydown', (e) => {
     if (fromCardMenu(e)) return;
     onCardKeydown(e, card.id);
+  });
+
+  // Right-click is an accelerator onto the menu the + opens — the same panel,
+  // in the same place beside the +, since settle() measures the column scroller
+  // to decide which way to flip and following the pointer would be a second
+  // positioning system for one panel. Repeated right-clicks leave it open: the
+  // toggle belongs to the button, which has an aria-expanded to keep honest.
+  el.addEventListener('contextmenu', (e) => {
+    if (fromCardMenu(e)) return;
+    e.preventDefault();
+    openCardMenu(card.id, el.querySelector('.card-menu'));
   });
 
   el.addEventListener('dragstart', (e) => {
