@@ -17,6 +17,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
 from playwright.sync_api import sync_playwright
@@ -75,6 +77,10 @@ def _password_hash(password):
 
 
 PASSWORD_HASH = _password_hash(TEST_PASSWORD)
+# The developer trace's own key, minted per run like the two above: it unlocks a
+# page that shows the system prompt and every tool result, so it is never a
+# constant anybody could have read out of this file.
+DEV_KEY = secrets.token_urlsafe(18)
 SESSION_COOKIE = ""  # set by log_in() once the server is up
 
 
@@ -88,6 +94,15 @@ class _BoardSession(urllib.request.BaseHandler):
         if SESSION_COOKIE and req.host in (f"localhost:{PORT}", f"127.0.0.1:{PORT}"):
             req.add_unredirected_header("Cookie", SESSION_COOKIE)
         return req
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A 303 is the answer, not a step on the way to one: the trace unlock
+    reports success by redirecting, and following it would swallow both the
+    status and the Set-Cookie that came with it."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
 
 urllib.request.install_opener(urllib.request.build_opener(_BoardSession()))
@@ -306,7 +321,12 @@ def start_server():
              # The board refuses to boot without a verifier, and the brain
              # below is not a person: it presents the shared service token.
              "LODESTAR_AUTH_PASSWORD_HASH": PASSWORD_HASH,
-             "LODESTAR_SERVICE_TOKEN": SERVICE_TOKEN},
+             "LODESTAR_SERVICE_TOKEN": SERVICE_TOKEN,
+             # The developer trace is off unless a key is set, so the run sets
+             # one — the surface has to be exercised somewhere, and "absent
+             # without a key" is proven in tests/trace.test.js rather than by
+             # leaving it off here.
+             "LODESTAR_DEV_KEY": DEV_KEY},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -359,7 +379,10 @@ def start_brain():
              # choice, which is itself one of the things asserted below.
              "BRAIN_CLAUDE_CLI_BIN": CLAUDE_CLI_STUB,
              "BRAIN_CODEX_CLI_BIN": NO_CODEX_CLI,
-             "BRAIN_CHAT_COLLECTION": "chat-e2e"},
+             "BRAIN_CHAT_COLLECTION": "chat-e2e",
+             # And the brain files them. Both halves are needed to see anything,
+             # which is the point of the pair.
+             "BRAIN_TRACE": "board"},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -2866,6 +2889,11 @@ try:
         # This is an end-to-end test.
         # And once refused it stops asking for the rest of the chat — a broad
         # conversation must not be interrupted on every greeting.
+        # Waited for, not assumed: `submitChat` returns early while a turn is in
+        # flight, so pressing Send on a disabled composer does nothing at all and
+        # the failure reads as "the nudge asked again" — which is not what
+        # happened.
+        wait_until(lambda: not page.locator("#chat-input").is_disabled(), timeout=15)
         page.fill("#chat-input", "hello again")
         page.click("#chat-send")
         wait_for_capture(page, nudged, 2)
@@ -2880,6 +2908,9 @@ try:
         page.fill("#chat-input", "the weekend plan")
         page.click("#chat-send")
         wait_for_capture(page, nudged, 3)
+        # Same reason as above: the greeting must be typed into a composer that
+        # is listening, or the nudge it is meant to provoke never gets asked for.
+        wait_until(lambda: not page.locator("#chat-input").is_disabled(), timeout=15)
         page.fill("#chat-input", "hi")
         page.click("#chat-send")
         wait_until(lambda: page.locator(".chat-drift").count() == 1)
@@ -5308,6 +5339,125 @@ try:
         page.evaluate("key => localStorage.removeItem(key)", WIDGET_KEY)
         page.reload()
         page.wait_for_selector("#board")
+
+
+        # ---- The developer trace ---------------------------------------------
+        # This is an end-to-end test.
+        # The one thing no other suite can show: that what the page renders is
+        # what the brain actually sent. The board and the brain are both
+        # configured for tracing in this run, so the turns taken above are
+        # already filed — this drives the door, the tape, and the widget's link.
+        def dev_get(path, cookie=""):
+            # Its own opener, deliberately: the installed one attaches this
+            # run's session with `add_unredirected_header`, which OUTRANKS a
+            # Cookie set here — so the two credentials have to be sent together
+            # by hand, which is also exactly what a browser does.
+            req = urllib.request.Request(URL + path)
+            req.add_header("Cookie",
+                           SESSION_COOKIE + ("; " + cookie if cookie else ""))
+            with urllib.request.build_opener().open(req, timeout=5) as r:
+                return r.status, r.headers, r.read().decode()
+
+        def dev_unlock(key=DEV_KEY, nxt="/dev/trace"):
+            body = urllib.parse.urlencode({"key": key, "next": nxt}).encode()
+            req = urllib.request.Request(
+                URL + "/dev/trace/unlock", data=body, method="POST",
+                headers={"Content-Type": "application/x-www-form-urlencoded"})
+            # The redirect IS the success signal, so it must not be followed —
+            # and urllib reports an unfollowed 303 by raising, with the response
+            # (and its Set-Cookie) hanging off the exception.
+            opener = urllib.request.build_opener(_BoardSession, _NoRedirect)
+            try:
+                with opener.open(req, timeout=5) as r:
+                    return r.status, r.headers.get("Set-Cookie", "").split(";")[0]
+            except urllib.error.HTTPError as err:
+                return err.code, err.headers.get("Set-Cookie", "").split(";")[0]
+
+        locked_status, _, locked_body = dev_get("/dev/trace")
+        check("trace: locked, the page is a key field and nothing else",
+              locked_status == 200 and 'type="password"' in locked_body
+              and "data-trace=" not in locked_body)
+        check("trace: a wrong key is refused and never echoed",
+              dev_unlock("not-the-key")[0] == 401)
+        status, dev_cookie = dev_unlock()
+        check("trace: the right key unlocks without putting it in a url",
+              status == 303 and dev_cookie.startswith("lodestar_dev=")
+              and DEV_KEY not in dev_cookie)
+
+        # A turn of each kind, taken through the widget so the trace and the
+        # shell that links to it are exercised together.
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector(".quick-add input")
+        if not page.locator("#assistant-widget").is_visible():
+            page.click("#assistant-launcher")
+        page.wait_for_selector("#assistant-widget .chat-log")
+        page.click("#chat-new")
+        page.wait_for_selector(".chat-suggest")
+        cards_before_trace = len(api_state()["cards"])
+        page.fill("#chat-input", "trace this ordinary turn")
+        page.click("#chat-send")
+        wait_until(lambda: "FAKE: trace this ordinary turn"
+                   in page.inner_text(".chat-log"), timeout=20)
+        # A turn that calls a tool: 'add:' is the fake backend's one scripted
+        # tool call, so the tape has an ai → tool → ai stretch in it.
+        page.fill("#chat-input", "add: a card the trace can show")
+        page.click("#chat-send")
+        wait_until(lambda: not page.locator("#chat-input").is_disabled(), timeout=25)
+        session_id = page.evaluate("() => localStorage.getItem('lodestar:chat-session')")
+
+        # The widget's own way in — developer-only, and it carries the session id
+        # and nothing else.
+        link = page.locator("#assistant-trace")
+        check("trace: the widget offers the developer link, carrying only the"
+              " session id",
+              wait_until(lambda: link.count() == 1)
+              and link.get_attribute("href")
+              == f"/dev/trace?session={urllib.parse.quote(session_id)}"
+              and link.get_attribute("target") == "_blank")
+
+        _, headers, tape = dev_get(
+            f"/dev/trace?session={urllib.parse.quote(session_id)}", dev_cookie)
+        roles = re.findall(r'<div class="entry" data-role="(\w+)"', tape)
+        check("trace: the tape holds the human, system, ai and tool messages"
+              " the brain sent",
+              headers.get("Cache-Control") == "no-store"
+              and roles[:2] == ["system", "human"]
+              and "tool" in roles and roles.count("system") == 2
+              and "trace this ordinary turn" in tape
+              and "create_card" in tape)
+        check("trace: two prompts are two prompt groups, in order",
+              tape.count('class="prompt"') == 2
+              and tape.index("trace this ordinary turn")
+              < tape.index("a card the trace can show"))
+
+        # A turn that fails is exactly the one somebody goes looking for, so it
+        # has to be filed too — with what happened and no invented answer.
+        n_before = len(errors)
+        page.route("**/api/agent/chat/stream", lambda route: route.fulfill(
+            status=503, content_type="application/json", body='{"error":"nope"}'))
+        page.fill("#chat-input", "this turn never reaches the brain")
+        page.click("#chat-send")
+        page.wait_for_selector(".chat-error")
+        page.unroute("**/api/agent/chat/stream")
+        for e in [e for e in errors[n_before:] if "503" in e]:
+            errors.remove(e)
+        # Stubbed at the browser, so the brain never saw it — the trace is
+        # therefore unchanged, which is itself the assertion: nothing invents a
+        # record for a request that was never made.
+        _, _, again = dev_get(
+            f"/dev/trace?session={urllib.parse.quote(session_id)}", dev_cookie)
+        check("trace: a request the brain never received files no trace",
+              again.count('class="prompt"') == 2)
+
+        index_status, _, index_body = dev_get("/dev/trace", dev_cookie)
+        check("trace: the index lists the session and links to its tape",
+              index_status == 200 and session_id in index_body
+              and f'/dev/trace?session={urllib.parse.quote(session_id)}' in index_body)
+        # And the board is untouched by all of it. (The 'add:' turn above
+        # PROPOSES a card, which is invisible to readBoard until accepted, so
+        # this count is unchanged by the turns as well as by the reads.)
+        check("trace: reading traces changed no card",
+              len(api_state()["cards"]) == cards_before_trace)
 
         # ---- The reminder fires from the background ---------------------------
         # This is an end-to-end test. A habit slot arriving while the page

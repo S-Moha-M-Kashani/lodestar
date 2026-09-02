@@ -157,6 +157,37 @@ the brain gets `401` and the Assistant says the board is unreachable.
 Your password never enters the brain's environment, and revoking the brain's
 access is a matter of changing one token rather than changing what you type.
 
+## The developer trace
+
+There is a page that shows what the Assistant was actually asked: for each turn,
+the system prompt, your question, every tool the model called, everything those
+tools returned, and the answer — in the order the model saw them. It is the most
+revealing single view of your board that exists anywhere in this project, which
+is why it is off unless you deliberately turn it on, and why it has a lock of
+its own.
+
+Two switches, and you need both:
+
+```sh
+# in .env — the board stores traces and serves the page
+LODESTAR_DEV_KEY=$(node -e "console.log(require('crypto').randomBytes(24).toString('base64url'))")
+# and the brain files them
+BRAIN_TRACE=board
+```
+
+Without `LODESTAR_DEV_KEY` the surface does not exist: no table is created, no
+trace is stored, and `/dev/trace` answers `404` rather than telling a stranger
+there is a page here they cannot see. With it, the page still sits **behind your
+ordinary login** — the key is a second lock, not a way around the first — and
+asks for the key separately. Unlocking mints a random token that lives only in
+the server's memory, so restarting the board locks the page again, and the key
+itself never appears in a URL, in the page, in the cookie or in a log.
+
+The traces are read-only. Nothing on that page can change a card, a message or a
+chat, and every response is `Cache-Control: no-store`. Turning both switches back
+off stops new traces; the ones already filed stay in `assistant.db` until you
+remove them.
+
 ## Sessions
 
 - Stored in the server's memory, keyed by a SHA-256 of the token; the raw token

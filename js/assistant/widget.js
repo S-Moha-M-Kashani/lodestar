@@ -147,6 +147,27 @@ export function collapseToWidget() {
   focusComposer();
 }
 
+// Whether this board is keeping developer traces at all. Asked once, the first
+// time the widget paints, and never again: it is a boot-time property of the
+// server, and asking per render would be a request on every repaint of a
+// streaming transcript. `enabled` stays false until the answer arrives, so the
+// control appears rather than disappearing — the safe direction for a link that
+// would otherwise 404.
+const traceState = { asked: false, enabled: false };
+
+function askAboutTracing() {
+  if (traceState.asked) return;
+  traceState.asked = true;
+  fetch('/api/trace/status')
+    .then((res) => (res.ok ? res.json() : null))
+    .then((data) => {
+      if (!data || !data.enabled) return;
+      traceState.enabled = true;
+      if (widgetShowing()) render();
+    })
+    .catch(() => { /* no backend — no trace page either */ });
+}
+
 /** Paint the widget into its host. Called by render() on every paint, after
  *  the view beneath it — the widget outlives every one of them. */
 export function renderAssistantWidget() {
@@ -159,6 +180,7 @@ export function renderAssistantWidget() {
   // has to be found without a reload, and the widget may be the only shell this
   // browser ever opens.
   if (!brainModels.provider) probeBrainModels();
+  askAboutTracing();
   applySize();
 
   const card = document.createElement('div');
@@ -195,6 +217,23 @@ function renderWidgetHead() {
   title.textContent = current ? current.title : 'New chat';
   title.title = current ? current.title : 'New chat';
   head.appendChild(title);
+
+  // The way to this turn's trace, and only where there is one to see. It
+  // carries the session id and nothing else — the id is opaque, the page is
+  // behind its own key, and a control that leads to a 404 on every ordinary
+  // board is a control that lies about what this app does.
+  if (traceState.enabled && assistantState.sessionId) {
+    const trace = document.createElement('a');
+    trace.id = 'assistant-trace';
+    trace.className = 'btn ghost widget-btn';
+    trace.textContent = '⌥';
+    trace.href = '/dev/trace?session=' + encodeURIComponent(assistantState.sessionId);
+    trace.target = '_blank';
+    trace.rel = 'noopener noreferrer';
+    trace.title = 'Developer trace for this chat';
+    trace.setAttribute('aria-label', 'Developer trace for this chat');
+    head.appendChild(trace);
+  }
 
   const expand = document.createElement('button');
   expand.type = 'button';

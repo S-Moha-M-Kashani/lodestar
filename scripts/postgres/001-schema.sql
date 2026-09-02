@@ -145,3 +145,30 @@ CREATE TABLE IF NOT EXISTS assistant.messages (
   usage      TEXT,
   cost       DOUBLE PRECISION
 );
+
+-- The developer trace: one row per turn, holding the exact message envelope the
+-- brain handed the model. Deliberately not `messages` — that table is the
+-- conversation the durability promise is about, this is the request that
+-- produced it, and a debugging aid must not be able to change what the
+-- transcript says.
+--
+-- In SQLite this table is created only when LODESTAR_DEV_KEY is configured; here
+-- it always exists and stays empty until something files a trace. A schema is a
+-- shape, not a switch, and one that appeared and disappeared with an environment
+-- variable would be a migration nobody could reason about.
+CREATE TABLE IF NOT EXISTS assistant.traces (
+  trace_id   TEXT PRIMARY KEY,
+  session_id TEXT   NOT NULL,
+  board_id   TEXT   NOT NULL DEFAULT '',
+  status     TEXT   NOT NULL,
+  model      TEXT   NOT NULL DEFAULT '',
+  provider   TEXT   NOT NULL DEFAULT '',
+  started_at BIGINT NOT NULL,
+  ended_at   BIGINT,
+  error      TEXT   NOT NULL DEFAULT '',
+  usage      TEXT,
+  entries    TEXT   NOT NULL,
+  filed_at   BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS traces_session
+  ON assistant.traces (session_id, started_at);
