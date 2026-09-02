@@ -801,7 +801,7 @@ function purgeBoard(id) {
 // one endless transcript plus its very first message as "framing", so a new
 // question was answered in terms of the oldest one on the board. A session is
 // the boundary that makes a conversation a conversation; the docs are in
-// docs/superpowers/specs/2026-08-04-chat-sessions-design.md.
+// docs/decisions/2026-08-04-chat-sessions-design.md.
 //
 // Deleting is soft in both directions: `sessions.deleted_at` takes a whole
 // chat's messages out of every live read, `messages.deleted_at` takes one turn
