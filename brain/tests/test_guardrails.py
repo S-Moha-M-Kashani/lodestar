@@ -298,5 +298,8 @@ def test_the_brain_has_no_way_to_write_a_card():
     every failure mode the removal closed.
     """
     surface = {name for name in vars(BoardClient) if not name.startswith('_')}
+    # `record_trace` writes, and deliberately not to a card: it files the turn's
+    # own developer trace into a table of its own, the way `record_chat` files
+    # the conversation. Neither can reach `cards`.
     assert surface == {'list_cards', 'list_chat', 'list_all_chat', 'record_chat',
-                       'create_proposal', 'create_edit'}
+                       'record_trace', 'create_proposal', 'create_edit'}

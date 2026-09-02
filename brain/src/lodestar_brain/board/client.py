@@ -113,6 +113,17 @@ class BoardClient:
         body = await self._post('/api/chat/messages', payload)
         return body['messages']
 
+    async def record_trace(self, trace: dict) -> dict:
+        """File one turn's developer trace with the board.
+
+        Written twice per turn — in flight, then settled — and the board upserts
+        on `trace_id`, so one turn is one record however many times it is filed.
+        A separate table from the chat record and deliberately so: the record is
+        a conversation, this is the request that produced it, and a debugging
+        aid must not be able to change what the transcript says.
+        """
+        return await self._post('/api/trace', trace)
+
     async def create_proposal(self, card: dict, board_id: str = '') -> dict:
         """Offer one card for the user's approval.
 
