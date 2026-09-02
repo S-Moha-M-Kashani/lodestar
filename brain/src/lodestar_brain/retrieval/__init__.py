@@ -16,11 +16,12 @@ The shipped half of the chosen retrieval architecture, bottom up:
 | `fusion.py` | BM25, and the RRF that combines the two halves |
 | `rerank.py` | the reranker seam: IDF term coverage by default, a model by config |
 | `gate.py` | asking a model which contexts actually help |
+| `offload.py` | the lock and the thread hop a blocking store is reached through |
 | `cards.py` | `CardIndex` — the board, embedded in this process |
 | `chat.py` | `ChatStore` — chat memory in Chroma |
 
 **The dependency direction is one-way.** The leaves (`embeddings`, `chunking`,
-`timescope`, `expand`) import nothing from this package; `fusion` reads
+`timescope`, `expand`, `offload`) import nothing from this package; `fusion` reads
 `timescope`, `rerank` reads `expand` and `fusion`, `gate` reads nothing. Only
 `cards` and `chat` — the two assemblies — reach across the whole set, and
 nothing imports *them* from inside the package. That is what keeps the import

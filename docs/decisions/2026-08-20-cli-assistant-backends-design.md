@@ -49,7 +49,7 @@ them rather than replacing them:
 | Already there | Consequence for this design |
 | --- | --- |
 | `llm_cli.py` — both CLIs as `BaseChatModel`s: hardened argv, prompt-embedded tool calls, per-CLI usage reassembly, 8 offline tests | The agent loop, the untrusted fence, the middleware stack and the proposal gate stay exactly where they are. Only *where the subprocess runs* changes. |
-| Multi-board (`docs/superpowers/specs/2026-08-12-multi-board-design.md`) — cards and chats scoped by `board_id` | "Board moha uses claude-cli" is expressible from day one. Board scoping is not a later migration. |
+| Multi-board (`docs/decisions/2026-08-12-multi-board-design.md`) — cards and chats scoped by `board_id` | "Board moha uses claude-cli" is expressible from day one. Board scoping is not a later migration. |
 | `served_models` / `/agent/models` and its `verified` flag | The picker's existing doctrine — never offer what the backend cannot serve — is the rule the new options obey. |
 
 And one thing is deliberately **not** built: **the MCP inversion.** Exposing the

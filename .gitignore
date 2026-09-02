@@ -38,18 +38,31 @@ backups/
 .claude/
 
 # Working material lives on this machine's disk and is never committed: the
-# agent guides, the development notes, the course report, the plans. What the
-# repository does publish from docs/ is the design record — the dated specs
-# under docs/superpowers/specs/ and docs/cli-backends.md, both already tracked,
-# which a tracked file's immunity to this list is what keeps in.
+# agent guides, the development notes, the course report, the plans.
 CLAUDE.md
 AGENTS.md
 # Checks the guides' own numbers against the code, so it only means anything
 # where a guide exists — on this machine, never in a clone.
 tests/docclaims.test.js
-docs/
-docs/report/
-docs/superpowers/plans/
+
+# docs/ is private by default and publishes by name. It used to be `docs/`
+# flat, which excluded the folder outright — and a tracked file's immunity to
+# this list was the only reason the design record stayed in. That worked for as
+# long as nothing new was ever added: a new file under docs/ was silently
+# unpublishable, and `git add` refusing it is the *good* case. The screenshot
+# gallery is what found this, since an ignored image is a broken picture in the
+# README of every clone.
+#
+# So the rule is now `docs/*` — one level, which git can descend past — plus
+# the list of what the repository publishes. A negation only works if no parent
+# directory is excluded, which is why this is a directory allowlist and not a
+# pile of `!docs/**` lines.
+docs/*
+!docs/cli-backends.md
+!docs/security.md
+!docs/release-checklist.md
+!docs/decisions/
+!docs/img/
 README-Development.md
 ROADMAP-Development.md
 .vscode/

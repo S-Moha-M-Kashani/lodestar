@@ -35,6 +35,25 @@ from .result import (STEP_LIMIT_REPLY, AgentResult, _calls_in, _result_from,
 from .state import LodestarState, TurnContext
 from .trace import TraceCollector, TurnTrace, final_answer
 
+# The graph node that holds the agent's own model call. `create_agent` names it
+# this, and `stream_mode='messages'` stamps every message with the node it came
+# out of — which is the only thing that tells the assistant's voice apart from a
+# model a tool called for its own purposes. Observed against a live turn rather
+# than read off a docstring: 'model' for the reply, 'tools' for the relevance
+# gate's scores.
+MODEL_NODE = 'model'
+
+
+def _from_model(metadata: Any) -> bool:
+    """Did this streamed message come out of the agent's own model call?
+
+    A missing node is *not* trusted. The one thing worse than dropping a token
+    is streaming a tool's internal chatter into the transcript, and a stream
+    whose metadata has stopped carrying a node is a stream this function can no
+    longer make the distinction for.
+    """
+    return isinstance(metadata, dict) and metadata.get('langgraph_node') == MODEL_NODE
+
 
 def _spoken(messages: Iterable[BaseMessage]) -> list[tuple[str, str]]:
     """A thread's messages as the browser's transcript would hold them.
@@ -480,9 +499,28 @@ class LodestarAgent:
                     continue
                 # 'messages' carries every message the graph produces, tool
                 # answers included. Filtering to AIMessage is what stops a tool's
-                # JSON being pasted into the reply as if the model had said it.
-                message, _metadata = chunk
-                if isinstance(message, AIMessage) and (text := _text(message)):
+                # JSON being pasted into the reply as if the model had said it —
+                # but an AIMessage is not by itself the *assistant's* voice, and
+                # that is the hole this filter had. A tool may call a model of
+                # its own, LangChain propagates the run's callbacks into that
+                # nested call, and its reply arrives here as an AIMessage like
+                # any other. The relevance gate does exactly this: it grades
+                # candidates in one call and answers in the shape its own regex
+                # reads, so a real turn streamed `1: 9\n2: 0\n3: 1` into the
+                # transcript ahead of the answer, looking like debug output the
+                # assistant had said. Observed 2026-09-02 on BRAIN_LLM=claude-cli
+                # against a 60-card board; invisible to every test, because the
+                # e2e runs BRAIN_LLM=fake and the buffered route returns only the
+                # final result.
+                #
+                # So the node decides, not the type. `MODEL_NODE` is where
+                # create_agent puts the model call; a nested one runs inside
+                # 'tools'. If the framework ever renames the node, tokens stop
+                # rather than a tool's chatter starting — the safe direction, and
+                # the e2e's streaming checks fail loudly on it.
+                message, metadata = chunk
+                if (isinstance(message, AIMessage) and _from_model(metadata)
+                        and (text := _text(message))):
                     yield 'token', text
         except GraphRecursionError:
             self._traced(trace, seen, interrupted=True)

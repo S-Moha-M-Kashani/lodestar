@@ -1681,6 +1681,24 @@ try:
         page.wait_for_timeout(150)
         check("history: came forward again, later state intact",
               page.locator(".card", has_text="speculative decoding").count() == 1)
+        # And the log survives the browser being closed on it. Persistence is
+        # coalesced now — the stack updates in memory on every edit and the
+        # write lands at the first idle moment after the burst, or on
+        # `visibilitychange`/`pagehide` if the page goes away first. The unit
+        # tests drive those handlers directly; only a real browser can say
+        # whether Chromium delivers them, and only a real reload can say the
+        # written log reads back.
+        before = page.locator("#history-list .history-row").count()
+        newest = page.locator("#history-list .history-row .history-action").first.inner_text()
+        page.click("#close-history")
+        page.reload()
+        page.wait_for_selector("#board.board")
+        menu_click("#history-btn")
+        page.wait_for_selector("#history-dialog[open]")
+        check("history: the log is still there after a reload",
+              page.locator("#history-list .history-row").count() == before
+              and page.locator("#history-list .history-row .history-action")
+              .first.inner_text() == newest)
         page.click("#close-history")
 
         # ---- Responsive -----------------------------------------------------
@@ -2418,9 +2436,20 @@ try:
         # check used to pass on the count race above, reading the previous turn's
         # already-finished strip instead of this one's.
         folded = page.locator(".chat-meta").last
+        # Waited on the settled row itself — "Worked for", past tense — rather
+        # than on the word "tool" appearing somewhere in the strip. Those used
+        # to be the same wait by accident: the counts tail carried the tool
+        # count too, so "tool" showed up the moment a tool started running. It
+        # is named once now, by the row, so the substring only arrives when the
+        # turn settles, and a machine under load could reach the deadline with
+        # the answer already on screen. This says what the comment above always
+        # meant, and asserts the count in the strip separately.
         settled_meta = wait_until(
             lambda: folded.locator(".chat-meta-summary").count() == 1
-            and "tool" in folded.locator(".chat-meta-summary").inner_text())
+            and folded.locator(".chat-worked").count() == 1
+            and folded.locator(".chat-worked").inner_text().startswith("Worked for"))
+        settled_meta = settled_meta and "tool" in folded.locator(
+            ".chat-meta-summary").inner_text()
         check("assistant: the evidence under a reply is folded until asked for",
               settled_meta and not folded.locator(".chat-steps").is_visible())
         open_meta(page)
@@ -3925,6 +3954,14 @@ try:
               wait_until(lambda: page.locator(".chat-worked").last.inner_text()
                          .endswith("· 2 tools"))
               and page.locator(".chat-meta").last.locator(".chat-step").count() == 2)
+        # And it is named once. The row and the counts are two spans in one
+        # strip, and both used to carry the tool count — "Worked for 17.2s · 2
+        # tools · 1 source · 2 tools · 14,090 tokens". Reading `.chat-worked`
+        # alone cannot see that, which is why the assert is on the whole
+        # summary and why it is here rather than in a test of its own.
+        check("worked: the tool count is named once, not once per span",
+              page.locator(".chat-meta-summary").last.inner_text()
+              .count(" tools") == 1)
         page.unroute("**/api/agent/chat/stream")
 
         # ---- The composer footer: which board, which model, and send ---------
@@ -4365,12 +4402,38 @@ try:
         page.wait_for_selector('.matrix-switch button[data-matrix="followthrough"][aria-pressed="true"]')
         n_ft = sum(1 for c in srv_cards
                    if c.get("importance") and c.get("columnId") != "answered")
-        cols_with_dots = page.evaluate(
-            """() => new Set([...document.querySelectorAll('.matrix-quad')]
-                 .filter(q => q.querySelector('.plot-dot')).map(q => q.dataset.x)).size""")
+        # Which column each card belongs in, worked out here from the same
+        # timestamps the view reads, and compared against where the dots
+        # actually landed.
+        #
+        # This used to assert `cols_with_dots >= 2` — that at least two age
+        # columns hold something. It passed for a month and then could never
+        # pass again: sample-overview.json's newest card was touched
+        # 2026-07-18, the stale bucket opens at 45 days, and on 2026-09-01
+        # every card in the fixture aged into one column. A check whose answer
+        # depends on today's date is a check with an expiry date on it, and it
+        # expires into a failure that looks like a regression in the view.
+        # Bucketing every card correctly is also the stronger claim.
+        now_ms = page.evaluate("() => Date.now()")
+        DAY_MS = 86_400_000
+
+        def bucket_of(card):
+            age = now_ms - (card.get("updatedAt") or card.get("createdAt") or now_ms)
+            return ("fresh" if age < 14 * DAY_MS
+                    else "aging" if age < 45 * DAY_MS else "stale")
+
+        expected = {}
+        for c in srv_cards:
+            if not c.get("importance") or c.get("columnId") == "answered":
+                continue
+            expected[bucket_of(c)] = expected.get(bucket_of(c), 0) + 1
+        actual = page.evaluate(
+            """() => Object.fromEntries([...document.querySelectorAll('.matrix-quad')]
+                 .map(q => [q.dataset.x, q.querySelectorAll('.plot-dot').length])
+                 .reduce((m, [x, n]) => m.set(x, (m.get(x) || 0) + n), new Map()))""")
         check("matrices: follow-through buckets open cards by age",
               page.locator(".matrix-quad-dots .plot-dot").count() == n_ft
-              and cols_with_dots >= 2)
+              and {k: v for k, v in actual.items() if v} == expected)
         page.click('.matrix-switch button[data-matrix="eisenhower"]')
 
         # ---- Areas view ------------------------------------------------------

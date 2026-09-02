@@ -244,8 +244,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return
         try:
             recorded = await board.list_all_chat()
-            added = memory.sync(recorded)
-            dropped = memory.prune(recorded)
+            added, dropped = await memory.areconcile(recorded)
             if added or dropped:
                 logging.getLogger(__name__).info(
                     'chat index: %d message(s) indexed, %d pruned at boot',
@@ -390,7 +389,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if memory is None:
             return
         try:
-            memory.index_messages(rows)
+            await memory.aindex_messages(rows)
         except Exception:
             # Recorded but not indexed: the next boot's sync rebuilds this.
             logging.getLogger(__name__).exception('chat index write failed')
@@ -583,8 +582,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if memory is None:
             return {'indexed': 0, 'memory': False}
         recorded = await board.list_all_chat()
-        return {'indexed': memory.sync(recorded),
-                'pruned': memory.prune(recorded), 'memory': True}
+        indexed, pruned = await memory.areconcile(recorded)
+        return {'indexed': indexed, 'pruned': pruned, 'memory': True}
 
     @app.post('/rag/recall')
     async def recall(body: RecallBody,
@@ -628,9 +627,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 'recall: cards unsearchable, answering from chat only (%s)', exc)
         if memory is None:
             return {'matches': cards, 'memory': False}
-        chat = [hit | {'source': 'chat'}
-                for hit in memory.search(body.text, k=body.k,
-                                         board_id=board_id or None)]
+        # `asearch`: this route reads the whole chat collection and ranks
+        # it, and it used to do that inline from a coroutine — the one
+        # remaining place a recall stalled the process (retrieval/offload.py).
+        recalled = await memory.asearch(body.text, k=body.k,
+                                        board_id=board_id or None)
+        chat = [hit | {'source': 'chat'} for hit in recalled]
         return {'matches': chat + cards, 'memory': True}
 
     return app
