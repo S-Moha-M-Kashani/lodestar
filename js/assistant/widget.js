@@ -30,14 +30,24 @@ import { lastBoardView, render, setView } from '../ui/render.js';
 //     inside it: its panels open INSIDE it, and nothing here may put
 //     `overflow: hidden` on the box that holds them.
 
-// Where the clamps sit. Measured in the browser against a real transcript
-// (2026-09-02, 1440×900): below ~300px a reply's card rows wrap mid-id and the
-// composer footer drops its model name; above ~720px the card stops being a
-// margin on the board and becomes a second column, at which point the full view
-// is the better answer. The height bounds are the same argument vertically —
-// under 320px the transcript shows one turn, and 900px is taller than the
-// window this was measured in. The default is the size a three-turn exchange
-// reads comfortably at without covering the board's last column.
+// Where the clamps sit.
+//
+// MIN_W and DEFAULT_W were measured in the browser (2026-09-02, 1440×900, a
+// real three-turn transcript), by forcing the size past the clamp and asking
+// the card about itself: at 280px and below the card scrolls SIDEWAYS —
+// `scrollWidth > clientWidth` — and the board chip in the composer footer is
+// already truncated (48px of a 56px name at 280, 37px at 260). At 300 both stop
+// happening, which is why 300 is the floor. The head takes three lines up to
+// 340px and settles to two at 380, so 380 is the default: the first width at
+// which the widget looks like the thing it is rather than a squeezed one.
+//
+// MAX_W is a judgement, not a measurement — nothing breaks above it; the model
+// picker stops growing at 560 and the card simply gets wider. Past about 720 it
+// has stopped being a margin on the board and become a second column, and the
+// full view is the better answer to wanting that much room. MIN_H/MAX_H are the
+// same argument vertically: under 320 the transcript shows a single turn, and
+// 900 is taller than most windows this will open in (the viewport clamp below
+// takes over there anyway).
 const MIN_W = 300;
 const MAX_W = 720;
 const MIN_H = 320;
@@ -45,9 +55,11 @@ const MAX_H = 900;
 const DEFAULT_W = 380;
 const DEFAULT_H = 520;
 // Below this the card becomes a sheet and the handle goes away — see the media
-// query in styles.css, which reads the same number. A 340px floating card with
-// a composer in it is a worse phone UI than a sheet, and a handle you cannot
-// usefully drag is a control that lies.
+// query in styles.css, which carries the same number. Chosen rather than
+// measured: at 640 a floating card can still be 300px wide with board visible
+// beside it, and under that it would be the whole window pretending to float.
+// A 340px floating card with a composer in it is a worse phone UI than a sheet,
+// and a grip you cannot usefully drag is a control that lies.
 const NARROW_PX = 640;
 // The margin the widget keeps from the edges of the window, both here and in
 // the CSS. Named once so the clamp and the layout cannot disagree.
@@ -151,11 +163,6 @@ export function renderAssistantWidget() {
 
   const card = document.createElement('div');
   card.className = 'widget-card';
-
-  // No handle below the narrow threshold: there the card is a sheet filling
-  // the window, and a grip that cannot usefully be dragged is a control that
-  // lies. The media query hides it too, for a window resized without a repaint.
-  if (window.innerWidth >= NARROW_PX) card.appendChild(renderResizeHandle());
   card.appendChild(renderWidgetHead());
 
   // One line naming what is waiting, and a way to the room where it can be
@@ -166,6 +173,13 @@ export function renderAssistantWidget() {
 
   const log = renderChatChrome(card, 'widget');
   host.appendChild(card);
+  // The grip is built once and re-seated on the host beside the card, never
+  // rebuilt inside it. A turn arriving repaints the card several times, and a
+  // handle replaced mid-drag is a gesture dropped on the floor — the same
+  // reason the tools row is moved rather than recreated. No handle below the
+  // narrow threshold: there the card is a sheet filling the window, and a grip
+  // that cannot usefully be dragged is a control that lies.
+  if (window.innerWidth >= NARROW_PX) host.appendChild(resizeHandle());
   restoreChatScroll(log);
 }
 
@@ -241,8 +255,10 @@ function renderApprovalsStrip(n) {
  *  Top-LEFT because the widget is docked bottom-right: growing from the other
  *  corner would push the card off the screen it is anchored to. Native
  *  `resize: both` does exactly that, which is why it is not used. */
-function renderResizeHandle() {
-  const grip = document.createElement('div');
+let grip = null;
+function resizeHandle() {
+  if (grip) return grip;
+  grip = document.createElement('div');
   grip.className = 'widget-resize';
   grip.setAttribute('role', 'separator');
   grip.setAttribute('aria-label', 'Resize the assistant');

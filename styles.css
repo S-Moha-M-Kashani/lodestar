@@ -4218,6 +4218,8 @@ button.chat-source-card {
    js/assistant/widget.js, which stops rendering the handle at the same point —
    a 340px floating card with a composer in it is a worse phone UI than a sheet,
    and a grip you cannot usefully drag is a control that lies. */
+/* 639 = NARROW_PX - 1. The two numbers are one decision in two languages; the
+   note on the constant in widget.js is where the reasoning lives. */
 @media (max-width: 639px) {
   #assistant-widget {
     inset: 8px;
