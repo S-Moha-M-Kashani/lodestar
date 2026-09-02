@@ -4373,12 +4373,38 @@ try:
         page.wait_for_selector('.matrix-switch button[data-matrix="followthrough"][aria-pressed="true"]')
         n_ft = sum(1 for c in srv_cards
                    if c.get("importance") and c.get("columnId") != "answered")
-        cols_with_dots = page.evaluate(
-            """() => new Set([...document.querySelectorAll('.matrix-quad')]
-                 .filter(q => q.querySelector('.plot-dot')).map(q => q.dataset.x)).size""")
+        # Which column each card belongs in, worked out here from the same
+        # timestamps the view reads, and compared against where the dots
+        # actually landed.
+        #
+        # This used to assert `cols_with_dots >= 2` — that at least two age
+        # columns hold something. It passed for a month and then could never
+        # pass again: sample-overview.json's newest card was touched
+        # 2026-07-18, the stale bucket opens at 45 days, and on 2026-09-01
+        # every card in the fixture aged into one column. A check whose answer
+        # depends on today's date is a check with an expiry date on it, and it
+        # expires into a failure that looks like a regression in the view.
+        # Bucketing every card correctly is also the stronger claim.
+        now_ms = page.evaluate("() => Date.now()")
+        DAY_MS = 86_400_000
+
+        def bucket_of(card):
+            age = now_ms - (card.get("updatedAt") or card.get("createdAt") or now_ms)
+            return ("fresh" if age < 14 * DAY_MS
+                    else "aging" if age < 45 * DAY_MS else "stale")
+
+        expected = {}
+        for c in srv_cards:
+            if not c.get("importance") or c.get("columnId") == "answered":
+                continue
+            expected[bucket_of(c)] = expected.get(bucket_of(c), 0) + 1
+        actual = page.evaluate(
+            """() => Object.fromEntries([...document.querySelectorAll('.matrix-quad')]
+                 .map(q => [q.dataset.x, q.querySelectorAll('.plot-dot').length])
+                 .reduce((m, [x, n]) => m.set(x, (m.get(x) || 0) + n), new Map()))""")
         check("matrices: follow-through buckets open cards by age",
               page.locator(".matrix-quad-dots .plot-dot").count() == n_ft
-              and cols_with_dots >= 2)
+              and {k: v for k, v in actual.items() if v} == expected)
         page.click('.matrix-switch button[data-matrix="eisenhower"]')
 
         # ---- Areas view ------------------------------------------------------
