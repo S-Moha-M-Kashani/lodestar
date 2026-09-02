@@ -266,3 +266,45 @@ def test_recall_returns_card_matches_even_with_memory_off():
     assert body['memory'] is False
     assert body['matches'], 'cards must be searchable with chat memory off'
     assert all(match['source'] == 'card' for match in body['matches'])
+
+
+# This is an integration test (in-process Chroma, no server, no disk).
+def test_a_chunk_from_another_board_cannot_arrive_through_the_dense_half():
+    """`search`'s own docstring promises that `board_id` "keeps only the board
+    being searched", and that both filters are applied in Python rather than in
+    a Chroma `where` clause precisely so that "two halves of one search
+    disagreeing about what is eligible" cannot happen. It could.
+
+    The corpus the BM25 half ranks over *is* board-filtered, so the lexical
+    half was always right. The dense half comes back from Chroma unfiltered,
+    and the fusion loop re-checked `_in_session` on it and not `_on_board` — so
+    a chunk belonging to somebody else's board could enter a recall through the
+    dense ranking alone. Reported while the recall slice was being built and
+    left unfixed there because that slice's contract was "results unchanged".
+
+    The foreign chunk here deliberately shares the query's rare term. That is
+    not to help it rank: it is so the lexical-evidence floor cannot be what
+    keeps it out, which would let this test pass over the bug.
+    """
+    store = ChatStore(MEMORY_URL, LexicalHashEmbeddings(),
+                      collection='chat-board-fence')
+    store.index_messages([
+        dict(row(1, 'the hunter2 wifi password for the flat'), boardId='home'),
+        dict(row(2, 'the hunter2 staging credentials'), boardId='work'),
+    ])
+
+    home = store.search('hunter2', k=5, board_id='home', evidence=False)
+    texts = [hit['text'] for hit in home]
+    assert any('flat' in text for text in texts), texts
+    assert not any('staging' in text for text in texts), (
+        'a chunk from board "work" reached a search of board "home"')
+
+    # The other direction, so the test cannot pass by filtering everything, and
+    # with the evidence floor on as the recall box uses it.
+    work = store.search('hunter2', k=5, board_id='work', evidence=True)
+    assert [hit['text'] for hit in work] == [
+        'the hunter2 staging credentials']
+
+    # And a caller naming no board still sees both, which is what keeps every
+    # eval, curl and pre-boards path working.
+    assert len(store.search('hunter2', k=5, evidence=False)) == 2

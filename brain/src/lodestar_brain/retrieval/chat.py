@@ -402,8 +402,17 @@ class ChatStore:
             for ranking in rankings:
                 for rank, doc in enumerate(ranking, start=1):
                     # The dense half comes straight from Chroma, so it has not
-                    # been through the corpus filter above.
-                    if _in_session(doc.metadata, exclude_session):
+                    # been through the corpus filter above — and it needs
+                    # *both* of that filter's rules, not one. This re-checked
+                    # only the session until 2026-09-02, so a chunk on another
+                    # board could enter a recall through the dense ranking
+                    # while the lexical half, which ranks over the filtered
+                    # corpus, correctly never offered it. Exactly the "two
+                    # halves of one search disagreeing about what is eligible"
+                    # this method's docstring says filtering here rather than
+                    # in a Chroma `where` clause exists to prevent.
+                    if (not _on_board(doc.metadata, board_id)
+                            or _in_session(doc.metadata, exclude_session)):
                         continue
                     seen.setdefault(doc.page_content, doc)
                     scores[doc.page_content] = (
