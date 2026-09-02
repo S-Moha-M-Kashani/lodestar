@@ -28,7 +28,7 @@ import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import {
   parsePasswordHash, verifyPassword, secretEquals, hostAllowed, provenanceOf,
   parseCookies, sessionCookie, clearedCookie, SessionStore, LoginThrottle,
@@ -124,6 +124,25 @@ if (SERVICE_TOKEN && SERVICE_TOKEN.length < 32) {
     'LODESTAR_SERVICE_TOKEN is shorter than 32 characters. Generate one with: '
     + "node -e \"console.log(require('crypto').randomBytes(32).toString('base64url'))\"");
 }
+
+// A third credential, and the only one that guards a *page* rather than the
+// API: the developer trace at /dev/trace. Unset — the default, and what a
+// normal board runs with — the whole surface is absent: no route, no storage,
+// nothing to find. Set, it is a second lock in front of the ordinary session,
+// because a trace is the system prompt, the question and every tool result in
+// one record, and that deserves more than "you are already logged in".
+const DEV_KEY = (process.env.LODESTAR_DEV_KEY || '').trim();
+if (DEV_KEY && DEV_KEY.length < 12) {
+  throw new Error(
+    'LODESTAR_DEV_KEY is shorter than 12 characters — refusing to guard the '
+    + 'developer trace with something guessable. Generate one with: '
+    + "node -e \"console.log(require('crypto').randomBytes(24).toString('base64url'))\"");
+}
+// The unlock token lives here and only here: in this process's memory, never in
+// a database, never in a file. Restarting the server locks the trace again,
+// which is the feature — a debugging door that survives a restart is a door
+// somebody forgot to close.
+let devToken = '';
 
 const sessions = new SessionStore();
 // Overridable only because a test that waits a real minute to prove a lockout
@@ -838,6 +857,36 @@ if (!chatColumns.has('session_id')) chatDb.exec("ALTER TABLE messages ADD COLUMN
 if (!chatColumns.has('steps')) chatDb.exec("ALTER TABLE messages ADD COLUMN steps TEXT NOT NULL DEFAULT '[]'");
 if (!chatColumns.has('usage')) chatDb.exec('ALTER TABLE messages ADD COLUMN usage TEXT');
 if (!chatColumns.has('cost')) chatDb.exec('ALTER TABLE messages ADD COLUMN cost REAL');
+
+// The developer trace: one row per turn, holding the exact list of messages
+// the brain handed the model. Created only when the trace is configured — a
+// board with no dev key stores nothing, which is the strongest version of "the
+// surface is absent" a table can have.
+//
+// Deliberately NOT the `messages` table. That one is the conversation: two
+// roles, what the user said and what came back, and it is the thing the
+// durability promise is about. This is the request that produced it — four
+// roles, the system prompt, every tool result — and it is a debugging aid that
+// must not be able to change what the transcript says.
+if (DEV_KEY) {
+  chatDb.exec(`
+    CREATE TABLE IF NOT EXISTS traces (
+      trace_id   TEXT PRIMARY KEY,
+      session_id TEXT    NOT NULL,
+      board_id   TEXT    NOT NULL DEFAULT '',
+      status     TEXT    NOT NULL,
+      model      TEXT    NOT NULL DEFAULT '',
+      provider   TEXT    NOT NULL DEFAULT '',
+      started_at INTEGER NOT NULL,
+      ended_at   INTEGER,
+      error      TEXT    NOT NULL DEFAULT '',
+      usage      TEXT,
+      entries    TEXT    NOT NULL,
+      filed_at   INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS traces_session ON traces (session_id, started_at);
+  `);
+}
 
 const CHAT_ROLES = new Set(['user', 'assistant']);
 // The chat every caller that names no session lands in. A curl, an eval, or a
@@ -1573,6 +1622,251 @@ function purgeCard(id) {
 }
 
 // --------------------------------------------------------------------------
+// The developer trace
+// --------------------------------------------------------------------------
+//
+// What the brain files, and the page that reads it back. Everything here is
+// inert unless LODESTAR_DEV_KEY is set: the table is not created, the routes
+// answer 404, and nothing about the board changes.
+//
+// The trace is read-only in the strongest sense — no route below writes a card,
+// a message, a session or a proposal — and every response carries no-store,
+// because the whole point of looking at a trace is to see the state a turn is
+// in *now*, and a cached copy of that is a wrong answer wearing a right one's
+// clothes.
+
+const TRACE_STATUSES = new Set(['in_flight', 'completed', 'failed', 'interrupted']);
+const TRACE_ROLES = new Set(['system', 'human', 'ai', 'tool']);
+
+/** One filed trace, validated. Returns null for anything that is not one —
+ *  the brain is the only caller, but a store is not the place to find that
+ *  out. */
+function cleanTrace(body) {
+  if (!body || typeof body !== 'object') return null;
+  const id = String(body.trace_id || '').trim();
+  const session = String(body.session_id || '').trim();
+  if (!id || !session) return null;
+  if (!TRACE_STATUSES.has(body.status)) return null;
+  if (!Array.isArray(body.entries)) return null;
+  const entries = body.entries
+    .filter((e) => e && TRACE_ROLES.has(e.role))
+    .map((e, i) => ({
+      seq: Number.isInteger(e.seq) ? e.seq : i,
+      role: e.role,
+      content: typeof e.content === 'string' ? e.content : '',
+      metadata: e.metadata && typeof e.metadata === 'object' ? e.metadata : {},
+    }));
+  return {
+    trace_id: id,
+    session_id: session,
+    board_id: String(body.board_id || ''),
+    status: body.status,
+    model: String(body.model || ''),
+    provider: String(body.provider || ''),
+    started_at: Number(body.started_at) || Date.now(),
+    ended_at: Number.isFinite(Number(body.ended_at)) && body.ended_at !== null
+      ? Number(body.ended_at) : null,
+    error: String(body.error || ''),
+    usage: body.usage ? JSON.stringify(body.usage) : null,
+    entries: JSON.stringify(entries),
+  };
+}
+
+/** File one turn's trace. An upsert on `trace_id`, because the brain files the
+ *  same turn twice — once in flight, once settled — and one turn is one
+ *  record. Everything but the id is replaced: the settled write is the fuller
+ *  one by construction. */
+function writeTrace(trace) {
+  chatDb.prepare(`
+    INSERT INTO traces (trace_id, session_id, board_id, status, model, provider,
+                        started_at, ended_at, error, usage, entries, filed_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(trace_id) DO UPDATE SET
+      session_id = excluded.session_id, board_id = excluded.board_id,
+      status = excluded.status, model = excluded.model,
+      provider = excluded.provider, started_at = excluded.started_at,
+      ended_at = excluded.ended_at, error = excluded.error,
+      usage = excluded.usage, entries = excluded.entries,
+      filed_at = excluded.filed_at
+  `).run(trace.trace_id, trace.session_id, trace.board_id, trace.status,
+    trace.model, trace.provider, trace.started_at, trace.ended_at,
+    trace.error, trace.usage, trace.entries, Date.now());
+}
+
+/** The sessions that have traces, newest activity first. Joined to `sessions`
+ *  only for a title — a trace outlives the chat it came from (a deleted chat
+ *  is exactly the one somebody debugs), so the join must not decide whether the
+ *  row is listed. */
+function readTraceSessions() {
+  return chatDb.prepare(`
+    SELECT t.session_id AS id,
+           COUNT(*)     AS prompts,
+           MAX(t.started_at) AS latest,
+           (SELECT title FROM sessions s WHERE s.id = t.session_id) AS title
+    FROM traces t GROUP BY t.session_id ORDER BY latest DESC LIMIT 200
+  `).all();
+}
+
+/** Every trace of one session, oldest first — the order the prompts happened
+ *  in, which is the order a tape is read in. */
+function readTraces(sessionId) {
+  return chatDb.prepare(
+    'SELECT * FROM traces WHERE session_id = ? ORDER BY started_at ASC LIMIT 200')
+    .all(sessionId)
+    .map((row) => ({
+      ...row,
+      entries: JSON.parse(row.entries || '[]'),
+      usage: row.usage ? JSON.parse(row.usage) : null,
+    }));
+}
+
+
+// --- The page ---------------------------------------------------------------
+//
+// Server-rendered HTML, deliberately: this is a developer surface that must
+// work when the app it debugs does not, so it depends on no module of the
+// frontend, no fetch, and no script at all. Everything a browser puts on screen
+// here came out of the database on this request.
+
+const esc = (value) => String(value ?? '')
+  .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+  .replaceAll('"', '&quot;').replaceAll("'", '&#39;');
+
+// Every response no-store, and no page here is ever cached by anything.
+const sendHtml = (res, status, html) => {
+  res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8',
+                          'Cache-Control': 'no-store',
+                          'X-Robots-Tag': 'noindex, nofollow' });
+  res.end(html);
+};
+
+const TRACE_CSS = `
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+         margin: 0; padding: 24px; background: #f7f6f2; color: #23201c; }
+  a { color: #7a2f2f; }
+  h1 { font-size: 16px; letter-spacing: .08em; text-transform: uppercase; }
+  .bar { display: flex; gap: 12px; align-items: baseline; margin-bottom: 18px; }
+  .bar form { margin: 0; }
+  table { border-collapse: collapse; width: 100%; max-width: 900px; }
+  td, th { text-align: left; padding: 6px 10px; border-bottom: 1px solid #ddd8cc; }
+  .prompt { max-width: 900px; margin: 0 0 26px; padding: 10px 0 0;
+            border-top: 2px solid #23201c; }
+  .prompt h2 { font-size: 13px; margin: 0 0 8px; font-weight: 600; }
+  .status { padding: 1px 6px; border: 1px solid currentColor; border-radius: 3px;
+            font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+  .completed { color: #2f6b3a; } .failed { color: #8c2f2f; }
+  .in_flight { color: #8a6d1f; } .interrupted { color: #8a6d1f; }
+  .entry { margin: 0 0 8px; padding: 8px 10px; border: 1px solid #ddd8cc;
+           background: #fffdf8; }
+  .entry[data-role="system"] { background: #efece2; color: #5b564c; }
+  .entry[data-role="ai"] { margin-inline-start: 28px; }
+  .entry[data-role="tool"] { margin-inline-start: 28px; background: #f2f4ef; }
+  .who { font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
+         color: #6b665c; }
+  pre { margin: 4px 0 0; white-space: pre-wrap; word-break: break-word; }
+  details > summary { cursor: pointer; font-size: 12px; color: #6b665c; }
+  .meta { font-size: 12px; color: #6b665c; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #16150f; color: #e8e4d8; }
+    a { color: #d99; }
+    .entry { background: #1e1d16; border-color: #35332a; }
+    .entry[data-role="system"] { background: #24231a; color: #b8b2a2; }
+    .entry[data-role="tool"] { background: #1a1f1a; }
+    td, th { border-color: #35332a; }
+    .prompt { border-color: #e8e4d8; }
+  }
+`;
+
+const tracePage = (title, body) => `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(title)}</title><style>${TRACE_CSS}</style></head>
+<body>${body}</body></html>`;
+
+/** The door. One field, masked, and it says nothing about what is behind it. */
+function unlockPage(next, failed = false) {
+  return tracePage('Developer trace', `
+    <h1>Developer trace</h1>
+    <form method="POST" action="/dev/trace/unlock">
+      <input type="hidden" name="next" value="${esc(next)}">
+      <label>Key <input type="password" name="key" autocomplete="off" autofocus></label>
+      <button type="submit">Unlock</button>
+    </form>
+    ${failed ? '<p class="meta">Unlock failed.</p>' : ''}`);
+}
+
+const when = (ms) => (ms ? new Date(ms).toISOString().replace('T', ' ').slice(0, 19) : '—');
+const took = (row) => (row.ended_at && row.started_at
+  ? `${((row.ended_at - row.started_at) / 1000).toFixed(1)}s` : '—');
+
+function traceIndexPage(rows) {
+  const body = rows.length ? `<table>
+    <tr><th>Session</th><th>Prompts</th><th>Latest</th></tr>
+    ${rows.map((r) => `<tr>
+      <td><a href="/dev/trace?session=${encodeURIComponent(r.id)}">${esc(r.title || r.id)}</a>
+          <div class="meta">${esc(r.id)}</div></td>
+      <td>${r.prompts}</td><td>${esc(when(r.latest))}</td></tr>`).join('')}
+  </table>` : '<p class="meta">No traces recorded yet. Is BRAIN_TRACE=board set on the brain?</p>';
+  return tracePage('Developer trace', `
+    <div class="bar"><h1>Developer trace</h1>
+      <form method="POST" action="/dev/trace/lock"><button type="submit">Lock</button></form>
+    </div>${body}`);
+}
+
+/** One entry of the tape. A tool call and a tool result are folded — they are
+ *  the longest things here and the least often what you came to read. */
+function traceEntry(entry) {
+  const calls = entry.metadata && entry.metadata.tool_calls;
+  const parts = [`<div class="who">${esc(entry.role)} · ${entry.seq}</div>`];
+  if (entry.content) {
+    // The system prompt is a page of text and it is identical in every prompt
+    // group, so it is folded — folded, not trimmed: the whole thing is in the
+    // document, one click away, and the character count says how much is
+    // behind the fold. A tape you have to scroll past two screens of prompt to
+    // read is a tape nobody reads.
+    parts.push(entry.role === 'system'
+      ? `<details><summary>system prompt · ${entry.content.length} chars</summary>
+           <pre>${esc(entry.content)}</pre></details>`
+      : `<pre>${esc(entry.content)}</pre>`);
+  }
+  if (Array.isArray(calls) && calls.length) {
+    parts.push(calls.map((c) => `<details><summary>calls ${esc(c.name)}</summary>
+      <pre>${esc(JSON.stringify(c.args, null, 2))}</pre></details>`).join(''));
+  }
+  if (entry.metadata && entry.metadata.tool_call_id) {
+    parts.push(`<div class="meta">answering ${esc(entry.metadata.name || '')}
+      (${esc(entry.metadata.tool_call_id)})</div>`);
+  }
+  return `<div class="entry" data-role="${esc(entry.role)}">${parts.join('')}</div>`;
+}
+
+function traceDetailPage(sessionId, rows) {
+  const groups = rows.map((row, i) => `
+    <section class="prompt" data-trace="${esc(row.trace_id)}">
+      <h2>Prompt ${i + 1}
+        <span class="status ${esc(row.status)}">${esc(row.status)}</span></h2>
+      <div class="meta">${esc(when(row.started_at))} · ${esc(took(row))}
+        · ${esc(row.provider || '?')}/${esc(row.model || '?')}
+        ${row.usage ? `· ${esc(row.usage.total_tokens ?? '?')} tokens` : ''}</div>
+      ${row.error ? `<p class="meta">error: ${esc(row.error)}</p>` : ''}
+      ${row.entries.map(traceEntry).join('')}
+    </section>`).join('');
+  return tracePage(`Trace · ${sessionId}`, `
+    <div class="bar"><h1><a href="/dev/trace">Developer trace</a> · ${esc(sessionId)}</h1>
+      <form method="POST" action="/dev/trace/lock"><button type="submit">Lock</button></form>
+    </div>
+    <p class="meta">Read-only. This page shows the message envelope the brain
+      handed the model, in the order it was handed over.</p>
+    ${groups || '<p class="meta">No traces for that session.</p>'}`);
+}
+
+/** Is this request carrying a live unlock token? Constant-time, and false the
+ *  moment the process restarts — the token only ever existed in memory. */
+const devUnlocked = (req) => Boolean(devToken)
+  && secretEquals(parseCookies(req.headers.cookie).lodestar_dev || '', devToken);
+
+// --------------------------------------------------------------------------
 // HTTP
 // --------------------------------------------------------------------------
 
@@ -1784,6 +2078,91 @@ async function handleRequest(req, res) {
     if (provenanceOf(req.headers, boundary()) === 'blocked') {
       return sendJson(res, 403, { error: 'Forbidden' });
     }
+  }
+
+  // The developer trace. Behind the session like everything else — the dev key
+  // is a second lock, never the only one — and absent entirely when no key is
+  // configured: 404, not 401, because a board running the ordinary way should
+  // not advertise that a developer page exists at all.
+  //
+  // Whether tracing is available is the one thing said before the door: the
+  // Assistant needs it to decide whether to draw a control, and "a link exists"
+  // is not a secret worth keeping from someone who has already logged in.
+  if (path === '/api/trace/status') {
+    if (req.method !== 'GET') return sendJson(res, 405, { error: 'Method not allowed' });
+    return sendJson(res, 200, { enabled: Boolean(DEV_KEY) });
+  }
+
+  if (path === '/api/trace' || path === '/dev/trace'
+      || path.startsWith('/dev/trace/')) {
+    if (!DEV_KEY) return sendJson(res, 404, { error: 'Not found' });
+
+    // The brain filing a turn. Not behind the unlock token: the token is a
+    // *reader's* credential, and the writer is the brain, which arrives with
+    // the service token like every other write it makes.
+    if (path === '/api/trace') {
+      if (req.method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed' });
+      try {
+        const trace = cleanTrace(JSON.parse(await readBody(req)));
+        if (!trace) return sendJson(res, 400, { error: 'Not a trace' });
+        writeTrace(trace);
+        return sendJson(res, 200, { ok: true }, { 'Cache-Control': 'no-store' });
+      } catch (err) {
+        if (!(err instanceof SyntaxError) && !err.badRequest) throw err;
+        return sendJson(res, 400, { error: 'Invalid JSON: ' + err.message });
+      }
+    }
+
+    if (path === '/dev/trace/unlock') {
+      if (req.method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed' });
+      const form = new URLSearchParams(await readBody(req));
+      // Constant-time, and never told apart from any other failure. The
+      // submitted value is not echoed anywhere — not into the page, not into a
+      // log line, and not into the redirect.
+      if (!secretEquals(form.get('key') || '', DEV_KEY)) {
+        return sendHtml(res, 401, unlockPage('/dev/trace', true));
+      }
+      // A fresh token per unlock, so an old one stops working. Random, and
+      // kept only in this process's memory: nothing durable to steal, and a
+      // restart locks the door again.
+      devToken = randomBytes(32).toString('base64url');
+      const next = String(form.get('next') || '/dev/trace');
+      res.writeHead(303, {
+        // Path-scoped, so this cookie is never sent to the board's own API,
+        // and HttpOnly so no script on any page can read it.
+        'Set-Cookie': `lodestar_dev=${devToken}; Path=/dev/trace; HttpOnly; `
+          + 'SameSite=Strict',
+        'Cache-Control': 'no-store',
+        // The path the user asked for, and nothing they typed.
+        Location: next.startsWith('/dev/trace') ? next : '/dev/trace',
+      });
+      return res.end();
+    }
+
+    if (path === '/dev/trace/lock') {
+      if (req.method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed' });
+      devToken = '';
+      res.writeHead(303, {
+        'Set-Cookie': 'lodestar_dev=; Path=/dev/trace; HttpOnly; SameSite=Strict; Max-Age=0',
+        'Cache-Control': 'no-store', Location: '/dev/trace',
+      });
+      return res.end();
+    }
+
+    if (path === '/dev/trace') {
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        return sendJson(res, 405, { error: 'Method not allowed' });
+      }
+      const session = url.searchParams.get('session') || '';
+      if (!devUnlocked(req)) {
+        return sendHtml(res, 200, unlockPage(session
+          ? `/dev/trace?session=${encodeURIComponent(session)}` : '/dev/trace'));
+      }
+      if (!session) return sendHtml(res, 200, traceIndexPage(readTraceSessions()));
+      return sendHtml(res, 200, traceDetailPage(session, readTraces(session)));
+    }
+
+    return sendJson(res, 404, { error: 'Not found' });
   }
 
   // Which board this request is about, for every route that reads or writes

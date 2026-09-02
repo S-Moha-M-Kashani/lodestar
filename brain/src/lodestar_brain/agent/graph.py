@@ -31,8 +31,9 @@ from ..middleware.summarize import make_context_editor, make_summarizer
 from ..middleware.untrusted import UntrustedToolOutput
 from .prompt import SYSTEM_PROMPT
 from .result import (STEP_LIMIT_REPLY, AgentResult, _calls_in, _result_from,
-                     _steps_from, _text)
+                     _steps_from, _text, _usage_from)
 from .state import LodestarState, TurnContext
+from .trace import TraceCollector, TurnTrace, final_answer
 
 
 def _spoken(messages: Iterable[BaseMessage]) -> list[tuple[str, str]]:
@@ -260,7 +261,8 @@ class LodestarAgent:
         return middleware
 
     def _run_config(self, session_id: str | None = None,
-                    board_id: str | None = None) -> dict:
+                    board_id: str | None = None,
+                    trace: TurnTrace | None = None) -> dict:
         # A step is a model turn plus a tool turn, and the run ends on a model
         # turn — which was 2n+1 nodes for n tool calls until middleware started
         # adding nodes of its own. `_per_step` and `_per_run` are that shape,
@@ -293,6 +295,14 @@ class LodestarAgent:
                                          'turn_id': uuid4().hex}}
         if board_id:
             config['configurable']['board_id'] = board_id
+        # The developer trace, when one is asked for. A run callback rather than
+        # middleware or a wrapped model: `on_chat_model_start` is fired with the
+        # exact list the model is about to be sent, which is the only place that
+        # list exists — see agent/trace.py for why every other capture point
+        # would be a reconstruction. Absent when nobody is tracing, so a turn
+        # that is not being watched carries no handler at all.
+        if trace is not None:
+            config['callbacks'] = [TraceCollector(trace)]
         return config
 
     def _run_kwargs(self, session_id: str | None) -> dict:
@@ -354,12 +364,32 @@ class LodestarAgent:
         """
         return [m for m in messages if m.id not in before] if before else messages
 
+    @staticmethod
+    def _traced(trace: TurnTrace | None, seen: list[BaseMessage],
+                interrupted: bool = False) -> None:
+        """Close the trace on the way out of a run.
+
+        The envelope was captured by the callback while the turn ran; what is
+        left is the message the turn ended on and how it ended. Both are read
+        off `seen` rather than off the result, because the result is already a
+        projection — and a trace built from a projection is the reconstruction
+        this whole surface exists to avoid.
+        """
+        if trace is None:
+            return
+        answer = final_answer(seen)
+        if interrupted:
+            trace.interrupt(answer)
+            return
+        trace.settle(answer, _usage_from(seen))
+
     def run(self, messages: list[dict], model: str | None = None,
             provider: str | None = None,
             session_id: str | None = None,
-            board_id: str | None = None) -> AgentResult:
+            board_id: str | None = None,
+            trace: TurnTrace | None = None) -> AgentResult:
         graph = self._graph(model, provider)
-        config = self._run_config(session_id, board_id)
+        config = self._run_config(session_id, board_id, trace)
         payload, before = self._prepare(graph, config, messages, session_id)
         seen: list[BaseMessage] = []
         try:
@@ -370,15 +400,19 @@ class LodestarAgent:
                                       **self._run_kwargs(session_id)):
                 seen = self._fresh(chunk['messages'], before)
         except GraphRecursionError:
+            self._traced(trace, seen, interrupted=True)
             return _result_from(seen, STEP_LIMIT_REPLY)
-        return _result_from(seen)
+        result = _result_from(seen)
+        self._traced(trace, seen)
+        return result
 
     async def arun(self, messages: list[dict], model: str | None = None,
                    provider: str | None = None,
                    session_id: str | None = None,
-                   board_id: str | None = None) -> AgentResult:
+                   board_id: str | None = None,
+                   trace: TurnTrace | None = None) -> AgentResult:
         graph = self._graph(model, provider)
-        config = self._run_config(session_id, board_id)
+        config = self._run_config(session_id, board_id, trace)
         payload, before = await self._aprepare(graph, config, messages,
                                                session_id)
         seen: list[BaseMessage] = []
@@ -388,13 +422,17 @@ class LodestarAgent:
                                              **self._run_kwargs(session_id)):
                 seen = self._fresh(chunk['messages'], before)
         except GraphRecursionError:
+            self._traced(trace, seen, interrupted=True)
             return _result_from(seen, STEP_LIMIT_REPLY)
-        return _result_from(seen)
+        result = _result_from(seen)
+        self._traced(trace, seen)
+        return result
 
     async def astream(self, messages: list[dict], model: str | None = None,
                       provider: str | None = None,
                       session_id: str | None = None,
-                      board_id: str | None = None
+                      board_id: str | None = None,
+                      trace: TurnTrace | None = None
                       ) -> AsyncIterator[tuple[str, Any]]:
         """The same turn as `arun`, reported while it happens.
 
@@ -416,7 +454,7 @@ class LodestarAgent:
         STEP_LIMIT_REPLY.
         """
         graph = self._graph(model, provider)
-        config = self._run_config(session_id, board_id)
+        config = self._run_config(session_id, board_id, trace)
         payload, before = await self._aprepare(graph, config, messages,
                                                session_id)
         seen: list[BaseMessage] = []
@@ -447,9 +485,12 @@ class LodestarAgent:
                 if isinstance(message, AIMessage) and (text := _text(message)):
                     yield 'token', text
         except GraphRecursionError:
+            self._traced(trace, seen, interrupted=True)
             yield 'done', _result_from(seen, STEP_LIMIT_REPLY)
             return
-        yield 'done', _result_from(seen)
+        result = _result_from(seen)
+        self._traced(trace, seen)
+        yield 'done', result
 
 
 __all__ = ['LodestarAgent']

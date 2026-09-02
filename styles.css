@@ -3829,7 +3829,53 @@ button.chat-source-card {
   .chat-usage { grid-column: 1; text-align: left; }
 }
 
-.chat-composer { display: flex; gap: 8px; align-items: flex-end; }
+/* The composer is two rows now: the text you are writing, and one line of
+   everything that decides where it goes — which board answers it, which model
+   answers it, and the two ways to send it. Column rather than the old
+   text-beside-buttons row, because the footer has to span the full width or
+   the model name is the first thing to be squeezed out. */
+.chat-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: stretch;
+}
+.composer-footer {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+/* A label, and styled as one: the ledger's own chip idiom, no border, no
+   hover, nothing that reads as pressable. */
+.composer-context {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 40%;
+}
+.composer-model {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--ink-soft);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 3px 4px;
+  min-width: 0;
+  max-width: 42%;
+}
+/* Pushed to the right end of the footer, so send is where the thumb and the
+   eye both expect it and the labels stay left. */
+.composer-footer .composer-actions { margin-left: auto; }
+.chat-send {
+  font-size: 0.95rem;
+  line-height: 1;
+  padding: 8px 12px;
+}
 .chat-composer textarea {
   flex: 1;
   resize: vertical;
@@ -3901,6 +3947,59 @@ button.chat-source-card {
   min-height: 1em;
 }
 
+/* --- A failed turn ---------------------------------------------------------
+
+   Not a reply the assistant gave, so not drawn as one: a ruled box in the
+   danger hue with the error's first line, and the two things wanted next —
+   the whole text, and another go. `.chat-msg.assistant.error` is still on it,
+   because it is still that turn's place in the transcript. */
+.chat-msg.chat-error {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 8px;
+  align-items: start;
+  padding: 10px 12px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--danger) 6%, var(--paper));
+}
+.chat-error-icon { color: var(--danger); line-height: 1.4; }
+.chat-error-line {
+  margin: 0;
+  /* One line, whatever the error does. The whole thing is behind Details. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.chat-error-actions {
+  grid-column: 2;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.chat-error-actions .btn { font-size: 0.72rem; padding: 3px 8px; }
+.chat-error-detail {
+  grid-column: 2;
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--ink-soft);
+}
+/* Load-bearing: this file sets `display: grid` on the box and the UA's own
+   [hidden] rule loses to it — the same trap as .assistant-tools and
+   .board-switch, one level in. */
+.chat-error-detail[hidden] { display: none; }
+
+/* What the turn cost in time and tools. It leads the evidence strip's summary
+   line, and stands alone as a plain line on a turn with nothing behind it. */
+.chat-worked { font-variant-numeric: tabular-nums; }
+.chat-worked-line { margin: 0; }
+
 /* --- The plan on a card --------------------------------------------------- */
 
 /* The plan fieldset in the dialog: three dropdowns that assemble one date,
@@ -3944,4 +4043,191 @@ button.chat-source-card {
 .card-plan[data-conflict="true"] {
   color: var(--high);
   text-decoration: underline wavy;
+}
+
+
+/* ---------------------------------------------------------------------------
+   The Assistant widget
+
+   A corner-docked card holding the same conversation the full view holds. The
+   HOST is static markup and the last child of <body>; render() replaces the
+   card inside it and never the host, which is why the remembered size lives
+   here as two custom properties rather than on anything that gets rebuilt.
+
+   Three rules this block exists to keep:
+
+   1. `[hidden]` loses to `display: flex` — the third instance of that trap
+      after .assistant-tools and .board-switch, and the reason the very first
+      rule below is the one that undoes it.
+   2. Nothing here may take `overflow: hidden`. The widget is a fixed-position
+      box and therefore a ceiling for everything inside it; its own panels drop
+      INSIDE it and would be clipped by a scroller on the card. Only .chat-log
+      scrolls.
+   3. z-index 70 rather than something larger. On the star theme the header
+      takes 2 and #board takes 1, and panels inside the header claim 60 among
+      their siblings; the widget is a child of <body>, so it is competing with
+      the header itself and 70 is the smallest claim that clears it. Written
+      next to that scale rather than bidding high in the dark.
+   --------------------------------------------------------------------------- */
+#assistant-widget[hidden] { display: none; }
+#assistant-widget {
+  position: fixed;
+  inset-inline-end: 16px;
+  inset-block-end: 16px;
+  z-index: 70;
+  display: flex;
+  width: var(--assistant-widget-w, 380px);
+  height: var(--assistant-widget-h, 520px);
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 32px);
+}
+.widget-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 10px 12px 12px;
+  background: var(--card);
+  border: 1px solid var(--card-line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lift);
+}
+/* The grip, on the corner diagonally opposite the docked one. 14px because a
+   pointer target smaller than that is a thing you hunt for; the cursor is the
+   affordance, since a visible handle on a card this small is furniture. */
+.widget-resize {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+  touch-action: none;   /* or the browser scrolls the page instead of resizing */
+}
+/* Two lines, deliberately: the title, then the controls. The tools row alone
+   is four controls wide and the card is 380px, so on one line the chat's name
+   was clamped to a single letter — a title that names no chat is worse than a
+   title on a line of its own. */
+.widget-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  min-width: 0;
+  padding-inline-start: 10px;   /* clear of the grip */
+}
+/* Two lines, clamped. One line renders "what should i pack for berlin" as
+   "what shoul…", which names no chat at all. */
+.widget-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  line-height: 1.25;
+  color: var(--ink-soft);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.widget-tools-slot { display: contents; }
+/* The tools take the second line whole. */
+#assistant-widget .assistant-tools { flex: 1 0 100%; min-width: 0; }
+#assistant-widget .chat-recall-name { font-size: 0.68rem; }
+.widget-btn {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  font-size: 0.8rem;
+  line-height: 1.2;
+}
+/* One line naming what waits, and the way to the room where it can be decided:
+   accepting a proposal opens the card dialog, which needs more space than a
+   corner card has. Absent entirely when nothing waits. */
+.widget-approvals {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--ink-soft);
+  border: 1px solid var(--ink-amber);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--ink-amber) 8%, var(--paper));
+}
+.widget-approvals-text { flex: 1 1 auto; min-width: 0; }
+.widget-approvals-open { flex: 0 0 auto; font-size: 0.7rem; padding: 2px 8px; }
+/* The widget's own panels, inside it. Absolutely positioned against the card
+   and sized to it, because a panel dropping out of a fixed box cannot escape
+   it — the same answer the chat rows already got when their actions unfolded
+   inside the row rather than over the list. */
+/* The tools row anchors its own panels — but inside the widget the row is a
+   ~100px box in the head, so anchoring to it would drop a 440px panel out of
+   the side of the card. Static here, and the card (which is `relative`)
+   becomes what the three panels are positioned against instead. */
+#assistant-widget .assistant-tools,
+#assistant-widget .assistant-tools .chat-recall { position: static; }
+#assistant-widget .chat-history,
+#assistant-widget .assistant-extras,
+#assistant-widget .assistant-tools .chat-recall-drop {
+  position: absolute;
+  inset-block-start: 34px;
+  inset-inline: 6px;
+  width: auto;
+  max-width: none;
+  max-height: calc(var(--assistant-widget-h, 520px) - 52px);
+}
+/* The launcher: the way in from every view. Same square as the gear beside it,
+   so the header's right-hand end reads as one row of controls. */
+.assistant-launcher {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 31px;
+  height: 31px;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--ink-soft);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.assistant-launcher:hover { color: var(--ink); border-color: var(--ink-soft); }
+.assistant-launcher[aria-pressed="true"] {
+  color: var(--ink);
+  border-color: var(--ink-soft);
+}
+/* The waiting count, on the launcher as on the Assistant tab. Positioned out
+   of the button's own square rather than inside it: at 31px there is no room
+   to put a number beside the mark. */
+.assistant-launcher .view-badge {
+  position: absolute;
+  inset-block-start: -6px;
+  inset-inline-end: -6px;
+}
+/* The collapse control on the full view, beside the tools in the sheet's head. */
+.assistant-collapse { flex: 0 0 auto; margin-inline-start: 4px; }
+
+/* Below this width the card becomes a sheet: it fills the window apart from a
+   margin, and the grip goes away. The number is NARROW_PX in
+   js/assistant/widget.js, which stops rendering the handle at the same point —
+   a 340px floating card with a composer in it is a worse phone UI than a sheet,
+   and a grip you cannot usefully drag is a control that lies. */
+/* 639 = NARROW_PX - 1. The two numbers are one decision in two languages; the
+   note on the constant in widget.js is where the reasoning lives. */
+@media (max-width: 639px) {
+  #assistant-widget {
+    inset: 8px;
+    width: auto;
+    height: auto;
+    max-width: none;
+    max-height: none;
+  }
+  .widget-resize { display: none; }
+  .widget-head { padding-inline-start: 0; }
 }

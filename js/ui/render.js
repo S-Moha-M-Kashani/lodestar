@@ -1,6 +1,8 @@
 import { assistantState, ensureChatSession, refreshChatSessions } from '../assistant/session.js';
 import { renderAssistant } from '../assistant/sheet.js';
 import { renderAssistantTools, rescueAssistantTools } from '../assistant/tools.js';
+import { widgetShowing } from '../assistant/shell.js';
+import { renderAssistantWidget } from '../assistant/widget.js';
 import { COLUMNS, VIEWS, VIEW_LABELS } from '../core/constants.js';
 import { timeline } from '../core/history.js';
 import { VIEW_KEY } from '../core/keys.js';
@@ -65,6 +67,12 @@ export function render() {
   renderCatRail();
   renderTagBar();
   renderHabitBanner();
+  // The widget, then the tools. Order matters and is the whole hand-off: the
+  // wired-once tools node was parked in the header by the rescue above, the
+  // Assistant sheet claims it while it builds, and this is where the widget
+  // claims it instead — so exactly one shell has it, and renderAssistantTools()
+  // then paints the panels wherever it ended up.
+  renderAssistantWidget();
   renderAssistantTools();
 
   if (dealCards) {
@@ -86,6 +94,13 @@ const viewButtons = [...document.querySelectorAll('.view-switch button')];
 
 export function syncViewButtons() {
   for (const btn of viewButtons) btn.setAttribute('aria-pressed', String(btn.dataset.view === view));
+  const launcher = $('#assistant-launcher');
+  if (launcher) {
+    // Pressed while the conversation is on screen in either shell — the
+    // launcher is one control over two states, not two controls.
+    launcher.setAttribute('aria-pressed',
+      String(widgetShowing() || view === 'assistant'));
+  }
   syncProposalBadge();
 }
 
@@ -94,26 +109,45 @@ export function syncViewButtons() {
 // Proposals and suggested edits share the count: from the Board they are the
 // same fact — the Assistant is waiting on you.
 export function syncProposalBadge() {
-  const btn = viewButtons.find((b) => b.dataset.view === 'assistant');
-  if (!btn) return;
   const n = assistantState.proposals.length + assistantState.edits.length;
-  let badge = btn.querySelector('.view-badge');
-  if (!n) {
-    if (badge) badge.remove();
-    btn.removeAttribute('aria-description');
-    return;
+  // Both ways into the Assistant carry the same count. The launcher is on
+  // every view now, so it — not the tab — is where a proposal left waiting is
+  // most likely to be noticed.
+  for (const btn of [viewButtons.find((b) => b.dataset.view === 'assistant'),
+                     $('#assistant-launcher')]) {
+    if (!btn) continue;
+    let badge = btn.querySelector('.view-badge');
+    if (!n) {
+      if (badge) badge.remove();
+      btn.removeAttribute('aria-description');
+      continue;
+    }
+    if (!badge) {
+      badge = document.createElement('span');
+      badge.className = 'view-badge';
+      btn.appendChild(badge);
+    }
+    badge.textContent = String(n);
+    btn.setAttribute('aria-description',
+      `${n} item${n === 1 ? '' : 's'} awaiting your approval`);
   }
-  if (!badge) {
-    badge = document.createElement('span');
-    badge.className = 'view-badge';
-    btn.appendChild(badge);
-  }
-  badge.textContent = String(n);
-  btn.setAttribute('aria-description', `${n} item${n === 1 ? '' : 's'} awaiting your approval`);
 }
 
-function setView(next) {
+// Where collapsing the Assistant lands. The view the user came from, and the
+// Board when there is none — the Assistant is a place you go from somewhere,
+// so going back to "somewhere" is the only answer that is never surprising.
+// Deliberately NOT seeded from `view` here: this module sits on a cycle back
+// to core/state.js, and reading that binding at evaluation time is the exact
+// "Cannot access before initialization" that killed the whole page once
+// already. Empty until the first switch, and the Board answers for it.
+let previousView = '';
+export const lastBoardView = () => previousView || 'board';
+
+/** Switch views. Exported because the widget's expand and the sheet's collapse
+ *  are view switches made from outside the view switcher. */
+export function setView(next) {
   if (next === view || !VIEWS.includes(next)) return;
+  if (view !== 'assistant') previousView = view;
   setCurrentView(next);
   try { localStorage.setItem(VIEW_KEY, view); } catch (_) { /* private mode */ }
   syncViewButtons();

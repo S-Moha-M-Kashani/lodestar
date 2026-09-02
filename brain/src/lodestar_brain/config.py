@@ -155,6 +155,16 @@ class Settings:
     # call out anyway.
     tracing: str = 'off'
     langsmith_api_key: str = ''
+    # 'board' | 'off' — whether a turn's exact model envelope is filed with the
+    # board for the developer trace page (`agent/trace.py`). Off everywhere by
+    # default, including from the environment, and for a different reason from
+    # `tracing` above: nothing leaves this machine either way, but a trace is the
+    # system prompt and every tool result in one record, and two extra round
+    # trips per turn. It is a thing you switch on to debug, not a thing you leave
+    # on. The page that reads them is gated separately, by LODESTAR_DEV_KEY on
+    # the board — capture and viewing are two switches because they are two
+    # risks, each in the service that owns it.
+    trace: str = 'off'
     # The agent's own working memory: LangGraph's checkpointer (one thread per
     # chat, so reopening a conversation resumes it) and its long-term store,
     # sharing one sqlite file. Never board.db and never assistant.db — those are
@@ -201,8 +211,18 @@ def _chroma_database_for(board_api_url: str) -> str:
     return NON_PRODUCTION_DATABASE
 
 
+# What BRAIN_TRACE may say. No `auto`, by repository rule: a value nobody
+# recognises is a mistake, and guessing at one is how a debugging surface ends
+# up silently off in the one session somebody needed it.
+TRACE_BACKENDS = ('off', 'board')
+
+
 def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     env = os.environ if env is None else env
+    trace = env.get('BRAIN_TRACE', 'off')
+    if trace not in TRACE_BACKENDS:
+        raise ValueError(f'unknown BRAIN_TRACE {trace!r}; expected one of '
+                         f'{", ".join(TRACE_BACKENDS)}')
     board_api_url = env.get('BOARD_API_URL', 'http://127.0.0.1:3000')
     provider = env.get('BRAIN_LLM', 'ollama')
     return Settings(
@@ -241,6 +261,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         # Opt-in by name, never a default: tracing ships a private journal's
         # metadata to a third party.
         tracing=env.get('BRAIN_TRACING', 'off'),
+        trace=trace,
         langsmith_api_key=env.get('LANGSMITH_API_KEY', ''),
         # Beside the other real databases, and covered by no backup: it is
         # derived working memory, not a record.

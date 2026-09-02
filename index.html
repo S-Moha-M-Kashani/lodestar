@@ -293,6 +293,12 @@
              unfound. View-specific furniture, like the search and filters to
              the left of them: shown only while the Assistant is open. The
              panel is a sibling of the button so it can drop from under it. -->
+        <!-- The way into the Assistant from every view. A launcher, not a
+             seventh tab: the widget floats over whatever you are looking at
+             rather than replacing it, and the tab beside it still opens the
+             full view. Carries the same waiting count that tab does, because
+             from the Board they are one fact — the Assistant needs you. -->
+        <button id="assistant-launcher" class="assistant-launcher" aria-pressed="false" aria-label="Assistant" title="Ask the assistant about this board">✦</button>
         <div class="assistant-tools" hidden>
           <div id="chat-recall-slot"></div>
           <button id="chat-history-btn" class="btn ghost chat-history-btn" aria-haspopup="true" aria-expanded="false" aria-controls="chat-history">History</button>
@@ -595,6 +601,15 @@
   </footer>
 
   <div id="live-region" class="visually-hidden" aria-live="polite"></div>
+
+  <!-- The Assistant widget's host. Static markup, and the last child of the
+       body for two reasons: #board is wiped on every render, so nothing that
+       must outlive a view can live inside it; and at equal z-index the later
+       element wins, so being last is what lets the widget float over the board
+       and the star sky with the smallest claim that works. render() paints the
+       card inside this; the host itself is never destroyed, which is what lets
+       the remembered size live on it as two custom properties. -->
+  <div id="assistant-widget" hidden></div>
   <!-- The whole frontend, as native ES modules — no bundler and no build step.
        type="module" is deferred, so the DOM above is parsed before any of it
        runs and a module may look up its own elements at the top level. -->
