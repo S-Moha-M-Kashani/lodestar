@@ -589,12 +589,13 @@ def test_the_card_index_re_embeds_only_when_the_board_changed():
     assert embeddings.documents == 2
     index.build(list(cards))          # the same board, a different list object
     assert embeddings.documents == 2  # a per-tool-call rebuild costs nothing
-    # An edit is a different board even at the same length: the fingerprint
-    # covers what gets indexed, not how many rows there are.
+    # An edit is priced per card, not per board: the fingerprint that decides is
+    # the edited card's own, so the card beside it is reused rather than
+    # re-encoded. `test_incremental_index.py` is where that has its own suite.
     index.build([dict(cards[0], title='Renew the visa urgently'), cards[1]])
-    assert embeddings.documents == 4
+    assert embeddings.documents == 3
     index.build([cards[1]])
-    assert embeddings.documents == 5
+    assert embeddings.documents == 3  # dropping a card embeds nothing
     assert [doc.id for doc in index.search('dentist')] == ['c2']
 
 
