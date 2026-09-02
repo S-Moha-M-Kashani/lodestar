@@ -37,17 +37,18 @@ tabs.](docs/img/hero.png)
 
 ## A look at it
 
-Every shot below is a real screenshot from the end-to-end test suite or a live
-recording — none is a mockup. The card text in them comes from the six seed
-cards the app ships with and from the demo board in `sample-overview.json`, both
-already in this repository, so none of it is anyone's real board. Details of
-each image, and what it is evidence for, are in
-[`docs/img/README.md`](docs/img/README.md).
+Every shot below is a real screenshot — from the end-to-end test suite, or from
+a scripted session driving the app for the purpose. None is a mockup and none is
+retouched. The card text in them comes from the six seed cards the app ships
+with, the demo board in `sample-overview.json` (both already in this
+repository), and two titles typed into a throwaway board while recording, so
+none of it is anyone's real board. Details of each image, how it was made, and
+what it is evidence for are in [`docs/img/README.md`](docs/img/README.md).
 
 | | |
 | --- | --- |
 | ![The Areas view: a nine-spoke radar wheel labelled Work, Love, Family, Health, Mind, Music, Travel, Home, Money, with per-area tiles below showing open counts, how long each has been carried, and a sparkline.](docs/img/areas.png) **Areas** — nine life areas side by side. A lopsided wheel means a starved corner. | ![The Matrix view: four Eisenhower quadrants — Answer now, Schedule, Delegate, Drop — each holding a category-coloured dot, with a per-area colour legend above.](docs/img/matrix.png) **Matrix** — importance against urgency, placed by the card's own fields. |
-| ![The same board grown to 62 cards across nine life areas, with a "1 habit due" banner at the top, a Habits rail on the right, and an open habit card showing a 21-day completion tape.](docs/img/board-habits.png) **Habits** — a due banner, a rail, and a 21-day tape per habit. | ![The Review view scrolled to Today's Resurfacing: three long-untouched cards, each offering "Still matters", "Open" and "To Trash", above a "Stamp the review done" button.](docs/img/review.png) **Review** — three old thoughts re-met on purpose: keep, open, or let go. |
+| ![The same board grown to 61 cards across nine life areas, with a "1 habit due — Meditate (1/2 today)" banner at the top, a Habits rail on the right, and a habit card showing its punch strip and a 21-day completion tape reading "15 of 21 complete".](docs/img/board-habits.png) **Habits** — a due banner, a rail, and a 21-day tape per habit. | ![The Review view scrolled to Today's Resurfacing: three long-untouched cards, each offering "Still matters", "Open" and "To Trash", above a "Stamp the review done" button.](docs/img/review.png) **Review** — three old thoughts re-met on purpose: keep, open, or let go. |
 | ![The Board History dialog listing timestamped changes newest first with a Restore button on each, one row marked CURRENT, and a Deleted cards section explaining that "Delete permanently" is the only thing that truly erases a card.](docs/img/history.png) **History** — every change logged and restorable; only *Delete permanently* really erases. | ![The Categories dialog listing ten life areas, each in its own colour with its card count and a Remove button, plus a new-category field and a row of colour swatches.](docs/img/categories.png) **Life areas** — yours to name and colour; removing one never deletes its cards. |
 
 ## Run it
