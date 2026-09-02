@@ -1681,6 +1681,24 @@ try:
         page.wait_for_timeout(150)
         check("history: came forward again, later state intact",
               page.locator(".card", has_text="speculative decoding").count() == 1)
+        # And the log survives the browser being closed on it. Persistence is
+        # coalesced now — the stack updates in memory on every edit and the
+        # write lands at the first idle moment after the burst, or on
+        # `visibilitychange`/`pagehide` if the page goes away first. The unit
+        # tests drive those handlers directly; only a real browser can say
+        # whether Chromium delivers them, and only a real reload can say the
+        # written log reads back.
+        before = page.locator("#history-list .history-row").count()
+        newest = page.locator("#history-list .history-row .history-action").first.inner_text()
+        page.click("#close-history")
+        page.reload()
+        page.wait_for_selector("#board.board")
+        menu_click("#history-btn")
+        page.wait_for_selector("#history-dialog[open]")
+        check("history: the log is still there after a reload",
+              page.locator("#history-list .history-row").count() == before
+              and page.locator("#history-list .history-row .history-action")
+              .first.inner_text() == newest)
         page.click("#close-history")
 
         # ---- Responsive -----------------------------------------------------
