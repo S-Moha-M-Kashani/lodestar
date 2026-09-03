@@ -432,7 +432,22 @@ test('both chroma services pin one exact image version, never latest', () => {
 // firewall was on. The loopback prefix is the whole boundary for the composed
 // stack, since the app inside the container must bind 0.0.0.0 for Docker to
 // reach it at all.
-test('every published host port binds loopback, and none is bare', () => {
+//
+// HOME_LAN is the single, deliberate exception, added 2026-09-03 so a second
+// person in this house can open the board on her own device. It is one literal
+// address and not a range, a prefix or an interface name, for the reason the
+// Host allowlist is exact-match too: every widening of this kind in the wild
+// was a pattern that matched more than its author meant. Pinning the address
+// rather than publishing on 0.0.0.0 is what keeps the exception *local* — this
+// laptop travels, and on any other network Docker cannot bind an address that
+// is not there, so the stack refuses to start instead of quietly serving a
+// private life to a cafe. The address must therefore be held fixed on the
+// machine (System Settings -> Wi-Fi -> Details -> TCP/IP -> Using DHCP with
+// manual address), or the board stops starting at home too.
+const HOME_LAN = '192.168.0.194:';
+
+// This is a configuration invariant.
+test('every published host port binds loopback or the one home address', () => {
   const yaml = read('docker-compose.yml');
   // Lines under a `ports:` key, ignoring comments — i.e. actual mappings.
   const mappings = [...yaml.matchAll(/^\s+- "([^"]+)"$/gm)]
@@ -441,11 +456,21 @@ test('every published host port binds loopback, and none is bare', () => {
   assert.ok(mappings.length >= 3,
     `expected the three published services, found ${mappings.length}`);
   for (const mapping of mappings) {
-    assert.ok(mapping.startsWith('127.0.0.1:'),
-      `"${mapping}" publishes on every interface — prefix it with 127.0.0.1:`);
+    assert.ok(mapping.startsWith('127.0.0.1:') || mapping.startsWith(HOME_LAN),
+      `"${mapping}" publishes on every interface — prefix it with 127.0.0.1:, ` +
+        `or with ${HOME_LAN} for the board's one home-network exception`);
     // host:container, both present: "127.0.0.1:3000" alone would publish a
     // random host port, which is a different bug wearing the same prefix.
     assert.equal(mapping.split(':').length, 3, `"${mapping}" is not host:container`);
+  }
+  // The exception belongs to the board and to nothing else: the vector stores
+  // hold the same private life one chunk at a time, and no person opens them.
+  const offLoopback = mappings.filter((m) => !m.startsWith('127.0.0.1:'));
+  const board = serviceBlock('lodestar');
+  for (const mapping of offLoopback) {
+    assert.ok(board.includes(`"${mapping}"`),
+      `"${mapping}" leaves loopback outside the board service — only the board ` +
+        'has a person opening it from another device');
   }
 });
 
