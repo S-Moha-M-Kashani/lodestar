@@ -30,14 +30,21 @@ import { dirname, join, normalize } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomBytes } from 'node:crypto';
 import {
-  parsePasswordHash, verifyPassword, secretEquals, hostAllowed, provenanceOf,
+  resolvePasswordHash, verifyPassword, secretEquals, hostAllowed, provenanceOf,
   parseCookies, sessionCookie, clearedCookie, SessionStore, LoginThrottle,
   SESSION_COOKIE, ABSOLUTE_MS,
 } from './auth/local-auth.mjs';
 import { resolveBoardDb, resolveAssistantDb } from './scripts/db-location.mjs';
+import { applyEnvFile } from './scripts/env-file.mjs';
 import { chooseBackend } from './db/backend.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
+
+// .env, before anything below reads a variable out of the environment. It
+// fills in the board's own settings and never overrides one that is really
+// set, so a container and a one-off `VAR=… npm start` both still win; see
+// scripts/env-file.mjs for why Node's own --env-file is not what does this.
+applyEnvFile({ root: ROOT });
 
 // Which store this process opens. Asked here, at boot, because a seam nothing
 // calls is not a seam: until this line existed, LODESTAR_DB_BACKEND=postgres
@@ -97,20 +104,14 @@ if (AUTH_MODE !== 'required') {
     + '"required". There is deliberately no way to switch authentication off.');
 }
 
-const PASSWORD_HASH = (process.env.LODESTAR_AUTH_PASSWORD_HASH || '').trim();
-if (!parsePasswordHash(PASSWORD_HASH)) {
-  // Missing and malformed are told apart HERE and only here. A login response
-  // must not distinguish them — that would tell a guesser whether the server is
-  // even configured — but an operator reading a boot failure needs to know
-  // which of the two they are looking at.
-  throw new Error(
-    (PASSWORD_HASH ? 'LODESTAR_AUTH_PASSWORD_HASH is set but is not a hash '
-                     + 'this server can read'
-                   : 'LODESTAR_AUTH_PASSWORD_HASH is not set')
-    + ' — refusing to open the board without a way to protect it. Make one '
-    + 'with:\n\n    npm run auth:setup\n\nand put the printed line in .env '
-    + '(git-ignores it already).');
-}
+// One decision with two right answers — a minted hash, or the password itself
+// on a line in .env — and it is made in auth/local-auth.mjs so that every way
+// it can be wrong is a value a test can hold. Missing, malformed, too short
+// and both-at-once each raise with their own message: this boot error is the
+// one place those may be told apart, since a login response that distinguished
+// them would tell a guesser whether the server is even configured.
+const { hash: PASSWORD_HASH, source: PASSWORD_SOURCE } =
+  resolvePasswordHash(process.env);
 
 // A second credential, for one caller that is not a person: the brain, which
 // reads cards and posts proposals over the same API the browser uses. It gets
@@ -2789,4 +2790,11 @@ server.listen(PORT, BIND, () => {
   console.log(BIND === '127.0.0.1'
     ? '  bound to 127.0.0.1 — reachable from this machine only; login required'
     : `  bound to ${BIND} — NOT loopback-only; every interface can reach this port`);
+  // Which of the two forms supplied the password, said once at boot. The
+  // plaintext form is the weaker one and it is chosen by editing a file, so it
+  // should not be possible to be running it and not know.
+  if (PASSWORD_SOURCE === 'password') {
+    console.log('  password read from LODESTAR_AUTH_PASSWORD — it is stored in '
+      + 'plaintext in .env; `npm run auth:setup` mints a hash instead');
+  }
 });
