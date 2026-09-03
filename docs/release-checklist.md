@@ -12,6 +12,7 @@ Run them in order. Anything that fails stops the release.
 | --- | --- | --- |
 | Nothing uncommitted | `git status --porcelain` | no output |
 | You are releasing from `development` | `git branch --show-current` | `development` |
+| The publication remote is Lodestar | `git remote get-url personal` | `https://github.com/S-Moha-M-Kashani/lodestar.git` |
 | `master` is the only publication target | `git log --oneline -1 master` | the last release point, not a hand commit |
 | No dev-only docs are about to be published | `git ls-tree -r --name-only master \| grep -E 'README-Development\|ROADMAP-Development\|125.md\|docs/report/'` | no output |
 | No database is tracked on the release branch | `git ls-tree -r --name-only master \| grep '^databases/'` | no output (`tests/databases.test.js` asserts it too) |
@@ -63,7 +64,7 @@ version nobody can describe.
 
 ```sh
 git push personal master
-git push personal --tags   # v* only; never --all, never development
+git push personal vX.Y.Z   # the one new version tag; never --tags or --all
 ```
 
 `git push --all` always fails while `development` exists — the `pre-push` hook
@@ -72,8 +73,8 @@ refuses that branch, and a refused ref aborts the whole push. Publish by naming
 
 | Gate | Check | Pass means |
 | --- | --- | --- |
-| CI ran on the pushed ref | the Actions tab for the pushed commit | one run, all four steps green |
-| Server, brain and e2e all executed | the run's step list | none skipped or missing |
+| CI ran on the pushed ref | the Actions tab for the pushed commit | the CI job is green |
+| Server, brain and e2e all executed | the run's step list | all three suite steps succeeded; none skipped or missing |
 | Badges point at the real workflow | click each badge in the rendered README | each resolves to this repository's run |
 
 **Badges go in after the green run, never before.** A badge added in advance is
