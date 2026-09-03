@@ -12,6 +12,18 @@ services:
       # port below carries the same prefix, and tests/compose.test.js fails on
       # any that does not.
       - "127.0.0.1:3000:3000"
+      # The one deliberate exception (2026-09-03): a second person in this house
+      # opens the board on her own device over the home Wi-Fi. One literal
+      # address, never 0.0.0.0 and never a range — and pinning it is what keeps
+      # the exception local, because this laptop travels: on any other network
+      # Docker cannot bind an address that is not there, so `docker compose up`
+      # fails loudly instead of quietly serving a private life to a cafe. The
+      # cost of that safety: the address has to be held fixed on this machine
+      # (Wi-Fi -> Details -> TCP/IP -> Using DHCP with manual address), or the
+      # board stops starting at home too. The password is still the gate; this
+      # only decides who can see the door. Until Tailscale replaces it, note
+      # that the login crosses the WPA home network unencrypted.
+      - "192.168.0.194:3000:3000"
     environment:
       # The one caller of this switch, and the reason it exists. Docker
       # forwards a published port to the CONTAINER's address, so a server that
@@ -22,8 +34,14 @@ services:
       # no reason to set it there.
       LODESTAR_BIND: 0.0.0.0
       # Inside the network the brain dials http://lodestar:3000, a name the
-      # Host allowlist cannot derive from a port. Exact match, one name.
-      LODESTAR_ALLOWED_HOSTS: lodestar:3000
+      # Host allowlist cannot derive from a port. Exact match, whole strings.
+      # The two home-network spellings are here for the same reason: a browser
+      # on another device sends the address it typed, which is not a loopback
+      # name, so without them every request from her laptop is a 403 before a
+      # row is read. The .local name is Bonjour's and survives the address
+      # changing; the literal address is the fallback for a device whose
+      # browser will not resolve it.
+      LODESTAR_ALLOWED_HOSTS: lodestar:3000,192.168.0.194:3000,mohas-macbook-pro.local:3000
       # Both forms of the one credential are passed through, because either is
       # a complete answer: the hash `npm run auth:setup` prints, or the
       # password itself on a line in .env. `:?` used to sit on the hash so
