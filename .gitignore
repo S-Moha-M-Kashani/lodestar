@@ -35,6 +35,9 @@ backups/
 # Subagent-driven-development scratch: ledgers, briefs, review packages.
 .superpowers/
 
+# Local Graphify knowledge-graph output; regenerate with `graphify . --code-only --no-viz`.
+graphify-out/
+
 .claude/
 
 # Working material lives on this machine's disk and is never committed: the

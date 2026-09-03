@@ -44,7 +44,7 @@ a skip, and `npm run hygiene` is the same command with the tag list filled in.
 | Gate | Check | Pass means |
 | --- | --- | --- |
 | Every gallery asset is tracked, not ignored | `git check-ignore docs/img/*` | no output |
-| Every README image resolves from a clean checkout | `grep -o 'docs/img/[^)\"]*' README.md \| sort -u \| xargs -I{} git ls-files --error-unmatch {}` | no error |
+| Every README image resolves from a clean checkout | `grep -o 'docs/img/[A-Za-z0-9._-]*' README.md \| sort -u \| xargs -I{} git ls-files --error-unmatch {}` | no error |
 | No asset carries private data | open each file in `docs/img/` and look | seed or fixture data only |
 | No claim contradicts the code | `node --test tests/docclaims.test.js` | pass |
 
@@ -62,8 +62,8 @@ version nobody can describe.
 ## 6. The push, and only then the badges
 
 ```sh
-git push origin master
-git push origin --tags   # v* only; never --all, never development
+git push personal master
+git push personal --tags   # v* only; never --all, never development
 ```
 
 `git push --all` always fails while `development` exists — the `pre-push` hook
