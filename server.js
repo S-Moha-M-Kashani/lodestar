@@ -28,7 +28,7 @@ import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import {
   parsePasswordHash, verifyPassword, secretEquals, hostAllowed, provenanceOf,
   parseCookies, sessionCookie, clearedCookie, SessionStore, LoginThrottle,
@@ -124,6 +124,25 @@ if (SERVICE_TOKEN && SERVICE_TOKEN.length < 32) {
     'LODESTAR_SERVICE_TOKEN is shorter than 32 characters. Generate one with: '
     + "node -e \"console.log(require('crypto').randomBytes(32).toString('base64url'))\"");
 }
+
+// A third credential, and the only one that guards a *page* rather than the
+// API: the developer trace at /dev/trace. Unset — the default, and what a
+// normal board runs with — the whole surface is absent: no route, no storage,
+// nothing to find. Set, it is a second lock in front of the ordinary session,
+// because a trace is the system prompt, the question and every tool result in
+// one record, and that deserves more than "you are already logged in".
+const DEV_KEY = (process.env.LODESTAR_DEV_KEY || '').trim();
+if (DEV_KEY && DEV_KEY.length < 12) {
+  throw new Error(
+    'LODESTAR_DEV_KEY is shorter than 12 characters — refusing to guard the '
+    + 'developer trace with something guessable. Generate one with: '
+    + "node -e \"console.log(require('crypto').randomBytes(24).toString('base64url'))\"");
+}
+// The unlock token lives here and only here: in this process's memory, never in
+// a database, never in a file. Restarting the server locks the trace again,
+// which is the feature — a debugging door that survives a restart is a door
+// somebody forgot to close.
+let devToken = '';
 
 const sessions = new SessionStore();
 // Overridable only because a test that waits a real minute to prove a lockout
@@ -782,7 +801,7 @@ function purgeBoard(id) {
 // one endless transcript plus its very first message as "framing", so a new
 // question was answered in terms of the oldest one on the board. A session is
 // the boundary that makes a conversation a conversation; the docs are in
-// docs/superpowers/specs/2026-08-04-chat-sessions-design.md.
+// docs/decisions/2026-08-04-chat-sessions-design.md.
 //
 // Deleting is soft in both directions: `sessions.deleted_at` takes a whole
 // chat's messages out of every live read, `messages.deleted_at` takes one turn
@@ -838,6 +857,70 @@ if (!chatColumns.has('session_id')) chatDb.exec("ALTER TABLE messages ADD COLUMN
 if (!chatColumns.has('steps')) chatDb.exec("ALTER TABLE messages ADD COLUMN steps TEXT NOT NULL DEFAULT '[]'");
 if (!chatColumns.has('usage')) chatDb.exec('ALTER TABLE messages ADD COLUMN usage TEXT');
 if (!chatColumns.has('cost')) chatDb.exec('ALTER TABLE messages ADD COLUMN cost REAL');
+
+// The one index the query-plan evidence earned. Measured 2026-09-02 on a fresh
+// schema filled with 20 sessions / 3000 messages, ANALYZE run first, each query
+// prepared and run 200 times.
+//
+// It pays twice over. Reading ONE chat's transcript (`readChatSession`) went
+// from `SCAN messages | USE TEMP B-TREE FOR ORDER BY` to `SEARCH messages USING
+// INDEX messages_session (session_id=?)`, already in the wanted order:
+// 0.295 ms → 0.165 ms a run, 1.8x. And the history panel's list
+// (`readChatSessions`), whose per-chat `COUNT(*)` is a correlated subquery that
+// scanned the whole of `messages` once per session, went 0.588 ms → 0.121 ms,
+// 4.9x. That second number is the whole cost of opening the chats panel, and it
+// grows with the message count — the one number in this schema that only ever
+// goes up.
+//
+// `(session_id, created_at, id)` and not `session_id` alone, because both
+// readers order by exactly that pair. The index then answers the ORDER BY as
+// well as the predicate, which is what makes the temp B-tree disappear rather
+// than merely shrink.
+//
+// NOTHING ELSE, and the negative result is written down here so the next person
+// does not have to measure it again: `cards_board (board_id, position)` does
+// improve `readBoard`'s plan — the temp B-tree goes away — and moves wall clock
+// by 7%, 1.150 ms → 1.071 ms, which is inside the noise, because the query
+// returns 360 of 2000 rows and the `SELECT *` row fetch dominates the scan it
+// saves. On the trash query it buys nothing at all: `ORDER BY deleted_at DESC`
+// needs a sort of its own either way. The rule this change works to is to add
+// only the index the evidence identifies, and that is what "not identified"
+// looks like.
+//
+// After the session_id migration above and never before it: an assistant.db
+// written before sessions existed has no such column yet, and a CREATE INDEX
+// naming one would raise at boot on a database that opens fine today.
+chatDb.exec('CREATE INDEX IF NOT EXISTS messages_session ON messages (session_id, created_at, id)');
+
+// The developer trace: one row per turn, holding the exact list of messages
+// the brain handed the model. Created only when the trace is configured — a
+// board with no dev key stores nothing, which is the strongest version of "the
+// surface is absent" a table can have.
+//
+// Deliberately NOT the `messages` table. That one is the conversation: two
+// roles, what the user said and what came back, and it is the thing the
+// durability promise is about. This is the request that produced it — four
+// roles, the system prompt, every tool result — and it is a debugging aid that
+// must not be able to change what the transcript says.
+if (DEV_KEY) {
+  chatDb.exec(`
+    CREATE TABLE IF NOT EXISTS traces (
+      trace_id   TEXT PRIMARY KEY,
+      session_id TEXT    NOT NULL,
+      board_id   TEXT    NOT NULL DEFAULT '',
+      status     TEXT    NOT NULL,
+      model      TEXT    NOT NULL DEFAULT '',
+      provider   TEXT    NOT NULL DEFAULT '',
+      started_at INTEGER NOT NULL,
+      ended_at   INTEGER,
+      error      TEXT    NOT NULL DEFAULT '',
+      usage      TEXT,
+      entries    TEXT    NOT NULL,
+      filed_at   INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS traces_session ON traces (session_id, started_at);
+  `);
+}
 
 const CHAT_ROLES = new Set(['user', 'assistant']);
 // The chat every caller that names no session lands in. A curl, an eval, or a
@@ -1451,11 +1534,19 @@ function confirmProposal(id) {
   return row.board_id;
 }
 
-// Fields a suggestion may name. The same set `update_card` has always been able
-// to touch, so a suggestion is not a new way into anything — habit history and
-// the ledger number are absent here exactly as they are absent there.
+// Fields a suggestion may name — the set `update_card` can touch, so a
+// suggestion is not a new way into anything: habit history and the ledger
+// number are absent here exactly as they are absent there.
+//
+// `deadline` was missing until 2026-09-02, and the tool has advertised it all
+// along: the model named a due date, this filter dropped it, and the Assistant
+// then said it had suggested one when nothing had been stored. A suggestion
+// naming only a deadline was a 400 the user never saw. `plan` is still absent
+// deliberately — a suggested plan needs `planSrc` to say a person chose it, or
+// the save resolves the plan back to the deadline and discards it, and whether
+// a suggestion may claim that provenance is its own question.
 const EDITABLE_FIELDS = ['title', 'notes', 'type', 'category', 'columnId',
-  'importance', 'urgency', 'tags'];
+  'importance', 'urgency', 'deadline', 'tags'];
 
 /**
  * Store a suggested edit. Returns null when there is nothing to suggest or
@@ -1573,6 +1664,251 @@ function purgeCard(id) {
 }
 
 // --------------------------------------------------------------------------
+// The developer trace
+// --------------------------------------------------------------------------
+//
+// What the brain files, and the page that reads it back. Everything here is
+// inert unless LODESTAR_DEV_KEY is set: the table is not created, the routes
+// answer 404, and nothing about the board changes.
+//
+// The trace is read-only in the strongest sense — no route below writes a card,
+// a message, a session or a proposal — and every response carries no-store,
+// because the whole point of looking at a trace is to see the state a turn is
+// in *now*, and a cached copy of that is a wrong answer wearing a right one's
+// clothes.
+
+const TRACE_STATUSES = new Set(['in_flight', 'completed', 'failed', 'interrupted']);
+const TRACE_ROLES = new Set(['system', 'human', 'ai', 'tool']);
+
+/** One filed trace, validated. Returns null for anything that is not one —
+ *  the brain is the only caller, but a store is not the place to find that
+ *  out. */
+function cleanTrace(body) {
+  if (!body || typeof body !== 'object') return null;
+  const id = String(body.trace_id || '').trim();
+  const session = String(body.session_id || '').trim();
+  if (!id || !session) return null;
+  if (!TRACE_STATUSES.has(body.status)) return null;
+  if (!Array.isArray(body.entries)) return null;
+  const entries = body.entries
+    .filter((e) => e && TRACE_ROLES.has(e.role))
+    .map((e, i) => ({
+      seq: Number.isInteger(e.seq) ? e.seq : i,
+      role: e.role,
+      content: typeof e.content === 'string' ? e.content : '',
+      metadata: e.metadata && typeof e.metadata === 'object' ? e.metadata : {},
+    }));
+  return {
+    trace_id: id,
+    session_id: session,
+    board_id: String(body.board_id || ''),
+    status: body.status,
+    model: String(body.model || ''),
+    provider: String(body.provider || ''),
+    started_at: Number(body.started_at) || Date.now(),
+    ended_at: Number.isFinite(Number(body.ended_at)) && body.ended_at !== null
+      ? Number(body.ended_at) : null,
+    error: String(body.error || ''),
+    usage: body.usage ? JSON.stringify(body.usage) : null,
+    entries: JSON.stringify(entries),
+  };
+}
+
+/** File one turn's trace. An upsert on `trace_id`, because the brain files the
+ *  same turn twice — once in flight, once settled — and one turn is one
+ *  record. Everything but the id is replaced: the settled write is the fuller
+ *  one by construction. */
+function writeTrace(trace) {
+  chatDb.prepare(`
+    INSERT INTO traces (trace_id, session_id, board_id, status, model, provider,
+                        started_at, ended_at, error, usage, entries, filed_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(trace_id) DO UPDATE SET
+      session_id = excluded.session_id, board_id = excluded.board_id,
+      status = excluded.status, model = excluded.model,
+      provider = excluded.provider, started_at = excluded.started_at,
+      ended_at = excluded.ended_at, error = excluded.error,
+      usage = excluded.usage, entries = excluded.entries,
+      filed_at = excluded.filed_at
+  `).run(trace.trace_id, trace.session_id, trace.board_id, trace.status,
+    trace.model, trace.provider, trace.started_at, trace.ended_at,
+    trace.error, trace.usage, trace.entries, Date.now());
+}
+
+/** The sessions that have traces, newest activity first. Joined to `sessions`
+ *  only for a title — a trace outlives the chat it came from (a deleted chat
+ *  is exactly the one somebody debugs), so the join must not decide whether the
+ *  row is listed. */
+function readTraceSessions() {
+  return chatDb.prepare(`
+    SELECT t.session_id AS id,
+           COUNT(*)     AS prompts,
+           MAX(t.started_at) AS latest,
+           (SELECT title FROM sessions s WHERE s.id = t.session_id) AS title
+    FROM traces t GROUP BY t.session_id ORDER BY latest DESC LIMIT 200
+  `).all();
+}
+
+/** Every trace of one session, oldest first — the order the prompts happened
+ *  in, which is the order a tape is read in. */
+function readTraces(sessionId) {
+  return chatDb.prepare(
+    'SELECT * FROM traces WHERE session_id = ? ORDER BY started_at ASC LIMIT 200')
+    .all(sessionId)
+    .map((row) => ({
+      ...row,
+      entries: JSON.parse(row.entries || '[]'),
+      usage: row.usage ? JSON.parse(row.usage) : null,
+    }));
+}
+
+
+// --- The page ---------------------------------------------------------------
+//
+// Server-rendered HTML, deliberately: this is a developer surface that must
+// work when the app it debugs does not, so it depends on no module of the
+// frontend, no fetch, and no script at all. Everything a browser puts on screen
+// here came out of the database on this request.
+
+const esc = (value) => String(value ?? '')
+  .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+  .replaceAll('"', '&quot;').replaceAll("'", '&#39;');
+
+// Every response no-store, and no page here is ever cached by anything.
+const sendHtml = (res, status, html) => {
+  res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8',
+                          'Cache-Control': 'no-store',
+                          'X-Robots-Tag': 'noindex, nofollow' });
+  res.end(html);
+};
+
+const TRACE_CSS = `
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+         margin: 0; padding: 24px; background: #f7f6f2; color: #23201c; }
+  a { color: #7a2f2f; }
+  h1 { font-size: 16px; letter-spacing: .08em; text-transform: uppercase; }
+  .bar { display: flex; gap: 12px; align-items: baseline; margin-bottom: 18px; }
+  .bar form { margin: 0; }
+  table { border-collapse: collapse; width: 100%; max-width: 900px; }
+  td, th { text-align: left; padding: 6px 10px; border-bottom: 1px solid #ddd8cc; }
+  .prompt { max-width: 900px; margin: 0 0 26px; padding: 10px 0 0;
+            border-top: 2px solid #23201c; }
+  .prompt h2 { font-size: 13px; margin: 0 0 8px; font-weight: 600; }
+  .status { padding: 1px 6px; border: 1px solid currentColor; border-radius: 3px;
+            font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+  .completed { color: #2f6b3a; } .failed { color: #8c2f2f; }
+  .in_flight { color: #8a6d1f; } .interrupted { color: #8a6d1f; }
+  .entry { margin: 0 0 8px; padding: 8px 10px; border: 1px solid #ddd8cc;
+           background: #fffdf8; }
+  .entry[data-role="system"] { background: #efece2; color: #5b564c; }
+  .entry[data-role="ai"] { margin-inline-start: 28px; }
+  .entry[data-role="tool"] { margin-inline-start: 28px; background: #f2f4ef; }
+  .who { font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
+         color: #6b665c; }
+  pre { margin: 4px 0 0; white-space: pre-wrap; word-break: break-word; }
+  details > summary { cursor: pointer; font-size: 12px; color: #6b665c; }
+  .meta { font-size: 12px; color: #6b665c; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #16150f; color: #e8e4d8; }
+    a { color: #d99; }
+    .entry { background: #1e1d16; border-color: #35332a; }
+    .entry[data-role="system"] { background: #24231a; color: #b8b2a2; }
+    .entry[data-role="tool"] { background: #1a1f1a; }
+    td, th { border-color: #35332a; }
+    .prompt { border-color: #e8e4d8; }
+  }
+`;
+
+const tracePage = (title, body) => `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(title)}</title><style>${TRACE_CSS}</style></head>
+<body>${body}</body></html>`;
+
+/** The door. One field, masked, and it says nothing about what is behind it. */
+function unlockPage(next, failed = false) {
+  return tracePage('Developer trace', `
+    <h1>Developer trace</h1>
+    <form method="POST" action="/dev/trace/unlock">
+      <input type="hidden" name="next" value="${esc(next)}">
+      <label>Key <input type="password" name="key" autocomplete="off" autofocus></label>
+      <button type="submit">Unlock</button>
+    </form>
+    ${failed ? '<p class="meta">Unlock failed.</p>' : ''}`);
+}
+
+const when = (ms) => (ms ? new Date(ms).toISOString().replace('T', ' ').slice(0, 19) : '—');
+const took = (row) => (row.ended_at && row.started_at
+  ? `${((row.ended_at - row.started_at) / 1000).toFixed(1)}s` : '—');
+
+function traceIndexPage(rows) {
+  const body = rows.length ? `<table>
+    <tr><th>Session</th><th>Prompts</th><th>Latest</th></tr>
+    ${rows.map((r) => `<tr>
+      <td><a href="/dev/trace?session=${encodeURIComponent(r.id)}">${esc(r.title || r.id)}</a>
+          <div class="meta">${esc(r.id)}</div></td>
+      <td>${r.prompts}</td><td>${esc(when(r.latest))}</td></tr>`).join('')}
+  </table>` : '<p class="meta">No traces recorded yet. Is BRAIN_TRACE=board set on the brain?</p>';
+  return tracePage('Developer trace', `
+    <div class="bar"><h1>Developer trace</h1>
+      <form method="POST" action="/dev/trace/lock"><button type="submit">Lock</button></form>
+    </div>${body}`);
+}
+
+/** One entry of the tape. A tool call and a tool result are folded — they are
+ *  the longest things here and the least often what you came to read. */
+function traceEntry(entry) {
+  const calls = entry.metadata && entry.metadata.tool_calls;
+  const parts = [`<div class="who">${esc(entry.role)} · ${entry.seq}</div>`];
+  if (entry.content) {
+    // The system prompt is a page of text and it is identical in every prompt
+    // group, so it is folded — folded, not trimmed: the whole thing is in the
+    // document, one click away, and the character count says how much is
+    // behind the fold. A tape you have to scroll past two screens of prompt to
+    // read is a tape nobody reads.
+    parts.push(entry.role === 'system'
+      ? `<details><summary>system prompt · ${entry.content.length} chars</summary>
+           <pre>${esc(entry.content)}</pre></details>`
+      : `<pre>${esc(entry.content)}</pre>`);
+  }
+  if (Array.isArray(calls) && calls.length) {
+    parts.push(calls.map((c) => `<details><summary>calls ${esc(c.name)}</summary>
+      <pre>${esc(JSON.stringify(c.args, null, 2))}</pre></details>`).join(''));
+  }
+  if (entry.metadata && entry.metadata.tool_call_id) {
+    parts.push(`<div class="meta">answering ${esc(entry.metadata.name || '')}
+      (${esc(entry.metadata.tool_call_id)})</div>`);
+  }
+  return `<div class="entry" data-role="${esc(entry.role)}">${parts.join('')}</div>`;
+}
+
+function traceDetailPage(sessionId, rows) {
+  const groups = rows.map((row, i) => `
+    <section class="prompt" data-trace="${esc(row.trace_id)}">
+      <h2>Prompt ${i + 1}
+        <span class="status ${esc(row.status)}">${esc(row.status)}</span></h2>
+      <div class="meta">${esc(when(row.started_at))} · ${esc(took(row))}
+        · ${esc(row.provider || '?')}/${esc(row.model || '?')}
+        ${row.usage ? `· ${esc(row.usage.total_tokens ?? '?')} tokens` : ''}</div>
+      ${row.error ? `<p class="meta">error: ${esc(row.error)}</p>` : ''}
+      ${row.entries.map(traceEntry).join('')}
+    </section>`).join('');
+  return tracePage(`Trace · ${sessionId}`, `
+    <div class="bar"><h1><a href="/dev/trace">Developer trace</a> · ${esc(sessionId)}</h1>
+      <form method="POST" action="/dev/trace/lock"><button type="submit">Lock</button></form>
+    </div>
+    <p class="meta">Read-only. This page shows the message envelope the brain
+      handed the model, in the order it was handed over.</p>
+    ${groups || '<p class="meta">No traces for that session.</p>'}`);
+}
+
+/** Is this request carrying a live unlock token? Constant-time, and false the
+ *  moment the process restarts — the token only ever existed in memory. */
+const devUnlocked = (req) => Boolean(devToken)
+  && secretEquals(parseCookies(req.headers.cookie).lodestar_dev || '', devToken);
+
+// --------------------------------------------------------------------------
 // HTTP
 // --------------------------------------------------------------------------
 
@@ -1611,6 +1947,109 @@ function sendJson(res, status, body, headers = {}) {
   const text = JSON.stringify(body);
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', ...headers });
   res.end(text);
+}
+
+// --------------------------------------------------------------------------
+// Conditional reads
+// --------------------------------------------------------------------------
+
+// An ALLOWLIST, named in full here, and deliberately not a middleware that
+// stamps every response on its way out. A validator is a promise that a client
+// may reuse what it already holds, and this server's payloads are somebody's
+// private life: the cost of a wrong entry is not a slow page, it is last week's
+// cards on screen with no way to tell. So a route joins the list only when both
+// of these hold, checked one route at a time by reading it:
+//
+//   1. its validator changes whenever ANYTHING the client can see changes —
+//      not a row count, not a MAX(updated_at); see revOf's own note for why
+//      every aggregate available here has a blind spot that loses a card, and
+//      the same reasoning applies to a validator, and
+//   2. a match can be answered without building the response body.
+//
+// ON the list:
+//   GET /api/state   — the board already computes `rev`, a sha1 of the exact
+//                      bytes the client is sent. That is an ETag in all but
+//                      name and it is the one validator in this file that is
+//                      already contractually blind-spot-free, so it is reused
+//                      rather than a second one invented beside it. What a 304
+//                      skips is the response object, its serialisation and the
+//                      body on the wire; what it cannot skip is the board read
+//                      the validator is derived FROM, and that is the trade
+//                      being made on purpose — a validator cheaper than the
+//                      payload would have to be an aggregate, and revOf's note
+//                      records what that costs. The conditional path therefore
+//                      does strictly less work than the unconditional one ever
+//                      did; it does not do none.
+//   the STATIC files — index.html, styles.css and every js/ module: code
+//                      shipped with the server, hashed from the exact bytes
+//                      just read off disk. Forty-odd modules revalidate on
+//                      every reload and none of them carries user data.
+//
+// OFF the list, each for a reason:
+//   /api/trash, /api/proposals, /api/edits, /api/boards, /api/boards/trash —
+//     mutable card and board state with no version of its own. Minting one
+//     means hashing the payload, and unlike /api/state there is no existing
+//     hash to reuse, so it would be new work on the common path to save bytes
+//     on a read nobody makes in a loop.
+//   every /api/chat/* read — the same, and worse: the chat record is what the
+//     durability promise is about, a soft-delete has to disappear from a read
+//     the moment it happens, and this is the surface where being subtly stale
+//     would be least visible. It stays uncached, which is the spec's second
+//     requirement rather than an omission.
+//   /api/trace/status and every other trace response — `no-store` is that
+//     surface's rule (a trace is read to see the state a turn is in NOW), and
+//     the most a validator could save there is one request per session.
+//   /api/health and /login — the public paths, one small fixed body each.
+//
+// Removing '/api/state' from this set is the whole feature-disable path for
+// that route: the header stops being sent and the 304 stops being possible,
+// with no other edit.
+const VALIDATED_READS = new Set(['/api/state', ...Object.keys(STATIC)]);
+
+/**
+ * Does this request already hold the version we were about to send?
+ *
+ * The allowlist is checked in HERE rather than at each call site, so a route
+ * cannot acquire a validator by someone remembering to ask for one.
+ *
+ * `If-None-Match` may carry a list, and `*` means "any version at all, if you
+ * have one". Comparison is weak per RFC 9110 — a `W/` prefix is stripped from
+ * both sides — which changes nothing today, since every tag this server mints
+ * is strong, and stops a proxy that weakened one from silently missing.
+ */
+function notModified(req, path, tag) {
+  if (!VALIDATED_READS.has(path) || !tag) return false;
+  const header = req.headers['if-none-match'];
+  if (!header) return false;
+  const bare = (t) => t.trim().replace(/^W\//, '');
+  const wanted = bare(tag);
+  return header.split(',').some((candidate) => {
+    const one = bare(candidate);
+    return one === '*' || one === wanted;
+  });
+}
+
+/** A validator over exact bytes. sha1 and 16 hex chars for revOf's reason:
+ *  this is a change-detector, never a security claim. */
+const etagOf = (bytes) => `"${createHash('sha1').update(bytes).digest('hex').slice(0, 16)}"`;
+
+/** `no-cache` is the other half of the contract and is not optional. It does
+ *  not mean "do not store"; it means "never reuse this without asking me
+ *  first", which is exactly what makes an ETag safe on a board that changes.
+ *  Without it a cache is free to apply its own heuristic freshness to a 200
+ *  carrying no directives, and the ETag would then have made staleness more
+ *  likely rather than less. */
+const REVALIDATE = { 'Cache-Control': 'no-cache' };
+
+/** 304, and nothing whatsoever else: no body and no Content-Type, because a
+ *  not-modified response carrying a payload has already spent everything the
+ *  conditional request asked to save. The validator is echoed, since a client
+ *  that gets a 304 goes on using the copy it holds and the tag it holds with
+ *  it. Node knows a 304 has no body, so no length or encoding header is
+ *  written either. */
+function sendNotModified(res, tag) {
+  res.writeHead(304, { ETag: tag, ...REVALIDATE });
+  res.end();
 }
 
 function readBody(req) {
@@ -1786,6 +2225,91 @@ async function handleRequest(req, res) {
     }
   }
 
+  // The developer trace. Behind the session like everything else — the dev key
+  // is a second lock, never the only one — and absent entirely when no key is
+  // configured: 404, not 401, because a board running the ordinary way should
+  // not advertise that a developer page exists at all.
+  //
+  // Whether tracing is available is the one thing said before the door: the
+  // Assistant needs it to decide whether to draw a control, and "a link exists"
+  // is not a secret worth keeping from someone who has already logged in.
+  if (path === '/api/trace/status') {
+    if (req.method !== 'GET') return sendJson(res, 405, { error: 'Method not allowed' });
+    return sendJson(res, 200, { enabled: Boolean(DEV_KEY) });
+  }
+
+  if (path === '/api/trace' || path === '/dev/trace'
+      || path.startsWith('/dev/trace/')) {
+    if (!DEV_KEY) return sendJson(res, 404, { error: 'Not found' });
+
+    // The brain filing a turn. Not behind the unlock token: the token is a
+    // *reader's* credential, and the writer is the brain, which arrives with
+    // the service token like every other write it makes.
+    if (path === '/api/trace') {
+      if (req.method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed' });
+      try {
+        const trace = cleanTrace(JSON.parse(await readBody(req)));
+        if (!trace) return sendJson(res, 400, { error: 'Not a trace' });
+        writeTrace(trace);
+        return sendJson(res, 200, { ok: true }, { 'Cache-Control': 'no-store' });
+      } catch (err) {
+        if (!(err instanceof SyntaxError) && !err.badRequest) throw err;
+        return sendJson(res, 400, { error: 'Invalid JSON: ' + err.message });
+      }
+    }
+
+    if (path === '/dev/trace/unlock') {
+      if (req.method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed' });
+      const form = new URLSearchParams(await readBody(req));
+      // Constant-time, and never told apart from any other failure. The
+      // submitted value is not echoed anywhere — not into the page, not into a
+      // log line, and not into the redirect.
+      if (!secretEquals(form.get('key') || '', DEV_KEY)) {
+        return sendHtml(res, 401, unlockPage('/dev/trace', true));
+      }
+      // A fresh token per unlock, so an old one stops working. Random, and
+      // kept only in this process's memory: nothing durable to steal, and a
+      // restart locks the door again.
+      devToken = randomBytes(32).toString('base64url');
+      const next = String(form.get('next') || '/dev/trace');
+      res.writeHead(303, {
+        // Path-scoped, so this cookie is never sent to the board's own API,
+        // and HttpOnly so no script on any page can read it.
+        'Set-Cookie': `lodestar_dev=${devToken}; Path=/dev/trace; HttpOnly; `
+          + 'SameSite=Strict',
+        'Cache-Control': 'no-store',
+        // The path the user asked for, and nothing they typed.
+        Location: next.startsWith('/dev/trace') ? next : '/dev/trace',
+      });
+      return res.end();
+    }
+
+    if (path === '/dev/trace/lock') {
+      if (req.method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed' });
+      devToken = '';
+      res.writeHead(303, {
+        'Set-Cookie': 'lodestar_dev=; Path=/dev/trace; HttpOnly; SameSite=Strict; Max-Age=0',
+        'Cache-Control': 'no-store', Location: '/dev/trace',
+      });
+      return res.end();
+    }
+
+    if (path === '/dev/trace') {
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        return sendJson(res, 405, { error: 'Method not allowed' });
+      }
+      const session = url.searchParams.get('session') || '';
+      if (!devUnlocked(req)) {
+        return sendHtml(res, 200, unlockPage(session
+          ? `/dev/trace?session=${encodeURIComponent(session)}` : '/dev/trace'));
+      }
+      if (!session) return sendHtml(res, 200, traceIndexPage(readTraceSessions()));
+      return sendHtml(res, 200, traceDetailPage(session, readTraces(session)));
+    }
+
+    return sendJson(res, 404, { error: 'Not found' });
+  }
+
   // Which board this request is about, for every route that reads or writes
   // board data. Absent means the default board, so every caller written before
   // boards existed still addresses a real one; a named board that is gone or
@@ -1869,7 +2393,16 @@ async function handleRequest(req, res) {
   if (path === '/api/state') {
     if (boardId === null) return noSuchBoard();
     if (req.method === 'GET') {
-      return sendJson(res, 200, boardWithRev(boardId));
+      // The rev is the validator — see VALIDATED_READS for why this route is
+      // the one board read that may carry one, and what a 304 here does and
+      // does not save.
+      const board = boardWithRev(boardId);
+      // The tag IS the rev, quoted — not a second hash of it. One value, so a
+      // client can compare what it sent on a PUT with what it holds as a
+      // validator and see the same string.
+      const tag = `"${board.rev}"`;
+      if (notModified(req, path, tag)) return sendNotModified(res, tag);
+      return sendJson(res, 200, board, { ETag: tag, ...REVALIDATE });
     }
     if (req.method === 'PUT') {
       try {
@@ -2191,7 +2724,13 @@ async function handleRequest(req, res) {
     const [file, type] = entry;
     try {
       const body = await readFile(join(ROOT, normalize(file)));
-      res.writeHead(200, { 'Content-Type': type });
+      // Hashed from the bytes just read, never from mtime and size: an editor
+      // that rewrites a module to the same length inside one filesystem tick
+      // would leave that pair unchanged and pin a stale module in the browser
+      // of whoever is developing the app.
+      const tag = etagOf(body);
+      if (notModified(req, path, tag)) return sendNotModified(res, tag);
+      res.writeHead(200, { 'Content-Type': type, ETag: tag, ...REVALIDATE });
       return res.end(body);
     } catch {
       res.writeHead(404).end('Not found');

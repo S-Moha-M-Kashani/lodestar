@@ -28,7 +28,7 @@ logged in on the machine the brain runs on.**
 If you are on Docker, your options today are Ollama (local, free, private) or
 OpenRouter (an API key). Making a container reach the CLI on your own laptop is
 designed but not built — see
-`docs/superpowers/specs/2026-08-20-cli-assistant-backends-design.md`.
+`docs/decisions/2026-08-20-cli-assistant-backends-design.md`.
 
 ## Step 1 — install the CLI on your own computer
 

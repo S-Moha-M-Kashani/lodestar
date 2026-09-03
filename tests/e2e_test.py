@@ -17,6 +17,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
 from playwright.sync_api import sync_playwright
@@ -75,6 +77,10 @@ def _password_hash(password):
 
 
 PASSWORD_HASH = _password_hash(TEST_PASSWORD)
+# The developer trace's own key, minted per run like the two above: it unlocks a
+# page that shows the system prompt and every tool result, so it is never a
+# constant anybody could have read out of this file.
+DEV_KEY = secrets.token_urlsafe(18)
 SESSION_COOKIE = ""  # set by log_in() once the server is up
 
 
@@ -88,6 +94,15 @@ class _BoardSession(urllib.request.BaseHandler):
         if SESSION_COOKIE and req.host in (f"localhost:{PORT}", f"127.0.0.1:{PORT}"):
             req.add_unredirected_header("Cookie", SESSION_COOKIE)
         return req
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A 303 is the answer, not a step on the way to one: the trace unlock
+    reports success by redirecting, and following it would swallow both the
+    status and the Set-Cookie that came with it."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
 
 urllib.request.install_opener(urllib.request.build_opener(_BoardSession()))
@@ -166,6 +181,41 @@ def wait_for_capture(page, box, n=1, timeout=20.0):
     return wait_until(
         lambda: page.locator(".chat-log").count() >= 0 and len(box) >= n, timeout)
 
+
+def add_card(page, title):
+    """Create a card the way a person now does: the create control, the dialog,
+    a title, Save.
+
+    The Inbox form this replaces was one input and one Enter, so thirteen call
+    sites spelled the act out twice each. There is a dialog in the middle of it
+    now, and the wait that matters is the last one: the save commits and only
+    then re-renders the board, so returning on the dialog closing would hand a
+    caller a board that has not repainted yet. `wait_until` rather than
+    `wait_for_selector`, so a card that never arrives is the red line of the
+    check that wanted it instead of a TimeoutError that abandons every check
+    after it."""
+    page.click("#new-card-btn")
+    page.wait_for_selector("#card-dialog[open]")
+    page.fill("#card-title", title)
+    page.click("#save-card")
+    wait_until(lambda: page.locator('[data-col="inbox"] .card',
+                                    has_text=title).count() >= 1)
+
+
+def open_details(page):
+    """Open the card dialog's settings fold if it is shut.
+
+    Category, importance, urgency, deadline, plan, effort, control and tags all
+    live behind it now, and Playwright's fill/click/select_option each wait for
+    visibility — so a call site that reaches one of those fields without this
+    raises a TimeoutError, which abandons every check after it rather than
+    failing one. Clicks the real summary rather than setting `open` from script,
+    because that is the control a person uses. Idempotent on purpose: the dialog
+    opens the fold by itself for a card that already carries a setting, and a
+    blind click would then shut the very block the caller needs."""
+    if page.locator("#card-details[open]").count() == 0:
+        page.click("#card-details > summary")
+    page.wait_for_selector("#card-details[open]")
 
 def open_meta(page):
     """Unfold the evidence strip under the newest reply.
@@ -306,7 +356,12 @@ def start_server():
              # The board refuses to boot without a verifier, and the brain
              # below is not a person: it presents the shared service token.
              "LODESTAR_AUTH_PASSWORD_HASH": PASSWORD_HASH,
-             "LODESTAR_SERVICE_TOKEN": SERVICE_TOKEN},
+             "LODESTAR_SERVICE_TOKEN": SERVICE_TOKEN,
+             # The developer trace is off unless a key is set, so the run sets
+             # one — the surface has to be exercised somewhere, and "absent
+             # without a key" is proven in tests/trace.test.js rather than by
+             # leaving it off here.
+             "LODESTAR_DEV_KEY": DEV_KEY},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -359,7 +414,10 @@ def start_brain():
              # choice, which is itself one of the things asserted below.
              "BRAIN_CLAUDE_CLI_BIN": CLAUDE_CLI_STUB,
              "BRAIN_CODEX_CLI_BIN": NO_CODEX_CLI,
-             "BRAIN_CHAT_COLLECTION": "chat-e2e"},
+             "BRAIN_CHAT_COLLECTION": "chat-e2e",
+             # And the brain files them. Both halves are needed to see anything,
+             # which is the point of the pair.
+             "BRAIN_TRACE": "board"},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -386,6 +444,24 @@ def api_trash():
 
 def api_proposals():
     with urllib.request.urlopen(URL + "/api/proposals", timeout=3) as r:
+        return json.loads(r.read())
+
+
+def api_propose(card):
+    """Stand in for the Assistant proposing a card. Posting straight to
+    /api/proposals is the same door create_card goes through, and it lets a
+    check about the WIDGET's strip be about the strip rather than about
+    persuading a fake model to invent a card."""
+    req = urllib.request.Request(
+        URL + "/api/proposals", method="POST", data=json.dumps(card).encode(),
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=3) as r:
+        return json.loads(r.read())
+
+
+def api_post(path):
+    req = urllib.request.Request(URL + path, method="POST", data=b"")
+    with urllib.request.urlopen(req, timeout=3) as r:
         return json.loads(r.read())
 
 
@@ -702,12 +778,11 @@ try:
         check("categories: the removal is saved to the database",
               not any(c.get("id") == "reading" for c in api_state().get("categories", [])))
 
-        # ---- Quick add ------------------------------------------------------
+        # ---- New card -------------------------------------------------------
         before_snapshots = len(snapshots())
-        page.fill(".quick-add input", "What is speculative decoding?")
-        page.press(".quick-add input", "Enter")
+        add_card(page, "What is speculative decoding?")
         first = page.locator('[data-col="inbox"] .card .card-title').first
-        check("quick-add: new question at top of Inbox",
+        check("new card: the saved card is at the top of Inbox",
               first.inner_text() == "What is speculative decoding?")
 
         # Capturing a thought in the UI snapshots the database — the whole point
@@ -720,6 +795,7 @@ try:
         page.wait_for_selector("#card-dialog[open]")
         page.fill("#card-notes", "Draft tokens from a small model, verify with the big one.")
         page.locator('.type-picker label:has(input[value="problem"])').click()
+        open_details(page)
         page.locator('.category-picker label:has(input[value="work"])').click()
         page.fill("#card-tags", "inference, decoding")
         page.click('#card-form button[type="submit"]')
@@ -782,8 +858,7 @@ try:
         # four middle entries are quick-edits that change one field in place,
         # and Delete is the ordinary soft delete. It runs on a card of its own
         # and ends by deleting it, so the board it hands on is the one it found.
-        page.fill(".quick-add input", "Menu probe card")
-        page.press(".quick-add input", "Enter")
+        add_card(page, "Menu probe card")
         probe = lambda: page.locator(".card", has_text="Menu probe card").first
         # Only ever one panel is open, so every menu locator is scoped to the
         # visible one rather than to a card that may have moved column.
@@ -804,10 +879,11 @@ try:
               and geom["opacity"] == "1" and geom["tab"] >= 0)
 
         probe().locator(".card-menu-btn").click()
-        check("card menu: the + opens the seven actions, and not the card dialog",
+        check("card menu: the + opens the eight actions, and not the card dialog",
               [t.strip() for t in page.locator(
                   ".card-menu-panel:not([hidden]) .menu-item").all_inner_texts()]
-              == ["Edit…", "Category ▸", "Type ▸", "Deadline ▸", "Plan ▸", "Move to ▸", "Delete"]
+              == ["Edit…", "Duplicate", "Category ▸", "Type ▸", "Deadline ▸",
+                  "Plan ▸", "Move to ▸", "Delete"]
               and page.locator("#card-dialog[open]").count() == 0)
 
         page.keyboard.press("Escape")
@@ -818,6 +894,51 @@ try:
         page.locator('[data-col="inbox"] .column-title').click()
         check("card menu: Escape (focus back on the +) and an outside click both dismiss it",
               escaped and page.locator(".card-menu-panel:not([hidden])").count() == 0)
+
+        # At most one card's menu is ever open. There is one panel per card in
+        # the markup, so "the menu moved" is really "the other one was closed
+        # first" — and if closeCardMenus were dropped from the open path, two
+        # panels would stand open at once with the second card's on top, which
+        # looks right and is not. So the open panel's own card is read back,
+        # not just counted. The second card is found by index rather than by a
+        # title this block would then have to keep in step with the seed data.
+        other_idx = page.evaluate("""() => [...document.querySelectorAll('.card')]
+            .findIndex(c => c.querySelector('.card-title').textContent
+                            !== 'Menu probe card')""")
+        second = page.locator(".card").nth(other_idx)
+        second_title = second.locator(".card-title").inner_text()
+        probe().click(button="right")
+        page.wait_for_selector(".card-menu-panel:not([hidden])")
+        second.click(button="right")
+        page.wait_for_timeout(120)
+        owner = page.evaluate("""() => {
+          const p = document.querySelector('.card-menu-panel:not([hidden])');
+          return p ? p.closest('.card').querySelector('.card-title').textContent : null;
+        }""")
+        check("card menu: right-clicking a second card moves the one panel to it",
+              page.locator(".card-menu-panel:not([hidden])").count() == 1
+              and owner == second_title)
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(80)
+
+        # A right-click inside an open panel is use, not a fresh open. The
+        # regression the module header describes: every listener that has to
+        # tell "the menu" from "the card underneath it" gets it wrong at least
+        # once, and here it would repaint the panel back to its root — throwing
+        # the user out of the submenu they had just stepped into. A submenu is
+        # what makes that visible, since the root repainted looks identical to
+        # the root left alone.
+        probe().click(button="right")
+        page.wait_for_selector(".card-menu-panel:not([hidden])")
+        item("Category").click()
+        in_submenu = item("‹ Back").count() == 1
+        page.locator(".card-menu-panel:not([hidden])").click(button="right")
+        page.wait_for_timeout(120)
+        check("card menu: a right-click inside the panel leaves its submenu showing",
+              in_submenu and item("‹ Back").count() == 1
+              and item("Edit…").count() == 0)
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(80)
 
         probe().locator(".card-menu-btn").click()
         item("Category").click()
@@ -851,12 +972,20 @@ try:
               page.locator('[data-col="answered"] .card',
                            has_text="Menu probe card").count() == 1)
 
-        page.wait_for_timeout(500)  # debounced push
-        saved = [c for c in api_state()["cards"] if c["title"] == "Menu probe card"]
+        # Waited for, not slept through. The push is debounced, so a fixed 500ms
+        # is long enough on an idle machine and a flake on a busy one — which is
+        # exactly the proxy-condition wait that wait_until's own docstring names
+        # as the source of both of this suite's real flakes. Caught it doing it.
+        def quick_edits_saved():
+            rows = [c for c in api_state()["cards"] if c["title"] == "Menu probe card"]
+            if len(rows) != 1:
+                return False
+            c = rows[0]
+            return (c["category"] == "health" and c["type"] == "idea"
+                    and c["deadline"] == today and c["columnId"] == "answered")
+
         check("card menu: every quick-edit reached the database",
-              len(saved) == 1 and saved[0]["category"] == "health"
-              and saved[0]["type"] == "idea" and saved[0]["deadline"] == today
-              and saved[0]["columnId"] == "answered")
+              wait_until(quick_edits_saved, timeout=8))
 
         # The regression this control most easily causes: the whole card is one
         # click target, and a menu inside it must not swallow that or fire it.
@@ -1640,6 +1769,24 @@ try:
         page.wait_for_timeout(150)
         check("history: came forward again, later state intact",
               page.locator(".card", has_text="speculative decoding").count() == 1)
+        # And the log survives the browser being closed on it. Persistence is
+        # coalesced now — the stack updates in memory on every edit and the
+        # write lands at the first idle moment after the burst, or on
+        # `visibilitychange`/`pagehide` if the page goes away first. The unit
+        # tests drive those handlers directly; only a real browser can say
+        # whether Chromium delivers them, and only a real reload can say the
+        # written log reads back.
+        before = page.locator("#history-list .history-row").count()
+        newest = page.locator("#history-list .history-row .history-action").first.inner_text()
+        page.click("#close-history")
+        page.reload()
+        page.wait_for_selector("#board.board")
+        menu_click("#history-btn")
+        page.wait_for_selector("#history-dialog[open]")
+        check("history: the log is still there after a reload",
+              page.locator("#history-list .history-row").count() == before
+              and page.locator("#history-list .history-row .history-action")
+              .first.inner_text() == newest)
         page.click("#close-history")
 
         # ---- Responsive -----------------------------------------------------
@@ -1765,6 +1912,7 @@ try:
         page.wait_for_selector("#board.board")
         page.locator('.card', has_text="speculative decoding").first.click()
         page.wait_for_selector("#card-dialog[open]")
+        open_details(page)
         page.select_option("#card-importance", "high")
         page.select_option("#card-urgency", "low")
         page.click('#card-form button[type="submit"]')
@@ -1802,6 +1950,7 @@ try:
         def set_judgements(title, importance, urgency, deadline=None):
             page.locator('.card', has_text=title).first.click()
             page.wait_for_selector("#card-dialog[open]")
+            open_details(page)
             page.select_option("#card-importance", importance)
             page.select_option("#card-urgency", urgency)
             if deadline is not None:
@@ -2030,11 +2179,11 @@ try:
         page.wait_for_timeout(100)
 
         # ---- Decisional-balance preview ---------------------------------------
-        page.fill(".quick-add input", "Should we adopt the new framework?")
-        page.press(".quick-add input", "Enter")
+        add_card(page, "Should we adopt the new framework?")
         page.wait_for_timeout(150)
         page.locator('[data-col="inbox"] .card', has_text="new framework").first.click()
         page.wait_for_selector("#card-dialog[open]")
+        open_details(page)
         page.fill("#card-tags", "decision")
         page.fill("#card-notes", "+ faster builds\n+ better types\n- migration cost\n- team ramp-up")
         page.dispatch_event("#card-notes", "input")
@@ -2047,34 +2196,55 @@ try:
         page.click("#cancel-dialog")
         page.wait_for_timeout(100)
 
-        # ---- Quick-add: empty input and adding inside an open drawer ---------
+        # ---- New card: an empty title, and adding inside an open drawer -----
         count_now = page.locator(".card").count()
-        page.press(".quick-add input", "Enter")
+        page.click("#new-card-btn")
+        page.wait_for_selector("#card-dialog[open]")
+        page.click("#save-card")
         page.wait_for_timeout(80)
-        check("quick-add: empty input adds nothing and keeps focus in the input",
+        # #card-title is `required`, so the browser refuses the submit: nothing
+        # is written and the draft is still on screen to finish or abandon.
+        check("new card: an empty title adds nothing and leaves the dialog open",
               page.locator(".card").count() == count_now
-              and page.evaluate(
-                  "document.activeElement === document.querySelector('.quick-add input')"))
+              and page.locator("#card-dialog[open]").count() == 1)
+        page.click("#cancel-dialog")
+        page.wait_for_timeout(100)
 
         # A capture written inside an open category drawer belongs to that
         # drawer — it inherits the category and must never vanish behind the filter.
         page.locator('.cat-tab[data-cat="love"]').click()
         page.wait_for_timeout(100)
         love_before = page.locator(".card").count()
-        page.fill(".quick-add input", "Plan a surprise picnic FILTER-MARKER")
-        page.press(".quick-add input", "Enter")
+        add_card(page, "Plan a surprise picnic FILTER-MARKER")
         page.wait_for_timeout(100)
         marker = page.locator(".card", has_text="FILTER-MARKER")
-        check("quick-add: a card added inside an open drawer stays visible",
+        check("new card: one added inside an open drawer stays visible",
               page.locator(".card").count() == love_before + 1 and marker.count() == 1)
-        check("quick-add: it inherits the drawer's category",
+        check("new card: it inherits the drawer's category",
               marker.first.locator(".card-cat").inner_text() == "Love")
         page.locator(".cat-tab-all").click()
         page.wait_for_timeout(100)
 
+        # ...and the three filters that would hide it are cleared by the save.
+        # The category and type filters are deliberately NOT cleared — the card
+        # inherits those instead, which is the check just above — so this uses
+        # the search box: the easiest of the three to set, and the one whose own
+        # value says whether it was reset. Without the clearing block the card
+        # is written and then hidden by the search it was written under, which
+        # is "never lose a thought" failing in the quietest possible way.
+        page.fill("#search", "zzz-no-card-carries-this-word")
+        page.wait_for_timeout(150)
+        check("new card: a search that hides every card still offers the create control",
+              page.locator(".card").count() == 0
+              and page.locator("#new-card-btn").is_visible())
+        add_card(page, "SEARCH-CLEAR-probe")
+        page.wait_for_timeout(150)
+        check("new card: saving clears the search that would have hidden the card",
+              page.input_value("#search") == ""
+              and page.locator(".card", has_text="SEARCH-CLEAR-probe").count() == 1)
+
         # ---- Database persistence (the whole point of the server) -----------
-        page.fill(".quick-add input", "PERSIST-MARKER-alpha")
-        page.press(".quick-add input", "Enter")
+        add_card(page, "PERSIST-MARKER-alpha")
         page.wait_for_timeout(500)
         check("db: new question written to the database",
               any(c["title"] == "PERSIST-MARKER-alpha" for c in api_state()["cards"]))
@@ -2206,8 +2376,7 @@ try:
         page.click("#close-history")
 
         # ---- Survives a server restart (proves on-disk SQLite) --------------
-        page.fill(".quick-add input", "RESTART-MARKER-beta")
-        page.press(".quick-add input", "Enter")
+        add_card(page, "RESTART-MARKER-beta")
         page.wait_for_timeout(500)
         check("db: restart marker saved before restart",
               any(c["title"] == "RESTART-MARKER-beta" for c in api_state()["cards"]))
@@ -2377,9 +2546,20 @@ try:
         # check used to pass on the count race above, reading the previous turn's
         # already-finished strip instead of this one's.
         folded = page.locator(".chat-meta").last
+        # Waited on the settled row itself — "Worked for", past tense — rather
+        # than on the word "tool" appearing somewhere in the strip. Those used
+        # to be the same wait by accident: the counts tail carried the tool
+        # count too, so "tool" showed up the moment a tool started running. It
+        # is named once now, by the row, so the substring only arrives when the
+        # turn settles, and a machine under load could reach the deadline with
+        # the answer already on screen. This says what the comment above always
+        # meant, and asserts the count in the strip separately.
         settled_meta = wait_until(
             lambda: folded.locator(".chat-meta-summary").count() == 1
-            and "tool" in folded.locator(".chat-meta-summary").inner_text())
+            and folded.locator(".chat-worked").count() == 1
+            and folded.locator(".chat-worked").inner_text().startswith("Worked for"))
+        settled_meta = settled_meta and "tool" in folded.locator(
+            ".chat-meta-summary").inner_text()
         check("assistant: the evidence under a reply is folded until asked for",
               settled_meta and not folded.locator(".chat-steps").is_visible())
         open_meta(page)
@@ -2791,10 +2971,10 @@ try:
         page.keyboard.press("Escape")
         by_escape = wait_until(lambda: page.locator(".chat-history").count() == 0)
         open_chat_history(page)
-        page.mouse.click(700, 700)           # the transcript, not the tools
+        page.mouse.click(10, 500)            # the page margin, outside the tools
         by_click = wait_until(lambda: page.locator(".chat-history").count() == 0)
         open_chat_history(page)
-        page.mouse.move(700, 820)            # pointer walks away and stays away
+        page.mouse.move(10, 500)             # pointer walks away and stays away
         by_idle = wait_until(lambda: page.locator(".chat-history").count() == 0,
                              timeout=9)
         check("tools: the History panel drops from its button and closes when unused",
@@ -2848,6 +3028,11 @@ try:
         # This is an end-to-end test.
         # And once refused it stops asking for the rest of the chat — a broad
         # conversation must not be interrupted on every greeting.
+        # Waited for, not assumed: `submitChat` returns early while a turn is in
+        # flight, so pressing Send on a disabled composer does nothing at all and
+        # the failure reads as "the nudge asked again" — which is not what
+        # happened.
+        wait_until(lambda: not page.locator("#chat-input").is_disabled(), timeout=15)
         page.fill("#chat-input", "hello again")
         page.click("#chat-send")
         wait_for_capture(page, nudged, 2)
@@ -2862,6 +3047,9 @@ try:
         page.fill("#chat-input", "the weekend plan")
         page.click("#chat-send")
         wait_for_capture(page, nudged, 3)
+        # Same reason as above: the greeting must be typed into a composer that
+        # is listening, or the nudge it is meant to provoke never gets asked for.
+        wait_until(lambda: not page.locator("#chat-input").is_disabled(), timeout=15)
         page.fill("#chat-input", "hi")
         page.click("#chat-send")
         wait_until(lambda: page.locator(".chat-drift").count() == 1)
@@ -3339,13 +3527,15 @@ try:
               any(c["title"] == "A thought I do not want" for c in api_trash()["cards"]))
 
         # ---- Suggested edits: the agent asks, the user saves -----------------
+        # This is an end-to-end test.
         # The guardrail that replaced the one ungated write. A suggestion changes
         # nothing on its own; the user opens it, may adjust it, and their own save
         # is what applies it. So the assertions are in that order: unchanged,
         # then reviewable, then applied only after a save.
         target = api_state()["cards"][0]
         api_suggest_edit(target["id"], {"title": "A title the agent suggested",
-                                       "columnId": "in-progress"})
+                                       "columnId": "in-progress",
+                                       "deadline": "2027-03-04"})
         # Away and back: setView refreshes the waiting lists on entry, and the
         # previous block left us already on the Assistant, where a click is a
         # no-op. A suggestion made by a real chat turn arrives on its own flag.
@@ -3357,7 +3547,10 @@ try:
               and page.locator(".suggestion-review").count() == 1
               and page.locator(".suggestion-dismiss").count() == 1)
         check("edits: the row says what would change, without opening it",
-              "in progress" in page.inner_text(".suggestion-change").lower())
+              "in progress" in page.inner_text(".suggestion-change").lower()
+              # Every field the suggestion names has to be named here too, or
+              # the row invites the user to review a change it never mentioned.
+              and "2027-03-04" in page.inner_text(".suggestion-change"))
         check("edits: the card is untouched while the suggestion waits",
               next(c for c in api_state()["cards"]
                    if c["id"] == target["id"])["title"] == target["title"])
@@ -3369,6 +3562,13 @@ try:
         page.wait_for_selector("#card-dialog[open]")
         check("edits: reviewing opens the card with the suggestion filled in",
               page.input_value("#card-title") == "A title the agent suggested")
+        # The deadline used to be painted from the stored card while every other
+        # field came from the suggestion, so the reviewer read the old date,
+        # pressed Save, and wrote the old date back — the suggestion dropped
+        # with no error anywhere. The fold is forced open for a review, which is
+        # why this needs no open_details.
+        check("edits: a suggested deadline is what the reviewer is shown",
+              page.input_value("#card-deadline") == "2027-03-04")
         # The user's own wording wins — that is the whole point of reviewing.
         page.fill("#card-title", "A title I chose myself")
         page.click("#card-form button[type=submit]")
@@ -3381,6 +3581,8 @@ try:
         check("edits: saving applies what the USER left in the form", applied)
         check("edits: a suggested column move rides along with the save",
               wait_until(lambda: saved_card()["columnId"] == "in-progress"))
+        check("edits: the deadline the reviewer approved is the one saved",
+              wait_until(lambda: saved_card()["deadline"] == "2027-03-04"))
         check("edits: the answered suggestion leaves the list",
               len(api_edits()["edits"]) == 0)
 
@@ -3395,6 +3597,43 @@ try:
               len(api_edits()["edits"]) == 0
               and next(c for c in api_state()["cards"]
                        if c["id"] == target["id"])["notes"] != "notes the agent wanted")
+
+        # The second half of the dialog's fold predicate:
+        # `cardHasDetails(shown) || Boolean(reviewingEditId)`. Every review
+        # above lands on a seed card that already carries settings, so the FIRST
+        # clause is true there and the second could be deleted without a single
+        # red line — while a suggested change to a folded setting would then be
+        # approved unseen. This one reviews a card straight out of add_card,
+        # which carries nothing folded at all, and the suggestion names `notes`,
+        # a field that lives outside the fold, so the card-plus-suggestion
+        # overlay cannot make the first clause true either. The card's emptiness
+        # is asserted rather than assumed: a stray filter leaking a category
+        # into a future add_card would otherwise make this check vacuous.
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector("#board.board")
+        add_card(page, "EDIT-probe bare card")
+        wait_until(lambda: any(c["title"] == "EDIT-probe bare card"
+                               for c in api_state()["cards"]))
+        bare = next((c for c in api_state()["cards"]
+                     if c["title"] == "EDIT-probe bare card"), None)
+        nothing_folded = bare is not None and not (
+            bare.get("category") or bare.get("importance") or bare.get("urgency")
+            or bare.get("deadline") or bare.get("tags")
+            or bare.get("planSrc") != "auto" or bare.get("effortSrc") != "default"
+            or bare.get("controlSrc") != "default")
+        api_suggest_edit(bare["id"], {"notes": "a note the agent wanted"})
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector(".suggestion")
+        page.click(".suggestion-review")
+        page.wait_for_selector("#card-dialog[open]")
+        check("edits: a review opens the fold even on a card with nothing folded",
+              nothing_folded
+              and page.locator("#card-details[open]").count() == 1
+              and page.locator("#card-tags").is_visible())
+        page.click("#cancel-dialog")
+        page.wait_for_timeout(100)
+        page.click(".suggestion-dismiss")
+        page.wait_for_function("document.querySelectorAll('.suggestion').length === 0")
 
         # ---- Assistant model settings ----------------------------------------
         # A "Models" panel with two pickers (text, omni) plus a fixed embedder
@@ -3767,6 +4006,149 @@ try:
                 errors.remove(e)
         page.locator('.view-switch button[data-view="board"]').click()
 
+        # ---- The chrome around a turn: banner, Retry, worked-for, footer -----
+        # This is an end-to-end test.
+        # A failed turn used to be a red bubble saying one sentence, with the
+        # real error only in the console and the user's own words gone from the
+        # composer. It is a banner now: one line, the whole error behind a
+        # reveal, a copy, and a Retry that re-sends what they already typed.
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector("#chat-input")
+        # A chat of its own. The transcript above this point is full of turns
+        # the earlier blocks deliberately failed, and "exactly one banner" is
+        # the whole assertion — counted across those it would be meaningless.
+        page.click("#chat-new")
+        page.wait_for_selector(".chat-suggest")
+        n_before = len(errors)
+        n_msgs = page.locator(".chat-msg").count()
+        page.route("**/api/agent/chat/stream", lambda route: route.fulfill(
+            status=502, content_type="application/json",
+            body='{"error":"upstream exploded"}'))
+        page.fill("#chat-input", "banner please")
+        page.click("#chat-send")
+        page.wait_for_selector(".chat-error")
+        banner = page.locator(".chat-error").last
+        check("banner: a failed turn is one banner, not an assistant reply",
+              page.locator(".chat-error").count() == 1
+              and banner.get_attribute("role") == "alert"
+              and banner.locator(".chat-error-retry").count() == 1
+              and "FAKE:" not in page.inner_text(".chat-log"))
+        # The friendly line is what is read; the error as it arrived is behind
+        # Details — which is where the status and the body a bug report needs
+        # actually live.
+        collapsed = banner.locator(".chat-error-line").inner_text()
+        banner.locator(".chat-error-reveal").click()
+        check("banner: the whole error is behind a reveal, the friendly line in front",
+              "unavailable" in collapsed.lower()
+              and wait_until(lambda: banner.locator(".chat-error-detail").is_visible())
+              and "502" in banner.locator(".chat-error-detail").inner_text())
+        # Retry against a stream that now works: one user message, one reply,
+        # and the banner gone. The message is NOT retyped — that is the point.
+        page.unroute("**/api/agent/chat/stream")
+        banner.locator(".chat-error-retry").click()
+        page.wait_for_selector(".chat-msg.assistant:not(.error)")
+        check("banner: Retry re-sends the same message and replaces the banner",
+              wait_until(lambda: page.locator(".chat-error").count() == 0
+                         and "FAKE: banner please" in page.inner_text(".chat-log"))
+              and page.locator(".chat-msg.user", has_text="banner please").count() == 1
+              and page.locator(".chat-msg").count() == n_msgs + 2)
+        for e in [e for e in errors[n_before:] if "502" in e]:
+            errors.remove(e)
+        # A retry that fails again leaves exactly one banner for that turn — not
+        # a column of them, which is what appending would give.
+        n_before = len(errors)
+        page.route("**/api/agent/chat/stream", lambda route: route.fulfill(
+            status=502, content_type="application/json", body='{"error":"still down"}'))
+        page.fill("#chat-input", "fails twice")
+        page.click("#chat-send")
+        page.wait_for_selector(".chat-error")
+        page.locator(".chat-error").last.locator(".chat-error-retry").click()
+        page.wait_for_timeout(600)
+        check("banner: a retry that fails again leaves one banner, not two",
+              page.locator(".chat-error").count() == 1
+              and page.locator(".chat-msg.user", has_text="fails twice").count() == 1)
+        page.unroute("**/api/agent/chat/stream")
+        for e in [e for e in errors[n_before:] if "502" in e]:
+            errors.remove(e)
+        page.reload()   # drop the failed turn from view; the cache keeps it
+        page.wait_for_selector("#board")
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector("#chat-input")
+
+        # What the turn cost in time and tools, on the turn itself. Exact
+        # wording, because "0 tools" and "1 tool" are the two the plural rule
+        # gets wrong and a row that says "1 tools" is the sort of thing nobody
+        # reports and everybody notices.
+        page.fill("#chat-input", "how long did that take")
+        page.click("#chat-send")
+        # Wait for the turn to land before reading the row, and generously: this
+        # is the first turn after a reload, and the row says "Working for …"
+        # while it is in flight — which is correct, and would otherwise read as
+        # a failure of the wording this check is about.
+        landed = wait_until(
+            lambda: "FAKE: how long did that take" in page.inner_text(".chat-log")
+            and not page.locator("#chat-input").is_disabled(), timeout=20)
+        worked = landed and wait_until(
+            lambda: page.locator(".chat-worked").last.inner_text()
+            .startswith("Worked for "))
+        row = (page.locator(".chat-worked").last.inner_text()
+               if page.locator(".chat-worked").count() else "<no row>")
+        check("worked: a settled turn says how long it took and how many tools ran",
+              worked
+              and re.match(r"^Worked for \d+\.\d+s · (0 tools|1 tool|\d+ tools)$", row)
+              is not None)
+        # And the step chips are still reachable from it: the row leads the
+        # evidence strip rather than replacing it.
+        page.route("**/api/agent/chat/stream", lambda route: (
+            route.fulfill(status=200, content_type="text/event-stream",
+                          body=("event: step\ndata: " + json.dumps(
+                              {"tool": "list_cards", "arguments": {}, "result": []})
+                                + "\n\nevent: done\ndata: " + json.dumps(
+                              {"reply": "two tools ran", "steps": [
+                                  {"tool": "list_cards", "arguments": {}, "result": []},
+                                  {"tool": "web_search", "arguments": {}, "result": []}]})
+                                + "\n\n"))))
+        page.fill("#chat-input", "use some tools")
+        page.click("#chat-send")
+        wait_until(lambda: "two tools ran" in page.inner_text(".chat-log"))
+        check("worked: the count is the turn's tools, and the chips stay behind it",
+              wait_until(lambda: page.locator(".chat-worked").last.inner_text()
+                         .endswith("· 2 tools"))
+              and page.locator(".chat-meta").last.locator(".chat-step").count() == 2)
+        # And it is named once. The row and the counts are two spans in one
+        # strip, and both used to carry the tool count — "Worked for 17.2s · 2
+        # tools · 1 source · 2 tools · 14,090 tokens". Reading `.chat-worked`
+        # alone cannot see that, which is why the assert is on the whole
+        # summary and why it is here rather than in a test of its own.
+        check("worked: the tool count is named once, not once per span",
+              page.locator(".chat-meta-summary").last.inner_text()
+              .count(" tools") == 1)
+        page.unroute("**/api/agent/chat/stream")
+
+        # ---- The composer footer: which board, which model, and send ---------
+        # The pick moved out of the ⚙ drawer to where the question is typed. Two
+        # controls over one value: whichever is used, the other has to agree, or
+        # the app is telling two stories about which model just answered.
+        check("footer: the composer names the board the question is answered against",
+              page.locator(".chat-composer .composer-context").count() == 1
+              and page.locator(".chat-composer .composer-context").inner_text().strip()
+              == page.locator("#board-select option:checked").inner_text().strip())
+        # Pick whatever is not currently selected — the list is the brain's, so
+        # naming a slug here would pin the test to one machine's Ollama tags.
+        options = [o.strip() for o in
+                   page.locator("#chat-model option").all_inner_texts()]
+        picked = next((o for o in options
+                       if o != page.input_value("#chat-model")), None)
+        if picked:
+            page.select_option("#chat-model", label=picked)
+        open_models(page)
+        check("footer: a model picked in the footer is the pick the ⚙ panel shows",
+              picked is not None
+              and page.input_value("#chat-model") == picked
+              and page.input_value("#model-text") == picked)
+        page.click("#assistant-extras-btn")   # shut the drawer again
+        page.locator('.view-switch button[data-view="board"]').click()
+
         # ---- Chat transcript survives a reload (Session 6) -------------------
         # This is an end-to-end test.
         # The transcript is the one thing in the Assistant that was still lost on
@@ -4099,13 +4481,13 @@ try:
         check("sample: board intact after reload", page.locator(".card").count() == len(sample["cards"]))
 
         # ---- Editor: effort & control --------------------------------------
-        page.fill(".quick-add input", "EFFORT-CONTROL-probe")
-        page.press(".quick-add input", "Enter")
+        add_card(page, "EFFORT-CONTROL-probe")
         page.locator('[data-col="inbox"] .card', has_text="EFFORT-CONTROL-probe").first.click()
         page.wait_for_selector("#card-dialog[open]")
         check("editor: effort & control default to the middle of the scale",
               page.input_value("#card-effort") == "medium"
               and page.input_value("#card-control") == "influence")
+        open_details(page)
         page.select_option("#card-effort", "low")
         page.select_option("#card-control", "act")
         page.click('#card-form button[type="submit"]')
@@ -4181,12 +4563,38 @@ try:
         page.wait_for_selector('.matrix-switch button[data-matrix="followthrough"][aria-pressed="true"]')
         n_ft = sum(1 for c in srv_cards
                    if c.get("importance") and c.get("columnId") != "answered")
-        cols_with_dots = page.evaluate(
-            """() => new Set([...document.querySelectorAll('.matrix-quad')]
-                 .filter(q => q.querySelector('.plot-dot')).map(q => q.dataset.x)).size""")
+        # Which column each card belongs in, worked out here from the same
+        # timestamps the view reads, and compared against where the dots
+        # actually landed.
+        #
+        # This used to assert `cols_with_dots >= 2` — that at least two age
+        # columns hold something. It passed for a month and then could never
+        # pass again: sample-overview.json's newest card was touched
+        # 2026-07-18, the stale bucket opens at 45 days, and on 2026-09-01
+        # every card in the fixture aged into one column. A check whose answer
+        # depends on today's date is a check with an expiry date on it, and it
+        # expires into a failure that looks like a regression in the view.
+        # Bucketing every card correctly is also the stronger claim.
+        now_ms = page.evaluate("() => Date.now()")
+        DAY_MS = 86_400_000
+
+        def bucket_of(card):
+            age = now_ms - (card.get("updatedAt") or card.get("createdAt") or now_ms)
+            return ("fresh" if age < 14 * DAY_MS
+                    else "aging" if age < 45 * DAY_MS else "stale")
+
+        expected = {}
+        for c in srv_cards:
+            if not c.get("importance") or c.get("columnId") == "answered":
+                continue
+            expected[bucket_of(c)] = expected.get(bucket_of(c), 0) + 1
+        actual = page.evaluate(
+            """() => Object.fromEntries([...document.querySelectorAll('.matrix-quad')]
+                 .map(q => [q.dataset.x, q.querySelectorAll('.plot-dot').length])
+                 .reduce((m, [x, n]) => m.set(x, (m.get(x) || 0) + n), new Map()))""")
         check("matrices: follow-through buckets open cards by age",
               page.locator(".matrix-quad-dots .plot-dot").count() == n_ft
-              and cols_with_dots >= 2)
+              and {k: v for k, v in actual.items() if v} == expected)
         page.click('.matrix-switch button[data-matrix="eisenhower"]')
 
         # ---- Areas view ------------------------------------------------------
@@ -4247,6 +4655,7 @@ try:
         page.wait_for_timeout(100)
         page.locator('[data-col="inbox"] .card').first.click()
         page.wait_for_selector("#card-dialog[open]")
+        open_details(page)
         page.locator('.category-picker label:has(input[value="photography"])').click()
         page.click('#card-form button[type="submit"]')
         page.wait_for_timeout(100)
@@ -4296,18 +4705,27 @@ try:
         check("board: the third column is labelled Done",
               page.locator('[data-col="answered"] .column-title').text_content() == "Done")
 
-        page.fill(".quick-add input", "Meditate")
-        page.press(".quick-add input", "Enter")
+        add_card(page, "Meditate")
         habit_card = page.locator('[data-col="inbox"] .card', has_text="Meditate").first
         habit_card.click()
         page.wait_for_selector("#card-dialog[open]")
         check("habit: the cadence fields are hidden until the card is a habit",
               page.locator("#card-habit[hidden]").count() == 1)
         page.locator('.type-picker label:has(input[value="habit"])').click()
+        # is_visible(), not `#card-habit:not([hidden])`: the attribute stays
+        # absent whatever happens to the fieldset's surroundings, so an
+        # attribute check would pass just as happily with the cadence moved
+        # inside the collapsed fold and invisible. "Meditate" carries nothing
+        # folded, so the fold is shut here — which is what makes this the
+        # spec's assertion: the cadence appears beside the stamp that governs
+        # it, without the user opening the block.
         check("habit: stamping Habit reveals the cadence fields",
-              page.locator("#card-habit:not([hidden])").count() == 1)
+              page.locator("#card-habit").is_visible()
+              and page.locator("#card-habit-freq").is_visible()
+              and page.locator("#card-details[open]").count() == 0)
         page.select_option("#card-habit-freq", "daily")
         page.fill("#card-habit-count", "2")
+        open_details(page)
         page.locator('.category-picker label:has(input[value="health"])').click()
         page.click('#card-form button[type="submit"]')
 
@@ -4469,7 +4887,7 @@ try:
               and page.evaluate("localStorage.getItem('lodestar:habitChime')") == "bell"
               and page.get_attribute("#sound-bell", "aria-checked") == "true")
         page.reload()
-        page.wait_for_selector(".quick-add input")
+        page.wait_for_selector("#new-card-btn")
         page.click("#menu-btn")
         page.hover("#menu-sound")
         page.wait_for_timeout(150)
@@ -4523,14 +4941,161 @@ try:
         page.select_option("#type-filter", "")
         page.wait_for_timeout(150)
 
+        # ---- The card dialog's settings fold ---------------------------------
+        # This is an end-to-end test. Everything but the card, its notes and its
+        # type folds away, so the dialog a capture faces is three fields instead
+        # of eleven. The fold then opens itself for any card that already holds
+        # one of the folded settings — a short dialog must never hide a category
+        # somebody chose. Collapsing is not clearing: a save made with the block
+        # shut has to write exactly the values it is holding.
+        add_card(page, "FOLD-probe bare")
+        page.locator('.card', has_text="FOLD-probe bare").first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        check("fold: a bare card opens with its settings folded away",
+              page.locator("#card-details[open]").count() == 0
+              and page.locator("#card-title").is_visible()
+              and page.locator("#card-notes").is_visible()
+              and page.locator(".type-picker").is_visible()
+              and not page.locator("#card-tags").is_visible())
+        open_details(page)
+        page.locator('.category-picker label:has(input[value="work"])').click()
+        page.fill("#card-tags", "folded, probe")
+        page.click("#save-card")
+        page.wait_for_timeout(250)
+
+        page.locator('.card', has_text="FOLD-probe bare").first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        check("fold: a card that already carries a setting opens with it showing",
+              page.locator("#card-details[open]").count() == 1
+              and page.locator("#card-tags").is_visible())
+        page.click("#card-details > summary")
+        page.wait_for_selector("#card-details:not([open])")
+        page.fill("#card-title", "FOLD-probe renamed")
+        page.click("#save-card")
+        wait_until(lambda: page.locator('.card', has_text="FOLD-probe renamed").count() == 1)
+        page.wait_for_timeout(700)
+        folded = next((c for c in api_state()["cards"]
+                       if c["title"] == "FOLD-probe renamed"), None)
+        check("fold: a save made with the block shut keeps every folded value",
+              folded is not None and folded.get("category") == "work"
+              and folded.get("tags") == ["folded", "probe"])
+
+        # ---- Duplicate: a copy of the card, never a copy of its record -------
+        # This is an end-to-end test. A duplicate is a draft like any other: it
+        # exists when it is saved, so cancelling costs no ledger number. It
+        # carries the cadence, which is the habit's design, and never the
+        # completions, which are its record — a copy that inherited a year of
+        # ticks would be a record of things that did not happen, the same reason
+        # the agent is given no tool to tick a habit.
+        add_card(page, "DUP-probe stretch")
+        page.locator('.card', has_text="DUP-probe stretch").first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        page.locator('.type-picker label:has(input[value="habit"])').click()
+        page.select_option("#card-habit-freq", "daily")
+        page.fill("#card-habit-count", "1")
+        # A category, so the copy carries a *folded* setting and its draft opens
+        # showing it. The cadence alone would not: those fields sit outside the
+        # fold beside the stamp that governs them, so nothing is hidden and
+        # `cardHasDetails` rightly leaves the block shut.
+        open_details(page)
+        page.locator('.category-picker label:has(input[value="health"])').click()
+        page.click("#save-card")
+        page.wait_for_timeout(250)
+        src = lambda: page.locator('.card', has_text="DUP-probe stretch").first
+        # Punched to completion, so this habit stops being due and cannot banner
+        # over a later block's clicks.
+        # Punching itself is already covered above; here it is setup, and the
+        # last check re-reads this card's history from the database anyway.
+        src().locator(".habit-punch .punch-box:not(.done)").first.click()
+        page.wait_for_timeout(250)
+
+        # Right-click, deliberately: the accelerator and the + drop one panel.
+        src().click(button="right")
+        page.wait_for_selector(".card-menu-panel:not([hidden])")
+        no_dialog_yet = page.locator("#card-dialog[open]").count() == 0
+        item("Duplicate").click()
+        page.wait_for_selector("#card-dialog[open]")
+        # text_content(), not inner_text(): `#card-form h2` is uppercased in CSS,
+        # so inner_text() reports what is painted ("NEW CARD") rather than what
+        # the dialog set. Split in two, because a single seven-part condition
+        # says only that one of seven things broke.
+        check("duplicate: right-click opens a draft prefilled from the card",
+              no_dialog_yet
+              and page.input_value("#card-title") == "DUP-probe stretch"
+              and page.locator("#card-details[open]").count() == 1)
+        check("duplicate: the dialog says it is creating, not editing",
+              page.locator("#dialog-title").text_content().strip() == "New card"
+              and page.locator("#save-card").text_content().strip() == "Add card"
+              and not page.locator("#delete-card").is_visible()
+              and page.locator('.card', has_text="DUP-probe stretch").count() == 1)
+        page.fill("#card-title", "DUP-probe copy")
+        page.click("#save-card")
+        wait_until(lambda: page.locator('.card', has_text="DUP-probe copy").count() == 1)
+        page.wait_for_timeout(700)
+        cards = api_state()["cards"]
+        titles = [c["title"] for c in cards]
+        source = next((c for c in cards if c["title"] == "DUP-probe stretch"), None)
+        copy = next((c for c in cards if c["title"] == "DUP-probe copy"), None)
+        check("duplicate: the copy keeps the cadence, earns a number, inherits no history",
+              source is not None and copy is not None
+              and copy["habitFreq"] == source["habitFreq"]
+              and copy["habitCount"] == source["habitCount"]
+              and copy["columnId"] == source["columnId"]
+              and copy["num"] != source["num"]
+              and copy["category"] == source["category"] == "health"
+              and copy["habitHistory"] == {}
+              and source["habitHistory"] != {}
+              and titles.index("DUP-probe copy") == titles.index("DUP-probe stretch") + 1)
+        # Retire the copy: it has no completions, so it would be due and would
+        # banner over every board open in the blocks below.
+        page.locator('.card', has_text="DUP-probe copy").first.click(button="right")
+        page.wait_for_selector(".card-menu-panel:not([hidden])")
+        item("Move to").click()
+        item("Done").click()
+        page.wait_for_timeout(250)
+
+        # A cancelled draft writes nothing and burns no ledger number — the
+        # design's central argument, and nothing pinned it. Cheap insurance
+        # rather than a live risk: `num` is `nextNum()` = max(num) + 1, derived
+        # at the save from the board itself, so there is no counter a cancel
+        # could advance. What it would catch is the rejected alternative
+        # creeping back — create the card first and delete it on cancel, which
+        # burns a permanent number, writes two undo entries for one act and
+        # leaves a Trash entry to clean up. Both doors into a draft are tried,
+        # because only the create control's one goes through blankDraft.
+        expected_num = max(c["num"] for c in api_state()["cards"]) + 1
+        page.click("#new-card-btn")
+        page.wait_for_selector("#card-dialog[open]")
+        page.fill("#card-title", "CANCEL-probe blank draft")
+        open_details(page)
+        page.locator('.category-picker label:has(input[value="work"])').click()
+        page.click("#cancel-dialog")
+        page.wait_for_timeout(150)
+        page.locator('.card', has_text="DUP-probe stretch").first.click(button="right")
+        page.wait_for_selector(".card-menu-panel:not([hidden])")
+        item("Duplicate").click()
+        page.wait_for_selector("#card-dialog[open]")
+        page.fill("#card-title", "CANCEL-probe duplicate")
+        page.click("#cancel-dialog")
+        page.wait_for_timeout(150)
+        add_card(page, "CANCEL-probe kept")
+        page.wait_for_timeout(700)
+        after_cancels = api_state()["cards"]
+        kept = next((c for c in after_cancels
+                     if c["title"] == "CANCEL-probe kept"), None)
+        check("duplicate: a cancelled draft writes no card and burns no number",
+              not any(c["title"].startswith("CANCEL-probe blank")
+                      or c["title"] == "CANCEL-probe duplicate"
+                      for c in after_cancels)
+              and kept is not None and kept["num"] == expected_num)
+
         # ---- The plan (when a card is meant to happen) ------------------------
         # This is an end-to-end test. A plan is not a stored list: it is the
         # partial date each card carries — a year, a year and month, or a day —
         # read into five groups by how near it is. Its box looks like a habit's
         # on purpose and means something else: a tick finishes the card, so it
         # moves to Done and leaves the list.
-        page.fill(".quick-add input", "Send the tax forms")
-        page.press(".quick-add input", "Enter")
+        add_card(page, "Send the tax forms")
         plan_row = lambda: page.locator(".plan-rail .plan-rail-row", has_text="Send the tax forms")
         # Which groups a card is listed under — the headings above its rows.
         # A list, because a dated dream belongs to two of them.
@@ -4580,6 +5145,7 @@ try:
               page.locator("#card-plan-year").count() == 1
               and page.locator("#card-plan-month").count() == 1
               and page.locator("#card-plan-day").count() == 1)
+        open_details(page)
         page.fill("#card-deadline", "2026-01-01")
         page.locator("#card-plan-year").select_option(str(datetime.now().year + 3))
         page.wait_for_timeout(120)
@@ -4590,6 +5156,38 @@ try:
         page.wait_for_timeout(150)
         check("plan: and the card cannot be saved while it says that",
               page.locator("#card-dialog[open]").count() == 1)
+
+        # The same refusal from a COLLAPSED fold — the case the one-line
+        # `$('#card-details').open = true` in edit-dialog.js exists for. Without
+        # it the message and the year select are both inside a closed <details>:
+        # the error is invisible, focus() on an element in a closed fold is a
+        # no-op, and Save simply appears to do nothing at all.
+        #
+        # The fold is collapsed by hand here rather than found shut on open, and
+        # it has to be. A conflict needs a deadline in the form, and any card
+        # carrying a deadline makes `cardHasDetails` true, so the fold opens
+        # itself on every card that could produce one — "shut on open AND
+        # conflicting on save" is unreachable by construction. Collapsing it is
+        # the reachable half of the same scenario and fails in the same way.
+        page.click("#card-details > summary")
+        page.wait_for_selector("#card-details:not([open])")
+        page.click('#card-form button[type="submit"]')
+        page.wait_for_timeout(200)
+        check("plan: a refusal from a collapsed fold opens it and focuses the plan",
+              page.locator("#card-details[open]").count() == 1
+              and page.evaluate("() => document.activeElement.id") == "card-plan-year")
+        check("plan: and that refusal says why, where it can be read",
+              page.locator("#card-plan-error").is_visible()
+              and "after the deadline" in page.locator("#card-plan-error").inner_text())
+        check("plan: the refused save wrote nothing to the card",
+              page.locator("#card-dialog[open]").count() == 1
+              and all(c.get("deadline") != "2026-01-01"
+                      for c in api_state()["cards"]
+                      if c["title"] == "Send the tax forms"))
+        # Reopen the fold whatever the checks found, so the two clicks below
+        # reach visible controls instead of raising a TimeoutError that would
+        # abandon every check after this block.
+        open_details(page)
         page.click("#card-plan-follow")
         page.wait_for_timeout(100)
         check("plan: following the deadline again clears the error",
@@ -4731,7 +5329,7 @@ try:
             page.wait_for_function(
                 "name => document.querySelector('#board-select')"
                 "?.selectedOptions[0]?.textContent.includes(name)", arg=name)
-            page.wait_for_selector(".quick-add input")
+            page.wait_for_selector("#new-card-btn")
 
         def fill_prompt(text):
             page.fill("#prompt-input", text)
@@ -4748,8 +5346,7 @@ try:
               page.locator(".card").count() == 0
               and "Getaway" in page.locator("#board-select").inner_text())
 
-        page.fill(".quick-add input", "Book the ferry")
-        page.press(".quick-add input", "Enter")
+        add_card(page, "Book the ferry")
         page.wait_for_timeout(400)
         new_id = page.evaluate("() => document.querySelector('#board-select').value")
         check("boards: a card saved here lands on this board alone",
@@ -4791,10 +5388,12 @@ try:
         page.click("#history-btn")
         page.wait_for_selector("#history-dialog[open]")
         boards_section = page.locator("#boards-trash-section")
+        board_trash_loaded = wait_until(
+            lambda: boards_section.is_visible()
+            and "Board “Getaway” is deleted" in boards_section.inner_text()
+            and "1 card(s)" in boards_section.inner_text())
         check("boards: History says which board is deleted, cards counted",
-              boards_section.is_visible()
-              and "Board “Getaway” is deleted" in boards_section.inner_text()
-              and "1 card(s)" in boards_section.inner_text())
+              board_trash_loaded)
         page.click("#boards-trash-section button:has-text('Restore')")
         page.wait_for_timeout(300)
         check("boards: restoring from History puts the board back in the picker",
@@ -4850,7 +5449,7 @@ try:
                       "() => localStorage.getItem('e2e:prompt-close')") == "ok")))
 
         # Cancel still cancels: by the button, and by Escape.
-        page.wait_for_selector(".quick-add input")
+        page.wait_for_selector("#new-card-btn")
         name_before = selected_board_name()
         board_menu("#board-rename")
         prompt_open = wait_until(
@@ -4901,15 +5500,13 @@ try:
         # Force the next debounced PUT /api/state to fail.
         n_before = len(errors)
         page.route("**/api/state*", block_state_put)
-        page.fill(".quick-add input", "Trigger an offline push")
-        page.press(".quick-add input", "Enter")
+        add_card(page, "Trigger an offline push")
         page.wait_for_timeout(400)  # debounce is 150ms + failure
         check("offline: PUT failure announces the local-save message",
               "saved locally" in page.locator("#live-region").inner_text())
         # Recovery: stop aborting, trigger another push, expect the reconnect message.
         page.unroute("**/api/state*", block_state_put)
-        page.fill(".quick-add input", "Trigger a reconnect push")
-        page.press(".quick-add input", "Enter")
+        add_card(page, "Trigger a reconnect push")
         page.wait_for_timeout(400)
         check("offline: a later successful push announces reconnection",
               "Reconnected" in page.locator("#live-region").inner_text())
@@ -4921,6 +5518,387 @@ try:
         check("offline route-abort surfaced a console error to scrub", len(provoked) >= 1)
         for e in provoked:
             errors.remove(e)
+
+        # ---- The Assistant widget: one conversation, two shells --------------
+        # This is an end-to-end test.
+        # The Assistant used to be a screen you had to leave the board for. The
+        # widget is the same conversation docked in the corner of whatever view
+        # you are on, and the properties worth testing are the ones that make it
+        # a second *shell* rather than a second chat: it is closed until asked
+        # for, it is reachable from every view, and there is never more than one
+        # of it in the document — two `#chat-input`s would be invalid HTML and
+        # would break every selector this suite already depends on.
+        def set_theme(theme):
+            """Pick a theme the way a person does. The picker is inside the
+            board's ⚙ Menu — a hidden <select> fails Playwright's actionability
+            checks — and the Menu is the board's, so this drops it open, picks,
+            and shuts it again."""
+            if page.locator("#menu-panel").is_hidden():
+                page.click("#menu-btn")
+            page.select_option("#menu-panel #theme-select", theme, timeout=2000)
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(50)
+
+        WIDGET_KEY = "lodestar:widget"
+        page.evaluate("key => localStorage.removeItem(key)", WIDGET_KEY)
+        page.reload()
+        page.wait_for_selector("#board")
+        check("widget: the launcher is in the header on the Board",
+              page.locator("#assistant-launcher").count() == 1
+              and page.locator("#assistant-launcher").is_visible())
+        # Closed by default: an existing user meets no change until they ask for
+        # one, and an assistant that opens itself over the work is the mental
+        # load this whole change exists to remove.
+        check("widget: nothing is shown until the launcher is used",
+              not page.locator("#assistant-widget").is_visible())
+        page.click("#assistant-launcher")
+        page.wait_for_selector("#assistant-widget .chat-log")
+        # wait_until on the focus: opening fires the three requests the
+        # Assistant view fires on entry, and each answer repaints — so the caret
+        # is taken again once they settle rather than once, into a textarea that
+        # is about to be replaced.
+        check("widget: the launcher opens a docked card with the composer focused",
+              page.locator("#assistant-widget").is_visible()
+              and page.locator("#assistant-widget #chat-input").count() == 1
+              and wait_until(lambda: page.evaluate(
+                  "() => document.activeElement.id") == "chat-input"))
+        # The board is still there, and still the board: the widget floats over
+        # it rather than replacing it.
+        check("widget: the view underneath is untouched",
+              page.locator("#board .card").count() > 0
+              and page.get_attribute('.view-switch button[data-view="board"]',
+                                     "aria-pressed") == "true")
+        # One #chat-input, in every state either shell can be in. This is the
+        # duplicate-shell guard: it passes today (there is one sheet and no
+        # widget), and it is what fails the moment both paint at once.
+        one_input = lambda: page.locator("#chat-input").count() == 1
+        board_open = one_input()
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector(".assistant-sheet #chat-input")
+        view_open = one_input()
+        check("widget: exactly one message input exists in every state",
+              board_open and view_open
+              and not page.locator("#assistant-widget").is_visible())
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector("#assistant-widget .chat-log")
+        check("widget: leaving the Assistant view hands the conversation back",
+              one_input()
+              and page.locator("#assistant-widget #chat-input").count() == 1)
+        # Escape closes the innermost thing that is open — with no panel of its
+        # own showing, that is the widget itself — and the caret goes back to
+        # the control that opened it rather than to the top of the page.
+        page.locator("#assistant-widget #chat-input").focus()
+        page.keyboard.press("Escape")
+        check("widget: Escape closes it and returns focus to the launcher",
+              wait_until(lambda: not page.locator("#assistant-widget").is_visible())
+              and page.evaluate("() => document.activeElement.id") == "assistant-launcher")
+        # The panels the tools drop belong to the shell hosting them, and the
+        # tools row is ONE wired-once node that moves between the two. Opening
+        # the chats from the widget and then changing the view underneath must
+        # leave both the widget and the panel exactly as they were — that is the
+        # whole reason the node is moved rather than rebuilt.
+        page.click("#assistant-launcher")
+        page.wait_for_selector("#assistant-widget .chat-log")
+        open_chat_history(page)
+        # A repaint of the view underneath must not tear the panel down — that
+        # is what the wired-once tools node buys, and moving it into a second
+        # host is where it could have been lost. Typed rather than clicked: a
+        # click outside the tools is a dismissal by design, and this is about
+        # the repaint, not about the pointer.
+        page.fill("#search", "zzz-no-such-card")
+        page.wait_for_timeout(150)
+        survived = (page.locator("#assistant-widget .chat-history").count() == 1
+                    and page.get_attribute("#chat-history-btn", "aria-expanded") == "true")
+        page.fill("#search", "")
+        page.wait_for_timeout(150)
+        page.fill("#chat-input", "still here")
+        page.locator('.view-switch button[data-view="backlog"]').click()
+        page.wait_for_selector(".backlog-row")
+        check("widget: it survives a repaint and a view switch",
+              survived
+              and page.locator("#assistant-widget").is_visible()
+              and page.locator("#assistant-widget #chat-input").count() == 1
+              and page.input_value("#chat-input") == "still here")
+        page.fill("#chat-input", "")
+        open_chat_history(page)
+        # A panel dropped from a fixed box has to be drawn inside it and has to
+        # be on top. Asked of the browser at the panel's own coordinates rather
+        # than asserted as a z-index: a stacking context is a ceiling for
+        # everything inside it, so a z-index assertion passes against exactly the
+        # bug this is here to catch.
+        topmost = """() => {
+          const p = document.querySelector('#assistant-widget .chat-history');
+          if (!p) return 'no panel';
+          const b = p.getBoundingClientRect();
+          const hit = document.elementFromPoint(b.x + b.width / 2, b.y + 8);
+          return hit && p.contains(hit) ? 'panel' : (hit ? hit.className : 'nothing');
+        }"""
+        on_board = page.evaluate(topmost)
+        # The star sky is the hardest case: there the header and #board both
+        # take a stacking context to clear it, and a panel's own z-index counts
+        # only among its siblings. The picker lives in the board's ⚙ Menu, so
+        # this takes the same detour a person would.
+        set_theme("star")
+        page.wait_for_timeout(700)   # the body background transitions
+        open_chat_history(page)
+        on_star = page.evaluate(topmost)
+        check("widget: its panel is the topmost thing at its own coordinates",
+              on_board == "panel" and on_star == "panel")
+        # One Escape, one layer: the panel, and not the widget under it.
+        page.locator("#chat-history-btn").focus()
+        page.keyboard.press("Escape")
+        check("widget: Escape closes the panel first, the widget second",
+              wait_until(lambda: page.locator(".chat-history").count() == 0)
+              and page.locator("#assistant-widget").is_visible())
+        set_theme("light")
+        page.wait_for_timeout(700)
+
+        # ---- Resize: the size is remembered, and always inside its clamp -----
+        # Asserted on the PERSISTED value and its bounds, never on exact pixels:
+        # a drag lands where the pointer lands, and a test that insists on 480
+        # exactly is a test that fails on a scrollbar.
+        stored = lambda: page.evaluate(
+            "key => JSON.parse(localStorage.getItem(key) || '{}')", WIDGET_KEY)
+        before = stored()
+        grip = page.locator(".widget-resize")
+        box = grip.bounding_box()
+        page.mouse.move(box["x"] + 4, box["y"] + 4)
+        page.mouse.down()
+        page.mouse.move(box["x"] - 120, box["y"] - 90, steps=8)
+        page.mouse.up()
+        after = stored()
+        check("widget: dragging the corner changes the size that is remembered",
+              after.get("w", 0) > before.get("w", 0)
+              and after.get("h", 0) > before.get("h", 0))
+        # Far past the bound, and it stops at the bound rather than growing into
+        # a second window.
+        box = page.locator(".widget-resize").bounding_box()
+        page.mouse.move(box["x"] + 4, box["y"] + 4)
+        page.mouse.down()
+        page.mouse.move(4, 4, steps=10)
+        page.mouse.up()
+        huge = stored()
+        room = page.evaluate("() => [window.innerWidth - 32, window.innerHeight - 32]")
+        check("widget: a drag past the bound stops at the bound, inside the window",
+              300 <= huge.get("w", 0) <= min(720, room[0])
+              and 320 <= huge.get("h", 0) <= min(900, room[1]))
+        # A size remembered from a bigger window opens clamped, not cropped.
+        page.evaluate("key => localStorage.setItem(key, JSON.stringify("
+                      "{ open: true, w: 900, h: 800 }))", WIDGET_KEY)
+        page.reload()
+        page.wait_for_selector("#assistant-widget .chat-log")
+        card = page.locator("#assistant-widget").bounding_box()
+        size = page.evaluate("() => [window.innerWidth, window.innerHeight]")
+        check("widget: a remembered size larger than the window opens clamped",
+              card["width"] <= size[0] and card["height"] <= size[1]
+              and card["x"] >= 0 and card["y"] >= 0)
+
+        # ---- A phone-width window gets a sheet, not a floating card ----------
+        page.set_viewport_size({"width": 380, "height": 720})
+        page.wait_for_timeout(200)
+        card = page.locator("#assistant-widget").bounding_box()
+        # is_visible, not count: nothing repaints on a viewport change — the
+        # size lives on the host and the media query does the rest — so the
+        # handle from the last paint is still in the DOM, and "offers no resize
+        # handle" is a question about what is on screen.
+        check("widget: below the narrow threshold it fills the window and drops"
+              " the handle",
+              card["width"] >= 380 - 40
+              and not page.locator(".widget-resize").is_visible())
+        page.set_viewport_size({"width": 1440, "height": 900})
+        page.wait_for_timeout(200)
+
+        # ---- One conversation, two shells: the draft crosses both ways -------
+        # From the Board, so that what collapse returns to is a fact the check
+        # can name: the view the Assistant was reached from.
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector("#assistant-widget .chat-log")
+        page.fill("#chat-input", "half a thought")
+        page.click("#assistant-expand")
+        page.wait_for_selector(".assistant-sheet #chat-input")
+        expanded = (page.input_value("#chat-input") == "half a thought"
+                    and not page.locator("#assistant-widget").is_visible()
+                    and page.locator("#chat-input").count() == 1)
+        page.click("#assistant-collapse")
+        page.wait_for_selector("#assistant-widget .chat-log")
+        check("widget: expand and collapse carry the chat and the unsent draft",
+              expanded
+              and page.input_value("#chat-input") == "half a thought"
+              and page.locator("#assistant-widget #chat-input").count() == 1
+              and page.get_attribute('.view-switch button[data-view="board"]',
+                                     "aria-pressed") == "true")
+        page.fill("#chat-input", "")
+
+        # ---- What is waiting is visible from the corner, decided in the room -
+        api_propose({"title": "WIDGET-STRIP-probe", "columnId": "inbox"})
+        page.reload()
+        page.wait_for_selector("#assistant-widget .chat-log")
+        strip = wait_until(lambda: page.locator(".widget-approvals").count() == 1)
+        check("widget: a waiting proposal shows a strip and counts on the launcher",
+              strip
+              and "1 item" in page.inner_text(".widget-approvals")
+              and page.locator("#assistant-launcher .view-badge").inner_text().strip()
+              == "1")
+        waiting_id = next(c["id"] for c in api_proposals()["cards"]
+                          if c["title"] == "WIDGET-STRIP-probe")
+        api_post(f"/api/proposals/{waiting_id}/reject")
+        page.reload()
+        page.wait_for_selector("#assistant-widget .chat-log")
+        check("widget: nothing waiting, no strip and no count",
+              wait_until(lambda: page.locator(".widget-approvals").count() == 0)
+              and page.locator("#assistant-launcher .view-badge").count() == 0)
+
+        # Put the world back: closed, and the board in front again.
+        page.evaluate("key => localStorage.removeItem(key)", WIDGET_KEY)
+        page.reload()
+        page.wait_for_selector("#board")
+
+
+        # ---- The developer trace ---------------------------------------------
+        # This is an end-to-end test.
+        # The one thing no other suite can show: that what the page renders is
+        # what the brain actually sent. The board and the brain are both
+        # configured for tracing in this run, so the turns taken above are
+        # already filed — this drives the door, the tape, and the widget's link.
+        def dev_get(path, cookie=""):
+            # Its own opener, deliberately: the installed one attaches this
+            # run's session with `add_unredirected_header`, which OUTRANKS a
+            # Cookie set here — so the two credentials have to be sent together
+            # by hand, which is also exactly what a browser does.
+            req = urllib.request.Request(URL + path)
+            req.add_header("Cookie",
+                           SESSION_COOKIE + ("; " + cookie if cookie else ""))
+            with urllib.request.build_opener().open(req, timeout=5) as r:
+                return r.status, r.headers, r.read().decode()
+
+        def dev_unlock(key=DEV_KEY, nxt="/dev/trace"):
+            body = urllib.parse.urlencode({"key": key, "next": nxt}).encode()
+            req = urllib.request.Request(
+                URL + "/dev/trace/unlock", data=body, method="POST",
+                headers={"Content-Type": "application/x-www-form-urlencoded"})
+            # The redirect IS the success signal, so it must not be followed —
+            # and urllib reports an unfollowed 303 by raising, with the response
+            # (and its Set-Cookie) hanging off the exception.
+            opener = urllib.request.build_opener(_BoardSession, _NoRedirect)
+            try:
+                with opener.open(req, timeout=5) as r:
+                    return r.status, r.headers.get("Set-Cookie", "").split(";")[0]
+            except urllib.error.HTTPError as err:
+                return err.code, err.headers.get("Set-Cookie", "").split(";")[0]
+
+        locked_status, _, locked_body = dev_get("/dev/trace")
+        check("trace: locked, the page is a key field and nothing else",
+              locked_status == 200 and 'type="password"' in locked_body
+              and "data-trace=" not in locked_body)
+        check("trace: a wrong key is refused and never echoed",
+              dev_unlock("not-the-key")[0] == 401)
+        status, dev_cookie = dev_unlock()
+        check("trace: the right key unlocks without putting it in a url",
+              status == 303 and dev_cookie.startswith("lodestar_dev=")
+              and DEV_KEY not in dev_cookie)
+
+        # A turn of each kind, taken through the widget so the trace and the
+        # shell that links to it are exercised together.
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector("#new-card-btn")
+        if not page.locator("#assistant-widget").is_visible():
+            page.click("#assistant-launcher")
+        page.wait_for_selector("#assistant-widget .chat-log")
+        page.click("#chat-new")
+        page.wait_for_selector(".chat-suggest")
+        cards_before_trace = len(api_state()["cards"])
+        page.fill("#chat-input", "trace this ordinary turn")
+        page.click("#chat-send")
+        wait_until(lambda: "FAKE: trace this ordinary turn"
+                   in page.inner_text(".chat-log"), timeout=20)
+        # A turn that calls a tool: 'add:' is the fake backend's one scripted
+        # tool call, so the tape has an ai → tool → ai stretch in it.
+        page.fill("#chat-input", "add: a card the trace can show")
+        page.click("#chat-send")
+        # Asserted, not merely awaited. This wait's result used to be discarded,
+        # so a second turn slower than its deadline let the block read a tape
+        # holding only the first turn — and the two checks below then failed
+        # describing the tape rather than the turn that never landed.
+        second_turn = wait_until(
+            lambda: not page.locator("#chat-input").is_disabled(), timeout=40)
+        session_id = page.evaluate("() => localStorage.getItem('lodestar:chat-session')")
+
+        # The widget's own way in — developer-only, and it carries the session id
+        # and nothing else.
+        link = page.locator("#assistant-trace")
+        check("trace: the widget offers the developer link, carrying only the"
+              " session id",
+              wait_until(lambda: link.count() == 1)
+              and link.get_attribute("href")
+              == f"/dev/trace?session={urllib.parse.quote(session_id)}"
+              and link.get_attribute("target") == "_blank")
+
+        _, headers, tape = dev_get(
+            f"/dev/trace?session={urllib.parse.quote(session_id)}", dev_cookie)
+        roles = re.findall(r'<div class="entry" data-role="(\w+)"', tape)
+        # Named separately so a failure says which half broke. Filing never
+        # raises by design (`file_trace` logs and returns, so a debugging aid
+        # cannot 500 the turn it describes) — which means a turn that was never
+        # filed is indistinguishable from a tape read too early unless the two
+        # are asserted apart.
+        # KNOWN FAILING, and deliberately left red rather than removed: after a
+        # tool-calling turn taken through the *widget*, `#chat-input` is still
+        # disabled 40s later, so `assistantState.busy` never returned to false —
+        # the brain finished (the check below finds both envelopes filed) but the
+        # browser's stream never settled. The same turn through the Assistant
+        # sheet settles, so this looks specific to the widget shell.
+        # It was invisible until 2026-09-02 because this wait's result was
+        # discarded; asserting it is what found it. Unrelated to the card-draft
+        # change that surfaced it, and it wants its own investigation — a check
+        # that lies would cost more than one that is honestly red.
+        check("trace: the tool-calling turn finished", second_turn)
+        check("trace: both turns were filed",
+              tape.count('class="prompt"') == 2)
+        check("trace: the tape holds the human, system, ai and tool messages"
+              " the brain sent",
+              headers.get("Cache-Control") == "no-store"
+              and roles[:2] == ["system", "human"]
+              and "tool" in roles and roles.count("system") == 2
+              and "trace this ordinary turn" in tape
+              and "create_card" in tape)
+        # `in` before `index`: a bare .index() on an absent substring raises,
+        # which aborts the whole run instead of reddening one check — the one
+        # thing this suite's collector exists to prevent.
+        check("trace: two prompts are two prompt groups, in order",
+              tape.count('class="prompt"') == 2
+              and "trace this ordinary turn" in tape
+              and "a card the trace can show" in tape
+              and tape.index("trace this ordinary turn")
+              < tape.index("a card the trace can show"))
+
+        # A turn that fails is exactly the one somebody goes looking for, so it
+        # has to be filed too — with what happened and no invented answer.
+        n_before = len(errors)
+        page.route("**/api/agent/chat/stream", lambda route: route.fulfill(
+            status=503, content_type="application/json", body='{"error":"nope"}'))
+        page.fill("#chat-input", "this turn never reaches the brain")
+        page.click("#chat-send")
+        page.wait_for_selector(".chat-error")
+        page.unroute("**/api/agent/chat/stream")
+        for e in [e for e in errors[n_before:] if "503" in e]:
+            errors.remove(e)
+        # Stubbed at the browser, so the brain never saw it — the trace is
+        # therefore unchanged, which is itself the assertion: nothing invents a
+        # record for a request that was never made.
+        _, _, again = dev_get(
+            f"/dev/trace?session={urllib.parse.quote(session_id)}", dev_cookie)
+        check("trace: a request the brain never received files no trace",
+              again.count('class="prompt"') == 2)
+
+        index_status, _, index_body = dev_get("/dev/trace", dev_cookie)
+        check("trace: the index lists the session and links to its tape",
+              index_status == 200 and session_id in index_body
+              and f'/dev/trace?session={urllib.parse.quote(session_id)}' in index_body)
+        # And the board is untouched by all of it. (The 'add:' turn above
+        # PROPOSES a card, which is invisible to readBoard until accepted, so
+        # this count is unchanged by the turns as well as by the reads.)
+        check("trace: reading traces changed no card",
+              len(api_state()["cards"]) == cards_before_trace)
 
         # ---- The reminder fires from the background ---------------------------
         # This is an end-to-end test. A habit slot arriving while the page
@@ -4935,12 +5913,11 @@ try:
         bg_page = bg.new_page()
         bg_page.clock.install()
         bg_page.goto(URL)
-        bg_page.wait_for_selector(".quick-add input")
+        bg_page.wait_for_selector("#new-card-btn")
         bg_page.evaluate("window.addEventListener('lodestar:chime',"
                          " () => localStorage.setItem('e2e:bg-chime', '1'))")
         slot = (datetime.now() + timedelta(minutes=2)).strftime("%H:%M")
-        bg_page.fill(".quick-add input", "Water the plants")
-        bg_page.press(".quick-add input", "Enter")
+        add_card(bg_page, "Water the plants")
         bg_page.locator('[data-col="inbox"] .card',
                         has_text="Water the plants").first.click()
         bg_page.wait_for_selector("#card-dialog[open]")

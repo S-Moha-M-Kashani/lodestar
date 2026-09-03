@@ -293,6 +293,12 @@
              unfound. View-specific furniture, like the search and filters to
              the left of them: shown only while the Assistant is open. The
              panel is a sibling of the button so it can drop from under it. -->
+        <!-- The way into the Assistant from every view. A launcher, not a
+             seventh tab: the widget floats over whatever you are looking at
+             rather than replacing it, and the tab beside it still opens the
+             full view. Carries the same waiting count that tab does, because
+             from the Board they are one fact — the Assistant needs you. -->
+        <button id="assistant-launcher" class="assistant-launcher" aria-pressed="false" aria-label="Assistant" title="Ask the assistant about this board">✦</button>
         <div class="assistant-tools" hidden>
           <div id="chat-recall-slot"></div>
           <button id="chat-history-btn" class="btn ghost chat-history-btn" aria-haspopup="true" aria-expanded="false" aria-controls="chat-history">History</button>
@@ -387,77 +393,85 @@
         </label>
         <p class="field-hint">Leave the times empty and the habit is due from the start of the period.</p>
       </fieldset>
-      <fieldset class="category-picker">
-        <legend>Category</legend>
-        <div id="category-picker-options" class="picker-options"></div>
-      </fieldset>
-      <div class="field-row">
-        <label class="field">Importance
-          <select id="card-importance">
-            <option value="">Not set</option>
-            <option value="high">High</option>
-            <option value="low">Low</option>
-          </select>
-        </label>
-        <label class="field">Urgency
-          <select id="card-urgency">
-            <option value="">Not set</option>
-            <option value="high">High</option>
-            <option value="low">Low</option>
-          </select>
-        </label>
-      </div>
-      <p class="field-hint">Set both to place this card on the <strong>Matrix</strong> and stamp its priority.</p>
-      <label class="field">Deadline <span class="hint">(optional)</span>
-        <input id="card-deadline" type="date">
-      </label>
-      <!-- The plan: when you mean to get to it, as coarse or as precise as you
-           actually know. Right to left, each field needs the one to its left —
-           the Month list is dead until a Year is picked, the Day list until a
-           Month is. Empty is a real answer. -->
-      <fieldset id="card-plan" class="plan-fields">
-        <legend>Plan</legend>
+      <!-- Everything a card can carry besides its words. Folded shut for a
+           bare card and opened by edit-dialog.js for any card that already
+           holds one of these, so a setting is never hidden from the person
+           editing it. Habit cadence stays outside, beside the stamp that
+           decides whether it applies. -->
+      <details id="card-details" class="card-details">
+        <summary class="card-details-summary">Details <span class="hint">category, priority, dates, plan, tags</span></summary>
+        <fieldset class="category-picker">
+          <legend>Category</legend>
+          <div id="category-picker-options" class="picker-options"></div>
+        </fieldset>
         <div class="field-row">
-          <label class="field">Year
-            <select id="card-plan-year"></select>
+          <label class="field">Importance
+            <select id="card-importance">
+              <option value="">Not set</option>
+              <option value="high">High</option>
+              <option value="low">Low</option>
+            </select>
           </label>
-          <label class="field">Month
-            <select id="card-plan-month" disabled></select>
-          </label>
-          <label class="field">Day
-            <select id="card-plan-day" disabled></select>
+          <label class="field">Urgency
+            <select id="card-urgency">
+              <option value="">Not set</option>
+              <option value="high">High</option>
+              <option value="low">Low</option>
+            </select>
           </label>
         </div>
-        <p id="card-plan-hint" class="field-hint"></p>
-        <p id="card-plan-error" class="field-error" role="alert" hidden></p>
-        <button type="button" id="card-plan-follow" class="btn ghost plan-follow" hidden>↻ follow the deadline</button>
-      </fieldset>
-      <div class="field-row">
-        <label class="field">Effort
-          <select id="card-effort">
-            <option value="low">Low</option>
-            <option value="medium">Medium</option>
-            <option value="high">High</option>
-          </select>
+        <p class="field-hint">Set both to place this card on the <strong>Matrix</strong> and stamp its priority.</p>
+        <label class="field">Deadline <span class="hint">(optional)</span>
+          <input id="card-deadline" type="date">
         </label>
-        <label class="field">Control
-          <select id="card-control">
-            <option value="act">I can act</option>
-            <option value="influence">I can influence</option>
-            <option value="none">Out of my hands</option>
-          </select>
+        <!-- The plan: when you mean to get to it, as coarse or as precise as you
+             actually know. Right to left, each field needs the one to its left —
+             the Month list is dead until a Year is picked, the Day list until a
+             Month is. Empty is a real answer. -->
+        <fieldset id="card-plan" class="plan-fields">
+          <legend>Plan</legend>
+          <div class="field-row">
+            <label class="field">Year
+              <select id="card-plan-year"></select>
+            </label>
+            <label class="field">Month
+              <select id="card-plan-month" disabled></select>
+            </label>
+            <label class="field">Day
+              <select id="card-plan-day" disabled></select>
+            </label>
+          </div>
+          <p id="card-plan-hint" class="field-hint"></p>
+          <p id="card-plan-error" class="field-error" role="alert" hidden></p>
+          <button type="button" id="card-plan-follow" class="btn ghost plan-follow" hidden>↻ follow the deadline</button>
+        </fieldset>
+        <div class="field-row">
+          <label class="field">Effort
+            <select id="card-effort">
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </select>
+          </label>
+          <label class="field">Control
+            <select id="card-control">
+              <option value="act">I can act</option>
+              <option value="influence">I can influence</option>
+              <option value="none">Out of my hands</option>
+            </select>
+          </label>
+        </div>
+        <p class="field-hint">Rough calls are fine — both start at the midpoint until you (or the assistant) judge them.</p>
+        <label class="field">Tags <span class="hint">(comma separated)</span>
+          <input id="card-tags" type="text" placeholder="planning, ideas, follow-up">
         </label>
-      </div>
-      <p class="field-hint">Rough calls are fine — both start at the midpoint until you (or the assistant) judge them.</p>
-      <label class="field">Tags <span class="hint">(comma separated)</span>
-        <input id="card-tags" type="text" placeholder="planning, ideas, follow-up">
-      </label>
+      </details>
       <p id="card-meta" class="card-meta-line"></p>
       <div class="dialog-actions">
         <button type="button" id="delete-card" class="btn danger">Delete card</button>
         <span class="spacer"></span>
         <button type="button" id="cancel-dialog" class="btn ghost">Cancel</button>
-        <button type="submit" class="btn primary">Save changes</button>
+        <button type="submit" id="save-card" class="btn primary">Save changes</button>
       </div>
     </form>
   </dialog>
@@ -595,6 +609,15 @@
   </footer>
 
   <div id="live-region" class="visually-hidden" aria-live="polite"></div>
+
+  <!-- The Assistant widget's host. Static markup, and the last child of the
+       body for two reasons: #board is wiped on every render, so nothing that
+       must outlive a view can live inside it; and at equal z-index the later
+       element wins, so being last is what lets the widget float over the board
+       and the star sky with the smallest claim that works. render() paints the
+       card inside this; the host itself is never destroyed, which is what lets
+       the remembered size live on it as two custom properties. -->
+  <div id="assistant-widget" hidden></div>
   <!-- The whole frontend, as native ES modules — no bundler and no build step.
        type="module" is deferred, so the DOM above is parsed before any of it
        runs and a module may look up its own elements at the top level. -->

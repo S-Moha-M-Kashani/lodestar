@@ -248,3 +248,51 @@ def test_the_same_slug_under_two_providers_gets_two_graphs():
     assert sorted(agent._graphs) == [('fake', ''),
                                      ('ollama', 'shared-slug'),
                                      ('openrouter', 'shared-slug')]
+
+
+# This is a unit test.
+def test_astream_streams_the_model_and_never_a_tool_s_own_model_call():
+    """A tool that calls a model must not speak in the transcript.
+
+    Found by running the app, not by a test: on `BRAIN_LLM=claude-cli` a real
+    turn streamed `1: 9\n2: 0\n3: 1` ahead of the answer, which is the relevance
+    gate's scoring sheet — it grades all candidates in one call and replies in
+    the shape its own regex reads. LangChain propagates the run's callbacks into
+    a nested model call, so the gate's reply reaches `stream_mode='messages'` as
+    an AIMessage like any other, and filtering on the type alone let it through.
+    The node is what tells them apart.
+
+    The tool here stands in for the gate: same shape, no network.
+    """
+    gate_said = '1: 9\n2: 0\n3: 1'
+
+    @tool
+    def grade(text: str) -> dict:
+        """Grade candidates with a model of its own, the way the gate does."""
+        reply = FakeChat(script=[AIMessage(content=gate_said)]).invoke(
+            [('user', text)])
+        return {'scores': reply.content}
+
+    agent = build([call('grade', {'text': 'dentist'}),
+                   AIMessage(content='You have one card about dentists.')],
+                  [grade])
+
+    async def collect():
+        seen = []
+        async for kind, payload in agent.astream(
+                [{'role': 'user', 'content': 'what about dentists'}]):
+            seen.append((kind, payload))
+        return seen
+
+    events = asyncio.run(collect())
+    tokens = [payload for kind, payload in events if kind == 'token']
+
+    # The answer is streamed…
+    assert 'You have one card about dentists.' in ''.join(tokens)
+    # …and the tool's model is not, in any token.
+    assert not any('1: 9' in t for t in tokens), tokens
+    # The tool still ran and its result is still reported as a step — the fix
+    # hides the tool's *voice*, never its work.
+    done = next(payload for kind, payload in events if kind == 'done')
+    assert [s.tool for s in done.steps] == ['grade']
+    assert done.steps[0].result == {'scores': gate_said}

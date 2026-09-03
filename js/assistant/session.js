@@ -1,3 +1,4 @@
+import { chatOnScreen } from './shell.js';
 import { setChatScroll } from './streaming.js';
 import { boardUrl } from '../core/boards.js';
 import { uid } from '../core/cards.js';
@@ -122,6 +123,16 @@ function restoredMessage(msg) {
   // asked to continue from something it never finished saying.
   if (msg.error) out.error = true;
   if (msg.partial) out.partial = true;
+  // What the banner needs to be a banner after a reload: the error as it
+  // arrived, and the message to send again. Both are plain strings, and both
+  // are checked, because a restored `retry` is what Retry will put on the wire.
+  if (typeof msg.detail === 'string') out.detail = msg.detail;
+  if (typeof msg.retry === 'string') out.retry = msg.retry;
+  // How long the turn took. `startedAt` is deliberately NOT restored: it is a
+  // clock reading from another session, and a turn that came back holding one
+  // would count "Working for" up from hours ago. A finished turn carries the
+  // measurement instead of the ingredients for one.
+  if (Number.isFinite(msg.elapsedMs)) out.elapsedMs = msg.elapsedMs;
   if (Array.isArray(msg.steps)) out.steps = msg.steps;
   if (Array.isArray(msg.sources)) out.sources = msg.sources;
   if (msg.usage && typeof msg.usage === 'object') out.usage = msg.usage;
@@ -158,7 +169,7 @@ export function startNewChat({ focus = true } = {}) {
   setChatScroll({ top: 0, pinned: true });
   try { localStorage.setItem(CHAT_SESSION_KEY, assistantState.sessionId); }
   catch { /* private mode */ }
-  if (view === 'assistant') {
+  if (chatOnScreen()) {
     render();
     if (focus) document.getElementById('chat-input')?.focus();
   }
@@ -174,7 +185,7 @@ export async function openChatSession(id) {
   const cached = cachedChat(id);
   assistantState.messages = cached;
   setChatScroll({ top: 0, pinned: true });
-  if (view === 'assistant') render();
+  if (chatOnScreen()) render();
   try {
     const res = await fetch('/api/chat/sessions/' + encodeURIComponent(id),
       { headers: { Accept: 'application/json' } });
@@ -189,7 +200,7 @@ export async function openChatSession(id) {
   } catch { /* offline — the cache is what we have, and it is enough to read */ }
   try { localStorage.setItem(CHAT_SESSION_KEY, id); } catch { /* private mode */ }
   persistChat();
-  if (view === 'assistant') render();
+  if (chatOnScreen()) render();
 }
 
 /** Give the transcript on screen the record's row ids, in place. Returns
@@ -229,7 +240,7 @@ async function reloadOpenChat() {
     const data = await res.json();
     assistantState.messages = (data.messages || []).map(restoredMessage).filter(Boolean);
     persistChat();
-    if (view === 'assistant') render();
+    if (chatOnScreen()) render();
   } catch { /* offline — what is on screen is still the conversation */ }
 }
 
@@ -253,7 +264,7 @@ export async function learnRecordedIds() {
     const recorded = (data.messages || []).map(restoredMessage).filter(Boolean);
     if (!adoptRecordedIds(assistantState.messages, recorded)) return;
     persistChat();
-    if (view === 'assistant') render();
+    if (chatOnScreen()) render();
   } catch { /* offline — the ids arrive with the next reload */ }
 }
 
@@ -265,7 +276,7 @@ export async function refreshChatSessions() {
     const data = await res.json();
     if (Array.isArray(data.sessions)) {
       assistantState.sessions = data.sessions;
-      if (view === 'assistant') render();
+      if (chatOnScreen()) render();
     }
   } catch { /* offline — leave the list as it was */ }
 }
@@ -278,7 +289,7 @@ export async function refreshChatTrash() {
     const data = await res.json();
     if (Array.isArray(data.messages)) {
       assistantState.trash = data.messages;
-      if (view === 'assistant') render();
+      if (chatOnScreen()) render();
     }
   } catch { /* offline — leave the list as it was */ }
 }

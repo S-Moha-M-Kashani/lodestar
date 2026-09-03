@@ -17,6 +17,7 @@ from langgraph.store.sqlite import AsyncSqliteStore
 from pydantic import BaseModel, Field
 
 from .agent import AgentResult, AgentStep, LodestarAgent
+from .agent.trace import TurnTrace
 from .board import BoardClient, BoardSnapshot
 from .config import Settings, load_settings
 from .llm import make_chat_model, served_models
@@ -243,8 +244,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return
         try:
             recorded = await board.list_all_chat()
-            added = memory.sync(recorded)
-            dropped = memory.prune(recorded)
+            added, dropped = await memory.areconcile(recorded)
             if added or dropped:
                 logging.getLogger(__name__).info(
                     'chat index: %d message(s) indexed, %d pruned at boot',
@@ -389,10 +389,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if memory is None:
             return
         try:
-            memory.index_messages(rows)
+            await memory.aindex_messages(rows)
         except Exception:
             # Recorded but not indexed: the next boot's sync rebuilds this.
             logging.getLogger(__name__).exception('chat index write failed')
+
+    def tracing_turn(body: ChatBody) -> TurnTrace | None:
+        """A trace for this turn, or None when nobody is tracing.
+
+        Off is the default and the common case, and it costs exactly nothing:
+        no handler is attached to the run, and no request is made. `BRAIN_TRACE`
+        is the switch, and the page that reads what it files is gated separately
+        on the board — capture and viewing are two risks in two services.
+        """
+        if settings.trace != 'board':
+            return None
+        return TurnTrace(session_id=body.session_id, board_id=body.board_id,
+                         model=body.model or settings.model,
+                         provider=body.provider or settings.llm_provider)
+
+    async def file_trace(trace: TurnTrace | None) -> None:
+        """Send the record to the board. Never raises, the `remember` rule: a
+        debugging aid that can 500 the turn it is describing is worse than no
+        debugging aid, and this one runs twice per turn."""
+        if trace is None:
+            return
+        try:
+            await board.record_trace(trace.as_dict())
+        except Exception:
+            logging.getLogger(__name__).exception(
+                'trace not filed — the turn itself is unaffected')
 
     @app.post('/agent/chat')
     async def chat(body: ChatBody, background: BackgroundTasks) -> dict:
@@ -400,16 +426,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # sync tools (board HTTP, ddgs, Chroma) run in LangChain's thread
         # executor, so nothing here blocks the event loop.
         _refuse_if_oversized(body.messages)
-        result = await agent.arun(body.messages, model=body.model,
-                                  provider=body.provider,
-                                  session_id=body.session_id,
-                                  board_id=body.board_id)
+        trace = tracing_turn(body)
+        await file_trace(trace)          # in flight, before anything is known
+        try:
+            result = await agent.arun(body.messages, model=body.model,
+                                      provider=body.provider,
+                                      session_id=body.session_id,
+                                      board_id=body.board_id,
+                                      trace=trace)
+        except Exception as exc:
+            if trace is not None:
+                trace.fail(str(exc))
+                await file_trace(trace)
+            raise
         cost = priced(result, body)
         # After the answer is sent, not before it. Starlette awaits this once
         # the body is on the wire, so the record is written while the user is
         # already reading — the turn still always lands, it just stops being
         # something they wait for.
         background.add_task(remember, body, result, cost)
+        background.add_task(file_trace, trace)
         return _turn_json(result, cost)
 
     @app.post('/agent/chat/stream')
@@ -430,12 +466,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # flag: a stream that died before `done` has no turn to record, which is
         # the same thing as before — a reply that was never delivered.
         finished: list[tuple[AgentResult, float | None]] = []
+        # Filed before the first frame and again once the turn settles, so a
+        # turn that hangs is inspectable while it hangs — the case a record
+        # written only at the end cannot show at all.
+        trace = tracing_turn(body)
 
         async def events():
+            await file_trace(trace)
             try:
                 async for kind, payload in agent.astream(
                         body.messages, model=body.model, provider=body.provider,
-                        session_id=body.session_id, board_id=body.board_id):
+                        session_id=body.session_id, board_id=body.board_id,
+                        trace=trace):
                     if kind == 'calling':
                         yield _sse('calling', payload)   # already {tool, arguments}
                     elif kind == 'step':
@@ -451,6 +493,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 # with. Staying quiet would leave the browser on "Thinking…"
                 # forever — the hang this route exists to remove.
                 logging.getLogger(__name__).exception('chat stream failed')
+                if trace is not None:
+                    trace.fail(str(exc))
                 yield _sse('error', {'message': str(exc)})
 
         async def record() -> None:
@@ -463,6 +507,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             """
             for result, cost in finished:
                 await remember(body, result, cost)
+            # Filed whatever happened: a turn that failed is exactly the one
+            # somebody is about to go looking for.
+            await file_trace(trace)
 
         # no-cache and no buffering: an intermediary holding the frames back
         # would deliver a correct transcript and none of the progress.
@@ -535,8 +582,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if memory is None:
             return {'indexed': 0, 'memory': False}
         recorded = await board.list_all_chat()
-        return {'indexed': memory.sync(recorded),
-                'pruned': memory.prune(recorded), 'memory': True}
+        indexed, pruned = await memory.areconcile(recorded)
+        return {'indexed': indexed, 'pruned': pruned, 'memory': True}
 
     @app.post('/rag/recall')
     async def recall(body: RecallBody,
@@ -580,9 +627,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 'recall: cards unsearchable, answering from chat only (%s)', exc)
         if memory is None:
             return {'matches': cards, 'memory': False}
-        chat = [hit | {'source': 'chat'}
-                for hit in memory.search(body.text, k=body.k,
-                                         board_id=board_id or None)]
+        # `asearch`: this route reads the whole chat collection and ranks
+        # it, and it used to do that inline from a coroutine — the one
+        # remaining place a recall stalled the process (retrieval/offload.py).
+        recalled = await memory.asearch(body.text, k=body.k,
+                                        board_id=board_id or None)
+        chat = [hit | {'source': 'chat'} for hit in recalled]
         return {'matches': chat + cards, 'memory': True}
 
     return app

@@ -2,6 +2,7 @@ import { renderChatSettings } from './models.js';
 import { renderRecallPanel } from './recall.js';
 import { assistantState, chatCacheKey, openChatSession, purgeChatMessage, refreshChatSessions, restoreChatMessage, startNewChat } from './session.js';
 import { sendChat } from './streaming.js';
+import { widgetShowing } from './shell.js';
 import { boardUrl } from '../core/boards.js';
 import { view } from '../core/state.js';
 import { ask, prompt } from '../ui/dialogs.js';
@@ -108,9 +109,9 @@ function renderChatSwitcher() {
   return wrap;
 }
 
-// The tools row is one wired-once node that MOVES: while the Assistant is
-// open it sits in the sheet's own header, right of the heading; every other
-// view parks it back in the app header, hidden. Moving the same element
+// The tools row is one wired-once node that MOVES: it sits in the sheet's own
+// header while the Assistant view is open, in the widget's head while the
+// widget is, and is parked back in the app header, hidden, when neither is. Moving the same element
 // keeps its listeners; what would destroy them is being inside the sheet
 // when render() wipes #board — hence the rescue, called before every wipe.
 const toolsEl = document.querySelector('.assistant-tools');
@@ -122,21 +123,29 @@ export function rescueAssistantTools() {
   }
 }
 
-/** Seat the tools row in the Assistant sheet's head as it is built. */
+/** Seat the tools row in whichever shell is being built — the sheet's head or
+ *  the widget's. Exactly one of them calls this per render; the rescue above
+ *  is what guarantees the node is alive to be moved. */
 export function mountAssistantTools(parent) {
   if (toolsEl) parent.appendChild(toolsEl);
 }
+
+/** Whether the tools have a shell to belong to. Two hosts now: the Assistant
+ *  sheet's head and the widget's. Neither showing, the row is furniture that
+ *  configures a screen nobody is on. */
+const toolsLive = () => view === 'assistant' || widgetShowing();
 
 /** The Assistant's tools: search the record, History, New chat, the settings
  *  gear. Static markup driven from here, so the panels are not rebuilt by a
  *  render of the transcript underneath them.
  *
- *  Shown only on the Assistant, seated in the sheet's own header: a gear that
- *  configures a screen you are not on is furniture that does nothing. */
+ *  Shown only where the conversation is, and seated in that shell's own
+ *  header: a gear that configures a screen you are not on is furniture that
+ *  does nothing. */
 export function renderAssistantTools() {
   const tools = $('.assistant-tools');
   if (!tools) return;
-  tools.hidden = view !== 'assistant';
+  tools.hidden = !toolsLive();
   const btn = $('#chat-history-btn');
   if (btn) btn.setAttribute('aria-expanded', String(assistantState.historyOpen));
   const gear = $('#assistant-extras-btn');
@@ -147,12 +156,12 @@ export function renderAssistantTools() {
   const recall = $('#chat-recall-slot');
   if (recall) {
     recall.innerHTML = '';
-    if (view === 'assistant') recall.appendChild(renderRecallPanel());
+    if (toolsLive()) recall.appendChild(renderRecallPanel());
   }
   const slot = $('#chat-history-slot');
   if (slot) {
     slot.innerHTML = '';
-    if (view === 'assistant' && assistantState.historyOpen) slot.appendChild(renderChatHistory());
+    if (toolsLive() && assistantState.historyOpen) slot.appendChild(renderChatHistory());
   }
   // The settings drop from the gear the way the chats drop from History —
   // both are things you open, look at, and shut again. Built even while shut,
@@ -161,7 +170,7 @@ export function renderAssistantTools() {
   const drawer = $('#assistant-extras-slot');
   if (!drawer) return;
   drawer.innerHTML = '';
-  if (view !== 'assistant') return;
+  if (!toolsLive()) return;
   const extras = document.createElement('div');
   extras.id = 'assistant-extras';
   extras.className = 'assistant-extras';

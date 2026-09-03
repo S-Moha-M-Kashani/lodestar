@@ -65,12 +65,16 @@ def make_retrieve_tool(index: CardIndex, board: BoardClient | BoardSnapshot,
             # recall box; in front of a model that judges relevance itself it
             # would silently drop the semantic matches that are the point of
             # having a dense index (see ChatStore.search).
+            # `asearch`, not `search`: this is a coroutine, and the chat
+            # half reads the whole collection and ranks it. Inline, one
+            # find_related stops the process answering anything else for the
+            # length of a recall (retrieval/offload.py).
+            recalled = await memory.asearch(text, k=k, evidence=False,
+                                            board_id=board_id)
             rows += [{'chat': {'text': hit['text'],
                                'role': hit['metadata'].get('role', '')},
                       'rank': rank}
-                     for rank, hit in enumerate(
-                         memory.search(text, k=k, evidence=False,
-                                       board_id=board_id), start=1)]
+                     for rank, hit in enumerate(recalled, start=1)]
         return rows
 
     if memory is not None:
@@ -99,6 +103,12 @@ def make_recall_tool(store: ChatStore) -> BaseTool:
         # The board still rides in `configurable`, shared with find_related.
         config = getattr(runtime, 'config', None) or {}
         board = config.get('configurable', {}).get('board_id')
+        # The synchronous door, deliberately. This tool is synchronous, so
+        # LangChain awaits it through `run_in_executor` — the work is already
+        # off the event loop, and what it was missing was not the hop but the
+        # lock, which `ChatStore` now takes whichever door is used. A coroutine
+        # here would offload work that is already offloaded, and would break
+        # every caller that invokes this tool synchronously.
         hits = store.search(text, k=k, exclude_session=current or None,
                             board_id=board or None)
         # Dated, so a recalled line can be attributed instead of quoted as

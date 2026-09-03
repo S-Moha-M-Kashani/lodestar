@@ -103,7 +103,8 @@ setInterval(renderHabitBanner, 30_000);
 
 initTimeline();      // the undo timeline, opened on the board as restored
 syncViewButtons();   // mark the restored view before the first paint
-render();            // instant paint from localStorage
+render();            // instant paint from localStorage — the widget with it,
+                     // since a board left with it open reopens with it open
 // The picker only appears once the server has listed the boards, and that list
 // is also what catches an active board this browser remembers but the database
 // no longer has — loadBoards resets and reloads there, so the sync below must

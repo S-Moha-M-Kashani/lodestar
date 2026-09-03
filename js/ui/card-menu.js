@@ -7,14 +7,16 @@ import { commit, short } from '../core/history.js';
 import { setFocusCard } from '../core/state.js';
 import { deleteCard } from './card-actions.js';
 import { announce, columnTitle, getCard } from './dom.js';
-import { openDialog } from './edit-dialog.js';
+import { openDialog, openNewCard } from './edit-dialog.js';
 
 // The card's own actions menu — the + that sits in .card-top beside the ledger
 // number and the stamps, and the panel it drops.
 //
-// Six entries. Edit opens the card dialog, exactly as clicking the card does;
-// Delete is the ordinary soft delete; and the four in between are quick-edits
-// that change one field in place. Those four exist because re-filing a card is
+// Eight entries, seven on a habit — which repeats on its own calendar and so
+// has no plan to set. Edit opens the card dialog, exactly as clicking the card
+// does; Duplicate opens that same dialog on an unsaved copy, so the copy costs
+// no ledger number until it is saved; Delete is the ordinary soft delete; and
+// the four in between are quick-edits that change one field in place. Those four exist because re-filing a card is
 // the most common thing anyone does to it, and routing "this is Health, not
 // Work" through a modal with nine other fields in it makes a one-word decision
 // cost a form.
@@ -190,6 +192,18 @@ function paintRoot(cardId, panel) {
   const card = getCard(cardId);
   panel.replaceChildren(
     mkItem('Edit…', () => { closeCardMenus(); openDialog(cardId); }),
+    // Nothing is created here: openNewCard opens the dialog on a draft copy,
+    // and the second card exists only once the user saves it — so a cancelled
+    // duplicate burns no ledger number and leaves no Trash entry to clean up.
+    // The card is re-read when the entry is picked rather than taken from the
+    // paint above, the way every sub-level below does it: a quick-edit repaints
+    // this panel, and copying the card as it was drawn would copy a stale field.
+    mkItem('Duplicate', () => {
+      const fresh = getCard(cardId);
+      if (!fresh) return;
+      closeCardMenus();
+      openNewCard(fresh);
+    }),
     mkItem('Category ▸', () => paintCategories(cardId, panel)),
     mkItem('Type ▸', () => paintTypes(cardId, panel)),
     mkItem('Deadline ▸', () => paintDeadlines(cardId, panel)),
@@ -340,16 +354,38 @@ export function cardMenu(card) {
   panel.className = 'menu-panel card-menu-panel';
   panel.hidden = true;
 
+  // The toggle stays here, on the button, and deliberately did not move into
+  // openCardMenu. A button that says "expanded" has to be able to say the
+  // opposite when it is pressed again; a right-click has no such promise to
+  // keep, and a second right-click on the same card that closed the menu would
+  // read as the card flickering. So: pressing the + twice shuts it, and
+  // right-clicking twice leaves it open.
   btn.addEventListener('click', () => {
     if (!panel.hidden) { closeCardMenus(); return; }
-    closeCardMenus(); // one menu at a time, whichever card it belonged to
-    paintRoot(card.id, panel);
-    panel.hidden = false;
-    btn.setAttribute('aria-expanded', 'true');
-    wrap.closest('.card')?.classList.add('menu-open');
-    settle(panel); // positions it, and puts focus on the first entry
+    openCardMenu(card.id, wrap);
   });
 
   wrap.append(btn, panel);
   return wrap;
+}
+
+/** Open one card's menu at its root level. `wrap` is the card's `.card-menu`.
+ *
+ *  Exported for the Board's right-click, which finds the wrapper inside the
+ *  card element rather than holding the closure cardMenu() built — so the
+ *  button and the panel are derived from the wrapper here instead of being
+ *  passed in, and there is one open path however the menu was asked for. The
+ *  panel keeps its place beside the + rather than following the pointer:
+ *  settle() measures the enclosing column scroller to decide which way to
+ *  flip, and a second positioning system for one panel is not worth a menu
+ *  that appears somewhere new each time. */
+export function openCardMenu(cardId, wrap) {
+  const btn = wrap.querySelector('.card-menu-btn');
+  const panel = wrap.querySelector('.menu-panel');
+  closeCardMenus(); // one menu at a time, whichever card it belonged to
+  paintRoot(cardId, panel);
+  panel.hidden = false;
+  btn.setAttribute('aria-expanded', 'true');
+  wrap.closest('.card')?.classList.add('menu-open');
+  settle(panel); // positions it, and puts focus on the first entry
 }

@@ -1,3 +1,4 @@
+import { widgetShowing } from './shell.js';
 import { boardSuffix } from '../core/boards.js';
 import { KEY_PREFIX } from '../core/keys.js';
 import { view } from '../core/state.js';
@@ -123,7 +124,7 @@ export async function probeBrainModels() {
     assistantModels.provider = 'ollama';
     assistantModels.text = pickerOptions(MODEL_PICKERS[0])[0];
     persistModels();
-    if (view === 'assistant') render();
+    if (view === 'assistant' || widgetShowing()) render();
     return;
   }
   if (!answered || !brainModels.verified || !brainModels.models.length) return;
@@ -146,7 +147,7 @@ export async function probeBrainModels() {
   }
   // Only when the answer changed something. Re-rendering unconditionally would
   // loop: the render triggers the probe that triggers the render.
-  if (changed && view === 'assistant') render();
+  if (changed && (view === 'assistant' || widgetShowing())) render();
 }
 
 // The options for one picker: the backend's own list when it verified one,
@@ -197,6 +198,44 @@ let settingsOpen = false;
 // text, kept here so a repaint shows the same answer without asking again.
 // '' = never asked.
 let keyKnown = '';
+
+/** The composer footer's model pick — the same choice the ⚙ drawer offers,
+ *  where the question is actually asked.
+ *
+ *  Two controls, one source of truth: both read `assistantModels.text` and both
+ *  write it through `persistModels`, so neither can show a model the other is
+ *  not using. The re-render is what keeps the drawer's own summary line ("Models
+ *  · gemma…") honest after a pick made down here.
+ *
+ *  Native `<select>`, and labelled by title rather than by a visible label: the
+ *  footer is one line under a textarea, and a second word of chrome on it would
+ *  cost the composer more than it explains. When the brain has not answered yet
+ *  the curated presets stand, so the control always names a real model rather
+ *  than sitting empty. */
+export function renderModelPicker({ busy = false } = {}) {
+  const sel = document.createElement('select');
+  sel.id = 'chat-model';
+  sel.className = 'composer-model';
+  sel.setAttribute('aria-label', 'Model answering this chat');
+  sel.title = 'Which model answers — the ⚙ settings hold the rest';
+  const offered = pickerOptions(MODEL_PICKERS[0]);
+  const opts = offered.includes(assistantModels.text)
+    ? offered : [assistantModels.text, ...offered];
+  for (const slug of opts) {
+    const opt = document.createElement('option');
+    opt.value = slug;
+    opt.textContent = codexLabel(slug);
+    sel.append(opt);
+  }
+  sel.value = assistantModels.text;
+  sel.disabled = busy;
+  sel.addEventListener('change', () => {
+    assistantModels.text = sel.value;
+    persistModels();
+    render();
+  });
+  return sel;
+}
 
 // Folded away by default, like the evidence strip under a reply: a model is
 // chosen once and then left alone, and four pickers open in the rail is a wall

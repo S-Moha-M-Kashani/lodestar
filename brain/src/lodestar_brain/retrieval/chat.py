@@ -4,7 +4,18 @@ Unlike `CardIndex`, which is derived from `/api/state` and can be thrown away,
 the transcript is stored nowhere else — losing it is losing the data. The
 argument for one store here and an in-process index there is written out in
 `cards.py`.
+
+Everything in here blocks: a Chroma call is an HTTP round trip, an embedding is
+CPU, and BM25 over the collection is CPU proportional to it. Two things follow,
+and they are the whole of what `StoreGuard` and the corpus cache are for. One
+caller is inside the store at a time (`@_guarded`), so the two doors — a
+synchronous method for the evals and the tools, an `a`-prefixed coroutine for
+the routes — cannot reach one Chroma client from two threads at once. And the
+collection is read once per generation rather than once per search: `search`
+used to fetch every chunk and rebuild BM25 over it *every time it was called*,
+which was 30 ms of a 30 ms recall at 500 chunks.
 """
+import functools
 import json
 import urllib.request
 from datetime import datetime, timezone
@@ -17,6 +28,7 @@ from .. import textnorm
 from .chunking import day_int, flatten_metadata, split_text
 from .expand import QUESTION_WORDS, expand_queries
 from .fusion import CANDIDATES, RECALL_WEIGHTS, RRF_K, RankBM25Retriever
+from .offload import StoreGuard
 from .timescope import TimeScope, _to_int, where_clause
 
 # Sentinel url selecting an in-process client: no server, no disk, no network.
@@ -66,6 +78,46 @@ def _on_board(metadata: dict | None, board_id: str | None) -> bool:
     return (metadata or {}).get('board_id', LEGACY_BOARD) == board_id
 
 
+# How many (board, excluded-session) pairs keep a prepared BM25 index. A pair
+# is one caller's view of the corpus — a chat recalling from its own board is
+# one, the recall box on the same board is another — and this board has one
+# person on it, so the number only has to cover the chats in play at once. Past
+# it the whole set is dropped rather than an entry chosen: an eviction policy
+# implies a measurement of which entry is worth keeping, and there is none.
+BM25_CACHED = 8
+
+
+def _embedder_identity(embeddings: Embeddings) -> tuple:
+    """What a cached corpus was embedded by, as a comparable value.
+
+    Part of the cache key rather than assumed constant: swapping the embedder
+    swaps the vector space, so a corpus prepared under the old one is not stale
+    data, it is data from another index. Name plus whichever model attribute the
+    implementation carries — LangChain's `Embeddings` promises no model field, so
+    this asks for the two the shipped backends use and settles for the class when
+    neither is there.
+    """
+    return (type(embeddings).__module__, type(embeddings).__qualname__,
+            getattr(embeddings, 'model', None)
+            or getattr(embeddings, 'model_name', None))
+
+
+def _guarded(method):
+    """One caller inside the store at a time, whichever door it came through.
+
+    A synchronous caller (an eval, `recall_chat` on LangChain's executor thread)
+    and a coroutine that offloaded (`asearch` from `/rag/recall`) reach the same
+    Chroma client and the same cache, so the lock belongs to the work rather
+    than to either door. Reentrant, because `reconcile` calls `sync`, which
+    calls `index_messages`.
+    """
+    @functools.wraps(method)
+    def door(self, *args, **kwargs):
+        with self._guard:
+            return method(self, *args, **kwargs)
+    return door
+
+
 def _in_session(metadata: dict | None, session_id: str | None) -> bool:
     """Whether a chunk belongs to the session being excluded.
 
@@ -106,7 +158,17 @@ class ChatStore:
         self.store = Chroma(client=client, collection_name=collection,
                             embedding_function=embeddings,
                             collection_metadata={'hnsw:space': 'cosine'})
+        self._guard = StoreGuard()
+        # Writes this store has made. Half of the corpus identity below: a
+        # message re-indexed under the same id leaves the chunk count alone, so
+        # counting is what notices an upsert.
+        self._writes = 0
+        self._embedder = _embedder_identity(embeddings)
+        self._corpus_key: tuple | None = None
+        self._corpus: list[Document] = []
+        self._lexical_cache: dict[tuple, RankBM25Retriever] = {}
 
+    @_guarded
     def record(self, texts: list[str], metadata: dict | None = None) -> None:
         """Chunk and store. Chunking lives here rather than at the call site so
         one place decides how a transcript is cut."""
@@ -116,7 +178,9 @@ class ChatStore:
         payload = {'created_day': _to_int(datetime.now(timezone.utc).date())}
         payload |= flatten_metadata(metadata or {})
         self.store.add_texts(chunks, metadatas=[dict(payload)] * len(chunks))
+        self._writes += 1
 
+    @_guarded
     def index_messages(self, rows: list[dict]) -> None:
         """Chunk recorded messages (assistant.db rows, via the Node API) into
         the index. Chunk ids derive from the message id, so Chroma *upserts*:
@@ -139,7 +203,19 @@ class ChatStore:
                 metadatas.append(dict(payload))
         if texts:
             self.store.add_texts(texts, metadatas=metadatas, ids=ids)
+            self._writes += 1
 
+    async def aindex_messages(self, rows: list[dict]) -> None:
+        """`index_messages`, off the event loop.
+
+        The door the chat route takes. Filing a turn embeds a few chunks and
+        writes them over HTTP, and it happens on every turn — inline in the
+        coroutine that records the turn, that is the whole process stopped for
+        the duration of somebody else's answer being filed.
+        """
+        await self._guard.offload(self.index_messages, rows)
+
+    @_guarded
     def sync(self, rows: list[dict]) -> int:
         """Index every recorded message this index does not know yet; returns
         how many were missing. The rebuild path: a turn recorded while Chroma
@@ -153,6 +229,7 @@ class ChatStore:
         self.index_messages(missing)
         return len(missing)
 
+    @_guarded
     def prune(self, rows: list[dict]) -> int:
         """Drop chunks whose message is no longer in the live record; returns how
         many messages were dropped.
@@ -179,8 +256,27 @@ class ChatStore:
                 dropped.add(int(head))
         if doomed:
             self.store.delete(ids=doomed)
+            self._writes += 1
         return len(dropped)
 
+    @_guarded
+    def reconcile(self, rows: list[dict]) -> tuple[int, int]:
+        """`sync` then `prune`: make the index match the record, both ways.
+
+        The pair, because every caller wants both — the boot sync and
+        `/rag/chat/reindex` each add what arrived while the index was not
+        looking and drop what left the record meanwhile. One method means one
+        lock and one thread hop for what is one job.
+        """
+        return self.sync(rows), self.prune(rows)
+
+    async def areconcile(self, rows: list[dict]) -> tuple[int, int]:
+        """`reconcile`, off the event loop. The heaviest call this store has —
+        it reads every chunk id in the collection twice and re-chunks whatever
+        is missing — and the browser fires it on every chat delete."""
+        return await self._guard.offload(self.reconcile, rows)
+
+    @_guarded
     def chunks_on(self, day: int) -> list[dict]:
         """Every chunk stamped with that created_day, as its metadata dict.
         Not a search: the recap tool reports what a day holds, and a query
@@ -188,6 +284,73 @@ class ChatStore:
         got = self.store.get(where={'created_day': day})
         return [dict(meta) for meta in got.get('metadatas') or []]
 
+    def _prepared(self, total: int) -> list[Document]:
+        """Every chunk in the collection, as Documents, until it changes.
+
+        `search` needs the whole corpus: the lexical half ranks over it and the
+        board and session filters are applied to it in Python, so that both
+        halves of one search agree about what is eligible. Fetching it per
+        search was the cost of a recall — 13.7 ms of a 30 ms call at 500 chunks
+        with the in-process store, and an HTTP round trip with a real one.
+
+        **Identity, never a timer.** The key is where the collection is, what
+        embedded it, how many chunks are in it, and how many writes this store
+        has made. Count catches a foreign writer — another brain, an import, a
+        prune — because chat chunk ids are `message_id:n` and a message is
+        appended or removed, never edited in place. The write counter catches
+        our own upserts, which do not move the count. The one change neither
+        sees is a foreign add and a foreign delete of equal size landing between
+        two searches; that is an accepted cost, and what would close it is a
+        collection version from Chroma itself, which its API does not offer.
+
+        **A refresh that fails serves nothing.** The entry is dropped before the
+        fetch, so a Chroma that has gone away raises out of `search` — the
+        caller sees the store being unreachable, which is true, instead of an
+        answer from a corpus we already know is out of date.
+        """
+        key = (self.url, self.database, self.collection_name, self._embedder,
+               total, self._writes)
+        if key == self._corpus_key:
+            return self._corpus
+        self._corpus_key, self._corpus = None, []
+        self._lexical_cache.clear()
+        raw = self.store.get()
+        self._corpus = [Document(id=id_, page_content=content,
+                                 metadata=meta or {})
+                        for id_, content, meta in zip(raw['ids'],
+                                                      raw['documents'],
+                                                      raw['metadatas'])]
+        self._corpus_key = key
+        return self._corpus
+
+    def _bm25(self, view: tuple, corpus: list[Document]) -> RankBM25Retriever:
+        """A BM25 index over one filtered view of the corpus, kept until the
+        corpus changes. Building it is the other half of a recall's cost (16.3
+        ms of 30 at 500 chunks) and it is pure tokenising, so it is the same
+        index every time the same view is searched. The scope and the depth are
+        a `model_copy` at the call site, exactly as `CardIndex` does: they
+        filter and truncate at query time and do not touch the postings."""
+        ready = self._lexical_cache.get(view)
+        if ready is None:
+            if len(self._lexical_cache) >= BM25_CACHED:
+                self._lexical_cache.clear()
+            ready = self._lexical_cache[view] = (
+                RankBM25Retriever.from_documents(corpus))
+        return ready
+
+    async def asearch(self, *args, **kwargs) -> list[dict]:
+        """`search`, off the event loop.
+
+        The door for a coroutine — `/rag/recall` and `find_related`, both of
+        which called `search` inline and stalled every other request in the
+        process for the length of one recall. `recall_chat` stays on the
+        synchronous door on purpose: it is a synchronous tool, so LangChain
+        already runs it in an executor thread, and what it was missing was the
+        lock rather than the hop.
+        """
+        return await self._guard.offload(self.search, *args, **kwargs)
+
+    @_guarded
     def search(self, text: str, k: int = 5,
                scope: TimeScope | None = None, *,
                evidence: bool = True, exclude_session: str | None = None,
@@ -214,17 +377,16 @@ class ChatStore:
         total = self.count()
         if total == 0:
             return []   # an empty store is a normal state, not a failed query
-        raw = self.store.get()
-        corpus = [Document(id=id_, page_content=content, metadata=meta or {})
-                  for id_, content, meta in zip(raw['ids'], raw['documents'],
-                                                raw['metadatas'])
-                  if _on_board(meta, board_id)
-                  and not _in_session(meta, exclude_session)]
+        corpus = [doc for doc in self._prepared(total)
+                  if _on_board(doc.metadata, board_id)
+                  and not _in_session(doc.metadata, exclude_session)]
         if not corpus:
             return []
         depth = min(total, max(k, CANDIDATES))
         chroma_filter = where_clause(scope, fields=('created_day',))
-        bm25 = RankBM25Retriever.from_documents(corpus, k=depth, scope=scope)
+        bm25 = self._bm25((board_id or '', exclude_session or ''),
+                          corpus).model_copy(update={'k': depth,
+                                                     'scope': scope})
         queries = expand_queries(text)
         dense_rankings = [self.store.similarity_search(q, k=depth,
                                                        filter=chroma_filter)
@@ -240,8 +402,17 @@ class ChatStore:
             for ranking in rankings:
                 for rank, doc in enumerate(ranking, start=1):
                     # The dense half comes straight from Chroma, so it has not
-                    # been through the corpus filter above.
-                    if _in_session(doc.metadata, exclude_session):
+                    # been through the corpus filter above — and it needs
+                    # *both* of that filter's rules, not one. This re-checked
+                    # only the session until 2026-09-02, so a chunk on another
+                    # board could enter a recall through the dense ranking
+                    # while the lexical half, which ranks over the filtered
+                    # corpus, correctly never offered it. Exactly the "two
+                    # halves of one search disagreeing about what is eligible"
+                    # this method's docstring says filtering here rather than
+                    # in a Chroma `where` clause exists to prevent.
+                    if (not _on_board(doc.metadata, board_id)
+                            or _in_session(doc.metadata, exclude_session)):
                         continue
                     seen.setdefault(doc.page_content, doc)
                     scores[doc.page_content] = (
@@ -263,10 +434,13 @@ class ChatStore:
         return [{'text': key, 'score': round(scores[key], 4),
                  'metadata': dict(seen[key].metadata)} for key in ordered]
 
+    @_guarded
     def count(self) -> int:
         return self.client.get_collection(self.collection_name).count()
 
+    @_guarded
     def drop(self) -> None:
         """Delete this collection. For tests cleaning up after themselves —
         never wired to anything a user can reach."""
         self.client.delete_collection(self.collection_name)
+        self._writes += 1

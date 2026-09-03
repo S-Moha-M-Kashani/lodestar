@@ -147,6 +147,7 @@ function describeEdit(fields, card) {
     columnId: (v) => `move to ${columnTitle(v)}`,
     importance: (v) => `importance → ${v || 'none'}`,
     urgency: (v) => `urgency → ${v || 'none'}`,
+    deadline: (v) => `deadline → ${v || 'none'}`,
     tags: (v) => `tags → ${(v || []).join(', ') || 'none'}`,
   };
   return Object.entries(fields)

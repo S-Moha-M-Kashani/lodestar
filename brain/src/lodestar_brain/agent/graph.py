@@ -31,8 +31,28 @@ from ..middleware.summarize import make_context_editor, make_summarizer
 from ..middleware.untrusted import UntrustedToolOutput
 from .prompt import SYSTEM_PROMPT
 from .result import (STEP_LIMIT_REPLY, AgentResult, _calls_in, _result_from,
-                     _steps_from, _text)
+                     _steps_from, _text, _usage_from)
 from .state import LodestarState, TurnContext
+from .trace import TraceCollector, TurnTrace, final_answer
+
+# The graph node that holds the agent's own model call. `create_agent` names it
+# this, and `stream_mode='messages'` stamps every message with the node it came
+# out of — which is the only thing that tells the assistant's voice apart from a
+# model a tool called for its own purposes. Observed against a live turn rather
+# than read off a docstring: 'model' for the reply, 'tools' for the relevance
+# gate's scores.
+MODEL_NODE = 'model'
+
+
+def _from_model(metadata: Any) -> bool:
+    """Did this streamed message come out of the agent's own model call?
+
+    A missing node is *not* trusted. The one thing worse than dropping a token
+    is streaming a tool's internal chatter into the transcript, and a stream
+    whose metadata has stopped carrying a node is a stream this function can no
+    longer make the distinction for.
+    """
+    return isinstance(metadata, dict) and metadata.get('langgraph_node') == MODEL_NODE
 
 
 def _spoken(messages: Iterable[BaseMessage]) -> list[tuple[str, str]]:
@@ -260,7 +280,8 @@ class LodestarAgent:
         return middleware
 
     def _run_config(self, session_id: str | None = None,
-                    board_id: str | None = None) -> dict:
+                    board_id: str | None = None,
+                    trace: TurnTrace | None = None) -> dict:
         # A step is a model turn plus a tool turn, and the run ends on a model
         # turn — which was 2n+1 nodes for n tool calls until middleware started
         # adding nodes of its own. `_per_step` and `_per_run` are that shape,
@@ -293,6 +314,14 @@ class LodestarAgent:
                                          'turn_id': uuid4().hex}}
         if board_id:
             config['configurable']['board_id'] = board_id
+        # The developer trace, when one is asked for. A run callback rather than
+        # middleware or a wrapped model: `on_chat_model_start` is fired with the
+        # exact list the model is about to be sent, which is the only place that
+        # list exists — see agent/trace.py for why every other capture point
+        # would be a reconstruction. Absent when nobody is tracing, so a turn
+        # that is not being watched carries no handler at all.
+        if trace is not None:
+            config['callbacks'] = [TraceCollector(trace)]
         return config
 
     def _run_kwargs(self, session_id: str | None) -> dict:
@@ -354,12 +383,32 @@ class LodestarAgent:
         """
         return [m for m in messages if m.id not in before] if before else messages
 
+    @staticmethod
+    def _traced(trace: TurnTrace | None, seen: list[BaseMessage],
+                interrupted: bool = False) -> None:
+        """Close the trace on the way out of a run.
+
+        The envelope was captured by the callback while the turn ran; what is
+        left is the message the turn ended on and how it ended. Both are read
+        off `seen` rather than off the result, because the result is already a
+        projection — and a trace built from a projection is the reconstruction
+        this whole surface exists to avoid.
+        """
+        if trace is None:
+            return
+        answer = final_answer(seen)
+        if interrupted:
+            trace.interrupt(answer)
+            return
+        trace.settle(answer, _usage_from(seen))
+
     def run(self, messages: list[dict], model: str | None = None,
             provider: str | None = None,
             session_id: str | None = None,
-            board_id: str | None = None) -> AgentResult:
+            board_id: str | None = None,
+            trace: TurnTrace | None = None) -> AgentResult:
         graph = self._graph(model, provider)
-        config = self._run_config(session_id, board_id)
+        config = self._run_config(session_id, board_id, trace)
         payload, before = self._prepare(graph, config, messages, session_id)
         seen: list[BaseMessage] = []
         try:
@@ -370,15 +419,19 @@ class LodestarAgent:
                                       **self._run_kwargs(session_id)):
                 seen = self._fresh(chunk['messages'], before)
         except GraphRecursionError:
+            self._traced(trace, seen, interrupted=True)
             return _result_from(seen, STEP_LIMIT_REPLY)
-        return _result_from(seen)
+        result = _result_from(seen)
+        self._traced(trace, seen)
+        return result
 
     async def arun(self, messages: list[dict], model: str | None = None,
                    provider: str | None = None,
                    session_id: str | None = None,
-                   board_id: str | None = None) -> AgentResult:
+                   board_id: str | None = None,
+                   trace: TurnTrace | None = None) -> AgentResult:
         graph = self._graph(model, provider)
-        config = self._run_config(session_id, board_id)
+        config = self._run_config(session_id, board_id, trace)
         payload, before = await self._aprepare(graph, config, messages,
                                                session_id)
         seen: list[BaseMessage] = []
@@ -388,13 +441,17 @@ class LodestarAgent:
                                              **self._run_kwargs(session_id)):
                 seen = self._fresh(chunk['messages'], before)
         except GraphRecursionError:
+            self._traced(trace, seen, interrupted=True)
             return _result_from(seen, STEP_LIMIT_REPLY)
-        return _result_from(seen)
+        result = _result_from(seen)
+        self._traced(trace, seen)
+        return result
 
     async def astream(self, messages: list[dict], model: str | None = None,
                       provider: str | None = None,
                       session_id: str | None = None,
-                      board_id: str | None = None
+                      board_id: str | None = None,
+                      trace: TurnTrace | None = None
                       ) -> AsyncIterator[tuple[str, Any]]:
         """The same turn as `arun`, reported while it happens.
 
@@ -416,7 +473,7 @@ class LodestarAgent:
         STEP_LIMIT_REPLY.
         """
         graph = self._graph(model, provider)
-        config = self._run_config(session_id, board_id)
+        config = self._run_config(session_id, board_id, trace)
         payload, before = await self._aprepare(graph, config, messages,
                                                session_id)
         seen: list[BaseMessage] = []
@@ -442,14 +499,36 @@ class LodestarAgent:
                     continue
                 # 'messages' carries every message the graph produces, tool
                 # answers included. Filtering to AIMessage is what stops a tool's
-                # JSON being pasted into the reply as if the model had said it.
-                message, _metadata = chunk
-                if isinstance(message, AIMessage) and (text := _text(message)):
+                # JSON being pasted into the reply as if the model had said it —
+                # but an AIMessage is not by itself the *assistant's* voice, and
+                # that is the hole this filter had. A tool may call a model of
+                # its own, LangChain propagates the run's callbacks into that
+                # nested call, and its reply arrives here as an AIMessage like
+                # any other. The relevance gate does exactly this: it grades
+                # candidates in one call and answers in the shape its own regex
+                # reads, so a real turn streamed `1: 9\n2: 0\n3: 1` into the
+                # transcript ahead of the answer, looking like debug output the
+                # assistant had said. Observed 2026-09-02 on BRAIN_LLM=claude-cli
+                # against a 60-card board; invisible to every test, because the
+                # e2e runs BRAIN_LLM=fake and the buffered route returns only the
+                # final result.
+                #
+                # So the node decides, not the type. `MODEL_NODE` is where
+                # create_agent puts the model call; a nested one runs inside
+                # 'tools'. If the framework ever renames the node, tokens stop
+                # rather than a tool's chatter starting — the safe direction, and
+                # the e2e's streaming checks fail loudly on it.
+                message, metadata = chunk
+                if (isinstance(message, AIMessage) and _from_model(metadata)
+                        and (text := _text(message))):
                     yield 'token', text
         except GraphRecursionError:
+            self._traced(trace, seen, interrupted=True)
             yield 'done', _result_from(seen, STEP_LIMIT_REPLY)
             return
-        yield 'done', _result_from(seen)
+        result = _result_from(seen)
+        self._traced(trace, seen)
+        yield 'done', result
 
 
 __all__ = ['LodestarAgent']

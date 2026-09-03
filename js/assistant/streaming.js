@@ -198,8 +198,16 @@ export async function sendChat(text) {
   // The turn being streamed into. `running` holds tools the model has asked
   // for but that have not answered yet; `partial` marks a turn the stream
   // abandoned, so it is shown but never replayed to the model as history.
-  const turn = { role: 'assistant', content: '', steps: [], running: [] };
+  // `startedAt` is what the worked-for row counts from. Stamped here rather
+  // than on the first token: the wait a user is watching starts when they press
+  // Send, not when the model gets around to answering.
+  const turn = { role: 'assistant', content: '', steps: [], running: [],
+                 startedAt: Date.now() };
   let failure = CHAT_UNAVAILABLE;
+  // What the banner shows when it is unfolded: the error as it actually
+  // arrived, kept apart from the friendly line above it. A user who has to
+  // report this needs the status and the body, not the reassurance.
+  let detail = '';
   try {
     const carried = contextWindow(assistantState.messages.filter(replayable))
       .messages.map(({ role, content }) => ({ role, content }));
@@ -226,6 +234,9 @@ export async function sendChat(text) {
     });
     if (!res.ok || !res.body) {
       failure = CHAT_REFUSALS[res.status] || CHAT_UNAVAILABLE;
+      // Read before throwing: the body is where the brain says what actually
+      // went wrong, and a response object in a catch block has already lost it.
+      detail = `HTTP ${res.status} ${await res.text().catch(() => '')}`.trim();
       throw new Error(`agent ${res.status}`);
     }
     assistantState.messages.push(turn);
@@ -263,6 +274,10 @@ export async function sendChat(text) {
     // but nothing on the wire says how many, and a partial count shown as the
     // total would be wrong in the direction that flatters us.
     turn.usage = data.usage || null;
+    // How long the turn took, measured here where it ended. Kept on the turn
+    // rather than recomputed at render time: `startedAt` survives a reload in
+    // the cache, but "now" on the next load is hours later.
+    turn.elapsedMs = Date.now() - turn.startedAt;
     // Absent unless the brain actually knew the price — see pricing.py. Left
     // undefined rather than set to 0, so an unpriced turn is missing from the
     // session total instead of quietly reported as free.
@@ -276,10 +291,11 @@ export async function sendChat(text) {
     if (data.proposed) { await refreshProposals(); await refreshEdits(); }
     announce(data.proposed ? 'Assistant has something waiting for your approval'
       : 'Assistant replied');
-  } catch {
+  } catch (err) {
     // Before anything else: a dead stream must not leave a reveal loop running
     // against a turn that will never finish.
     endStreaming();
+    if (!detail) detail = (err && err.message) || String(err);
     // Whatever arrived before the failure is kept — a long answer that dies
     // at the last frame should not vanish — but it is marked `partial` so a
     // truncated reply is never sent back as if the assistant had finished it.
@@ -287,10 +303,16 @@ export async function sendChat(text) {
     if (arrived && (turn.content || turn.steps.length)) {
       turn.running = [];
       turn.partial = true;
+      turn.elapsedMs = Date.now() - turn.startedAt;
     } else if (arrived) {
       assistantState.messages.splice(assistantState.messages.indexOf(turn), 1);
     }
-    assistantState.messages.push({ role: 'assistant', content: failure, error: true });
+    // A failed turn is a banner, and a banner offers to try again — so it has
+    // to carry both halves of that offer: the error as it arrived, and the
+    // message that provoked it. Without the second one Retry would be a button
+    // asking the user to retype what they already typed.
+    assistantState.messages.push({ role: 'assistant', content: failure,
+                                   error: true, detail, retry: text });
     announce(failure);
   }
   assistantState.busy = false;

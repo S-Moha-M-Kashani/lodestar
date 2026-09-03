@@ -22,6 +22,21 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@v5
 
+      # `pg` is the one npm dependency (server.js has none; the SQLite →
+      # Postgres migration script imports it). tests/migrate.test.js imports it
+      # lazily, so this is what tells a missing tool apart from a broken
+      # migration.
+      - name: Install the one npm dependency
+        run: npm ci --prefer-offline --no-audit --fund=false
+
+      # First, because it is the cheapest suite here and the one most likely to
+      # catch a break: seconds against Playwright's minutes. The Postgres cases
+      # in tests/postgres.test.js skip on a runner with no shared server, which
+      # is the intended behaviour, not a gap — the schema itself is still
+      # asserted against server.js on every run.
+      - name: Server unit tests
+        run: node --test tests/*.test.js
+
       - name: Brain unit tests (offline — fake LLM, hash embedder)
         run: uv run --project brain pytest brain/tests -v
 
