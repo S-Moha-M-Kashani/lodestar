@@ -4171,10 +4171,6 @@ button.chat-source-card {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.widget-tools-slot { display: contents; }
-/* The tools take the second line whole. */
-#assistant-widget .assistant-tools { flex: 1 0 100%; min-width: 0; }
-#assistant-widget .chat-recall-name { font-size: 0.68rem; }
 .widget-btn {
   flex: 0 0 auto;
   padding: 2px 6px;
@@ -4198,56 +4194,63 @@ button.chat-source-card {
 }
 .widget-approvals-text { flex: 1 1 auto; min-width: 0; }
 .widget-approvals-open { flex: 0 0 auto; font-size: 0.7rem; padding: 2px 8px; }
-/* The widget's own panels, inside it. Absolutely positioned against the card
-   and sized to it, because a panel dropping out of a fixed box cannot escape
-   it — the same answer the chat rows already got when their actions unfolded
-   inside the row rather than over the list. */
-/* The tools row anchors its own panels — but inside the widget the row is a
-   ~100px box in the head, so anchoring to it would drop a 440px panel out of
-   the side of the card. Static here, and the card (which is `relative`)
-   becomes what the three panels are positioned against instead. */
-#assistant-widget .assistant-tools,
-#assistant-widget .assistant-tools .chat-recall { position: static; }
-#assistant-widget .chat-history,
-#assistant-widget .assistant-extras,
-#assistant-widget .assistant-tools .chat-recall-drop {
-  position: absolute;
-  inset-block-start: 34px;
-  inset-inline: 6px;
-  width: auto;
-  max-width: none;
-  max-height: calc(var(--assistant-widget-h, 520px) - 52px);
-}
-/* The launcher: the way in from every view. Same square as the gear beside it,
-   so the header's right-hand end reads as one row of controls. */
+/* The launcher: the way in from every view, docked in the corner the card it
+   opens uses. `display: none` on [hidden] first, and load-bearing — the fourth
+   instance of this trap, after .assistant-tools, .board-switch and
+   #assistant-widget: `display: flex` here outranks the UA's [hidden] rule, and
+   render() drives `hidden` to give the corner to the card. */
+#assistant-launcher[hidden] { display: none; }
 .assistant-launcher {
-  position: relative;
-  display: grid;
-  place-items: center;
-  flex: 0 0 auto;
-  width: 31px;
-  height: 31px;
-  padding: 0;
-  font-size: 13px;
+  position: fixed;
+  /* The same 16px the widget keeps from the edges — EDGE_PX in
+     js/assistant/widget.js. One margin, so the pill and the card it opens
+     stand in the same place rather than a pixel apart. */
+  inset-inline-end: 16px;
+  inset-block-end: 16px;
+  /* The widget's layer. Equal z-index and later in the body, so the card that
+     replaces it in this corner is the one that wins. */
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 15px 7px 9px;
+  font-family: var(--display);
+  font-size: 15px;
   line-height: 1;
-  color: var(--ink-soft);
-  background: var(--paper);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
+  color: var(--ink);
+  background: var(--card);
+  border: 1px solid var(--card-line);
+  /* Fully round: at this height anything short of half of it reads as a
+     mis-sized card rather than a thing you press. */
+  border-radius: 999px;
+  box-shadow: var(--shadow-lift);
   cursor: pointer;
 }
-.assistant-launcher:hover { color: var(--ink); border-color: var(--ink-soft); }
-.assistant-launcher[aria-pressed="true"] {
-  color: var(--ink);
-  border-color: var(--ink-soft);
+.assistant-launcher:hover { border-color: var(--ink-soft); }
+/* The brand mark at pill size. Its own class rather than .brand-mark: that one
+   is hidden under the star theme, where the sky already carries a nova at full
+   size — but a 26px mark in the corner is the pill's own identity, not a second
+   sky, and a pill that vanished into an unlabelled word would be the launcher
+   losing the thing this change exists to give it. */
+.assistant-launcher-mark {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
 }
-/* The waiting count, on the launcher as on the Assistant tab. Positioned out
-   of the button's own square rather than inside it: at 31px there is no room
-   to put a number beside the mark. */
+.assistant-launcher-mark svg { width: 100%; height: 100%; display: block; grid-area: 1 / 1; }
+.assistant-launcher-mark .scene-stars { display: none; }
+[data-theme="dark"] .assistant-launcher-mark .scene-colour,
+[data-theme="star"] .assistant-launcher-mark .scene-colour { display: none; }
+[data-theme="dark"] .assistant-launcher-mark .scene-stars,
+[data-theme="star"] .assistant-launcher-mark .scene-stars { display: block; }
+/* The waiting count, on the pill as on the Assistant tab. Out of the pill's own
+   box rather than inside it, so a two-digit count cannot reflow the word beside
+   the mark. */
 .assistant-launcher .view-badge {
   position: absolute;
   inset-block-start: -6px;
-  inset-inline-end: -6px;
+  inset-inline-end: -2px;
 }
 /* The collapse control on the full view, beside the tools in the sheet's head. */
 .assistant-collapse { flex: 0 0 auto; margin-inline-start: 4px; }

@@ -293,12 +293,6 @@
              unfound. View-specific furniture, like the search and filters to
              the left of them: shown only while the Assistant is open. The
              panel is a sibling of the button so it can drop from under it. -->
-        <!-- The way into the Assistant from every view. A launcher, not a
-             seventh tab: the widget floats over whatever you are looking at
-             rather than replacing it, and the tab beside it still opens the
-             full view. Carries the same waiting count that tab does, because
-             from the Board they are one fact — the Assistant needs you. -->
-        <button id="assistant-launcher" class="assistant-launcher" aria-pressed="false" aria-label="Assistant" title="Ask the assistant about this board">✦</button>
         <div class="assistant-tools" hidden>
           <div id="chat-recall-slot"></div>
           <button id="chat-history-btn" class="btn ghost chat-history-btn" aria-haspopup="true" aria-expanded="false" aria-controls="chat-history">History</button>
@@ -618,6 +612,28 @@
        card inside this; the host itself is never destroyed, which is what lets
        the remembered size live on it as two custom properties. -->
   <div id="assistant-widget" hidden></div>
+  <!-- The way into the Assistant from every view. A launcher, not a seventh
+       tab: the widget floats over whatever you are looking at rather than
+       replacing it, and the tab in the header still opens the full view.
+       Carries the same waiting count that tab does, because from the Board they
+       are one fact — the Assistant needs you.
+
+       Docked here rather than in the header for the same two reasons the host
+       above is: a fixed-position box inside the header is trapped by that
+       header's stacking context, and being last in the body is what lets it
+       float over the board and the star sky with the smallest z-index that
+       works. It shares the bottom-right corner with the card it opens, so
+       render() hides it while the card is there — and on the Assistant view,
+       where the sheet has its own collapse control. The mark is the brand's,
+       reached through the sprite already in this document; the two scenes are
+       both here and the theme picks one, exactly as .brand-mark does. -->
+  <button id="assistant-launcher" class="assistant-launcher" aria-label="Ask the assistant about this board" title="Ask the assistant about this board">
+    <span class="assistant-launcher-mark" aria-hidden="true">
+      <svg class="scene-colour" viewBox="16 16 168 168"><use href="#mark-colour-art"/></svg>
+      <svg class="scene-stars" viewBox="16 16 168 168"><use href="#mark-stars-art"/></svg>
+    </span>
+    <span class="assistant-launcher-word">Ask</span>
+  </button>
   <!-- The whole frontend, as native ES modules — no bundler and no build step.
        type="module" is deferred, so the DOM above is parsed before any of it
        runs and a module may look up its own elements at the top level. -->

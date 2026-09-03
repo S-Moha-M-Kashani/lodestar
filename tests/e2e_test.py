@@ -5543,9 +5543,35 @@ try:
         page.evaluate("key => localStorage.removeItem(key)", WIDGET_KEY)
         page.reload()
         page.wait_for_selector("#board")
-        check("widget: the launcher is in the header on the Board",
-              page.locator("#assistant-launcher").count() == 1
-              and page.locator("#assistant-launcher").is_visible())
+        # The way in is a pill in the bottom-right corner — the corner the card
+        # itself opens into — carrying the Lodestar mark and the word Ask. It was
+        # a bare ✦ square at the right-hand end of the header, where it read as
+        # one more toolbar control among nine. Out of the header for a structural
+        # reason as well as a visual one: a fixed-position child of the header is
+        # trapped by it, which is why the widget's own host is a child of <body>.
+        pill = page.locator("#assistant-launcher")
+        dock = page.evaluate("""() => {
+          const el = document.getElementById('assistant-launcher');
+          const b = el.getBoundingClientRect();
+          const s = getComputedStyle(el);
+          return { right: window.innerWidth - b.right,
+                   bottom: window.innerHeight - b.bottom,
+                   radius: parseFloat(s.borderTopLeftRadius),
+                   half: b.height / 2,
+                   fixed: s.position === 'fixed',
+                   inHeader: !!el.closest('.app-header') };
+        }""")
+        check("widget: the way in is an Ask pill docked bottom-right",
+              pill.count() == 1 and pill.is_visible()
+              # The mark and the word, not a lone glyph.
+              and "Ask" in pill.inner_text()
+              and page.locator("#assistant-launcher svg").count() >= 1
+              # In the corner, within the 16px margin the widget keeps (EDGE_PX),
+              # and fully rounded like the card it opens.
+              and dock["fixed"] and 0 <= dock["right"] <= 24
+              and 0 <= dock["bottom"] <= 24
+              and dock["radius"] >= dock["half"] - 1
+              and not dock["inHeader"])
         # Closed by default: an existing user meets no change until they ask for
         # one, and an assistant that opens itself over the work is the mental
         # load this whole change exists to remove.
@@ -5562,6 +5588,11 @@ try:
               and page.locator("#assistant-widget #chat-input").count() == 1
               and wait_until(lambda: page.evaluate(
                   "() => document.activeElement.id") == "chat-input"))
+        # The pill and the card want the same corner, so the pill gives it up
+        # while the card is there. Recorded here and checked below, once the
+        # other state it hides in — the Assistant view, where the sheet has its
+        # own collapse control — has been visited too.
+        hidden_over_card = not pill.is_visible()
         # The board is still there, and still the board: the widget floats over
         # it rather than replacing it.
         check("widget: the view underneath is untouched",
@@ -5576,6 +5607,7 @@ try:
         page.locator('.view-switch button[data-view="assistant"]').click()
         page.wait_for_selector(".assistant-sheet #chat-input")
         view_open = one_input()
+        hidden_on_view = not pill.is_visible()
         check("widget: exactly one message input exists in every state",
               board_open and view_open
               and not page.locator("#assistant-widget").is_visible())
@@ -5589,29 +5621,51 @@ try:
         # the control that opened it rather than to the top of the page.
         page.locator("#assistant-widget #chat-input").focus()
         page.keyboard.press("Escape")
-        check("widget: Escape closes it and returns focus to the launcher",
+        check("widget: Escape closes it and returns focus to the pill",
               wait_until(lambda: not page.locator("#assistant-widget").is_visible())
               and page.evaluate("() => document.activeElement.id") == "assistant-launcher")
-        # The panels the tools drop belong to the shell hosting them, and the
-        # tools row is ONE wired-once node that moves between the two. Opening
-        # the chats from the widget and then changing the view underneath must
-        # leave both the widget and the panel exactly as they were — that is the
-        # whole reason the node is moved rather than rebuilt.
+        # Both states the pill hides in, and the one it shows in. The focus above
+        # is the other half of this: a hidden element cannot take focus, so a
+        # pill that failed to come back would have left the caret on the body.
+        check("widget: the pill hides behind the card and on the Assistant view",
+              hidden_over_card and hidden_on_view and pill.is_visible())
+        # The four controls the tools row holds — search the record, the chats
+        # panel, New chat and the settings gear — belong to the Assistant PAGE
+        # alone. In the widget they took a line of their own at 380px and left
+        # the chat's name a single letter, and a settings drawer on a 380px card
+        # is a settings screen in a margin. The row is still ONE wired-once
+        # node, so "removed from the widget" has to mean two things: the widget
+        # never hosts it, AND it is parked hidden rather than left visible in the
+        # app header, where it would configure a screen nobody is on.
         page.click("#assistant-launcher")
         page.wait_for_selector("#assistant-widget .chat-log")
-        open_chat_history(page)
-        # A repaint of the view underneath must not tear the panel down — that
-        # is what the wired-once tools node buys, and moving it into a second
-        # host is where it could have been lost. Typed rather than clicked: a
-        # click outside the tools is a dismissal by design, and this is about
-        # the repaint, not about the pointer.
+        in_widget = page.locator("#assistant-widget .assistant-tools").count()
+        parked = not page.locator(".assistant-tools").is_visible()
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector(".assistant-sheet #chat-input")
+        on_page = (page.locator(".assistant-head .assistant-tools").count() == 1
+                   and page.locator(".assistant-tools .chat-recall").count() == 1
+                   and page.locator("#chat-history-btn").is_visible()
+                   and page.locator("#chat-new").is_visible()
+                   and page.locator("#assistant-extras-btn").is_visible())
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector("#assistant-widget .chat-log")
+        check("widget: search, chats, New chat and settings are the Assistant"
+              " page's alone",
+              in_widget == 0 and parked and on_page)
+        # A repaint of the view underneath must not tear the widget down, and
+        # the unsent draft rides through a view switch: the host is the one node
+        # render() never replaces, and the draft is the cheapest proof that the
+        # card inside it was rebuilt rather than started from nothing. Typed
+        # into the board's search rather than clicked, because a click outside
+        # the widget is not what this is about.
+        page.fill("#chat-input", "still here")
         page.fill("#search", "zzz-no-such-card")
         page.wait_for_timeout(150)
-        survived = (page.locator("#assistant-widget .chat-history").count() == 1
-                    and page.get_attribute("#chat-history-btn", "aria-expanded") == "true")
+        survived = (page.locator("#assistant-widget #chat-input").count() == 1
+                    and page.input_value("#chat-input") == "still here")
         page.fill("#search", "")
         page.wait_for_timeout(150)
-        page.fill("#chat-input", "still here")
         page.locator('.view-switch button[data-view="backlog"]').click()
         page.wait_for_selector(".backlog-row")
         check("widget: it survives a repaint and a view switch",
@@ -5620,38 +5674,35 @@ try:
               and page.locator("#assistant-widget #chat-input").count() == 1
               and page.input_value("#chat-input") == "still here")
         page.fill("#chat-input", "")
-        open_chat_history(page)
-        # A panel dropped from a fixed box has to be drawn inside it and has to
-        # be on top. Asked of the browser at the panel's own coordinates rather
-        # than asserted as a z-index: a stacking context is a ceiling for
-        # everything inside it, so a z-index assertion passes against exactly the
-        # bug this is here to catch.
-        topmost = """() => {
-          const p = document.querySelector('#assistant-widget .chat-history');
-          if (!p) return 'no panel';
-          const b = p.getBoundingClientRect();
+        # The card and the pill are both fixed boxes over whatever view is
+        # beneath them, and the star sky is the hardest case: there the header
+        # and #board both take a stacking context to clear the sky, and a
+        # z-index counts only among siblings. Asked of the browser at each one's
+        # own coordinates rather than asserted as a z-index, because a z-index
+        # assertion passes against exactly the bug this is here to catch.
+        topmost = """(sel) => {
+          const el = document.querySelector(sel);
+          if (!el) return 'missing';
+          const b = el.getBoundingClientRect();
           const hit = document.elementFromPoint(b.x + b.width / 2, b.y + 8);
-          return hit && p.contains(hit) ? 'panel' : (hit ? hit.className : 'nothing');
+          return hit && el.contains(hit) ? 'it' : (hit ? hit.className : 'nothing');
         }"""
-        on_board = page.evaluate(topmost)
-        # The star sky is the hardest case: there the header and #board both
-        # take a stacking context to clear it, and a panel's own z-index counts
-        # only among its siblings. The picker lives in the board's ⚙ Menu, so
-        # this takes the same detour a person would.
+        card_sel = "#assistant-widget .widget-card"
+        card_board = page.evaluate(topmost, card_sel)
         set_theme("star")
         page.wait_for_timeout(700)   # the body background transitions
-        open_chat_history(page)
-        on_star = page.evaluate(topmost)
-        check("widget: its panel is the topmost thing at its own coordinates",
-              on_board == "panel" and on_star == "panel")
-        # One Escape, one layer: the panel, and not the widget under it.
-        page.locator("#chat-history-btn").focus()
+        card_star = page.evaluate(topmost, card_sel)
+        page.locator("#assistant-widget #chat-input").focus()
         page.keyboard.press("Escape")
-        check("widget: Escape closes the panel first, the widget second",
-              wait_until(lambda: page.locator(".chat-history").count() == 0)
-              and page.locator("#assistant-widget").is_visible())
+        wait_until(lambda: not page.locator("#assistant-widget").is_visible())
+        pill_star = page.evaluate(topmost, "#assistant-launcher")
+        check("widget: the card and the pill are the topmost things at their own"
+              " coordinates, on the board and on the star sky",
+              card_board == "it" and card_star == "it" and pill_star == "it")
         set_theme("light")
         page.wait_for_timeout(700)
+        page.click("#assistant-launcher")
+        page.wait_for_selector("#assistant-widget .chat-log")
 
         # ---- Resize: the size is remembered, and always inside its clamp -----
         # Asserted on the PERSISTED value and its bounds, never on exact pixels:
@@ -5801,11 +5852,15 @@ try:
         # shell that links to it are exercised together.
         page.locator('.view-switch button[data-view="board"]').click()
         page.wait_for_selector("#new-card-btn")
-        if not page.locator("#assistant-widget").is_visible():
-            page.click("#assistant-launcher")
-        page.wait_for_selector("#assistant-widget .chat-log")
+        # New chat is the Assistant page's control now, so the clean chat is
+        # started there and folded back into the corner — the turns below are
+        # still taken through the widget.
+        page.locator('.view-switch button[data-view="assistant"]').click()
+        page.wait_for_selector(".assistant-sheet #chat-input")
         page.click("#chat-new")
         page.wait_for_selector(".chat-suggest")
+        page.click("#assistant-collapse")
+        page.wait_for_selector("#assistant-widget .chat-log")
         cards_before_trace = len(api_state()["cards"])
         page.fill("#chat-input", "trace this ordinary turn")
         page.click("#chat-send")
