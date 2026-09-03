@@ -2971,10 +2971,10 @@ try:
         page.keyboard.press("Escape")
         by_escape = wait_until(lambda: page.locator(".chat-history").count() == 0)
         open_chat_history(page)
-        page.mouse.click(700, 700)           # the transcript, not the tools
+        page.mouse.click(10, 500)            # the page margin, outside the tools
         by_click = wait_until(lambda: page.locator(".chat-history").count() == 0)
         open_chat_history(page)
-        page.mouse.move(700, 820)            # pointer walks away and stays away
+        page.mouse.move(10, 500)             # pointer walks away and stays away
         by_idle = wait_until(lambda: page.locator(".chat-history").count() == 0,
                              timeout=9)
         check("tools: the History panel drops from its button and closes when unused",
@@ -5388,10 +5388,12 @@ try:
         page.click("#history-btn")
         page.wait_for_selector("#history-dialog[open]")
         boards_section = page.locator("#boards-trash-section")
+        board_trash_loaded = wait_until(
+            lambda: boards_section.is_visible()
+            and "Board “Getaway” is deleted" in boards_section.inner_text()
+            and "1 card(s)" in boards_section.inner_text())
         check("boards: History says which board is deleted, cards counted",
-              boards_section.is_visible()
-              and "Board “Getaway” is deleted" in boards_section.inner_text()
-              and "1 card(s)" in boards_section.inner_text())
+              board_trash_loaded)
         page.click("#boards-trash-section button:has-text('Restore')")
         page.wait_for_timeout(300)
         check("boards: restoring from History puts the board back in the picker",
