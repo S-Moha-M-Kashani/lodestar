@@ -9,6 +9,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   hashPassword, parsePasswordHash, verifyPassword, secretEquals,
+  resolvePasswordHash, MIN_PASSWORD_LENGTH,
   hostAllowed, originAllowed, refererAllowed, provenanceOf,
   parseCookies, sessionCookie, clearedCookie, SessionStore, SESSION_COOKIE,
   LoginThrottle,
@@ -56,6 +57,85 @@ test('a malformed hash is unverifiable and indistinguishable from a wrong passwo
   const parsed = parsePasswordHash(good);
   assert.equal(parsed.N, 16384);
   assert.equal(parsed.key.length, 32);
+});
+
+// This is a unit test. Which verifier the server boots with is one decision
+// with two right answers and four wrong ones, so it is made here as a value
+// rather than inline at boot. The two right answers are the pre-minted hash
+// `npm run auth:setup` prints and a plaintext password typed straight into
+// .env — the second one exists because changing a password should be editing
+// one line, not running a script and pasting its output.
+test('the boot verifier comes from a hash or a plaintext password, never both', () => {
+  const minted = hashPassword('from the hash');
+  const fromHash = resolvePasswordHash({ LODESTAR_AUTH_PASSWORD_HASH: minted });
+  assert.equal(fromHash.hash, minted);
+  assert.equal(fromHash.source, 'hash');
+
+  // The editable form. What matters is that the password on the line is the
+  // one that logs in, and that what the server ends up holding is still a
+  // hash — the plaintext is hashed at boot and not kept.
+  const fromPlain = resolvePasswordHash({ LODESTAR_AUTH_PASSWORD: 'open sesame' });
+  assert.equal(fromPlain.source, 'password');
+  assert.equal(verifyPassword('open sesame', fromPlain.hash), true);
+  assert.equal(verifyPassword('open sesam', fromPlain.hash), false);
+  assert.ok(!fromPlain.hash.includes('open sesame'));
+  assert.ok(parsePasswordHash(fromPlain.hash), 'the resolver must hand back a readable verifier');
+
+  // Surrounding whitespace is stripped, like every other env value the server
+  // reads. A password whose last character is an invisible one nobody can see
+  // in .env is a login that fails for no visible reason.
+  assert.equal(
+    verifyPassword('open sesame',
+      resolvePasswordHash({ LODESTAR_AUTH_PASSWORD: '  open sesame  ' }).hash),
+    true);
+
+  // `$` is a literal. It is the character scrypt's own format is built out of
+  // and the reason .env values here are quoted; a resolver that let a shell or
+  // an interpolator eat it would accept a different password than the one
+  // written down, and say nothing.
+  assert.equal(
+    verifyPassword('a$1$16384$b',
+      resolvePasswordHash({ LODESTAR_AUTH_PASSWORD: 'a$1$16384$b' }).hash),
+    true);
+
+  // Neither set: refuse, and name both ways out.
+  assert.throws(() => resolvePasswordHash({}), /npm run auth:setup/);
+  assert.throws(() => resolvePasswordHash({}), /LODESTAR_AUTH_PASSWORD\b/);
+
+  // An empty value is "not set", not "set to nothing" — that is what every
+  // test harness and every `${VAR:-}` in docker-compose.yml actually passes,
+  // and reading it as a configured-but-blank password would be a board with no
+  // door on it.
+  assert.throws(
+    () => resolvePasswordHash({ LODESTAR_AUTH_PASSWORD_HASH: '', LODESTAR_AUTH_PASSWORD: '   ' }),
+    /npm run auth:setup/);
+
+  // Both set: refuse rather than pick. Either choice buys the same bad
+  // afternoon — an operator edits the plaintext, restarts, and the old
+  // password still works because a stale hash outranked it (or the reverse,
+  // and a hash they carefully minted is silently ignored).
+  assert.throws(
+    () => resolvePasswordHash({ LODESTAR_AUTH_PASSWORD_HASH: minted,
+                                LODESTAR_AUTH_PASSWORD: 'open sesame' }),
+    /both/i);
+
+  // A malformed hash keeps its own message, so an operator reading a refused
+  // boot is told which of the two problems they have. (A login response must
+  // never make that distinction; a boot error is the one place it belongs.)
+  assert.throws(
+    () => resolvePasswordHash({ LODESTAR_AUTH_PASSWORD_HASH: 'scrypt$1$nonsense' }),
+    /not a hash/);
+
+  // Too short to be worth hashing, enforced here as well as in
+  // scripts/set-password.mjs — .env is now a second way in, and a minimum that
+  // only guards one of them is not a minimum.
+  assert.throws(
+    () => resolvePasswordHash({
+      LODESTAR_AUTH_PASSWORD: 'x'.repeat(MIN_PASSWORD_LENGTH - 1) }),
+    new RegExp(String(MIN_PASSWORD_LENGTH)));
+  assert.ok(
+    resolvePasswordHash({ LODESTAR_AUTH_PASSWORD: 'x'.repeat(MIN_PASSWORD_LENGTH) }).hash,
+    'exactly the minimum is long enough');
 });
 
 // This is a unit test.

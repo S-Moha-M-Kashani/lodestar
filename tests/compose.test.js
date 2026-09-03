@@ -466,12 +466,30 @@ test('the composed board binds every interface inside its own namespace', () => 
 });
 
 // This is a configuration invariant.
-test('the composed stack refuses to start without a password verifier', () => {
+test('the composed stack supplies no password of its own, in either form', () => {
   const block = serviceBlock('lodestar');
-  // `:?` and not `:-`: a default here would be a board on the network with no
-  // password, which is the exact state this whole change exists to end.
-  assert.match(block, /LODESTAR_AUTH_PASSWORD_HASH: \$\{LODESTAR_AUTH_PASSWORD_HASH:\?/,
-    'compose supplies a fallback for the password hash — it must fail instead');
+  // Both forms are passed through, because either one is a complete answer:
+  // the pre-minted hash from `npm run auth:setup`, or a plaintext password
+  // typed into .env. `:?` used to sit on the hash so compose failed fast, and
+  // it cannot stay — it would refuse a stack whose password is the plaintext,
+  // which is now the ordinary way to have one.
+  assert.match(block, /LODESTAR_AUTH_PASSWORD_HASH: \$\{LODESTAR_AUTH_PASSWORD_HASH:-\}/,
+    'the composed board must pass the hash through, with no value of its own');
+  assert.match(block, /LODESTAR_AUTH_PASSWORD: \$\{LODESTAR_AUTH_PASSWORD:-\}/,
+    'the composed board must pass the plaintext password through too');
+
+  // The refusal moved one layer down rather than going away: `:-` yields an
+  // empty string, server.js reads an empty credential as absent, fills what it
+  // can from the mounted .env, and stops the process before the databases open
+  // if neither form arrived. What must never appear here is a literal — a
+  // default password in a tracked file is the state this whole boundary
+  // exists to end.
+  // Anchored to the start of a line: unanchored, this matched the variable
+  // name *inside* its own ${…} and reported the interpolation as a literal.
+  const literal = block.match(/^\s*LODESTAR_AUTH_PASSWORD(?:_HASH)?: *(?!\$\{)(\S+)/m);
+  assert.equal(literal, null,
+    `compose names a password value outright: ${literal && literal[0]}`);
+
   assert.match(block, /LODESTAR_SERVICE_TOKEN: \$\{LODESTAR_SERVICE_TOKEN:-\}/);
   assert.match(serviceBlock("brain"), /BOARD_API_TOKEN: \$\{LODESTAR_SERVICE_TOKEN:-\}/,
     'the brain and the board must share one service token');

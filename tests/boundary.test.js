@@ -9,14 +9,15 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { request } from 'node:http';
 import { connect } from 'node:net';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { networkInterfaces } from 'node:os';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { copyFileSync, cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   startServer, rawFetch, authorize, TEST_PASSWORD, TEST_SERVICE_TOKEN, authEnv,
+  waitForLine,
 } from './helpers/server-harness.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -295,10 +296,23 @@ test('a service token authenticates a non-browser caller, and only the right one
 // This is an integration test.
 test('the server refuses to boot without a password verifier', () => {
   const dir = mkdtempSync(join(tmpdir(), 'lodestar-auth-'));
+  // A copy of the server rather than the repo itself, and the reason is the
+  // feature: server.js reads the .env beside it, so run in this repo it finds
+  // the real password and boots — every case below would then assert the
+  // opposite of what it saw. This directory deliberately has no .env at all,
+  // which also pins that a missing one is not an error.
+  copyFileSync(join(ROOT, 'server.js'), join(dir, 'server.js'));
+  for (const sub of ['scripts', 'db', 'auth']) {
+    cpSync(join(ROOT, sub), join(dir, sub), { recursive: true });
+  }
+  // Both credentials are blanked in the base environment, not just the one
+  // each case is about, so a developer's own exported password cannot decide
+  // this test either.
   const boot = (env, timeout = 15_000) => spawnSync('node', ['server.js'], {
-    cwd: ROOT, encoding: 'utf8', timeout,
+    cwd: dir, encoding: 'utf8', timeout,
     env: { ...process.env, PORT: '0', LODESTAR_BACKUP_ON_WRITE: '0',
            BOARD_DB: join(dir, 'board.db'), ASSISTANT_DB: join(dir, 'assistant.db'),
+           LODESTAR_AUTH_PASSWORD_HASH: '', LODESTAR_AUTH_PASSWORD: '',
            ...env },
   });
   try {
@@ -323,10 +337,113 @@ test('the server refuses to boot without a password verifier', () => {
     assert.notEqual(weak.status, 0);
     assert.match(weak.stderr, /LODESTAR_SERVICE_TOKEN/);
 
-    // And with a real verifier it boots and says the boundary out loud.
+    // Naming both is refused rather than resolved. The operator gets one
+    // clear error instead of a password whose value depends on which line the
+    // server happened to prefer.
+    const both = boot({ ...authEnv(), LODESTAR_AUTH_PASSWORD: 'a real password' });
+    assert.notEqual(both.status, 0);
+    assert.match(both.stderr, /both/i);
+
+    // A password too short to be worth hashing is refused at boot, the same
+    // way `npm run auth:setup` refuses it at mint time.
+    const short = boot({ LODESTAR_AUTH_PASSWORD: 'abc' });
+    assert.notEqual(short.status, 0);
+    assert.match(short.stderr, /LODESTAR_AUTH_PASSWORD/);
+
+    // And with a real verifier it boots and says the boundary out loud —
+    // whichever of the two forms supplied it.
     const ok = boot({ ...authEnv() }, 3000);
     assert.match(ok.stdout, /bound to 127\.0\.0\.1/);
+
+    const plain = boot({ LODESTAR_AUTH_PASSWORD: 'a real password' }, 3000);
+    assert.match(plain.stdout, /bound to 127\.0\.0\.1/,
+      'a plaintext password in the environment is a verifier too');
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// This is an integration test. The password is now something the operator can
+// change by editing one line, which only works if the server reads that file
+// itself — until now nothing did, so a hash sitting in .env reached the
+// process only if the shell had exported it, and `set -a; . ./.env` mangles a
+// scrypt hash on the way (the shell eats every `$1$` in it as a positional
+// parameter).
+test('the server reads .env from its own directory, and the environment outranks it', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'lodestar-env-'));
+  // The same self-sufficient copy tests/databases.test.js boots: server.js
+  // plus the local modules it imports at boot. js/ is deliberately absent —
+  // the server warns and serves the API alone, which is all a login needs.
+  copyFileSync(join(ROOT, 'server.js'), join(root, 'server.js'));
+  copyFileSync(join(ROOT, 'login.html'), join(root, 'login.html'));
+  for (const dir of ['scripts', 'db', 'auth']) {
+    cpSync(join(ROOT, dir), join(root, dir), { recursive: true });
+  }
+  // Quoted, the way .env's own comments insist on, and carrying a `$` for the
+  // same reason: this file is read by three different things and only one of
+  // them may be allowed to interpret that character.
+  writeFileSync(join(root, '.env'),
+    "LODESTAR_AUTH_PASSWORD='written in the file $1$'\n");
+
+  // Neither credential set at all, so anything that arrives came from the
+  // file. Deleted rather than blanked: a developer's own exported password
+  // must not be what decides this test.
+  const baseEnv = () => {
+    const env = { ...process.env, PORT: '0', NODE_NO_WARNINGS: '1',
+                  LODESTAR_BACKUP_ON_WRITE: '0',
+                  BOARD_DB: join(root, 'board.db'),
+                  ASSISTANT_DB: join(root, 'assistant.db') };
+    delete env.LODESTAR_AUTH_PASSWORD_HASH;
+    delete env.LODESTAR_AUTH_PASSWORD;
+    return env;
+  };
+
+  const login = async (port, password) => (await raw(port, {
+    method: 'POST', path: '/api/login',
+    headers: { host: `127.0.0.1:${port}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ password }),
+  })).status;
+
+  const run = async (env, check) => {
+    const proc = spawn('node', ['server.js'],
+      { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    proc.stderr.on('data', () => {});
+    try {
+      const [, bound] = await waitForLine(
+        proc, /Lodestar running at http:\/\/localhost:(\d+)\b/);
+      await check(Number(bound));
+    } finally { proc.kill('SIGKILL'); }
+  };
+
+  try {
+    // 1. The file alone is enough, which is the whole point: edit one line,
+    //    restart, done.
+    await run(baseEnv(), async (port) => {
+      assert.equal(await login(port, 'written in the file $1$'), 200);
+      assert.equal(await login(port, 'written in the file'), 401,
+        'the $ must survive the file, the parser and the hash');
+    });
+
+    // 2. An EMPTY environment variable must not shadow the file. docker
+    //    compose passes `${LODESTAR_AUTH_PASSWORD:-}` as an empty string when
+    //    the host has none, and a loader that reads that as "already set"
+    //    leaves the container refusing to boot over a .env sitting right
+    //    there in the mounted tree.
+    await run(
+      { ...baseEnv(), LODESTAR_AUTH_PASSWORD_HASH: '', LODESTAR_AUTH_PASSWORD: '' },
+      async (port) => {
+        assert.equal(await login(port, 'written in the file $1$'), 200);
+      });
+
+    // 3. A real value outranks the file, so a container's own environment and
+    //    a one-off `LODESTAR_AUTH_PASSWORD=… node server.js` both still win.
+    //    Note what this also means: the file supplied no second credential
+    //    here, so the both-are-set refusal does not fire — filling in is not
+    //    the same act as naming two.
+    await run({ ...baseEnv(), LODESTAR_AUTH_PASSWORD: 'from the environment' },
+      async (port) => {
+        assert.equal(await login(port, 'from the environment'), 200);
+        assert.equal(await login(port, 'written in the file $1$'), 401);
+      });
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 // --------------------------------------------------------------------------

@@ -62,6 +62,11 @@ export function hashPassword(password, params = SCRYPT_PARAMS) {
   return [HASH_SCHEME, HASH_VERSION, N, r, p, b64(salt), b64(key)].join('$');
 }
 
+// The shortest password worth hashing. Enforced here, for one typed into
+// .env, and in scripts/set-password.mjs, for one typed at the prompt: a
+// minimum that guards only one of the two ways in is not a minimum.
+export const MIN_PASSWORD_LENGTH = 8;
+
 /** Read a stored verifier. Returns null for anything this code cannot verify —
  *  wrong scheme, unknown version, missing field, non-numeric cost, junk. */
 export function parsePasswordHash(stored) {
@@ -101,6 +106,69 @@ export function verifyPassword(password, stored) {
   // but timingSafeEqual throws on a mismatch rather than returning false, so
   // the guard stays.
   return derived.length === key.length && timingSafeEqual(derived, key);
+}
+
+/** Which verifier this process boots with, read off the environment.
+ *
+ *  Two forms are accepted, and exactly one of them may be present:
+ *
+ *    LODESTAR_AUTH_PASSWORD_HASH  the line `npm run auth:setup` prints. Already
+ *                                 hashed, so there is nothing here to protect.
+ *    LODESTAR_AUTH_PASSWORD       the password itself, hashed below and kept
+ *                                 only as the digest.
+ *
+ *  The second exists because changing a password should be editing one line.
+ *  It is the weaker of the two — a plaintext in .env is a password to anyone
+ *  who can read that file, where a hash is only a thing to crack — and it is
+ *  offered anyway, because the file it goes in already holds two API keys, the
+ *  service answers loopback only, and the alternative that was actually
+ *  happening is worse: a hash minted, mangled by the shell that exported it,
+ *  and a boot error that reads like a typo.
+ *
+ *  Naming both RAISES rather than resolving. Whichever one lost would lose in
+ *  silence, and what that buys is an operator who edits their password,
+ *  restarts, finds the old one still works, and has nothing to read that says
+ *  why. Returns `{ hash, source }`; every throw is written for whoever is
+ *  reading a refused boot, which is the one place missing and malformed may be
+ *  told apart. */
+export function resolvePasswordHash(env = process.env) {
+  const stored = (env.LODESTAR_AUTH_PASSWORD_HASH || '').trim();
+  const plain = (env.LODESTAR_AUTH_PASSWORD || '').trim();
+
+  if (stored && plain) {
+    throw new Error(
+      'Both LODESTAR_AUTH_PASSWORD_HASH and LODESTAR_AUTH_PASSWORD are set, '
+      + 'and only one of them can be the password. Delete the one you did not '
+      + 'mean — the plaintext line if you keep a minted hash, the hash line if '
+      + 'you would rather just type your password.');
+  }
+  if (stored) {
+    if (!parsePasswordHash(stored)) {
+      throw new Error(
+        'LODESTAR_AUTH_PASSWORD_HASH is set but is not a hash this server can '
+        + 'read. A verifier looks like scrypt$1$16384$8$1$<salt>$<key>, not a '
+        + 'password — if what you put there is your password, move it to '
+        + "LODESTAR_AUTH_PASSWORD instead:\n\n    "
+        + "LODESTAR_AUTH_PASSWORD='your password'\n\nor mint a hash with:"
+        + '\n\n    npm run auth:setup\n');
+    }
+    return { hash: stored, source: 'hash' };
+  }
+  if (plain) {
+    if (plain.length < MIN_PASSWORD_LENGTH) {
+      throw new Error(
+        `LODESTAR_AUTH_PASSWORD is shorter than ${MIN_PASSWORD_LENGTH} `
+        + 'characters — refusing to guard a private board with something that '
+        + 'short.');
+    }
+    return { hash: hashPassword(plain), source: 'password' };
+  }
+  throw new Error(
+    'Neither LODESTAR_AUTH_PASSWORD nor LODESTAR_AUTH_PASSWORD_HASH is set — '
+    + 'refusing to open the board without a way to protect it. Put your '
+    + 'password in .env (git-ignores it already), quoted so a $ in it '
+    + "survives:\n\n    LODESTAR_AUTH_PASSWORD='your password'\n\nor, to keep "
+    + 'only a hash on disk, mint one with:\n\n    npm run auth:setup\n');
 }
 
 /** Constant-time string comparison, for the service token. Compared as sha256
