@@ -18,7 +18,7 @@ each one holds if the others fail.
 | --- | --- | --- |
 | **Loopback binding** | The server listens on `127.0.0.1`. A peer on the same Wi-Fi has no address to connect to. | `LODESTAR_BIND`, `server.js` |
 | **A Host allowlist** | Only `localhost`, `127.0.0.1` and `[::1]` on the port actually bound are answered. Everything else is refused before the router runs. | `auth/local-auth.mjs` |
-| **A password login** | Every private route needs a session, including on loopback. | `LODESTAR_AUTH_PASSWORD_HASH` |
+| **A password login** | Every private route needs a session, including on loopback. | `LODESTAR_AUTH_PASSWORD` or `…_HASH` |
 
 Two more sit behind those, for the browser specifically: the session cookie is
 `HttpOnly; SameSite=Strict`, and an authenticated `POST`/`PUT`/`PATCH`/`DELETE`
@@ -44,7 +44,25 @@ catastrophic.
 
 ## Setting the password
 
-Once, when you first clone the repo:
+Two ways, and `.env` (already git-ignored) is where both of them live. The
+server reads that file itself, so setting or changing a password is editing one
+line and restarting — nothing to export, and nothing to `source`.
+
+**The simple way.** Put the password in `.env`, in quotes:
+
+```
+LODESTAR_AUTH_PASSWORD='the password you will type'
+```
+
+Minimum eight characters. It is hashed with scrypt when the server starts, and
+the running process keeps only the digest — but the plaintext is sitting in
+that file, so anyone who can read the file can log in. On a machine where a
+private board is worth protecting from the network rather than from other
+people with your user account, that is usually the right trade; the file
+already holds your OpenRouter and LangSmith keys, which are worth more.
+
+**The stronger way.** Store only the verifier, so a copy of `.env` is something
+to crack rather than a way in:
 
 ```sh
 npm run auth:setup
@@ -53,20 +71,38 @@ npm run auth:setup
 It asks for a password twice without echoing it, and prints one line:
 
 ```
-LODESTAR_AUTH_PASSWORD_HASH=scrypt$1$16384$8$1$…$…
+LODESTAR_AUTH_PASSWORD_HASH='scrypt$1$16384$8$1$…$…'
 ```
 
-Put that line in `.env` (already git-ignored) and start the server. The
-password itself is never stored, never accepted as a command-line argument (an
+Put that in `.env` and leave `LODESTAR_AUTH_PASSWORD` empty. The password
+itself is then never stored, never accepted as a command-line argument (an
 argument is visible in `ps` and lands in your shell history), and never logged.
 Losing it means running `npm run auth:setup` again — there is no reset link,
 because there is no email and no second factor to send one to.
 
-**The server refuses to boot without it.** Not a warning, not a default
-password, not a "first run" mode: a missing or unreadable hash stops the
-process before it opens the board file. There is deliberately no way to switch
-authentication off — `LODESTAR_AUTH_MODE` has exactly one legal value, and a
-typo is a refusal to start rather than a silent fallback.
+**Keep the quotes, whichever you use.** Both the shell and docker compose read
+a bare `$` as "insert a variable here". Measured on an 85-character hash:
+unquoted, it arrives as `scrypt` when the file is sourced and as 56 characters
+under compose, and the server then refuses to boot saying the hash is
+unreadable — which reads like a typo and is not one.
+
+**Setting both is a refusal, not a preference.** Whichever one lost would lose
+in silence, and what that buys is an afternoon spent wondering why a password
+you just changed still logs in with the old one. Delete the line you did not
+mean.
+
+**The server refuses to boot without either.** Not a warning, not a default
+password, not a "first run" mode: no credential, or an unreadable hash, stops
+the process before it opens the board file. There is deliberately no way to
+switch authentication off — `LODESTAR_AUTH_MODE` has exactly one legal value,
+and a typo is a refusal to start rather than a silent fallback.
+
+**What else `.env` may tell the server: only `LODESTAR_*`.** That file is
+shared with the brain, and the board has no business holding
+`OPENROUTER_API_KEY` — the browser talks to the model through the board's proxy
+precisely so that key stays in one service. A value already in the environment
+always wins, so a container's own settings and a one-off
+`LODESTAR_DEV_KEY=… npm start` are still the last word.
 
 ## What is not the boundary
 
@@ -136,8 +172,11 @@ Inside the container the app binds `0.0.0.0` (`LODESTAR_BIND`), because Docker
 forwards to the container's own address and a loopback bind there is reachable
 by nothing at all. The loopback boundary is the host-side mapping, one level up.
 
-The composed stack will not start without `LODESTAR_AUTH_PASSWORD_HASH` in your
-`.env`; there is no fallback value.
+The composed stack supplies no password of its own, in either form: compose
+passes `LODESTAR_AUTH_PASSWORD` and `LODESTAR_AUTH_PASSWORD_HASH` through from
+your environment with no fallback value, and the container reads the `.env` in
+its mounted tree for whichever of them your environment did not name. With
+neither, the board stops at boot rather than starting unprotected.
 
 ## The brain
 

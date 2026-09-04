@@ -37,9 +37,10 @@ function boardRail() {
 export function render() {
   const board = $('#board');
   board.className = view;
-  // The header's controls are the board's — search, the filters, the category
-  // tabs, the tag bar, the ⚙ Menu (theme included). Which view is showing
-  // decides whether they are furniture that does nothing.
+  // The header's controls are the board's — the filters, the category tabs,
+  // the tag bar, the ⚙ Menu (theme included). Which view is showing decides
+  // whether they are furniture that does nothing. Text search is not among
+  // them: it is painted into the board itself, beside `+ New card`.
   document.body.dataset.view = view;
   // The assistant's tools live in the sheet's head while the Assistant is
   // open, and the sheet is about to be torn down — rescue the wired-once node
@@ -67,12 +68,12 @@ export function render() {
   renderCatRail();
   renderTagBar();
   renderHabitBanner();
-  // The widget, then the tools. Order matters and is the whole hand-off: the
-  // wired-once tools node was parked in the header by the rescue above, the
-  // Assistant sheet claims it while it builds, and this is where the widget
-  // claims it instead — so exactly one shell has it, and renderAssistantTools()
-  // then paints the panels wherever it ended up.
+  // The widget, its pill, then the tools. The tools row is the Assistant
+  // sheet's alone: the rescue above parked the wired-once node back in the
+  // header, the sheet claimed it again while it built, and renderAssistantTools()
+  // paints its panels wherever it ended up.
   renderAssistantWidget();
+  syncAssistantPill();
   renderAssistantTools();
 
   if (dealCards) {
@@ -94,14 +95,23 @@ const viewButtons = [...document.querySelectorAll('.view-switch button')];
 
 export function syncViewButtons() {
   for (const btn of viewButtons) btn.setAttribute('aria-pressed', String(btn.dataset.view === view));
-  const launcher = $('#assistant-launcher');
-  if (launcher) {
-    // Pressed while the conversation is on screen in either shell — the
-    // launcher is one control over two states, not two controls.
-    launcher.setAttribute('aria-pressed',
-      String(widgetShowing() || view === 'assistant'));
-  }
   syncProposalBadge();
+}
+
+/** Whether the Ask pill is on screen. Driven from render() rather than from
+ *  syncViewButtons(), because opening and closing the widget calls the former
+ *  and never the latter — and a stale value here does not merely mislabel a
+ *  control, it leaves the pill sitting in the corner the card has taken.
+ *
+ *  The pill hides for exactly as long as the conversation is on screen: behind
+ *  the card, whose corner and z-index it shares, and on the Assistant view,
+ *  which IS the conversation at full size and carries its own collapse control.
+ *  No `aria-pressed` on it — the pill is never visible in a pressed state, and
+ *  an attribute that can only ever read "false" is a control describing itself
+ *  wrongly. */
+function syncAssistantPill() {
+  const pill = $('#assistant-launcher');
+  if (pill) pill.hidden = widgetShowing() || view === 'assistant';
 }
 
 // A count on the Assistant tab, so something left waiting while the user is on
@@ -110,9 +120,9 @@ export function syncViewButtons() {
 // same fact — the Assistant is waiting on you.
 export function syncProposalBadge() {
   const n = assistantState.proposals.length + assistantState.edits.length;
-  // Both ways into the Assistant carry the same count. The launcher is on
-  // every view now, so it — not the tab — is where a proposal left waiting is
-  // most likely to be noticed.
+  // Both ways into the Assistant carry the same count. The pill is in the
+  // corner of every view now, so it — not the tab — is where a proposal left
+  // waiting is most likely to be noticed.
   for (const btn of [viewButtons.find((b) => b.dataset.view === 'assistant'),
                      $('#assistant-launcher')]) {
     if (!btn) continue;

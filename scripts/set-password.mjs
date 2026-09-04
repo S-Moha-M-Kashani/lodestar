@@ -15,9 +15,8 @@
 // digest. Nothing here writes a file: the operator pastes the line where they
 // want it, which keeps this script incapable of clobbering a .env it did not
 // write.
-import { hashPassword, SCRYPT_PARAMS } from '../auth/local-auth.mjs';
-
-const MIN_LENGTH = 8;
+import { hashPassword, SCRYPT_PARAMS, MIN_PASSWORD_LENGTH }
+  from '../auth/local-auth.mjs';
 
 if (process.argv.slice(2).some((a) => !a.startsWith('-'))) {
   console.error(
@@ -79,8 +78,8 @@ function readSecret(prompt) {
 }
 
 const password = await readSecret('New Lodestar password: ');
-if (password.length < MIN_LENGTH) {
-  console.error(`Too short — use at least ${MIN_LENGTH} characters.`);
+if (password.length < MIN_PASSWORD_LENGTH) {
+  console.error(`Too short — use at least ${MIN_PASSWORD_LENGTH} characters.`);
   process.exit(1);
 }
 if (process.stdin.isTTY) {

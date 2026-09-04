@@ -2,8 +2,6 @@ import { renderChatChrome, restoreChatScroll } from './chrome.js';
 import { brainModels, probeBrainModels } from './models.js';
 import { assistantState, ensureChatSession, refreshChatSessions } from './session.js';
 import { persistWidget, widgetShowing, widgetState } from './shell.js';
-import { mountAssistantTools } from './tools.js';
-import { view } from '../core/state.js';
 import { $ } from '../ui/dom.js';
 import { refreshEdits, refreshProposals } from '../ui/proposals.js';
 import { lastBoardView, render, setView } from '../ui/render.js';
@@ -27,8 +25,10 @@ import { lastBoardView, render, setView } from '../ui/render.js';
 //     context with overflow rules of its own — a fixed-position child of one
 //     is trapped by it.
 //  3. The widget is a fixed-position box, so it is a ceiling for everything
-//     inside it: its panels open INSIDE it, and nothing here may put
-//     `overflow: hidden` on the box that holds them.
+//     inside it. Nothing here may put `overflow: hidden` on the card — only
+//     `.chat-log` scrolls — and the corner it occupies is shared with the Ask
+//     pill that opens it, which render() hides for exactly as long as the card
+//     is there.
 
 // Where the clamps sit.
 //
@@ -124,9 +124,9 @@ export function closeWidget({ focusBack = true } = {}) {
 }
 
 export function toggleWidget() {
-  // On the Assistant view the launcher is the way back down rather than a
-  // second copy of what is already on screen.
-  if (view === 'assistant') { collapseToWidget(); return; }
+  // No Assistant-view branch: the pill is hidden there (render() drives that),
+  // so this cannot be reached from it, and the sheet has its own collapse
+  // control. A branch nothing can take is a claim about the UI that is not true.
   if (widgetState.open) closeWidget();
   else openWidget();
 }
@@ -255,19 +255,12 @@ function renderWidgetHead() {
 
   head.append(expand, close);
 
-  // The tools take a line of their own, under the title and the two controls
-  // that belong to the window rather than to the conversation. Measured: at
-  // 380px the search fold, History, New chat and the ⚙ fill a line by
-  // themselves, and squeezing all six onto one clamped the chat's name to a
-  // single letter — a title that names no chat is worse than a second line.
-  // The DOM order is the reading order, so Tab follows the eye.
-  const slot = document.createElement('div');
-  slot.className = 'widget-tools-slot';
-  head.appendChild(slot);
-  // The wired-once node, moved in rather than copied: search, History, New chat
-  // and the ⚙ are the same four controls, with the same listeners and the same
-  // open panels, whichever shell is hosting them.
-  mountAssistantTools(slot);
+  // No tools row here, deliberately. Search the record, the chats panel, New
+  // chat and the ⚙ are the Assistant PAGE's four controls: at 380px they took a
+  // line of their own and clamped the chat's name to a single letter, and a
+  // settings drawer on a card this size is a settings screen in a margin. The
+  // head keeps what belongs to this window — where you are, and the three ways
+  // out of it. The DOM order is the reading order, so Tab follows the eye.
   return head;
 }
 

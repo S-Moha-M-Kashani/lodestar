@@ -1,5 +1,9 @@
 # Lodestar
 
+[![CI](https://github.com/S-Moha-M-Kashani/lodestar/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/S-Moha-M-Kashani/lodestar/actions/workflows/ci.yml?query=branch%3Amaster)
+[![Licence: all rights reserved](https://img.shields.io/badge/licence-all%20rights%20reserved-8a1c1c)](LICENSE)
+[![Node 23.4+](https://img.shields.io/badge/node-23.4%2B-1f6f4a)](package.json)
+
 *Your compass for life.*
 
 One board for your whole life — work, love, family, health, mind, music, travel, home, money.
@@ -133,21 +137,44 @@ Privacy is a design rule, not a setting: conversations are never sent to any tra
 
 ## Why I built this
 
-Every tool I tried was built for work. They assume a project, a sprint, a
-deadline — and the things that actually take up room in a head are not shaped
-like that. *"How do we support mum's move this autumn?"* is not a ticket. It is
-a question that will sit unresolved for months, that belongs beside a guitar I
-mean to restring and a deploy that keeps failing on Fridays, and that no
-kanban board has a column for. So the things I most needed to stop carrying
-were the things no tool would hold, and they stayed in my head.
+I have more ambitions and ideas than I will ever get through — a running
+backlog of things I want to build, learn, fix, or just sit with, and most of
+them used to quietly disappear, because there was nowhere for them to live
+between having them and getting to them. Every tool I tried was built for
+work. They assume a project, a sprint, a deadline — and the things that
+actually take up room in a head are not shaped like that. *"How do we support
+mum's move this autumn?"* is not a ticket. It is a question that will sit
+unresolved for months, that belongs beside a guitar I mean to restring and a
+deploy that keeps failing on Fridays, and that no kanban board has a column
+for. So the things I most needed to stop carrying were the things no tool
+would hold, and they stayed in my head.
 
-Lodestar is the tool that holds them. A card can be a *question* with no answer
-yet, and that is a legitimate state to be in rather than a task nobody has
-started. Nine life areas sit at the same level, so work cannot quietly take the
-whole board. Nothing is ever deleted by accident, because the whole promise
-falls apart the first time it loses something. And it runs on my own machine
-with no account and no cloud, because a board holding this much of a private
-life should not be somewhere else.
+Lodestar is the tool that holds them, meant to outlast any one sprint because
+a life does. A card can be a *question* with no answer yet, and that is a
+legitimate state to be in rather than a task nobody has started. Nine life
+areas sit at the same level, so work cannot quietly take the whole board.
+Nothing is ever deleted by accident, because the whole promise falls apart the
+first time it loses something. And it runs on my own machine with no account
+and no cloud, because a board holding this much of a private life should not
+be somewhere else.
+
+**What's exclusive to it, not incidental:** the assistant reads everything and
+writes nothing — a card it invents is a proposal waiting on a click, never a
+fact already on the board; every backend it depends on (chat model, embedder,
+reranker, transcriber, search, link safety) is a named seam with no `auto`
+mode, so nothing silently picks a paid API on one machine and a local model on
+another; and the sync protocol is a hash of the exact bytes a client was sent
+— the answer to two laptops once costing 24 real cards in one save.
+
+**The effort, in what it actually cost:** this was not a weekend build —
+fourteen dated design records in [`docs/decisions/`](docs/decisions/), each
+written *before* its code and several carrying an amendment for where reality
+disagreed; four layers of tests, developed test-first and run fully offline; a
+whole security-hardening pass (loopback-only binding, an exact `Host`
+allowlist, a server that refuses to boot rather than serve on a missing
+password); and, for the one security claim that matters most, a measured and
+published number instead of a promise — 3 of 12 injection payloads got
+through, not "it's safe."
 
 The AI part came last and deliberately weakest: it can read everything and
 write nothing. See below.
