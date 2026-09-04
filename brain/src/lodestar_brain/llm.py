@@ -223,7 +223,7 @@ class FakeChat(BaseChatModel):
 
     Scripted mode pops pre-baked messages in order. Heuristic mode (no script):
     - a user message starting with 'add:' yields one create_card tool call,
-      then a '... created ...' reply once a ToolMessage is in the transcript;
+      then a '... created ...' reply once *this turn* has a ToolMessage in it;
     - anything else echoes back as 'FAKE: <text>'.
 
     The 'FAKE: ...' strings and the 'add:' prefix are asserted by
@@ -264,10 +264,17 @@ class FakeChat(BaseChatModel):
     def _next(self, messages: list[BaseMessage]) -> AIMessage:
         if self.script:
             return self.script.pop(0)
-        last_user = next((m for m in reversed(messages)
-                          if isinstance(m, HumanMessage)), None)
+        asked = max((i for i, m in enumerate(messages)
+                     if isinstance(m, HumanMessage)), default=-1)
+        last_user = messages[asked] if asked >= 0 else None
         text = _text(last_user).strip() if last_user is not None else ''
-        tool_ran = any(isinstance(m, ToolMessage) for m in messages)
+        # Only what came after the question counts. `tool_ran` exists to end
+        # this turn's tool loop, and a session is a checkpointed thread that
+        # replays every earlier turn — so a create_card three turns back used
+        # to make a *second* 'add:' answer "created" while calling nothing,
+        # proposing no card. That failed the e2e's second proposal roughly one
+        # run in three, in a way that read as the brain being slow.
+        tool_ran = any(isinstance(m, ToolMessage) for m in messages[asked + 1:])
         if text.lower().startswith('add:'):
             title = text[4:].strip()
             if not tool_ran:
