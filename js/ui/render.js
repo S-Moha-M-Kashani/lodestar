@@ -37,9 +37,10 @@ function boardRail() {
 export function render() {
   const board = $('#board');
   board.className = view;
-  // The header's controls are the board's — search, the filters, the category
-  // tabs, the tag bar, the ⚙ Menu (theme included). Which view is showing
-  // decides whether they are furniture that does nothing.
+  // The header's controls are the board's — the filters, the category tabs,
+  // the tag bar, the ⚙ Menu (theme included). Which view is showing decides
+  // whether they are furniture that does nothing. Text search is not among
+  // them: it is painted into the board itself, beside `+ New card`.
   document.body.dataset.view = view;
   // The assistant's tools live in the sheet's head while the Assistant is
   // open, and the sheet is about to be torn down — rescue the wired-once node

@@ -1,6 +1,6 @@
 import { cardLabel, filtersActive, matchesFilters } from '../core/cards.js';
 import { catColor, catLabel } from '../core/categories.js';
-import { cardAria, renderNewCardButton, typeBadge } from '../ui/board.js';
+import { cardAria, renderCaptureRow, typeBadge } from '../ui/board.js';
 import { sortMenu } from '../ui/card-actions.js';
 import { columnCards } from '../ui/dom.js';
 import { openDialog } from '../ui/edit-dialog.js';
@@ -32,7 +32,7 @@ export function renderBacklog() {
 
   // The same create control the Board shows, not a second one: `#new-card-btn`
   // is an id, and only one view renders into #board at a time.
-  sheet.append(head, renderNewCardButton());
+  sheet.append(head, renderCaptureRow());
 
   const list = document.createElement('div');
   list.className = 'backlog-list';

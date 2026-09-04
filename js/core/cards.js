@@ -147,14 +147,21 @@ export function matchesFilters(card) {
     if (filters.prio === 'none' ? p !== 0 : String(p) !== filters.prio) return false;
   }
   if (filters.tags.size && ![...filters.tags].every((t) => card.tags.includes(t))) return false;
-  if (filters.search) {
+  // `filters.search` is the text as typed — the search box is rebuilt from it
+  // on every repaint, so trimming or lower-casing it there would eat a space
+  // mid-word and undo a capital letter under the caret. Normalising belongs
+  // here, at the one place that compares it to anything.
+  const needle = searchNeedle();
+  if (needle) {
     const haystack = (card.title + ' ' + card.notes + ' ' + card.tags.join(' ')).toLowerCase();
-    if (!haystack.includes(filters.search)) return false;
+    if (!haystack.includes(needle)) return false;
   }
   return true;
 }
 
-export const filtersActive = () => Boolean(filters.search || filters.type || filters.category || filters.prio || filters.tags.size);
+const searchNeedle = () => filters.search.trim().toLowerCase();
+
+export const filtersActive = () => Boolean(searchNeedle() || filters.type || filters.category || filters.prio || filters.tags.size);
 
 export function moveCard(cardId, columnId, beforeId = null) {
   const card = getCard(cardId);

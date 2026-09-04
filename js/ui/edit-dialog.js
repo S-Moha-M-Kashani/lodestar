@@ -422,7 +422,10 @@ form.addEventListener('submit', (e) => {
       filters.search = '';
       filters.tags.clear();
       filters.prio = '';
-      $('#search').value = '';
+      // The search box is painted from `filters.search` by the render this
+      // commit triggers, so clearing the field is the same act as clearing the
+      // filter — and reaching for #search here would throw on the views that
+      // have no capture row to hold one.
       $('#prio-filter').value = '';
     }
     commit(`Added ${cardLabel(draft)} “${short(draft.title)}”`);

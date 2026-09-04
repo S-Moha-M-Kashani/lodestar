@@ -304,10 +304,12 @@
       </div>
     </div>
     <div id="habit-banner-slot" role="status" aria-live="polite"></div>
-    <!-- Every way of narrowing the board on one line: the category tabs,
-         then type and priority right after the last tab, search flush
-         right. The filters are static markup beside the rail, never inside
-         it — renderCatRail() wipes the rail's children on every repaint. -->
+    <!-- Every way of narrowing the board by a property on one line: the
+         category tabs, then type, priority and tags right after the last tab.
+         Text search is not here — it sits beside `+ New card` at the head of
+         the Inbox, which js/ui/board.js builds. These filters are static markup
+         beside the rail, never inside it — renderCatRail() wipes the rail's
+         children on every repaint. -->
     <div class="rail-row">
       <div id="cat-rail" class="cat-rail" role="group" aria-label="Filter by category" hidden></div>
       <div class="rail-filters">
@@ -334,7 +336,6 @@
         <select id="tag-filter" aria-label="Filter by tag">
           <option value="">All tags</option>
         </select>
-        <input id="search" type="search" placeholder="Search the board…" aria-label="Search the board">
       </div>
     </div>
     <div id="tag-bar" class="tag-bar" role="group" aria-label="Filter by tag" hidden></div>
