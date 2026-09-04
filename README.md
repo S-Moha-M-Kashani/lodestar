@@ -1,5 +1,9 @@
 # Lodestar
 
+[![CI](https://github.com/S-Moha-M-Kashani/lodestar/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/S-Moha-M-Kashani/lodestar/actions/workflows/ci.yml?query=branch%3Amaster)
+[![Licence: all rights reserved](https://img.shields.io/badge/licence-all%20rights%20reserved-8a1c1c)](LICENSE)
+[![Node 23.4+](https://img.shields.io/badge/node-23.4%2B-1f6f4a)](package.json)
+
 *Your compass for life.*
 
 One board for your whole life — work, love, family, health, mind, music, travel, home, money.

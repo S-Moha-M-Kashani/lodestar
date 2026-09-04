@@ -11,7 +11,14 @@ jobs:
   e2e:
     runs-on: ubuntu-latest
     steps:
+      # The whole history and every tag, not the single commit checkout takes
+      # by default: tests/hygiene.test.js scans master and every `v*` tag
+      # reachable from it for private data, and a runner given one commit and
+      # no tags has nothing to scan — which is how that check was red on every
+      # push without anything being wrong with the release set.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Node
         uses: actions/setup-node@v4
