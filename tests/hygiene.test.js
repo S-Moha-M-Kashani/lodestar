@@ -25,7 +25,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -176,4 +176,21 @@ test('the approved release set of this repository is publishable', () => {
   const run = hygiene({ cwd: ROOT, refs: ['master', ...tags], names: FAKE_NAME });
   assert.equal(run.ok, true,
     `the approved release set must be free of private data:\n${run.output}`);
+});
+
+// This is a configuration invariant.
+test('CI is handed the history and the tags the check above reads', () => {
+  // actions/checkout takes one commit and no tags by default, so on the runner
+  // `git tag --list v* --merged master` came back empty and the check above
+  // failed for every push since it was written — not because anything was
+  // unpublishable, but because the runner had been given a repository with no
+  // release set in it to scan. A gate that cannot see what it grades is worse
+  // than no gate: it reports red where there is nothing wrong, and the habit
+  // that forms is ignoring it.
+  const workflow = readFileSync(join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
+  const checkout = workflow.match(/uses: actions\/checkout@[^\n]*\n((?:[ \t]+\S[^\n]*\n)*)/);
+  assert.ok(checkout, 'could not find the checkout step in .github/workflows/ci.yml');
+  assert.match(checkout[1], /fetch-depth:\s*0(\s|$)/,
+    'the checkout step must ask for the whole history (fetch-depth: 0), which is ' +
+    'also what brings the v* tags with it');
 });
