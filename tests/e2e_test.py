@@ -5367,6 +5367,27 @@ try:
         }"""
         check("plan: a rail taller than the window scrolls instead of being cut off",
               page.evaluate(reach_last_row) == "ok")
+
+        # This is an end-to-end test. The rail is the page's right margin, so it
+        # stays against the window's right edge however wide the window gets —
+        # a board capped in the middle of a wide screen left the habits and the
+        # plan floating in a field of paper. And its own padding is symmetric:
+        # with none on the right the scrollbar this list needs is painted hard
+        # against the letters.
+        page.set_viewport_size({"width": 1900, "height": 320})
+        page.wait_for_timeout(250)
+        rail_box = page.evaluate("""() => {
+          const el = document.querySelector('.board-rail');
+          const s = getComputedStyle(el);
+          const r = el.getBoundingClientRect();
+          return { right: window.innerWidth - r.right,
+                   pl: parseFloat(s.paddingLeft), pr: parseFloat(s.paddingRight) };
+        }""")
+        check("rail: the habits and the plan stay docked to the right edge",
+              0 < rail_box["right"] <= 40)
+        check("rail: its right padding matches its left, so the scroller clears"
+              " the text",
+              rail_box["pr"] >= 10 and abs(rail_box["pr"] - rail_box["pl"]) <= 1)
         page.set_viewport_size({"width": 1200, "height": 800})
         page.wait_for_timeout(250)
 

@@ -1246,15 +1246,24 @@ body[data-view="board"] .cards { min-height: 0; }
 
 /* --- The rail: today's habits and today's plan, beside the board ---------- */
 
+/* The board fills the window when the rail is up, so the habits and the plan
+   stay against the right edge: capped at 1440px and centred, they floated in
+   the middle of a wide screen with a field of paper to their right. The rail
+   keeps its 200px and the three card columns take everything else — capping
+   *them* instead would have moved the same dead space to the other side of the
+   rail, which is a hole in the middle of the board rather than a margin. */
 .board.has-rail {
   grid-template-columns: repeat(3, minmax(210px, 1fr)) 200px;
-  width: min(100%, 1440px);
+  width: 100%;
 }
 
 .board-rail {
   position: sticky;
   top: 8px;
-  padding: 0 0 0 14px;
+  /* Symmetric, and not decoration: this box scrolls itself, and a scrollbar is
+     painted inside the padding — with none on the right it sits hard against
+     the letters of every habit and plan row. */
+  padding: 0 14px;
   border-left: 1px dashed var(--line);
 }
 
