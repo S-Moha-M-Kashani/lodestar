@@ -1298,18 +1298,20 @@ try:
               footer is not None and footer["height"] <= 16)
 
         # ---- Filters live on the category rail --------------------------------
-        # This is an end-to-end test. Search and the two filters left the top
-        # toolbar for the tab row, so every way of narrowing the board sits in
-        # one place: the category tabs, then type and priority right after the
-        # last tab, and search flush against the right edge.
+        # This is an end-to-end test. The two filters left the top toolbar for
+        # the tab row, so every way of narrowing the board by a *property* sits
+        # in one place: the category tabs, then type and priority right after
+        # the last tab. Search is no longer among them — it moved down to the
+        # head of the Inbox, beside the control that makes a card, and the row
+        # must not keep a second copy of it.
         rail_line = page.locator(".rail-row")
-        check("rail: categories, filters and search share one row",
+        check("rail: categories and the property filters share one row",
               rail_line.count() == 1
               and rail_line.locator("#cat-rail").count() == 1
               and rail_line.locator("#type-filter").count() == 1
               and rail_line.locator("#prio-filter").count() == 1
               and rail_line.locator("#tag-filter").count() == 1
-              and rail_line.locator("#search").count() == 1
+              and rail_line.locator("#search").count() == 0
               and page.locator(".toolbar #search").count() == 0
               and page.locator(".toolbar #type-filter").count() == 0
               and page.locator(".toolbar #prio-filter").count() == 0
@@ -1330,16 +1332,14 @@ try:
         last_tab_bb = page.locator("#cat-rail .cat-tab").last.bounding_box()
         type_bb = page.locator("#type-filter").bounding_box()
         prio_bb = page.locator("#prio-filter").bounding_box()
-        search_bb = page.locator("#search").bounding_box()
+        tag_bb = page.locator("#tag-filter").bounding_box()
         row_bb = rail_line.bounding_box()
-        check("rail: type and priority follow the last tab, search at the far right",
-              all(b is not None for b in (last_tab_bb, type_bb, prio_bb, search_bb, row_bb))
+        check("rail: type, priority and tags follow the last tab, on its line",
+              all(b is not None for b in (last_tab_bb, type_bb, prio_bb, tag_bb, row_bb))
               and type_bb["x"] >= last_tab_bb["x"] + last_tab_bb["width"]
               and prio_bb["x"] >= type_bb["x"] + type_bb["width"]
-              and search_bb["x"] >= prio_bb["x"] + prio_bb["width"]
-              and (search_bb["x"] + search_bb["width"])
-                  >= (row_bb["x"] + row_bb["width"]) - 40
-              and abs(search_bb["y"] - last_tab_bb["y"]) <= 24)
+              and tag_bb["x"] >= prio_bb["x"] + prio_bb["width"]
+              and abs(tag_bb["y"] - last_tab_bb["y"]) <= 24)
 
         # Everything on the rail shares the tabs' upper and lower edge — a
         # control floating above or below the line reads as broken.
@@ -1349,12 +1349,50 @@ try:
 
         tab_edges = edges("#cat-rail .cat-tab >> nth=1")  # a quiet, unpressed tab
         offenders = [s for s in ("#edit-cats-btn", "#type-filter", "#prio-filter",
-                                 "#tag-filter", "#search")
+                                 "#tag-filter")
                      if edges(s) is None or tab_edges is None
                      or abs(edges(s)[0] - tab_edges[0]) > 2
                      or abs(edges(s)[1] - tab_edges[1]) > 2]
         check(f"rail: every control shares the tabs' edges (off: {offenders})",
               tab_edges is not None and not offenders)
+
+        # ---- Capture and search are one row ---------------------------------
+        # This is an end-to-end test. The control that makes a card and the box
+        # that finds one are the same reach, so they share one line at the head
+        # of the Inbox: `+ New card` left, search right of it. There is exactly
+        # one #search on the page and this is it — an id painted twice would
+        # make every search selector in this suite ambiguous.
+        row = page.locator('[data-col="inbox"] .capture-row')
+        btn_bb = page.locator("#new-card-btn").bounding_box()
+        search_bb = page.locator("#search").bounding_box()
+        check("capture: + New card and search share one row in the Inbox",
+              row.count() == 1
+              and row.locator("#new-card-btn").count() == 1
+              and row.locator("#search").count() == 1
+              and page.locator("#search").count() == 1)
+        check("capture: the button is left, the search box right of it, on one line",
+              btn_bb is not None and search_bb is not None
+              and search_bb["x"] >= btn_bb["x"] + btn_bb["width"]
+              and abs(search_bb["y"] - btn_bb["y"]) <= 8)
+
+        # The row lives inside #board, which render() wipes on every keystroke,
+        # so the input the second letter is typed into is not the element the
+        # first one went to. Typed letter by letter for exactly that reason:
+        # fill() dispatches one input event, which a rebuild that drops focus
+        # or the caret would survive unnoticed.
+        cards_before = page.locator("#board .card").count()
+        page.locator("#search").click()
+        page.locator("#search").press_sequentially("zzq", delay=60)
+        page.wait_for_timeout(200)
+        check("capture: typing survives the repaint each keystroke triggers",
+              page.input_value("#search") == "zzq"
+              and page.evaluate("() => document.activeElement.id") == "search"
+              and page.evaluate("() => document.activeElement.selectionStart") == 3
+              and page.locator("#board .card").count() == 0)
+        page.fill("#search", "")
+        page.wait_for_timeout(200)
+        check("capture: clearing it brings the whole board back",
+              page.locator("#board .card").count() == cards_before)
 
         # The tags dropdown is a third filter beside type and priority: every
         # tag on the board is an option, picking one narrows the board to its
@@ -4915,15 +4953,42 @@ try:
         check("habit: the rail still shows it, marked done",
               page.locator('.habit-rail .habit-rail-row.done', has_text="Meditate").count() == 1)
 
+        # ---- A habit has no In Progress -------------------------------------
+        # This is an end-to-end test. A habit's progress IS the punch strip in
+        # the rail, so the middle column would tell the same fact twice. Three
+        # ways in, all closed: a board that already has one filed there, the
+        # pointer, and the keyboard.
+        planted = api_state()["cards"]
+        for c in planted:
+            if c["title"] == "Meditate":
+                c["columnId"] = "in-progress"
+        api_put(planted)
+        page.reload()
+        page.wait_for_selector("#new-card-btn")
+        check("habit: one already filed in In Progress reads as Inbox",
+              page.locator('[data-col="in-progress"] .card', has_text="Meditate").count() == 0
+              and page.locator('[data-col="inbox"] .card', has_text="Meditate").count() == 1
+              and page.locator('.habit-rail .habit-rail-row', has_text="Meditate").count() == 1)
+
+        # The zone must refuse the drop rather than swallow the card: one that
+        # vanished into a column it is never painted in reads as data loss.
+        page.locator('[data-col="inbox"] .card', has_text="Meditate").first.drag_to(
+            page.locator('.cards[data-col="in-progress"]'))
+        page.wait_for_timeout(200)
+        check("habit: dragging one onto In Progress leaves it where it was",
+              page.locator('[data-col="in-progress"] .card', has_text="Meditate").count() == 0
+              and page.locator('[data-col="inbox"] .card', has_text="Meditate").count() == 1)
+
         # Done means retired: it leaves the rail and stops reminding, but keeps
-        # its history.
+        # its history. One ] gets there from the Inbox, because the column in
+        # between is not a place this card can be.
         habit_card = page.locator('[data-col="inbox"] .card', has_text="Meditate").first
         habit_card.focus()
         page.keyboard.press("]")
-        page.wait_for_timeout(100)
-        page.locator('[data-col="in-progress"] .card', has_text="Meditate").first.focus()
-        page.keyboard.press("]")
-        page.wait_for_timeout(150)
+        page.wait_for_timeout(200)
+        check("habit: ] from the Inbox skips In Progress and lands on Done",
+              page.locator('[data-col="in-progress"] .card', has_text="Meditate").count() == 0
+              and page.locator('[data-col="answered"] .card', has_text="Meditate").count() == 1)
         check("habit: a habit moved to Done is retired from the rail",
               page.locator('.habit-rail .habit-rail-row', has_text="Meditate").count() == 0)
         retired = page.locator('[data-col="answered"] .card', has_text="Meditate").first
@@ -5302,6 +5367,27 @@ try:
         }"""
         check("plan: a rail taller than the window scrolls instead of being cut off",
               page.evaluate(reach_last_row) == "ok")
+
+        # This is an end-to-end test. The rail is the page's right margin, so it
+        # stays against the window's right edge however wide the window gets —
+        # a board capped in the middle of a wide screen left the habits and the
+        # plan floating in a field of paper. And its own padding is symmetric:
+        # with none on the right the scrollbar this list needs is painted hard
+        # against the letters.
+        page.set_viewport_size({"width": 1900, "height": 320})
+        page.wait_for_timeout(250)
+        rail_box = page.evaluate("""() => {
+          const el = document.querySelector('.board-rail');
+          const s = getComputedStyle(el);
+          const r = el.getBoundingClientRect();
+          return { right: window.innerWidth - r.right,
+                   pl: parseFloat(s.paddingLeft), pr: parseFloat(s.paddingRight) };
+        }""")
+        check("rail: the habits and the plan stay docked to the right edge",
+              0 < rail_box["right"] <= 40)
+        check("rail: its right padding matches its left, so the scroller clears"
+              " the text",
+              rail_box["pr"] >= 10 and abs(rail_box["pr"] - rail_box["pl"]) <= 1)
         page.set_viewport_size({"width": 1200, "height": 800})
         page.wait_for_timeout(250)
 

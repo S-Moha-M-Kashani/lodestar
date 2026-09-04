@@ -490,8 +490,7 @@ input, select, textarea { font: inherit; color: inherit; }
   align-items: flex-end;
   gap: 8px;
 }
-.rail-filters select,
-.rail-filters #search {
+.rail-filters select {
   box-sizing: border-box;
   height: var(--rail-h);
   font-size: 11px;
@@ -499,7 +498,6 @@ input, select, textarea { font: inherit; color: inherit; }
   position: relative;
   top: 1px; /* seated on the rule, exactly like the tabs */
 }
-.rail-filters #search { margin-left: auto; min-width: 200px; }
 
 .cat-tab {
   font-family: var(--mono);
@@ -782,17 +780,50 @@ body[data-view="board"] .cards { min-height: 0; }
 }
 .sort-select:hover { color: var(--ink); background: var(--card); border-color: var(--line); }
 
-/* The create control, at the head of the Inbox where the capture form used to
-   be: the dashed outline of a card not written yet, full width so it reads as
-   an invitation rather than as one more button in the header — the same dashed
-   1.5px frame as .empty-hint below, which draws the same "nothing here yet".
-   No `display` is declared on purpose: the column is a flex container, so a
-   button blockifies by itself, and declaring one would put this rule in the
-   `[hidden]` trap that .assistant-tools and #assistant-widget document.
-   Keyboard focus comes from the global button :focus-visible outline. */
-.new-card-btn {
-  width: 100%;
+/* Capture and search on one line at the head of the Inbox: the control that
+   makes a card, then the box that finds one — you come here to write something
+   down or to look something up, so it is one reach and one row. The input
+   stretches to the button's height on its own (flex default). */
+.capture-row {
+  display: flex;
+  gap: 8px;
   margin: 0 0 12px;
+}
+
+.board-search {
+  /* Capped and pushed right: in the Inbox's column the box takes what is left
+     of the row, and in the Backlog's full-width sheet it stops growing at a
+     readable field instead of spanning a whole screen. The cap is what makes
+     the auto margin bite — a flex item free to grow leaves no free space for a
+     margin to claim. `min-width: 0` lets it shrink inside a 210px column
+     rather than pushing the row sideways, a flex item's floor being its
+     content. Focus comes from the global input :focus-visible outline. */
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 340px;
+  margin-left: auto;
+  box-sizing: border-box;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.board-search::placeholder { color: var(--ink-soft); }
+
+/* The create control, at the head of the Inbox where the capture form used to
+   be: the dashed outline of a card not written yet — the same dashed 1.5px
+   frame as .empty-hint below, which draws the same "nothing here yet". It gave
+   up its full width to the search box beside it and now takes only what its
+   own label needs. No `display` is declared on purpose: the row is a flex
+   container, so a button blockifies by itself, and declaring one would put
+   this rule in the `[hidden]` trap that .assistant-tools and #assistant-widget
+   document. Keyboard focus comes from the global button :focus-visible
+   outline. */
+.new-card-btn {
+  flex: 0 1 auto;
+  margin: 0;
   background: transparent;
   border: 1.5px dashed var(--line);
   border-radius: var(--radius);
@@ -1215,15 +1246,24 @@ body[data-view="board"] .cards { min-height: 0; }
 
 /* --- The rail: today's habits and today's plan, beside the board ---------- */
 
+/* The board fills the window when the rail is up, so the habits and the plan
+   stay against the right edge: capped at 1440px and centred, they floated in
+   the middle of a wide screen with a field of paper to their right. The rail
+   keeps its 200px and the three card columns take everything else — capping
+   *them* instead would have moved the same dead space to the other side of the
+   rail, which is a hole in the middle of the board rather than a margin. */
 .board.has-rail {
   grid-template-columns: repeat(3, minmax(210px, 1fr)) 200px;
-  width: min(100%, 1440px);
+  width: 100%;
 }
 
 .board-rail {
   position: sticky;
   top: 8px;
-  padding: 0 0 0 14px;
+  /* Symmetric, and not decoration: this box scrolls itself, and a scrollbar is
+     painted inside the padding — with none on the right it sits hard against
+     the letters of every habit and plan row. */
+  padding: 0 14px;
   border-left: 1px dashed var(--line);
 }
 

@@ -1,6 +1,6 @@
 import { categories, sanitizeCategories } from './categories.js';
 import { COLUMNS, TYPES, priorityOf } from './constants.js';
-import { habitCountVal, habitFreqVal, habitHistoryVal, habitTimesVal } from './habits.js';
+import { habitCountVal, habitFreqVal, habitHistoryVal, habitTimesVal, isHabit } from './habits.js';
 import { planSrcVal, planVal, resolvePlan } from './plan.js';
 import { commit } from './history.js';
 import { filters, state } from './state.js';
@@ -75,17 +75,33 @@ export function ensureNums(cards) {
 
 export const cardLabel = (card) => 'C-' + String(card.num).padStart(3, '0');
 
+// Which columns a card can be in. In Progress takes no habit: a habit's
+// progress IS the punch strip in the rail, so a habit filed there is one fact
+// told twice — and the column that shows a card is the only place it can be
+// dragged out of, which is why this is a refusal rather than a render filter.
+// Consulted by the three ways into a column: loading a board (below), the
+// pointer (ui/dnd.js) and the keyboard (ui/keyboard.js).
+export const columnAccepts = (card, columnId) =>
+  !(columnId === 'in-progress' && isHabit(card));
+
 export function sanitizeCard(raw, reg = categories) {
   if (!raw || typeof raw !== 'object' || typeof raw.title !== 'string' || !raw.title.trim()) return null;
   const habitCount = habitCountVal(raw.habitCount);
   const deadline = deadlineVal(raw.deadline);
   const planSrc = planSrcVal(raw.planSrc);
+  const type = typeVal(raw.type);
+  const habitFreq = habitFreqVal(raw.habitFreq);
+  const known = COLUMNS.some((c) => c.id === raw.columnId) ? raw.columnId : 'inbox';
   return {
     id: typeof raw.id === 'string' && raw.id ? raw.id : uid(),
-    columnId: COLUMNS.some((c) => c.id === raw.columnId) ? raw.columnId : 'inbox',
+    // A habit an older board (or an import) left in In Progress comes back to
+    // the Inbox, where it can be seen and moved. Hiding it in a column it is
+    // not painted in would strand it: the rail can open the card but not
+    // retire it.
+    columnId: columnAccepts({ type, habitFreq }, known) ? known : 'inbox',
     title: raw.title.trim(),
     notes: typeof raw.notes === 'string' ? raw.notes : '',
-    type: typeVal(raw.type),
+    type,
     category: catVal(raw.category, reg),
     importance: iuVal(raw.importance),
     urgency: iuVal(raw.urgency),
@@ -98,7 +114,7 @@ export function sanitizeCard(raw, reg = categories) {
     // needs no second act to appear in the plan. See js/core/plan.js.
     plan: resolvePlan({ plan: planVal(raw.plan), planSrc, deadline }),
     planSrc,
-    habitFreq: habitFreqVal(raw.habitFreq),
+    habitFreq,
     habitCount,
     habitTimes: habitTimesVal(raw.habitTimes, habitCount),
     habitHistory: habitHistoryVal(raw.habitHistory),
@@ -131,18 +147,26 @@ export function matchesFilters(card) {
     if (filters.prio === 'none' ? p !== 0 : String(p) !== filters.prio) return false;
   }
   if (filters.tags.size && ![...filters.tags].every((t) => card.tags.includes(t))) return false;
-  if (filters.search) {
+  // `filters.search` is the text as typed — the search box is rebuilt from it
+  // on every repaint, so trimming or lower-casing it there would eat a space
+  // mid-word and undo a capital letter under the caret. Normalising belongs
+  // here, at the one place that compares it to anything.
+  const needle = searchNeedle();
+  if (needle) {
     const haystack = (card.title + ' ' + card.notes + ' ' + card.tags.join(' ')).toLowerCase();
-    if (!haystack.includes(filters.search)) return false;
+    if (!haystack.includes(needle)) return false;
   }
   return true;
 }
 
-export const filtersActive = () => Boolean(filters.search || filters.type || filters.category || filters.prio || filters.tags.size);
+const searchNeedle = () => filters.search.trim().toLowerCase();
+
+export const filtersActive = () => Boolean(searchNeedle() || filters.type || filters.category || filters.prio || filters.tags.size);
 
 export function moveCard(cardId, columnId, beforeId = null) {
   const card = getCard(cardId);
   if (!card || cardId === beforeId) return;
+  if (!columnAccepts(card, columnId)) return;
   state.cards = state.cards.filter((c) => c.id !== cardId);
   card.columnId = columnId;
   card.updatedAt = Date.now();

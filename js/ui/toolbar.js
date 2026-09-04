@@ -8,13 +8,12 @@ import { filters } from '../core/state.js';
 import { $, announce } from './dom.js';
 import { render } from './render.js';
 
-// Toolbar: search, the type and priority filters, the actions menu, the
-// Assistant's header controls, and the keyboard shortcuts that reach them.
-
-$('#search').addEventListener('input', (e) => {
-  filters.search = e.target.value.trim().toLowerCase();
-  render();
-});
+// Toolbar: the type and priority filters, the actions menu, the Assistant's
+// header controls, and the keyboard shortcuts that reach them.
+//
+// The text search is not wired here. It is painted into the board beside
+// `+ New card` (js/ui/board.js) and so is rebuilt on every repaint, which is
+// the one control whose listener cannot be attached once at boot.
 
 $('#type-filter').addEventListener('change', (e) => {
   filters.type = e.target.value;

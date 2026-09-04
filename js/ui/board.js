@@ -42,7 +42,7 @@ export function renderColumn(col) {
 
   section.append(header);
 
-  if (col.id === 'inbox') section.append(renderNewCardButton());
+  if (col.id === 'inbox') section.append(renderCaptureRow());
 
   const cardsEl = document.createElement('div');
   cardsEl.className = 'cards';
@@ -67,12 +67,25 @@ export function renderColumn(col) {
   return section;
 }
 
-// The create control, at the head of the Inbox. It builds nothing: the dialog
-// holds the one card-construction path, so a capture that is cancelled halfway
-// burns no ledger number, writes no undo entry and leaves no Trash row behind.
-// No argument — a draft with no source starts empty and inherits the drawer it
+// The capture row, at the head of the Inbox and of the Backlog: the control
+// that makes a card on the left, the box that finds one on the right. They are
+// one reach — you come to the top of the Inbox either to write something down
+// or to look something up — and search left the header for this row on
+// 2026-09-04. Shared, so there is one of each: #new-card-btn and #search are
+// ids, and only one view renders into #board at a time.
+export function renderCaptureRow() {
+  const row = document.createElement('div');
+  row.className = 'capture-row';
+  row.append(newCardButton(), searchBox());
+  return row;
+}
+
+// The create control. It builds nothing: the dialog holds the one
+// card-construction path, so a capture that is cancelled halfway burns no
+// ledger number, writes no undo entry and leaves no Trash row behind. No
+// argument — a draft with no source starts empty and inherits the drawer it
 // was opened in, which is the dialog's decision to make, not this button's.
-export function renderNewCardButton() {
+function newCardButton() {
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.id = 'new-card-btn';
@@ -81,6 +94,37 @@ export function renderNewCardButton() {
   btn.setAttribute('aria-label', 'Add a card to the Inbox');
   btn.addEventListener('click', () => openNewCard());
   return btn;
+}
+
+// The board's text search. It lives inside #board now, which render() wipes on
+// every keystroke — so this element is not the one the next letter is typed
+// into, and three things have to be carried across the repaint by hand:
+//
+//   * the text, which is read back from `filters.search`. That field therefore
+//     holds what was *typed*, raw; matchesFilters lower-cases and trims when
+//     it compares, or a trailing space would be eaten mid-word and a capital
+//     undone under the caret.
+//   * the focus, and
+//   * the caret, because focus alone puts it at the end — which is only where
+//     it was if you never move it.
+function searchBox() {
+  const input = document.createElement('input');
+  input.type = 'search';
+  input.id = 'search';
+  input.className = 'board-search';
+  input.placeholder = 'Search the board…';
+  input.setAttribute('aria-label', 'Search the board');
+  input.value = filters.search;
+  input.addEventListener('input', (e) => {
+    filters.search = e.target.value;
+    const caret = e.target.selectionStart;
+    render();
+    const fresh = $('#search');
+    if (!fresh) return;
+    fresh.focus();
+    fresh.setSelectionRange(caret, caret);
+  });
+  return input;
 }
 
 // Rubber-stamp badge for a card's type — always neutral ink.
