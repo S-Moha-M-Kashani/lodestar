@@ -4915,15 +4915,42 @@ try:
         check("habit: the rail still shows it, marked done",
               page.locator('.habit-rail .habit-rail-row.done', has_text="Meditate").count() == 1)
 
+        # ---- A habit has no In Progress -------------------------------------
+        # This is an end-to-end test. A habit's progress IS the punch strip in
+        # the rail, so the middle column would tell the same fact twice. Three
+        # ways in, all closed: a board that already has one filed there, the
+        # pointer, and the keyboard.
+        planted = api_state()["cards"]
+        for c in planted:
+            if c["title"] == "Meditate":
+                c["columnId"] = "in-progress"
+        api_put(planted)
+        page.reload()
+        page.wait_for_selector("#new-card-btn")
+        check("habit: one already filed in In Progress reads as Inbox",
+              page.locator('[data-col="in-progress"] .card', has_text="Meditate").count() == 0
+              and page.locator('[data-col="inbox"] .card', has_text="Meditate").count() == 1
+              and page.locator('.habit-rail .habit-rail-row', has_text="Meditate").count() == 1)
+
+        # The zone must refuse the drop rather than swallow the card: one that
+        # vanished into a column it is never painted in reads as data loss.
+        page.locator('[data-col="inbox"] .card', has_text="Meditate").first.drag_to(
+            page.locator('.cards[data-col="in-progress"]'))
+        page.wait_for_timeout(200)
+        check("habit: dragging one onto In Progress leaves it where it was",
+              page.locator('[data-col="in-progress"] .card', has_text="Meditate").count() == 0
+              and page.locator('[data-col="inbox"] .card', has_text="Meditate").count() == 1)
+
         # Done means retired: it leaves the rail and stops reminding, but keeps
-        # its history.
+        # its history. One ] gets there from the Inbox, because the column in
+        # between is not a place this card can be.
         habit_card = page.locator('[data-col="inbox"] .card', has_text="Meditate").first
         habit_card.focus()
         page.keyboard.press("]")
-        page.wait_for_timeout(100)
-        page.locator('[data-col="in-progress"] .card', has_text="Meditate").first.focus()
-        page.keyboard.press("]")
-        page.wait_for_timeout(150)
+        page.wait_for_timeout(200)
+        check("habit: ] from the Inbox skips In Progress and lands on Done",
+              page.locator('[data-col="in-progress"] .card', has_text="Meditate").count() == 0
+              and page.locator('[data-col="answered"] .card', has_text="Meditate").count() == 1)
         check("habit: a habit moved to Done is retired from the rail",
               page.locator('.habit-rail .habit-rail-row', has_text="Meditate").count() == 0)
         retired = page.locator('[data-col="answered"] .card', has_text="Meditate").first

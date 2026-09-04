@@ -1,4 +1,4 @@
-import { matchesFilters, moveCard } from '../core/cards.js';
+import { columnAccepts, matchesFilters, moveCard } from '../core/cards.js';
 import { COLUMNS } from '../core/constants.js';
 import { setFocusCard } from '../core/state.js';
 import { deleteCard } from './card-actions.js';
@@ -25,7 +25,13 @@ export function onCardKeydown(e, cardId) {
 
   if (e.key === '[' || e.key === ']') {
     e.preventDefault();
-    const next = columnIndex(card.columnId) + (e.key === ']' ? 1 : -1);
+    const step = e.key === ']' ? 1 : -1;
+    let next = columnIndex(card.columnId) + step;
+    // Step over a column this card cannot be in — In Progress takes no habit,
+    // so one ] carries a habit from the Inbox to Done. Without the skip the
+    // key would simply stop working on habits, which reads as a broken board
+    // rather than as a rule.
+    if (COLUMNS[next] && !columnAccepts(card, COLUMNS[next].id)) next += step;
     if (next < 0 || next >= COLUMNS.length) return;
     setFocusCard(cardId);
     moveCard(cardId, COLUMNS[next].id);
