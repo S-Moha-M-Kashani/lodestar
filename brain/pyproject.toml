@@ -42,7 +42,7 @@ semantic = ["fastembed>=0.7"]
 # does not serve. torch is a ~1 GB install, so this stays an extra rather than a
 # dependency: it is what keeps the brain suite installable — and offline — with no
 # extras at all.
-local-embeddings = ["sentence-transformers>=3.0"]
+local-embeddings = ["sentence-transformers>=6.0.1"]
 # Local, offline dictation with NVIDIA Parakeet TDT. mlx is Apple-Silicon only,
 # so the marker keeps `uv sync --extra voice` harmless on Linux and in Docker —
 # the transcriber seam falls back to OpenRouter wherever this is absent.
