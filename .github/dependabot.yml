@@ -2,6 +2,19 @@
 # the server has one — so this file is mostly about the third list: the actions
 # CI runs. A retired action is what turned every run red at v1.7.2 and v1.7.3,
 # and it is the one kind of breakage nothing in the repository can see coming.
+#
+# **Take the change, never the branch.** Dependabot cuts every branch from the
+# default branch, which here is `master`, and there is no `target-branch` escape
+# because development never leaves the machine and GitHub has no such branch to
+# aim at. So merging one of these branches into development gives development
+# master's whole release ladder as ancestry, and the two are meant to sit side by
+# side: the first four proposals, merged the obvious way on 2026-09-05, took the
+# release gate from 5 pending commits to 84 and would have put July's features in
+# a patch note. Read the proposal, apply the bump yourself on a branch off
+# development, and regenerate the lockfile once for the whole batch — one at a
+# time also collides, since every proposal edits the same two files. The pull
+# requests close themselves when the versions reach master at the next release,
+# and Dependabot deletes its own branches.
 version: 2
 updates:
   - package-ecosystem: github-actions
