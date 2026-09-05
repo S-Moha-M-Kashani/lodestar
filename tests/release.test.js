@@ -9,8 +9,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { classify, verdict, SUBSTANTIVE } from '../scripts/release-to-master.mjs';
 
-const V = (subjects, treeChanged = true) =>
-  verdict({ ahead: subjects.length, treeChanged, counts: classify(subjects) });
+const V = (subjects, treeChanged = true, anyway = false) =>
+  verdict({ ahead: subjects.length, treeChanged, counts: classify(subjects), anyway });
 
 // This is a unit test.
 test('a release point needs something a reader actually gets', () => {
@@ -38,6 +38,25 @@ test('a release point needs something a reader actually gets', () => {
   // doc branches is still a run of doc changes.
   const merged = V(["Merge branch 'docs/typo'", 'docs: fix a typo']);
   assert.equal(merged.ok, false, 'a merge does not make a chore substantive');
+});
+
+// This is a unit test.
+test('--anyway overrides the judgement and neither of the two facts', () => {
+  // The judgement is a heuristic over commit subjects, and a batch of
+  // repository furniture is a release it cannot see. Overriding it is allowed,
+  // and the reason it overrode comes back so the run can print it.
+  const furniture = V(['docs: a changelog', 'chore(repo): issue forms'], true, true);
+  assert.equal(furniture.ok, true);
+  assert.match(furniture.overridden, /nothing substantive/,
+    'an override has to say what it overrode, or it is a silent one');
+
+  // The other two refusals are facts, not opinions: there is nothing to
+  // describe, so no message could honestly describe it.
+  assert.equal(V([], true, true).ok, false, 'an unmoved branch is not overridable');
+  assert.equal(V(['docs: x'], false, true).ok, false, 'an identical tree is not overridable');
+
+  // And a real release is not marked as an override it never needed.
+  assert.equal(V(['feat: a real feature'], true, true).overridden, undefined);
 });
 
 // This is a unit test.

@@ -51,6 +51,15 @@ a skip, and `npm run hygiene` is the same command with the tag list filled in.
 
 ## 5. The release point
 
+Write the entry **first**, while you still remember what the release is for.
+`CHANGELOG.md` is the one file here that no test can check: a version with no
+entry is invisible to everyone who was not in the room.
+
+| Gate | Check | Pass means |
+| --- | --- | --- |
+| The new version has an entry | `head -20 CHANGELOG.md` | the top heading is the version about to be built |
+| Its compare link is defined | `grep -c '^\[v' CHANGELOG.md` | one more than before |
+
 ```sh
 node scripts/release-to-master.mjs --check    # report and stop
 npm run release                               # build the release point
@@ -59,6 +68,12 @@ npm run release                               # build the release point
 Exit 2 from `--check` means `development` has gained nothing presentable — no
 `feat`/`fix`/`perf`/`refactor`, or no file changes. Refusing beats minting a
 version nobody can describe.
+
+`--anyway` releases past that verdict, and past that one only. Use it when the
+batch is something a reader gets that the commit types cannot see — repository
+furniture, a documentation release — and say in the message what they get. It
+cannot override the other two refusals: an unmoved branch and an unchanged tree
+are facts, and no release note over them could be honest.
 
 ## 6. The push, and only then the badges
 
@@ -76,6 +91,11 @@ refuses that branch, and a refused ref aborts the whole push. Publish by naming
 | CI ran on the pushed ref | the Actions tab for the pushed commit | the CI job is green |
 | Server, brain and e2e all executed | the run's step list | all three suite steps succeeded; none skipped or missing |
 | Badges point at the real workflow | click each badge in the rendered README | each resolves to this repository's run |
+| The tag is published as a release | the Releases box in the repository sidebar | the new version is listed, with the changelog entry as its body |
+
+A tag with no release behind it is a version nobody outside can see. Publish it
+from the tag, and paste that version's `CHANGELOG.md` entry in as the body —
+the tag message and the entry say the same thing on purpose.
 
 **Badges go in after the green run, never before.** A badge added in advance is
 a promise; added afterwards it is a status signal. That ordering is the whole

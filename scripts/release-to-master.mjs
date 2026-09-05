@@ -14,6 +14,7 @@
 //
 //   node scripts/release-to-master.mjs --check      report and stop
 //   node scripts/release-to-master.mjs -F msg.txt   build the release point
+//   node scripts/release-to-master.mjs --anyway …   release past the judgement
 //
 // Exit codes: 0 releasable (or released), 2 nothing worth releasing, 1 error.
 
@@ -36,7 +37,17 @@ export function classify(subjects) {
 }
 
 // The decision, kept apart from git so it can be read and tested on its own.
-export function verdict({ ahead, treeChanged, counts }) {
+// `anyway` overrides the judgement and nothing else. The first two refusals
+// stay absolute, because they are facts rather than opinions: a release point
+// over an unmoved branch has no changes behind it, and one whose tree matches
+// the last is the same files under a new number — neither is describable in any
+// words, so an override there could only mint a version whose own note has to
+// lie. The third is a heuristic reading commit subjects, and it is wrong in one
+// direction: a batch of repository furniture — a changelog, a security policy,
+// the forms an issue is filed on — is something a reader gets and carries no
+// `feat` anywhere. Overriding is loud, never silent: the caller types the flag
+// and the run prints which sentence it was used on.
+export function verdict({ ahead, treeChanged, counts, anyway = false }) {
   if (ahead === 0) {
     return { ok: false, why: 'development has not moved since the last release point' };
   }
@@ -46,11 +57,14 @@ export function verdict({ ahead, treeChanged, counts }) {
   const substantive = [...counts].filter(([t]) => SUBSTANTIVE.has(t));
   if (substantive.length === 0) {
     const kinds = [...counts.keys()].filter((k) => k !== 'merge').sort().join(', ') || 'none';
+    const why = `nothing substantive since the last release point — only ${kinds}`;
+    if (anyway) return { ok: true, substantive: [], overridden: why };
     return {
       ok: false,
-      why: `nothing substantive since the last release point — only ${kinds}`,
+      why,
       hint: 'a release point should be something a reader gets: a feature, a fix, '
-        + 'a real refactor. Docs and chores ride along with the next one.',
+        + 'a real refactor. Docs and chores ride along with the next one. '
+        + 'Pass --anyway if this is a batch the types cannot see.',
     };
   }
   return { ok: true, substantive };
@@ -62,6 +76,7 @@ function git(...args) {
 
 function main(argv) {
   const check = argv.includes('--check');
+  const anyway = argv.includes('--anyway');
   const fi = argv.indexOf('-F');
   const mi = argv.indexOf('-m');
   let message = null;
@@ -97,7 +112,7 @@ function main(argv) {
   const treeChanged = !masterTip
     || git('rev-parse', `${masterTip}^{tree}`) !== git('rev-parse', `${dev}^{tree}`);
   const counts = classify(subjects);
-  const v = verdict({ ahead: subjects.length, treeChanged, counts });
+  const v = verdict({ ahead: subjects.length, treeChanged, counts, anyway });
 
   console.log(`development is ${subjects.length} commit(s) past the last release point.`);
   if (counts.size) {
@@ -113,9 +128,14 @@ function main(argv) {
   }
 
   console.log('');
-  console.log('Worth a release point. It would carry:');
-  for (const s of subjects.filter((s) => SUBSTANTIVE.has((/^(\w+)/.exec(s) ?? [])[1]))) {
-    console.log(`  ${s}`);
+  if (v.overridden) {
+    console.log(`--anyway: releasing past "${v.overridden}".`);
+    console.log('Say in the message what a reader gets, since the types do not.');
+  } else {
+    console.log('Worth a release point. It would carry:');
+    for (const s of subjects.filter((s) => SUBSTANTIVE.has((/^(\w+)/.exec(s) ?? [])[1]))) {
+      console.log(`  ${s}`);
+    }
   }
 
   if (check) {

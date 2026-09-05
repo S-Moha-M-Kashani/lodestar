@@ -1,0 +1,27 @@
+# Lodestar keeps almost nothing to update — the frontend has no dependencies and
+# the server has one — so this file is mostly about the third list: the actions
+# CI runs. A retired action is what turned every run red at v1.7.2 and v1.7.3,
+# and it is the one kind of breakage nothing in the repository can see coming.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(ci)"
+
+  # `pg`, and only `pg`. See the note in package.json.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: uv
+    directory: /brain
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(deps)"
