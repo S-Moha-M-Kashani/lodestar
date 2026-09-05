@@ -8,6 +8,26 @@ Dates are the day the release point was built. Versions follow
 [semantic versioning](https://semver.org/) — a major number for a break, a
 minor for a capability, a patch for a fix.
 
+## [v1.7.7] — 2026-09-05
+
+**The files a stranger looks for.** Nothing in the app changed; everything a
+visitor reads before the app did.
+
+- This changelog, one entry per release point, in the tag's own words.
+- `SECURITY.md` at the root, where GitHub looks for it, saying what the boundary
+  defends, what the injection measurement actually is, and where to report a
+  hole. The long version stays in `docs/security.md`.
+- `package.json` names its licence, author, repository and homepage, so a tool
+  reading it no longer thinks the project is unlicensed and homeless.
+- Forms for the two kinds of issue this licence can accept — a bug, and a claim
+  in the documentation that is wrong — and a pull request template saying why
+  there is no third one.
+- Dependabot watches the CI actions weekly. A retired action is what turned
+  every run red at v1.7.2 and v1.7.3, and it is the one breakage nothing in the
+  tree can see coming.
+- `--anyway` on the release script, for a release the commit types cannot see.
+  This one.
+
 ## [v1.7.6] — 2026-09-05
 
 **A board switch the test suite waits out.** Switching boards reloads the page,
@@ -163,6 +183,7 @@ back through, and the board travels as a JSON file.
 **The board exists.** Three columns you drag cards between, saved in the
 browser.
 
+[v1.7.7]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.7.6...v1.7.7
 [v1.7.6]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.7.5...v1.7.6
 [v1.7.5]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.7.4...v1.7.5
 [v1.7.4]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.7.3...v1.7.4
