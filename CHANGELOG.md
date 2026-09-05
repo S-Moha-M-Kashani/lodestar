@@ -8,6 +8,21 @@ Dates are the day the release point was built. Versions follow
 [semantic versioning](https://semver.org/) — a major number for a break, a
 minor for a capability, a patch for a fix.
 
+## [v1.7.9] — 2026-09-05
+
+**The agent framework steps up.** `langchain` to 1.4.0, carrying
+`langchain-core` 1.6.2 and `langgraph` 1.2.11; `langchain-openai` to 1.6.0; and
+`numba` to 0.67.0 in the `voice` extra, with `llvmlite` 0.49 behind it.
+
+Taken one at a time, each on its own branch with the full suite between them,
+because a framework the whole agent sits on is not something to move in a batch.
+Both framework bumps were also checked against a **live** tool-calling turn —
+the agent called `find_related`, answered from real cards, and reported a real
+cost — since the suites run on a deterministic fake model and would not notice
+an adapter that had stopped reporting usage. The `numba` bump needed the `voice`
+extra installed to be exercised at all; nothing in the ordinary test run touches
+it.
+
 ## [v1.7.8] — 2026-09-05
 
 **The brain's dependencies move forward.** `fastapi` to 0.141.1, `uvicorn` to
@@ -196,6 +211,7 @@ back through, and the board travels as a JSON file.
 **The board exists.** Three columns you drag cards between, saved in the
 browser.
 
+[v1.7.9]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.7.8...v1.7.9
 [v1.7.8]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.7.7...v1.7.8
 [v1.7.7]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.7.6...v1.7.7
 [v1.7.6]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.7.5...v1.7.6
