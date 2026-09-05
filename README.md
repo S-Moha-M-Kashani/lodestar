@@ -222,7 +222,13 @@ afterwards, several carrying an amendment saying where reality disagreed.
 
 This is a personal project under a proprietary licence, so there is no
 contribution process and no pull requests. Issues pointing out a bug or a wrong
-claim are welcome.
+claim are welcome, and there is a form for each. A security problem goes to
+email rather than an issue — [`SECURITY.md`](SECURITY.md) says where and what is
+in scope.
+
+What changed in each release, newest first, is in
+[`CHANGELOG.md`](CHANGELOG.md); every entry there is a tag you can check out and
+run.
 
 **If you do run a copy, two things matter:**
 
