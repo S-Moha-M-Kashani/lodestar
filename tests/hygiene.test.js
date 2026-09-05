@@ -156,12 +156,35 @@ test('a database and a private name are caught in history, not just in the tree'
   }
 });
 
+// Where master is reachable from *this* checkout. A working tree has it as a
+// local branch; a checkout of any other ref — a pull request's merge ref, a
+// branch pushed to watch CI — has only the remote-tracking copy, and naming
+// the local one there is not a red release set but `git` refusing an object
+// name it cannot resolve. The gate is about master's content, so it should
+// read master wherever this repository can see it.
+function releaseRef() {
+  for (const ref of ['master', 'origin/master']) {
+    try {
+      git(ROOT, 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`);
+      return ref;
+    } catch { /* not this one */ }
+  }
+  return null;
+}
+
 // This is a configuration invariant.
 test('the approved release set of this repository is publishable', () => {
+  // Neither spelling resolves: this is a clone that cannot see the publication
+  // branch at all, so there is no release set here to grade. The same reasoning
+  // as the hooks check below — absence of the thing being asserted about is a
+  // different repository, not a failure of this one.
+  const master = releaseRef();
+  if (!master) return;
+
   // No names supplied is a refusal. The identifier half of the gate is the
   // half that cannot be inferred from the repository, so forgetting it has to
   // stop the release rather than report a green it never measured.
-  const silent = hygiene({ cwd: ROOT, refs: ['master'], names: undefined });
+  const silent = hygiene({ cwd: ROOT, refs: [master], names: undefined });
   assert.equal(silent.ok, false, 'a run with no identifiers must refuse');
   assert.match(silent.output, /LODESTAR_PRIVATE_NAMES/,
     'the refusal must say what to supply');
@@ -169,11 +192,11 @@ test('the approved release set of this repository is publishable', () => {
   // master and the v* tags reachable from it are the entire public release
   // set; `main`, `v1.1` and every `archive/*` tag are school-submission or
   // local-only refs and are deliberately not in it.
-  const tags = git(ROOT, 'tag', '--list', 'v*', '--merged', 'master')
+  const tags = git(ROOT, 'tag', '--list', 'v*', '--merged', master)
     .split('\n').map((t) => t.trim()).filter(Boolean);
   assert.ok(tags.length > 0, 'master must carry version tags to publish');
 
-  const run = hygiene({ cwd: ROOT, refs: ['master', ...tags], names: FAKE_NAME });
+  const run = hygiene({ cwd: ROOT, refs: [master, ...tags], names: FAKE_NAME });
   assert.equal(run.ok, true,
     `the approved release set must be free of private data:\n${run.output}`);
 });
