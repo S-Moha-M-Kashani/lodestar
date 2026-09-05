@@ -153,7 +153,22 @@ def wait_until(cond, timeout=5.0):
     selector expresses it: waiting for a *proxy* condition is how both of this
     suite's real flakes happened. Returns rather than raises, because a check
     that times out must be one red line among the results, not an exception
-    that abandons every check after it."""
+    that abandons every check after it.
+
+    It asks TWICE when the condition is already true — once in the guard, once
+    in the return — and reports the second reading. So a condition that flips
+    true → false between two samples is reported as a timeout that took no time
+    at all: that is what made the trace block's settle check red on the CI
+    runner for three days, with a log line reading "never settled in 0s". Write
+    conditions that stay true once they are true, and see the note there.
+
+    Returning the first reading instead is the obvious repair and is
+    deliberately NOT made here. Each cond() is a Playwright call, and a
+    Playwright call is what lets the sync api dispatch page events and route
+    handlers — see wait_for_capture. Dropping the second one takes a beat away
+    from every one of the several hundred call sites, and two unrelated checks
+    went red the first time it was tried. That is its own change, with its own
+    run of the suite behind it."""
     deadline = time.time() + timeout
     while time.time() < deadline and not cond():
         time.sleep(0.05)
@@ -5979,20 +5994,31 @@ try:
         # so a second turn slower than its deadline let the block read a tape
         # holding only the first turn — and the two checks below then failed
         # describing the tape rather than the turn that never landed.
+        #
+        # Two conditions, and the first one is what makes this an assertion
+        # about the turn rather than about the composer. `#chat-input` is
+        # enabled at the instant Send is clicked and only goes disabled once
+        # the browser has started the turn, so "enabled" on its own is true
+        # *before* anything happened — and, being true and then false, it is
+        # exactly the shape `wait_until` reports as a timeout of zero seconds.
+        # The reply bubble is the thing only a started turn produces, and
+        # bubbles only ever accumulate, so the pair goes true once and stays
+        # true: one bubble means the turn has not begun, a disabled composer
+        # means it has not ended.
         settle_started = time.time()
         second_turn = wait_until(
-            lambda: not page.locator("#chat-input").is_disabled(), timeout=90)
+            lambda: page.locator(".chat-log .chat-msg.assistant").count() >= 2
+            and not page.locator("#chat-input").is_disabled(), timeout=40)
         settled_in = time.time() - settle_started
-        # The check below is green on every machine it has been run on by hand
-        # and red on the CI runner, so the only thing that can settle it is
-        # evidence from the runner itself. `assistantState` is module scope and
-        # unreachable from here, so every reading is taken from the DOM it
-        # drives, plus the one fact that separates the two candidate hangs:
-        # whether the stream's own request has finished. A resource entry with
-        # responseEnd 0 is still open, which means `for await (... sseFrames)`
-        # is waiting on a server that never closed it; a finished entry with the
-        # composer still disabled means the turn is parked after the stream, in
-        # the reveal drain or one of the two refreshes.
+        # Kept, having earned it: this is the block that told the runner apart
+        # from the code. `assistantState` is module scope and unreachable from
+        # here, so every reading comes from the DOM it drives, plus the one
+        # fact that separates a genuine hang from a mis-timed sample — whether
+        # the stream's own request ever closed. A resource entry with
+        # responseEnd 0 is still open, so the turn is waiting on a server that
+        # never ended it; a closed entry with the composer still disabled means
+        # the turn is parked after the stream. The runner reported a closed
+        # entry, 32ms, and zero seconds waited, which is neither.
         if not second_turn:
             parked = page.evaluate(PARKED_TURN_JS)
             print(f"  diagnostic - the turn never settled in {settled_in:.0f}s:")
@@ -6018,22 +6044,17 @@ try:
         # cannot 500 the turn it describes) — which means a turn that was never
         # filed is indistinguishable from a tape read too early unless the two
         # are asserted apart.
-        # KNOWN FAILING on the CI runner, and deliberately left red rather than
-        # removed: after a tool-calling turn taken through the *widget*,
-        # `#chat-input` is still disabled long after the brain has finished (the
-        # check below finds both envelopes filed), so `assistantState.busy`
-        # never returned to false. The same turn through the Assistant sheet
-        # settles, so this looks specific to the widget shell. It was invisible
-        # until 2026-09-02 because this wait's result was discarded; asserting
-        # it is what found it. A check that lies would cost more than one that
-        # is honestly red.
-        #
-        # The deadline was 40s and is now 90s, which is not a way of making it
-        # pass: this machine settles the same turn in under a second, three runs
-        # out of three. What the extra 50s buys is the difference between a
-        # runner that is merely slow and one where the turn never settles at
-        # all — and the block above says which, by reporting what the page was
-        # doing when it gave up.
+        # This check was red on the CI runner and green on a laptop every time
+        # from 2026-09-02 to 2026-09-05, and was left honestly red with a note
+        # blaming the widget shell for never clearing `assistantState.busy`.
+        # That was wrong, and the diagnostic block above is what disproved it:
+        # the runner's own log said the turn "never settled in 0s" while the
+        # stream had closed in 32ms and the worked-for row read 0.6s. Nothing
+        # was stuck. `wait_until` asked its condition twice and returned the
+        # second answer, and on a slower machine the two samples fell either
+        # side of the browser starting the turn — see the note on that helper.
+        # A check that is red for a reason nobody has confirmed will be read as
+        # noise, which is most of the cost of leaving one red.
         check("trace: the tool-calling turn finished", second_turn)
         check("trace: both turns were filed",
               tape.count('class="prompt"') == 2)
