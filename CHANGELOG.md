@@ -8,6 +8,19 @@ Dates are the day the release point was built. Versions follow
 [semantic versioning](https://semver.org/) — a major number for a break, a
 minor for a capability, a patch for a fix.
 
+## [v1.7.8] — 2026-09-05
+
+**The brain's dependencies move forward.** `fastapi` to 0.141.1, `uvicorn` to
+0.52.4, `ddgs` to 9.16.0, and `sentence-transformers` to 6.0.1 in the
+`local-embeddings` extra. The `ddgs` update also sheds eight packages it no
+longer needs, so a full install is smaller than it was.
+
+Taken together rather than one at a time, because all four touched the same two
+files: the lockfile was regenerated once over the merged constraints. Verified
+past the test suites — both services were started on the real configuration and
+answered a live turn end to end, which no test does, since the suites run on a
+deterministic fake model by design.
+
 ## [v1.7.7] — 2026-09-05
 
 **The files a stranger looks for.** Nothing in the app changed; everything a
@@ -183,6 +196,7 @@ back through, and the board travels as a JSON file.
 **The board exists.** Three columns you drag cards between, saved in the
 browser.
 
+[v1.7.8]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.7.7...v1.7.8
 [v1.7.7]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.7.6...v1.7.7
 [v1.7.6]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.7.5...v1.7.6
 [v1.7.5]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.7.4...v1.7.5
