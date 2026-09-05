@@ -198,6 +198,14 @@ let settingsOpen = false;
 // text, kept here so a repaint shows the same answer without asking again.
 // '' = never asked.
 let keyKnown = '';
+// What has been typed into the key field and not yet saved. Module state for
+// exactly the reason `keyKnown` is: renderAssistantTools() rebuilds the whole
+// drawer, so the input a key is typed into is not the one Save reads, and a
+// value living only in the DOM is emptied under the cursor by any repaint. A
+// settling chat turn fires two of those on its own — the sessions refresh and
+// the recorded-id sweep — which is what made the CI runner post an empty key
+// and read back "none yet".
+let keyDraft = '';
 
 /** The composer footer's model pick — the same choice the ⚙ drawer offers,
  *  where the question is actually asked.
@@ -339,6 +347,8 @@ export function renderChatSettings() {
   keyInput.id = 'openrouter-key';
   keyInput.autocomplete = 'off';
   keyInput.placeholder = 'sk-or-…';
+  keyInput.value = keyDraft;
+  keyInput.addEventListener('input', () => { keyDraft = keyInput.value; });
   const keySave = document.createElement('button');
   keySave.type = 'button';
   keySave.id = 'openrouter-key-save';
@@ -366,15 +376,21 @@ export function renderChatSettings() {
   sayStatus();
   if (settingsOpen && keyKnown === '') refreshKeyStatus();
   panel.addEventListener('toggle', () => { if (panel.open) refreshKeyStatus(); });
+  // The key sent, and the field emptied once it is saved, both go through the
+  // draft and through whichever input is live — never through this handler's
+  // own closed-over node, which a repaint between the click and the answer
+  // leaves detached from the page. Same rule as `sayStatus`, one control on.
   keySave.addEventListener('click', async () => {
     try {
       const res = await fetch('/api/agent/key', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: keyInput.value }),
+        body: JSON.stringify({ key: keyDraft }),
       });
       const d = await res.json();
-      keyInput.value = '';
+      keyDraft = '';
+      const live = document.querySelector('#openrouter-key');
+      if (live) live.value = '';
       learnKey(res.ok ? (d.configured ? 'a key is set' : 'none yet')
                       : 'brain unreachable');
     } catch {
