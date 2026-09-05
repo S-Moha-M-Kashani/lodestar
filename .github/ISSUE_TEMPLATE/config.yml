@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: A security problem
+    url: https://github.com/S-Moha-M-Kashani/lodestar/blob/master/SECURITY.md
+    about: Do not open a public issue. Email s.moha.m.kashani@gmail.com instead.
+  - name: Anything beyond running your own local copy
+    url: https://github.com/S-Moha-M-Kashani/lodestar/blob/master/LICENSE
+    about: The licence reserves every other use. Ask by email and I will answer.
+  - name: A question about how it works
+    url: https://github.com/S-Moha-M-Kashani/lodestar/blob/master/ARCHITECTURE.md
+    about: ARCHITECTURE.md and docs/decisions/ explain the design and why it is that way.
