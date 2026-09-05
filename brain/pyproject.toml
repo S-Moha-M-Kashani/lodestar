@@ -52,7 +52,7 @@ voice = [
   # whose llvmlite 0.36 refuses to build on anything past Python 3.9, so the
   # install fails outright. This floor keeps it on a numba with 3.13 wheels;
   # that numba is also what pins numpy below 2.5 in this environment.
-  "numba>=0.62; sys_platform == 'darwin' and platform_machine == 'arm64'",
+  "numba>=0.67.0; sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
 
 [dependency-groups]
