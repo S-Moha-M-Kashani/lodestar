@@ -3868,6 +3868,16 @@ try:
               and key_input.get_attribute("type") == "password"
               and page.locator("#openrouter-key-save").count() == 1)
         key_input.fill(key_secret)
+        # The drawer is rebuilt by renderAssistantTools() on every repaint, so
+        # the input the key is typed into is not the one Save reads. The
+        # History button is the cheapest honest repaint from out here — it
+        # rebuilds the whole tools row, exactly as a settling chat turn does
+        # twice on its own, which is how the runner came to post an empty key
+        # and read the status back as "none yet".
+        page.click("#chat-history-btn")
+        page.click("#chat-history-btn")
+        check("key: a half-typed key survives a repaint of the drawer",
+              page.locator("#openrouter-key").input_value() == key_secret)
         with page.expect_response(
                 lambda r: r.url.endswith("/api/agent/key")
                 and r.request.method == "POST") as key_res:
