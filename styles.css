@@ -791,17 +791,17 @@ body[data-view="board"] .cards { min-height: 0; }
 }
 
 .board-search {
-  /* Capped and pushed right: in the Inbox's column the box takes what is left
-     of the row, and in the Backlog's full-width sheet it stops growing at a
-     readable field instead of spanning a whole screen. The cap is what makes
-     the auto margin bite — a flex item free to grow leaves no free space for a
-     margin to claim. `min-width: 0` lets it shrink inside a 210px column
-     rather than pushing the row sideways, a flex item's floor being its
-     content. Focus comes from the global input :focus-visible outline. */
+  /* It sits against the button, one row gap away, and takes the whole rest of
+     the line: `+ New card` and the search box are one reach, and in the Inbox
+     the line ends where the cards below it end — an auto left margin (and
+     later a 340px cap) left the box floating with paper on both sides of it,
+     lined up with nothing. So no cap here; the Backlog's full-width sheet,
+     where the same row spans a whole screen, sets its own below.
+     `min-width: 0` lets it shrink inside a 210px column rather than pushing
+     the row sideways, a flex item's floor being its content. Focus comes from
+     the global input :focus-visible outline. */
   flex: 1 1 auto;
   min-width: 0;
-  max-width: 340px;
-  margin-left: auto;
   box-sizing: border-box;
   background: var(--card);
   border: 1px solid var(--line);
@@ -811,6 +811,12 @@ body[data-view="board"] .cards { min-height: 0; }
 }
 
 .board-search::placeholder { color: var(--ink-soft); }
+
+/* The one place the box is capped. The Backlog's sheet is the full width of
+   the screen, and a search field 1,400px wide is a field whose right-hand end
+   nobody looks at; in the Inbox's column the row is card-width and the box
+   fills it. */
+.backlog-sheet .board-search { max-width: 340px; }
 
 /* The create control, at the head of the Inbox where the capture form used to
    be: the dashed outline of a card not written yet — the same dashed 1.5px
