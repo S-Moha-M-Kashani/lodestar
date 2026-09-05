@@ -307,6 +307,25 @@ shot = lambda name: os.path.join(ARTIFACTS, name)
 results = []
 
 
+# What the page was doing when a turn refused to settle. One evaluate, because
+# a hung turn is read once and the readings have to describe the same instant.
+PARKED_TURN_JS = """() => ({
+  inputs: document.querySelectorAll('#chat-input').length,
+  disabled: !!document.querySelector('#chat-input')?.disabled,
+  widget: !!document.querySelector('#assistant-widget:not([hidden])'),
+  worked: document.querySelector('.chat-worked')?.textContent ?? null,
+  bubbles: document.querySelectorAll('.chat-log .chat-msg.assistant').length,
+  lastBubble: (document.querySelector(
+    '.chat-log .chat-msg.assistant:last-of-type .chat-text')
+    ?.textContent ?? '').slice(0, 160),
+  errorBanner: !!document.querySelector('.chat-msg.assistant.error'),
+  toolChips: document.querySelectorAll('.chat-log .chat-step').length,
+  streams: performance.getEntriesByType('resource')
+    .filter((r) => r.name.includes('/chat/stream'))
+    .map((r) => ({ open: r.responseEnd === 0, ms: Math.round(r.duration) })),
+})"""
+
+
 def check(name, cond):
     results.append((name, bool(cond)))
     print(("PASS" if cond else "FAIL"), "-", name)
@@ -5960,8 +5979,25 @@ try:
         # so a second turn slower than its deadline let the block read a tape
         # holding only the first turn — and the two checks below then failed
         # describing the tape rather than the turn that never landed.
+        settle_started = time.time()
         second_turn = wait_until(
-            lambda: not page.locator("#chat-input").is_disabled(), timeout=40)
+            lambda: not page.locator("#chat-input").is_disabled(), timeout=90)
+        settled_in = time.time() - settle_started
+        # The check below is green on every machine it has been run on by hand
+        # and red on the CI runner, so the only thing that can settle it is
+        # evidence from the runner itself. `assistantState` is module scope and
+        # unreachable from here, so every reading is taken from the DOM it
+        # drives, plus the one fact that separates the two candidate hangs:
+        # whether the stream's own request has finished. A resource entry with
+        # responseEnd 0 is still open, which means `for await (... sseFrames)`
+        # is waiting on a server that never closed it; a finished entry with the
+        # composer still disabled means the turn is parked after the stream, in
+        # the reveal drain or one of the two refreshes.
+        if not second_turn:
+            parked = page.evaluate(PARKED_TURN_JS)
+            print(f"  diagnostic - the turn never settled in {settled_in:.0f}s:")
+            for key in sorted(parked):
+                print(f"    {key}: {parked[key]!r}")
         session_id = page.evaluate("() => localStorage.getItem('lodestar:chat-session')")
 
         # The widget's own way in — developer-only, and it carries the session id
@@ -5982,16 +6018,22 @@ try:
         # cannot 500 the turn it describes) — which means a turn that was never
         # filed is indistinguishable from a tape read too early unless the two
         # are asserted apart.
-        # KNOWN FAILING, and deliberately left red rather than removed: after a
-        # tool-calling turn taken through the *widget*, `#chat-input` is still
-        # disabled 40s later, so `assistantState.busy` never returned to false —
-        # the brain finished (the check below finds both envelopes filed) but the
-        # browser's stream never settled. The same turn through the Assistant
-        # sheet settles, so this looks specific to the widget shell.
-        # It was invisible until 2026-09-02 because this wait's result was
-        # discarded; asserting it is what found it. Unrelated to the card-draft
-        # change that surfaced it, and it wants its own investigation — a check
-        # that lies would cost more than one that is honestly red.
+        # KNOWN FAILING on the CI runner, and deliberately left red rather than
+        # removed: after a tool-calling turn taken through the *widget*,
+        # `#chat-input` is still disabled long after the brain has finished (the
+        # check below finds both envelopes filed), so `assistantState.busy`
+        # never returned to false. The same turn through the Assistant sheet
+        # settles, so this looks specific to the widget shell. It was invisible
+        # until 2026-09-02 because this wait's result was discarded; asserting
+        # it is what found it. A check that lies would cost more than one that
+        # is honestly red.
+        #
+        # The deadline was 40s and is now 90s, which is not a way of making it
+        # pass: this machine settles the same turn in under a second, three runs
+        # out of three. What the extra 50s buys is the difference between a
+        # runner that is merely slow and one where the turn never settles at
+        # all — and the block above says which, by reporting what the page was
+        # doing when it gave up.
         check("trace: the tool-calling turn finished", second_turn)
         check("trace: both turns were filed",
               tape.count('class="prompt"') == 2)
