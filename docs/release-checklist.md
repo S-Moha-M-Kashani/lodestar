@@ -69,6 +69,12 @@ Exit 2 from `--check` means `development` has gained nothing presentable — no
 `feat`/`fix`/`perf`/`refactor`, or no file changes. Refusing beats minting a
 version nobody can describe.
 
+`--anyway` releases past that verdict, and past that one only. Use it when the
+batch is something a reader gets that the commit types cannot see — repository
+furniture, a documentation release — and say in the message what they get. It
+cannot override the other two refusals: an unmoved branch and an unchanged tree
+are facts, and no release note over them could be honest.
+
 ## 6. The push, and only then the badges
 
 ```sh
