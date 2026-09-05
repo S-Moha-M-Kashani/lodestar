@@ -5474,6 +5474,29 @@ try:
                 "?.selectedOptions[0]?.textContent.includes(name)", arg=name)
             page.wait_for_selector("#new-card-btn")
 
+        def switch_board(value, name):
+            """Move to another board, and wait for the reload it triggers.
+
+            `wait_for_board` on its own is a proxy condition here — the shape
+            `wait_until`'s note warns about. `select_option` moves the OLD
+            page's <select> at once, so the picker names the board being
+            switched to before `location.reload()` has even begun, and every
+            check after it reads whichever document is on screen mid-flight.
+            Green on this machine, red on the runner, which read the picker's
+            value as neither board right after a switch. Switching boards
+            reloads the page (`openBoard`, js/core/boards.js), so the load
+            event is the thing that actually says the new board is up.
+            """
+            # Selecting the board already open is a no-op in `openBoard`, so
+            # there would be no load to wait for and this would time out —
+            # abandoning every check after it rather than reporting one red
+            # line, which is the trade this suite refuses to make.
+            if page.evaluate(
+                    "() => document.querySelector('#board-select')?.value") != value:
+                with page.expect_event("load"):
+                    page.select_option("#board-select", value)
+            wait_for_board(name)
+
         def fill_prompt(text):
             page.fill("#prompt-input", text)
             page.click("#prompt-ok")
@@ -5500,16 +5523,14 @@ try:
         check("boards: each board numbers its own cards from C-001",
               api_state(new_id)["cards"][0]["num"] == 1)
 
-        page.select_option("#board-select", "main")
-        wait_for_board("Lodestar")
+        switch_board("main", "Lodestar")
         check("boards: switching back shows the first board, not the new one",
               page.locator(".card").count() == before
               and page.locator(".card", has_text="Book the ferry").count() == 0)
 
         # Deleting is soft: the board leaves the picker, its cards stay in the
         # database, and the trash is where it comes back from.
-        page.select_option("#board-select", new_id)
-        wait_for_board("Getaway")
+        switch_board(new_id, "Getaway")
         board_menu("#board-delete")
         page.click("#confirm-ok")
         wait_for_board("Lodestar")
@@ -5620,9 +5641,7 @@ try:
         # Put the world back: leave for the first board, then erase the probe
         # board through the API so later checks see the original board set.
         page.evaluate("() => localStorage.removeItem('e2e:prompt-close')")
-        if page.evaluate("() => document.querySelector('#board-select')?.value") != "main":
-            page.select_option("#board-select", "main")
-            wait_for_board("Lodestar")
+        switch_board("main", "Lodestar")
         probe = next(
             (b for b in api_boards()["boards"] if b["name"] == "Enter Probe"), None)
         if probe:
