@@ -1,6 +1,27 @@
 {
   "name": "lodestar",
   "version": "1.7.6",
+  "private": true,
+  "license": "SEE LICENSE IN LICENSE",
+  "author": "Moha Kashani <s.moha.m.kashani@gmail.com>",
+  "homepage": "https://github.com/S-Moha-M-Kashani/lodestar#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/S-Moha-M-Kashani/lodestar.git"
+  },
+  "bugs": {
+    "url": "https://github.com/S-Moha-M-Kashani/lodestar/issues"
+  },
+  "keywords": [
+    "personal-dashboard",
+    "local-first",
+    "sqlite",
+    "vanilla-javascript",
+    "zero-dependencies",
+    "langgraph",
+    "rag",
+    "ai-assistant"
+  ],
   "description": "Lodestar — your compass for life: capture every open question, prioritize what matters, and never lose one. SQLite-backed so nothing is lost.",
   "type": "module",
   "scripts": {

@@ -1,0 +1,33 @@
+name: A claim that is wrong
+description: The README, ARCHITECTURE.md or a design record says something the code does not do.
+labels: ["docs"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This project claims a lot in prose and tries to keep every claim true.
+        A sentence that no longer matches the code is a real defect and this is
+        the right place for it.
+
+  - type: input
+    id: where
+    attributes:
+      label: Where the claim is
+      placeholder: "README.md, the 'How it's built' section"
+    validations:
+      required: true
+
+  - type: textarea
+    id: claim
+    attributes:
+      label: What it says
+    validations:
+      required: true
+
+  - type: textarea
+    id: reality
+    attributes:
+      label: What the code actually does
+      description: A file and a line number is ideal.
+    validations:
+      required: true
