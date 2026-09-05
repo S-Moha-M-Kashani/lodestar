@@ -16,18 +16,18 @@ jobs:
       # reachable from it for private data, and a runner given one commit and
       # no tags has nothing to scan — which is how that check was red on every
       # push without anything being wrong with the release set.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           # node:sqlite needs >=23.4; matches the Dockerfile's node:24
           node-version: "24"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v10
 
       # `pg` is the one npm dependency (server.js has none; the SQLite →
       # Postgres migration script imports it). tests/migrate.test.js imports it
