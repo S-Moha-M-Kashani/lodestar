@@ -27,7 +27,7 @@ jobs:
           node-version: "24"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v10
+        uses: astral-sh/setup-uv@v7
 
       # `pg` is the one npm dependency (server.js has none; the SQLite →
       # Postgres migration script imports it). tests/migrate.test.js imports it
