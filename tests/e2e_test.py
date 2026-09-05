@@ -1404,10 +1404,23 @@ try:
               and row.locator("#new-card-btn").count() == 1
               and row.locator("#search").count() == 1
               and page.locator("#search").count() == 1)
-        check("capture: the button is left, the search box right of it, on one line",
+        # The gap is the row's own 8px and nothing more: the box used to carry
+        # an auto left margin, which parked it against the far edge of the
+        # Backlog's full-width sheet, half a screen from the button it belongs
+        # beside. Measured with a couple of pixels of slack for the border.
+        # ...and its far end reaches the end of the line, which in the Inbox is
+        # the edge the cards below it are ruled to. A cap or an auto margin
+        # leaves it floating with paper on both sides, lined up with nothing.
+        row_bb = row.bounding_box()
+        gap = search_bb["x"] - (btn_bb["x"] + btn_bb["width"]) if btn_bb and search_bb else None
+        overhang = (row_bb["x"] + row_bb["width"]) - (search_bb["x"] + search_bb["width"]) \
+            if row_bb and search_bb else None
+        check("capture: the button is left, the search box attached right of it, on one line",
               btn_bb is not None and search_bb is not None
-              and search_bb["x"] >= btn_bb["x"] + btn_bb["width"]
+              and gap >= 0 and gap <= 12
               and abs(search_bb["y"] - btn_bb["y"]) <= 8)
+        check("capture: the search box runs to the Inbox column's right edge",
+              overhang is not None and abs(overhang) <= 1)
 
         # The row lives inside #board, which render() wipes on every keystroke,
         # so the input the second letter is typed into is not the element the
