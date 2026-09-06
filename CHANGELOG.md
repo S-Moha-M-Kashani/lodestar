@@ -2,13 +2,19 @@
 
 Every entry below is a release point on `master` and carries the tag of the same
 name. The ladder is the history: one landing, one release point, one tag, and
-the version in `package.json` names the newest of them.
+the version in `package.json` names the newest of them. An `Unreleased` heading,
+when there is one, holds what has landed on `development` and is waiting for the
+next release point — it becomes that version's entry when the point is built.
 
 Dates are the day the release point was built. Versions follow
 [semantic versioning](https://semver.org/) — a major number for a break, a
 minor for a capability, a patch for a fix.
 
-## [v1.7.9] — 2026-09-05
+## [Unreleased]
+
+Dependency updates only, carried until the next release with a feature or a
+fix in it. `v1.7.8` and `v1.7.9` were built for these on 2026-09-05 and taken
+back the next day: a version number should name something a reader gets.
 
 **The agent framework steps up.** `langchain` to 1.4.0, carrying
 `langchain-core` 1.6.2 and `langgraph` 1.2.11; `langchain-openai` to 1.6.0; and
@@ -22,8 +28,6 @@ cost — since the suites run on a deterministic fake model and would not notice
 an adapter that had stopped reporting usage. The `numba` bump needed the `voice`
 extra installed to be exercised at all; nothing in the ordinary test run touches
 it.
-
-## [v1.7.8] — 2026-09-05
 
 **The brain's dependencies move forward.** `fastapi` to 0.141.1, `uvicorn` to
 0.52.4, `ddgs` to 9.16.0, and `sentence-transformers` to 6.0.1 in the
@@ -211,8 +215,7 @@ back through, and the board travels as a JSON file.
 **The board exists.** Three columns you drag cards between, saved in the
 browser.
 
-[v1.7.9]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.7.8...v1.7.9
-[v1.7.8]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.7.7...v1.7.8
+[Unreleased]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.7.7...master
 [v1.7.7]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.7.6...v1.7.7
 [v1.7.6]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.7.5...v1.7.6
 [v1.7.5]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.7.4...v1.7.5
