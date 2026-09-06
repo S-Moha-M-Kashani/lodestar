@@ -3,6 +3,7 @@ import { catColor, catLabel } from '../core/categories.js';
 import { filters, state } from '../core/state.js';
 import { cardAria, renderCaptureRow, typeBadge } from '../ui/board.js';
 import { sortMenu } from '../ui/card-actions.js';
+import { wireCardContext } from '../ui/card-menu.js';
 import { columnCards, columnTitle } from '../ui/dom.js';
 import { openDialog } from '../ui/edit-dialog.js';
 import { onCardKeydown } from '../ui/keyboard.js';
@@ -116,5 +117,6 @@ function renderBacklogRow(card) {
   row.append(rowNum, badge, main, notes);
   row.addEventListener('click', () => openDialog(card.id));
   row.addEventListener('keydown', (e) => onCardKeydown(e, card.id));
+  wireCardContext(row, card.id);
   return row;
 }

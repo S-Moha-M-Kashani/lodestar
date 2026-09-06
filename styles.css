@@ -1057,6 +1057,20 @@ body[data-view="board"] #column-filter { display: none; }
 /* Flipped above the + when the column's scroller has no room below it */
 .card-menu-panel.up { top: auto; bottom: calc(100% + 6px); }
 
+/* The copy that hangs on <body> for a card with no + of its own — a Backlog
+   row, a map dot, an area row. It is given the anchor's own rectangle by
+   js/ui/card-menu.js, so the panel drops from the card exactly as it drops
+   from the +. `pointer-events` is load-bearing in both directions: the wrapper
+   lies ON TOP of the row it describes and would otherwise swallow every click
+   meant for it, and the panel inside has to keep taking them. */
+.card-menu-floating {
+  position: fixed;
+  margin: 0;
+  z-index: 80;
+  pointer-events: none;
+}
+.card-menu-floating .menu-panel { pointer-events: auto; }
+
 .card-menu-item {
   display: flex;
   align-items: center;
