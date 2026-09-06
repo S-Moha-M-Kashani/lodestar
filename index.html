@@ -378,6 +378,20 @@
           <ul></ul>
         </div>
       </div>
+      <!-- Where the card is filed. Above the stamp and OUTSIDE the settings
+           fold, because it is not a setting: it is the one question every open
+           card is asking, and answering it used to mean closing the dialog,
+           finding the card and dragging it. In Progress is disabled for a
+           habit — the refusal already in columnAccepts, said out loud rather
+           than dropped on save. -->
+      <fieldset id="card-column" class="column-picker">
+        <legend>Where it lives</legend>
+        <div class="picker-options">
+          <label><input type="radio" name="column" value="inbox"><span class="col-chip">Inbox</span></label>
+          <label><input type="radio" name="column" value="in-progress"><span class="col-chip">In Progress</span></label>
+          <label><input type="radio" name="column" value="answered"><span class="col-chip">Done</span></label>
+        </div>
+      </fieldset>
       <fieldset class="type-picker">
         <legend>Type</legend>
         <div id="type-picker-options" class="picker-options"></div>
