@@ -1259,9 +1259,39 @@ body[data-view="board"] .cards { min-height: 0; }
    *them* instead would have moved the same dead space to the other side of the
    rail, which is a hole in the middle of the board rather than a margin. */
 .board.has-rail {
-  grid-template-columns: repeat(3, minmax(210px, 1fr)) 200px;
+  /* The rail's width is the user's, dragged on the divider between the two
+     (js/ui/rail-resize.js writes --rail-w onto #board). The columns are `1fr`
+     each, so whatever the rail gives up is shared equally between them. */
+  grid-template-columns: repeat(3, minmax(210px, 1fr)) var(--rail-w, 200px);
   width: 100%;
 }
+
+/* The divider shares the rail's track instead of taking one of its own — a
+   fifth column would cost the cards real width to paint a line. Both are
+   placed on the last explicit track and the first row, since a grid item with
+   no placement would otherwise be dealt the next cell along. */
+.rail-grip,
+.board.has-rail .board-rail {
+  grid-column: -2 / -1;
+  grid-row: 1;
+}
+
+.rail-grip {
+  /* Straddles the rail's dashed border: a hairline is not something a pointer
+     can find, so the target is 8px wide and reaches 4px into each side. */
+  justify-self: start;
+  align-self: stretch;
+  width: 8px;
+  margin-left: -4px;
+  z-index: 2;
+  cursor: col-resize;
+  border-radius: 3px;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+.rail-grip:hover,
+.rail-grip:focus-visible,
+.rail-grip.dragging { background: color-mix(in srgb, var(--ink) 18%, transparent); }
 
 .board-rail {
   position: sticky;
@@ -2403,6 +2433,10 @@ kbd {
     position: static;
     scroll-snap-align: start;
   }
+  /* Nothing to divide in a carousel: the rail is the last panel you scroll to,
+     not a margin with an edge. A grip left in the flow here would be an 8px
+     sliver of a panel between two others. */
+  .rail-grip { display: none; }
 }
 
 @media (max-width: 640px) {
