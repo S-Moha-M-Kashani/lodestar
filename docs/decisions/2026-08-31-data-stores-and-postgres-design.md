@@ -32,8 +32,9 @@ Evidence, all of it from the machine rather than from reasoning:
   `lodestar_board-data`. `npm start` resolves `databases/real/board.db`
   (`scripts/db-location.mjs`). **Two files, one URL** — whichever stack was
   started last owned :3000.
-- The host file held three boards: `main` (created 2026-08-13), `Moha-Pari` and
-  `Pari` (2026-08-22 13:28 and 13:29). The volume was created at **13:38 the
+- The host file held three boards: `main` (created 2026-08-13), `Moha-Mahsa`
+  and `Mahsa` (2026-08-22 13:28 and 13:29) — the two personal boards are
+  written here under a stand-in name, as everywhere else in this repository. The volume was created at **13:38 the
   same day** — nine minutes later — and its `board.db` was born
   **2026-08-24 10:35**, empty.
 - After that reset the browser pushed its cached copy back, and **62 of the 71
@@ -42,8 +43,8 @@ Evidence, all of it from the machine rather than from reasoning:
   healthy.
 - **The set of boards is not in `localStorage`** — `js/core/boards.js` stores
   only *which* board is open (`lodestar:board`), never the list. Nothing
-  restored `Moha-Pari` or `Pari`. On 2026-08-30 06:51 the user created
-  "Moha-Pari" a second time, in the container's copy.
+  restored `Moha-Mahsa` or `Mahsa`. On 2026-08-30 06:51 the user created
+  "Moha-Mahsa" a second time, in the container's copy.
 
 The failure is therefore precise: **the cache can heal cards and cannot heal
 boards.** Any future store must not depend on that asymmetry, and no two stores

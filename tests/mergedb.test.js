@@ -41,9 +41,9 @@ test('a stranded board and its cards are added, and nothing is overwritten', () 
   const dir = mkdtempSync(join(tmpdir(), 'mergedb-'));
   const from = join(dir, 'stranded.db');
   const into = join(dir, 'real.db');
-  make(from, [board('main', 'Lodestar'), board('b-only-there', 'Moha-Pari'),
+  make(from, [board('main', 'Lodestar'), board('b-only-there', 'Moha-Mahsa'),
     card('c-shared', 'main', 'stranded title'), card('c-only-there', 'b-only-there', 'rescued')]);
-  make(into, [board('main', 'Lodestar'), board('b-only-here', 'Pari'),
+  make(into, [board('main', 'Lodestar'), board('b-only-here', 'Mahsa'),
     card('c-shared', 'main', 'real title'), card('c-only-here', 'b-only-here', 'kept')]);
 
   const added = mergeSqliteBoard({ from, into });
