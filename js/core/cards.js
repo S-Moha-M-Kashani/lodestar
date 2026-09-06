@@ -186,10 +186,18 @@ const searchNeedle = () => filters.search.trim().toLowerCase();
 export const filtersActive = () => Boolean(searchNeedle() || filters.type || filters.category || filters.prio || filters.tags.size
   || (filters.column && filters.column !== 'all' && !filters.columnsOff));
 
-export function moveCard(cardId, columnId, beforeId = null) {
+/** File a card in a column, and record nothing.
+ *
+ *  A card's place in `state.cards` is what decides where it appears in its
+ *  column, so setting `columnId` alone leaves it at whatever index it held in
+ *  the column it left. Split out of moveCard for the card dialog, which files a
+ *  card as part of a save that is already one act: calling moveCard there would
+ *  write a second undo entry and repaint mid-save, and copying these eleven
+ *  lines would be two answers to where a card goes. Returns whether it moved. */
+export function placeCard(cardId, columnId, beforeId = null) {
   const card = getCard(cardId);
-  if (!card || cardId === beforeId) return;
-  if (!columnAccepts(card, columnId)) return;
+  if (!card || cardId === beforeId) return false;
+  if (!columnAccepts(card, columnId)) return false;
   state.cards = state.cards.filter((c) => c.id !== cardId);
   card.columnId = columnId;
   card.updatedAt = Date.now();
@@ -203,5 +211,11 @@ export function moveCard(cardId, columnId, beforeId = null) {
     if (lastInColumn === -1) index = state.cards.length;
   }
   state.cards.splice(index, 0, card);
+  return true;
+}
+
+export function moveCard(cardId, columnId, beforeId = null) {
+  const card = getCard(cardId);
+  if (!placeCard(cardId, columnId, beforeId)) return;
   commit(`Moved ${cardLabel(card)} to ${columnTitle(columnId)}`);
 }

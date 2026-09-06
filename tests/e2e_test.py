@@ -5757,6 +5757,88 @@ try:
         page.locator('.view-switch button[data-view="board"]').click()
         page.wait_for_selector("#board.board")
 
+        # ---- Filing a card from the card itself ------------------------------
+        # This is an end-to-end test. Where a card lives was the one thing the
+        # dialog could not say: you closed it, found the card and dragged it.
+        # The control sits above the type stamp and OUTSIDE the settings fold,
+        # because it is not a setting — it is the one question every open card
+        # is asking.
+        # One move, one entry: the save below is a single act and must read as
+        # one in History, not as an edit and a move recorded separately. Read as
+        # the newest actions rather than as a count — the timeline is capped at
+        # HISTORY_LIMIT snapshots and this late in a run it is already full, so
+        # counting rows around the save answers 0 for a correct save.
+        def newest_actions(n=3):
+            menu_click("#history-btn")
+            page.wait_for_selector("#history-dialog[open]")
+            rows = [t.strip() for t in page.locator(
+                "#history-list .history-row .history-action").all_text_contents()][:n]
+            page.click("#close-history")
+            page.wait_for_timeout(120)
+            return rows
+
+        add_card(page, "COLUMN-probe card")
+        page.locator('.card', has_text="COLUMN-probe card").first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        placement = page.evaluate("""() => {
+          const col = document.querySelector('#card-column');
+          const type = document.querySelector('.type-picker');
+          if (!col || !type) return null;
+          return {
+            folded: Boolean(col.closest('#card-details')),
+            beforeType: Boolean(col.compareDocumentPosition(type)
+                                & Node.DOCUMENT_POSITION_FOLLOWING),
+            values: [...col.querySelectorAll('input[name="column"]')].map(i => i.value),
+            checked: col.querySelector('input[name="column"]:checked')?.value,
+          };
+        }""")
+        check("dialog: the column sits above the type stamp, outside the fold",
+              placement is not None
+              and placement["folded"] is False
+              and placement["beforeType"] is True
+              and placement["values"] == ["inbox", "in-progress", "answered"]
+              and placement["checked"] == "inbox"
+              and page.locator("#card-column").is_visible()
+              # Visible on a bare card, whose settings fold is shut.
+              and page.locator("#card-details[open]").count() == 0)
+
+        page.locator('#card-column label:has(input[value="answered"])').click()
+        page.click("#save-card")
+        page.wait_for_timeout(250)
+        check("dialog: picking Done files the card there on save",
+              page.locator('[data-col="answered"] .card',
+                           has_text="COLUMN-probe card").count() == 1
+              and page.locator('[data-col="inbox"] .card',
+                               has_text="COLUMN-probe card").count() == 0
+              and wait_until(lambda: any(c["columnId"] == "answered"
+                                         for c in api_state()["cards"]
+                                         if c["title"] == "COLUMN-probe card")))
+
+        # The two newest entries are this card's save and this card's capture,
+        # with nothing in between: a separate "Moved …" would sit between them.
+        # Asked this way rather than as "no Moved entry anywhere near", because
+        # the block above deliberately moves a card from the Backlog and its
+        # entry is still one of the newest on the board.
+        recent = newest_actions(2)
+        check("dialog: filing on save is one entry, not an edit and a move",
+              len(recent) == 2
+              and recent[0].startswith("Edited") and "COLUMN-probe card" in recent[0]
+              and recent[1].startswith("Added") and "COLUMN-probe card" in recent[1])
+
+        # A habit has no In Progress — the refusal already in columnAccepts —
+        # so the control must say so rather than offer a move that is dropped.
+        page.locator('[data-col="answered"] .card',
+                     has_text="COLUMN-probe card").first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        page.locator('.type-picker label:has(input[value="habit"])').click()
+        page.wait_for_timeout(150)
+        check("dialog: stamping Habit disables In Progress on the column control",
+              page.locator('#card-column input[value="in-progress"]').is_disabled()
+              and not page.locator('#card-column input[value="inbox"]').is_disabled()
+              and not page.locator('#card-column input[value="answered"]').is_disabled())
+        page.click("#cancel-dialog")
+        page.wait_for_timeout(150)
+
         # ---- Several boards --------------------------------------------------
         # Switching reloads the page on purpose (see core/boards.js), so every
         # step here waits for the board to be painted again rather than for a

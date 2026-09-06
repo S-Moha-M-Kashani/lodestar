@@ -2206,6 +2206,36 @@ dialog::backdrop {
   background: color-mix(in srgb, currentColor 10%, transparent);
 }
 
+/* The column chips. Deliberately not the category swatch and not the type
+   badge: colour on this board means category, and a stamp means type, so where
+   a card lives is drawn in plain ink like the ledger rule it is. */
+.col-chip {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  display: inline-block;
+  color: var(--ink-soft);
+  border: 1.5px solid var(--card-line);
+  border-radius: 3px;
+  padding: 4px 11px;
+  transition: all 0.15s ease;
+}
+
+.column-picker input:checked + .col-chip {
+  color: var(--ink);
+  border-color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+}
+
+/* A habit takes no In Progress. The rule is shown where it applies rather than
+   removing the option, which would leave the reader wondering where it went. */
+.column-picker input:disabled + .col-chip {
+  opacity: 0.35;
+  cursor: not-allowed;
+  text-decoration: line-through;
+}
+.column-picker label:has(input:disabled) { cursor: not-allowed; }
+
 .cat-swatch {
   font-family: var(--mono);
   font-size: 11px;
@@ -2227,6 +2257,7 @@ dialog::backdrop {
 }
 
 .picker-options input:focus-visible + .badge,
+.picker-options input:focus-visible + .col-chip,
 .picker-options input:focus-visible + .cat-swatch {
   outline: 2px solid var(--ink-blue);
   outline-offset: 2px;
