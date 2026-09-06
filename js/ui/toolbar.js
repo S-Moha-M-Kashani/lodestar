@@ -25,6 +25,13 @@ $('#prio-filter').addEventListener('change', (e) => {
   render();
 });
 
+// Where the card is filed. Painted on every view but the Board, where it would
+// be a control for emptying two of the three columns you are looking at.
+$('#column-filter').addEventListener('change', (e) => {
+  filters.column = e.target.value;
+  render();
+});
+
 // The tags dropdown: one tag or all of them. It writes the same Set the #
 // bar toggles, so the two stay one filter with two handles — picking here
 // replaces whatever combination the bar had built, and the empty option
@@ -113,6 +120,32 @@ for (const [btnId, cls, key] of [
     if (hidden) localStorage.setItem(key, '1');
     else localStorage.removeItem(key);
     apply(hidden);
+  });
+}
+
+// The column filter's switch is deliberately not in the loop above. Those four
+// are paint: a body class the CSS reads, and nothing about which cards exist.
+// This one decides what is *shown* — switching it off has to take the hide-Done
+// default with it, or cards go missing behind a dropdown that is no longer
+// there to explain them — so it writes a flag matchesFilters reads and asks for
+// a repaint. The boot pass sets the flag and does NOT repaint: this module is
+// still evaluating, and calling render() from here is the "Cannot access before
+// initialization" the module graph notes are about.
+{
+  const btn = $('#toggle-columns');
+  const key = KEY_PREFIX + 'hideColumns';
+  const apply = (hidden) => {
+    document.body.classList.toggle('hide-columns', hidden);
+    btn.setAttribute('aria-pressed', String(hidden));
+    filters.columnsOff = hidden;
+  };
+  apply(localStorage.getItem(key) === '1');
+  btn.addEventListener('click', () => {
+    const hidden = !document.body.classList.contains('hide-columns');
+    if (hidden) localStorage.setItem(key, '1');
+    else localStorage.removeItem(key);
+    apply(hidden);
+    render();
   });
 }
 

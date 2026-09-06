@@ -1943,10 +1943,27 @@ try:
               page.locator('.column[data-col="inbox"]').count() == 1)
 
         # ---- Overview view (semantic map, kept offline for a network-free test) ----
-        n_all = page.locator(".card").count()
+        # Open cards only. The map answers "what am I carrying?", and a finished
+        # card is a record rather than work — it is on the Board, in its own
+        # column, and the column filter is how it is asked for back.
+        n_open = page.locator('.column:not([data-col="answered"]) .card').count()
+        # A tag that is still on an open card, read off the board while the
+        # columns are on screen — the overview has none. The tag used below was
+        # hard-coded as "planning" and the drag-and-drop block earlier in this
+        # run files that very card in Done, so the map correctly showed nothing
+        # and a correct view failed its own test.
+        open_tag = page.evaluate("""() => {
+          for (const c of document.querySelectorAll(
+                 '.column:not([data-col=\"answered\"]) .card')) {
+            const chip = c.querySelector('.card-tag');
+            if (chip) return chip.textContent;
+          }
+          return null;
+        }""")
         page.locator('.view-switch button[data-view="overview"]').click()
         page.wait_for_selector("#board.overview .plot-dot")
-        check("overview: one dot per card", page.locator(".plot-dot").count() == n_all)
+        check("overview: one dot per open card, the finished ones left off",
+              page.locator(".plot-dot").count() == n_open)
         check("overview: view button marked pressed",
               page.get_attribute('.view-switch button[data-view="overview"]', "aria-pressed") == "true")
         check("overview: layout falls back to keyword overlap when the model is offline",
@@ -1958,15 +1975,19 @@ try:
               page.locator(".plot-tip").is_visible()
               and page.locator(".plot-tip .plot-tip-title").inner_text() != "")
 
-        page.locator('.tag-chip:has-text("planning")').first.click()
+        tag_chip = next((c for c in page.locator(".tag-chip").all()
+                         if c.inner_text().strip() == open_tag), None)
+        tag_chip.click()
         page.wait_for_timeout(100)
         k = page.locator(".plot-dot").count()
-        check("overview: tag filter narrows the map", 0 < k < n_all)
+        check(f"overview: tag filter narrows the map (#{open_tag})",
+              open_tag is not None and 0 < k < n_open)
         page.locator('.view-switch button[data-view="board"]').click()
         page.wait_for_selector("#board.board")
         check("overview: its tag filter matches the board's own filtering",
-              page.locator(".card").count() == k)
-        page.locator('.tag-chip:has-text("planning")').first.click()  # clear the filter
+              page.locator('.column:not([data-col="answered"]) .card').count() == k)
+        next(c for c in page.locator(".tag-chip").all()
+             if c.inner_text().strip() == open_tag).click()  # clear the filter
         page.wait_for_timeout(60)
 
         page.locator('.view-switch button[data-view="overview"]').click()
@@ -1985,8 +2006,12 @@ try:
               page.get_attribute('.view-switch button[data-view="matrix"]', "aria-pressed") == "true")
         check("matrix: four quadrants drawn", page.locator(".matrix-quad").count() == 4)
         page.wait_for_timeout(300)
-        placed_expected = sum(1 for c in api_state()["cards"] if c.get("importance") and c.get("urgency"))
-        check("matrix: one dot per question that has both importance and urgency",
+        # Judged *and* still open: the Matrix is a decision about what to do next,
+        # which a finished card is not part of.
+        placed_expected = sum(1 for c in api_state()["cards"]
+                              if c.get("importance") and c.get("urgency")
+                              and c.get("columnId") != "answered")
+        check("matrix: one dot per open question that has both importance and urgency",
               page.locator(".matrix-quad-dots .plot-dot").count() == placed_expected)
         page.screenshot(path=shot("matrix.png"))
 
@@ -4647,11 +4672,13 @@ try:
                   '.matrix-quad[data-imp="high"][data-urg="high"] .matrix-quad-verb')
                   .inner_text().lower())
         srv_cards = api_state()["cards"]
-        n_importance = sum(1 for c in srv_cards if c.get("importance"))
+        # Open cards, the same rule the follow-through lens below already used.
+        n_importance = sum(1 for c in srv_cards
+                           if c.get("importance") and c.get("columnId") != "answered")
         for lens in ("leverage", "serenity"):
             page.click(f'.matrix-switch button[data-matrix="{lens}"]')
             page.wait_for_selector(f'.matrix-switch button[data-matrix="{lens}"][aria-pressed="true"]')
-            check(f"matrices: {lens} shows 6 cells and places every importance-set card",
+            check(f"matrices: {lens} shows 6 cells and places every open importance-set card",
                   page.locator(".matrix-quad").count() == 6
                   and page.locator(".matrix-quad-dots .plot-dot").count() == n_importance)
         page.click('.matrix-switch button[data-matrix="followthrough"]')
@@ -5550,6 +5577,108 @@ try:
         page.wait_for_timeout(250)
         check("rail: with nothing stored it opens at its default width",
               abs(board_widths()["rail"] - 200) <= 2)
+
+        # ---- Done cards stay on the Board ------------------------------------
+        # This is an end-to-end test. A finished card is a record, not work: it
+        # belongs in the Done column and in the Board's own picture of the week,
+        # and nowhere else. Every other view was showing it beside the open ones,
+        # so the map, the matrix and the areas all read as busier than the week
+        # actually was.
+        #
+        # The escape hatch is a filter of its own — Inbox / In Progress / Done —
+        # beside the three that were already there. It is deliberately inert on
+        # the Board: the Board *is* the columns, and a control that would empty
+        # two of them is a way to lose your own cards.
+        add_card(page, "DONE-probe finished")
+        page.locator('.card', has_text="DONE-probe finished").first.focus()
+        # Two presses, and a beat between them: each move re-renders the board
+        # and puts focus back on the card, so a second key sent inside that
+        # repaint would land on nothing.
+        page.keyboard.press("]")
+        page.wait_for_timeout(200)
+        page.keyboard.press("]")
+        page.wait_for_timeout(200)
+        check("columns: the probe card is in Done to start with",
+              page.locator('[data-col="answered"] .card',
+                           has_text="DONE-probe finished").count() == 1)
+
+        col_filter = page.locator("#column-filter")
+        check("columns: the filter joins the other three on the rail row",
+              col_filter.count() == 1
+              and page.locator(".rail-filters #column-filter").count() == 1
+              and [o.strip() for o in col_filter.locator("option").all_inner_texts()]
+              == ["Open cards", "Inbox", "In Progress", "Done", "All columns"]
+              # Inert on the Board, and therefore not painted there either.
+              and not col_filter.is_visible())
+
+        page.locator('.view-switch button[data-view="overview"]').click()
+        page.wait_for_selector("#board.overview .plot-dot")
+        page.wait_for_timeout(300)
+        dot_titles = """() => [...document.querySelectorAll('.plot-dot')]
+            .map(d => d.getAttribute('aria-label'))"""
+        check("columns: a Done card is off the map, and the filter is offered here",
+              not any("DONE-probe finished" in t for t in page.evaluate(dot_titles))
+              and col_filter.is_visible())
+
+        page.select_option("#column-filter", "answered")
+        page.wait_for_timeout(250)
+        only_done = page.evaluate(dot_titles)
+        page.select_option("#column-filter", "all")
+        page.wait_for_timeout(250)
+        everything = page.evaluate(dot_titles)
+        check("columns: picking Done shows the finished cards, All shows both",
+              only_done
+              and all(", in Done" in t for t in only_done)
+              and any("DONE-probe finished" in t for t in everything)
+              and len(everything) > len(only_done))
+
+        page.select_option("#column-filter", "in-progress")
+        page.wait_for_timeout(250)
+        check("columns: picking In Progress narrows to that column alone",
+              all(", in In Progress" in t for t in page.evaluate(dot_titles)))
+        page.select_option("#column-filter", "")
+        page.wait_for_timeout(250)
+
+        # The other two card views hide it by the same rule, so the default is
+        # one decision rather than four.
+        page.locator('.view-switch button[data-view="matrix"]').click()
+        page.wait_for_selector("#board.matrix .matrix-grid")
+        page.wait_for_timeout(250)
+        matrix_clear = not any("DONE-probe finished" in t
+                               for t in page.evaluate(dot_titles))
+        page.locator('.view-switch button[data-view="areas"]').click()
+        page.wait_for_selector("#board.areas")
+        page.wait_for_timeout(250)
+        areas_clear = page.locator(".area-row", has_text="DONE-probe finished").count() == 0
+        check("columns: the Matrix and the Areas hide it by the same default",
+              matrix_clear and areas_clear)
+
+        # Switched off in the Menu like every other filter, and it takes its
+        # narrowing with it — a hidden control still doing its work is a board
+        # nobody can explain.
+        page.locator('.view-switch button[data-view="overview"]').click()
+        page.wait_for_selector("#board.overview .plot-dot")
+        page.select_option("#column-filter", "answered")
+        page.wait_for_timeout(250)
+        page.click("#menu-btn")
+        page.hover("#menu-show")
+        page.wait_for_selector("#toggle-columns")
+        page.click("#toggle-columns")
+        page.wait_for_timeout(250)
+        hidden_filter = (not col_filter.is_visible()
+                         and page.get_attribute("#toggle-columns", "aria-pressed") == "true")
+        showing_all = page.evaluate(dot_titles)
+        page.click("#toggle-columns")
+        page.wait_for_timeout(250)
+        page.keyboard.press("Escape")
+        check("columns: the Menu hides the filter, and hiding it stops it filtering",
+              hidden_filter and any("DONE-probe finished" in t for t in showing_all))
+        page.select_option("#column-filter", "")
+        page.wait_for_timeout(200)
+        # Left as it was found: the sections after this one open on whatever
+        # view is stored, and a board switch reloads the page into it.
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector("#board.board")
 
         # ---- Several boards --------------------------------------------------
         # Switching reloads the page on purpose (see core/boards.js), so every

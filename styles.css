@@ -955,6 +955,12 @@ body[data-view="board"] .cards { min-height: 0; }
 .hide-tags #tag-filter { display: none; }
 .hide-prios #prio-filter { display: none; }
 .hide-types #type-filter { display: none; }
+/* Two ways this control is absent, and they mean different things. Switched off
+   in the Menu it is gone everywhere, and js/core/cards.js stops applying it.
+   On the Board it is merely not painted: the Board is the three columns, so the
+   filter has nothing to say there and every card is shown regardless. */
+.hide-columns #column-filter { display: none; }
+body[data-view="board"] #column-filter { display: none; }
 .hide-done-col .column[data-col="answered"] { display: none; }
 
 /* Card type as a rubber stamp — always neutral ink; colour means category */

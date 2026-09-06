@@ -44,7 +44,13 @@ function loadState() {
 }
 
 export let state = loadState();
-export const filters = { search: '', type: '', category: '', prio: '', tags: new Set() };
+// `column` is the one filter with a meaningful empty value: '' means "open
+// cards", which hides Done everywhere but the Board, and 'all' is how you ask
+// for everything. `columnsOff` is the Menu's switch for the whole idea — the
+// control and the default it enforces go together, since hiding the control
+// while it still narrows the board leaves cards missing with nothing on screen
+// to explain it.
+export const filters = { search: '', type: '', category: '', prio: '', column: '', columnsOff: false, tags: new Set() };
 export let focusCardId = null; // restore focus after re-render (keyboard moves)
 export let draggedId = null;
 export let dealCards = true; // deal-in animation runs on first render only
