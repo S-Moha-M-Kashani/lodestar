@@ -3,6 +3,7 @@ import { catColor, catLabel, categories } from '../core/categories.js';
 import { CONTROL_LABEL } from '../core/constants.js';
 import { filters, state } from '../core/state.js';
 import { fetchTrash } from '../core/trash.js';
+import { wireCardContext } from '../ui/card-menu.js';
 import { announce } from '../ui/dom.js';
 import { openDialog } from '../ui/edit-dialog.js';
 import { render } from '../ui/render.js';
@@ -266,6 +267,8 @@ export function areaRow(card) {
   t.textContent = card.title;
   b.append(num, t);
   b.addEventListener('click', () => openDialog(card.id));
+  // Review builds its rows from here too, so both views gain the menu at once.
+  wireCardContext(b, card.id);
   return b;
 }
 

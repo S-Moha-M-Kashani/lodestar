@@ -5680,6 +5680,83 @@ try:
         page.locator('.view-switch button[data-view="board"]').click()
         page.wait_for_selector("#board.board")
 
+        # ---- The card's actions, wherever the card is shown ------------------
+        # This is an end-to-end test. Re-filing a card is the commonest thing
+        # anyone does to one, and it was reachable only from the Board — on the
+        # Backlog, the map and the Matrix a card could be opened and nothing
+        # else. The right-click that already opens the menu on a card now opens
+        # the same menu on a row and on a dot: one panel, one set of entries,
+        # one dismiss rule.
+        page.locator('.view-switch button[data-view="backlog"]').click()
+        page.wait_for_selector("#board.backlog .backlog-row")
+        row = page.locator(".backlog-row").first
+        row_title = row.locator(".row-title").inner_text()
+        row.click(button="right")
+        page.wait_for_timeout(200)
+        check("card menu: right-clicking a Backlog row opens the same eight actions",
+              [t.strip() for t in page.locator(
+                  ".card-menu-panel:not([hidden]) .menu-item").all_inner_texts()]
+              == ["Edit…", "Duplicate", "Category ▸", "Type ▸", "Deadline ▸",
+                  "Plan ▸", "Move to ▸", "Delete"]
+              # The row's own click opens the editor; the menu's right-click
+              # must not have done both.
+              and page.locator("#card-dialog[open]").count() == 0)
+
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(120)
+        escaped_backlog = page.locator(".card-menu-panel:not([hidden])").count() == 0
+
+        # And it is the real menu, not a painted copy of one: the entry that
+        # moves a card has to move it.
+        row.click(button="right")
+        page.wait_for_timeout(150)
+        page.locator(".card-menu-panel:not([hidden]) .menu-item",
+                     has_text="Move to ▸").click()
+        page.locator(".card-menu-panel:not([hidden]) .menu-item",
+                     has_text="Done").click()
+        page.wait_for_timeout(250)
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector("#board.board")
+        check("card menu: Move to from a Backlog row carries the card to Done",
+              escaped_backlog
+              and page.locator('[data-col="answered"] .card',
+                               has_text=row_title).count() == 1
+              and wait_until(lambda: any(c["columnId"] == "answered"
+                                         for c in api_state()["cards"]
+                                         if c["title"] == row_title)))
+
+        # A dot is the same card at its smallest. The panel cannot hang inside
+        # the dot — a dot is itself a button — so this is the case that proves
+        # the menu is anchored to whatever element was right-clicked.
+        page.locator('.view-switch button[data-view="overview"]').click()
+        page.wait_for_selector("#board.overview .plot-dot")
+        page.wait_for_timeout(250)
+        page.locator(".plot-dot").first.click(button="right")
+        page.wait_for_timeout(200)
+        panel_on_screen = page.evaluate("""() => {
+          const p = document.querySelector('.card-menu-panel:not([hidden])');
+          if (!p) return false;
+          const r = p.getBoundingClientRect();
+          if (r.width < 100 || r.height < 40) return false;
+          // Painted where it can actually be read, and on top: a panel behind
+          // the plot sheet is a menu that is not there.
+          const hit = document.elementFromPoint(r.left + r.width / 2, r.top + 8);
+          return r.top >= 0 && r.bottom <= window.innerHeight + 1 && p.contains(hit);
+        }""")
+        check("card menu: right-clicking a map dot opens the panel, on top and in view",
+              panel_on_screen
+              and page.locator("#card-dialog[open]").count() == 0)
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(120)
+        check("card menu: Escape closes the dot's panel and leaves none behind",
+              page.locator(".card-menu-panel:not([hidden])").count() == 0
+              # The floating panel is torn down, not merely hidden — one left
+              # in the page per right-click is a leak that ends as a stack of
+              # dead menus under the board.
+              and page.locator(".card-menu-floating").count() == 0)
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector("#board.board")
+
         # ---- Several boards --------------------------------------------------
         # Switching reloads the page on purpose (see core/boards.js), so every
         # step here waits for the board to be painted again rather than for a

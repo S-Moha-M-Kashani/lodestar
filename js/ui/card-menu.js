@@ -33,6 +33,24 @@ import { openDialog, openNewCard } from './edit-dialog.js';
 
 const OPEN_PANEL = '.card-menu-panel:not([hidden])';
 
+// The one floating panel, and what it was opened from.
+//
+// On the Board every card carries its own `+` and its own panel, and the panel
+// hangs inside the card. Nowhere else can: a Backlog row has no room for a
+// second control on the line, and a map dot IS a button, so a button inside it
+// would be invalid markup. So a right-click anywhere else builds one panel on
+// <body>, positioned over whatever was clicked, and takes it away again on
+// close. Same entries, same dismiss rules, same settle() — the only difference
+// is where the box hangs.
+let floating = null;
+let floatingAnchor = null;
+
+function dropFloating() {
+  floating?.remove();
+  floating = null;
+  floatingAnchor = null;
+}
+
 /** Did this event happen inside a card's actions menu?
  *
  *  composedPath(), and deliberately not `e.target.closest('.card-menu')`.
@@ -54,9 +72,14 @@ function closeCardMenus() {
   for (const panel of document.querySelectorAll(OPEN_PANEL)) {
     panel.hidden = true;
     const wrap = panel.closest('.card-menu');
-    wrap.querySelector('.card-menu-btn').setAttribute('aria-expanded', 'false');
+    // Optional: the floating copy has no `+` to un-press and no card to unmark.
+    wrap.querySelector('.card-menu-btn')?.setAttribute('aria-expanded', 'false');
     wrap.closest('.card')?.classList.remove('menu-open');
   }
+  // Removed rather than hidden. One left in the page per right-click is a
+  // stack of dead menus under the board, and `elementFromPoint` would find
+  // them before it found what the reader was aiming at.
+  dropFloating();
 }
 
 // The two ways out every menu in this app has. Registered once here, at module
@@ -77,9 +100,12 @@ document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   const panel = document.querySelector(OPEN_PANEL);
   if (!panel) return;
-  const btn = panel.closest('.card-menu').querySelector('.card-menu-btn');
+  // Where focus goes back to: the `+` on the Board, and the row or the dot the
+  // menu was summoned from anywhere else. Read before the close, which is what
+  // takes the floating wrapper — and its anchor — away.
+  const back = panel.closest('.card-menu').querySelector('.card-menu-btn') ?? floatingAnchor;
   closeCardMenus();
-  btn.focus();
+  back?.focus();
 });
 
 /** One row of the panel. `current` marks the value the card already holds. */
@@ -126,7 +152,11 @@ function settle(panel) {
   const bounds = scroller
     ? scroller.getBoundingClientRect()
     : { top: 0, bottom: window.innerHeight };
-  const anchor = panel.parentElement.querySelector('.card-menu-btn').getBoundingClientRect();
+  // The `+` on the Board; the floating wrapper itself elsewhere, which is sized
+  // and placed over the row or the dot that was right-clicked — so the panel
+  // drops from the card either way, and there is one positioning system.
+  const anchor = (panel.parentElement.querySelector('.card-menu-btn') ?? panel.parentElement)
+    .getBoundingClientRect();
   const below = bounds.bottom - anchor.bottom - GAP;
   const above = anchor.top - bounds.top - GAP;
 
@@ -367,6 +397,50 @@ export function cardMenu(card) {
 
   wrap.append(btn, panel);
   return wrap;
+}
+
+/** Open the menu for a card that has no `+` of its own, over `anchorEl`.
+ *
+ *  The wrapper is given the anchor's exact rectangle, so `.menu-panel`'s own
+ *  `right: 0; top: calc(100% + 6px)` puts the panel under the row or the dot
+ *  exactly as it puts it under the `+`. It is fixed rather than absolute
+ *  because a dot lives inside a plot field and a row inside a scrolling sheet,
+ *  and a panel clipped by either is a menu that is not there. */
+export function openCardMenuAt(cardId, anchorEl) {
+  closeCardMenus(); // one menu at a time, wherever the other one hung
+  const wrap = document.createElement('div');
+  wrap.className = 'card-menu card-menu-floating';
+  const panel = document.createElement('div');
+  panel.className = 'menu-panel card-menu-panel';
+  panel.hidden = true;
+  wrap.append(panel);
+  document.body.append(wrap);
+
+  const r = anchorEl.getBoundingClientRect();
+  wrap.style.left = `${r.left}px`;
+  wrap.style.top = `${r.top}px`;
+  wrap.style.width = `${r.width}px`;
+  wrap.style.height = `${r.height}px`;
+  floating = wrap;
+  floatingAnchor = anchorEl;
+
+  paintRoot(cardId, panel);
+  panel.hidden = false;
+  settle(panel); // positions it, and puts focus on the first entry
+}
+
+/** Give any element that stands for a card the card's actions on right-click.
+ *
+ *  The one line every view outside the Board calls, so that a Backlog row, a
+ *  map dot and an area row all answer the same gesture with the same panel —
+ *  and so that adding a fourth kind of row is one import rather than a fourth
+ *  copy of this handler. */
+export function wireCardContext(el, cardId) {
+  el.addEventListener('contextmenu', (e) => {
+    if (fromCardMenu(e)) return;
+    e.preventDefault();
+    openCardMenuAt(cardId, el);
+  });
 }
 
 /** Open one card's menu at its root level. `wrap` is the card's `.card-menu`.
