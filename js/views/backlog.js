@@ -1,4 +1,4 @@
-import { cardLabel, filtersActive, matchesFilters } from '../core/cards.js';
+import { cardLabel, columnFilterOn, filtersActive, matchesFilters } from '../core/cards.js';
 import { catColor, catLabel } from '../core/categories.js';
 import { filters, state } from '../core/state.js';
 import { cardAria, renderCaptureRow, typeBadge } from '../ui/board.js';
@@ -16,7 +16,7 @@ import { onCardKeydown } from '../ui/keyboard.js';
  *  is set, so that filter narrows this view rather than emptying it. `null` is
  *  "All columns", the one case with no single column to name or to sort. */
 function backlogColumn() {
-  if (filters.columnsOff || !filters.column) return 'inbox';
+  if (!columnFilterOn() || !filters.column) return 'inbox';
   return filters.column === 'all' ? null : filters.column;
 }
 

@@ -151,8 +151,14 @@ export function parseState(json) {
  *  `columnsOff` is the Menu switching the whole idea off: the default goes
  *  with the control, because a rule still narrowing the board from behind a
  *  hidden dropdown is a board nobody can explain. */
+// Is the rule in force at all? Off on the Board, and off when the Menu has
+// switched the filter away. Shared with filtersActive below, which would
+// otherwise claim a filter is narrowing the Board — and answer "No cards match"
+// over a column the reader emptied themselves.
+export const columnFilterOn = () => view !== 'board' && !filters.columnsOff;
+
 function matchesColumn(card) {
-  if (view === 'board' || filters.columnsOff || filters.column === 'all') return true;
+  if (!columnFilterOn() || filters.column === 'all') return true;
   if (filters.column) return card.columnId === filters.column;
   return card.columnId !== 'answered';
 }
@@ -180,11 +186,11 @@ export function matchesFilters(card) {
 
 const searchNeedle = () => filters.search.trim().toLowerCase();
 
-// The column filter counts only when it is narrowing to one column: the
+// The column filter counts only where it is narrowing to one named column: the
 // default hides Done on its own, and "No cards match" over an empty Backlog
 // would blame a filter the reader never set.
 export const filtersActive = () => Boolean(searchNeedle() || filters.type || filters.category || filters.prio || filters.tags.size
-  || (filters.column && filters.column !== 'all' && !filters.columnsOff));
+  || (columnFilterOn() && filters.column && filters.column !== 'all'));
 
 /** File a card in a column, and record nothing.
  *
