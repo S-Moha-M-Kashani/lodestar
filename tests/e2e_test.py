@@ -5457,6 +5457,100 @@ try:
               wait_until(lambda: any(c["columnId"] == "answered" for c in api_state()["cards"]
                                      if c["title"] == "Send the tax forms")))
 
+        # ---- The rail's own edge is draggable --------------------------------
+        # This is an end-to-end test. The rail is the page's right margin and it
+        # was a fixed 200px: a plan row reading "Send the tax forms" clipped on a
+        # narrow window, and on a wide one the margin stayed narrow while the
+        # cards had room to spare. The divider between the three card columns
+        # and the rail is now a real control, and it is a *separator* rather than
+        # a button — a keyboard user has to be able to move it too, which is the
+        # half a pointer-only grip always drops.
+        #
+        # One grip, one property: the three columns share `1fr` each, so taking
+        # room from the rail gives it back to Inbox, In Progress and Done in
+        # equal parts. That is the whole feature — the check reads all four
+        # widths rather than the rail's alone, because a rail that shrank while
+        # only the last column grew would pass a narrower test and look wrong.
+        page.set_viewport_size({"width": 1200, "height": 800})
+        page.wait_for_timeout(200)
+
+        def board_widths():
+            return page.evaluate("""() => {
+              const w = (sel) => {
+                const el = document.querySelector(sel);
+                return el ? el.getBoundingClientRect().width : null;
+              };
+              return {
+                inbox: w('.column[data-col="inbox"]'),
+                progress: w('.column[data-col="in-progress"]'),
+                done: w('.column[data-col="answered"]'),
+                rail: w('.board-rail'),
+              };
+            }""")
+
+        grip = page.locator(".rail-grip")
+        grip_box = grip.bounding_box() if grip.count() == 1 else None
+        last_col_box = page.locator('.column[data-col="answered"]').bounding_box()
+        rail_box_now = page.locator(".board-rail").bounding_box()
+        check("rail: a separator sits between the last column and the rail",
+              grip.count() == 1
+              and grip.get_attribute("role") == "separator"
+              and grip.get_attribute("aria-orientation") == "vertical"
+              and all(b is not None for b in (grip_box, last_col_box, rail_box_now))
+              and grip_box["x"] + grip_box["width"] >= last_col_box["x"] + last_col_box["width"] - 2
+              and grip_box["x"] <= rail_box_now["x"] + 2
+              # A hairline is not a drag target. 6px is the narrowest thing a
+              # pointer finds without hunting for it.
+              and grip_box["width"] >= 6)
+
+        before = board_widths()
+        # Dragging the divider left gives the rail the room, so the rail grows
+        # and each column loses a third of what it gained.
+        page.mouse.move(grip_box["x"] + grip_box["width"] / 2,
+                        grip_box["y"] + grip_box["height"] / 2)
+        page.mouse.down()
+        page.mouse.move(grip_box["x"] + grip_box["width"] / 2 - 60,
+                        grip_box["y"] + grip_box["height"] / 2, steps=10)
+        page.mouse.up()
+        page.wait_for_timeout(200)
+        after = board_widths()
+        check("rail: dragging the divider widens the rail and narrows all three"
+              " columns together",
+              all(v is not None for v in list(before.values()) + list(after.values()))
+              and abs((after["rail"] - before["rail"]) - 60) <= 4
+              and abs((before["inbox"] - after["inbox"]) - 20) <= 4
+              and abs(after["inbox"] - after["progress"]) <= 1
+              and abs(after["progress"] - after["done"]) <= 1)
+
+        # The keyboard half. A separator that only answers the mouse is one a
+        # keyboard user cannot reach at all — and this one carries a size, so it
+        # needs the same arrow keys a slider has.
+        grip.focus()
+        keyed_before = board_widths()["rail"]
+        page.keyboard.press("ArrowLeft")
+        page.wait_for_timeout(150)
+        check("rail: ArrowLeft on the focused separator widens it too",
+              board_widths()["rail"] > keyed_before)
+
+        # It is a size the user set, so it outlives the tab. Stored, not
+        # re-derived: a width that resets on reload is a control that undoes
+        # itself every morning.
+        kept = board_widths()["rail"]
+        page.reload()
+        page.wait_for_selector("#new-card-btn")
+        page.wait_for_timeout(250)
+        check("rail: the width survives a reload",
+              abs(board_widths()["rail"] - kept) <= 2)
+
+        # And with nothing stored the rail is back to the width it always had,
+        # which is what keeps every other layout check in this file honest.
+        page.evaluate("localStorage.removeItem('lodestar:railWidth')")
+        page.reload()
+        page.wait_for_selector("#new-card-btn")
+        page.wait_for_timeout(250)
+        check("rail: with nothing stored it opens at its default width",
+              abs(board_widths()["rail"] - 200) <= 2)
+
         # ---- Several boards --------------------------------------------------
         # Switching reloads the page on purpose (see core/boards.js), so every
         # step here waits for the board to be painted again rather than for a
