@@ -10,11 +10,48 @@ Dates are the day the release point was built. Versions follow
 [semantic versioning](https://semver.org/) — a major number for a break, a
 minor for a capability, a patch for a fix.
 
-## [Unreleased]
+## [v1.8.0] — 2026-09-06
 
-Dependency updates only, carried until the next release with a feature or a
-fix in it. `v1.7.8` and `v1.7.9` were built for these on 2026-09-05 and taken
-back the next day: a version number should name something a reader gets.
+**Four changes: the card's actions, where it is filed, what each view shows,
+and how wide the rail is.**
+
+**A card's actions follow it everywhere.** Right-clicking a card gave you its
+actions menu on the Board and nowhere else, so re-filing — the commonest thing
+anyone does to a card — was unreachable from the Backlog, the map, the Matrix,
+the Areas and the Review. The same menu, with the same entries and the same
+dismiss rules, now opens on a register row and on a plotted dot. Where a card
+has no room for its own control the panel is built beside whatever was clicked
+and taken away again on close, so no dead menus collect under the page.
+
+**A card can be filed from the card.** Three chips above the type stamp, outside
+the settings fold, say Inbox, In Progress and Done — where a card lives is the
+question an open card is asking, not a setting. The move is part of the save, so
+it is one entry in History rather than an edit and a move. In Progress is struck
+through for a habit, which cannot live there. The Assistant's suggested moves
+are painted into that control too, instead of being applied where no reviewer
+could see them.
+
+**A finished card stays in the Done column.** Everywhere but the Board a card in
+Done is a record, not work, and it was appearing beside the open ones on every
+view — so the map, the Matrix and the register all read as busier than the week
+had been. A fourth filter beside type, priority and tags names the column to
+show: Open cards, Inbox, In Progress, Done, or All columns. It is not painted on
+the Board, which is already three columns, and the Menu can switch the whole
+idea off — which takes the hide-Done default with it, because a rule narrowing
+the board from behind a control that is gone is a board nobody can explain.
+
+**The rail is as wide as you want it.** The habits-and-plan rail was a fixed
+200px: a long habit name clipped on a narrow window while a wide one gave the
+cards room the rail could have used. The divider between the columns and the
+rail is now a real handle — drag it, or focus it and use the arrow keys, and the
+width is remembered. What the rail gives up is shared equally between Inbox, In
+Progress and Done, so the three columns always match. Hiding the Done column
+closes the board up behind it as well; its empty slot used to keep a full
+column's width and leave the habits looking adrift.
+
+Dependency updates ride along below. `v1.7.8` and `v1.7.9` were built for these
+alone on 2026-09-05 and taken back the next day: a version number should name
+something a reader gets.
 
 **The agent framework steps up.** `langchain` to 1.4.0, carrying
 `langchain-core` 1.6.2 and `langgraph` 1.2.11; `langchain-openai` to 1.6.0; and
@@ -215,7 +252,7 @@ back through, and the board travels as a JSON file.
 **The board exists.** Three columns you drag cards between, saved in the
 browser.
 
-[Unreleased]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.7.7...master
+[v1.8.0]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.7.7...v1.8.0
 [v1.7.7]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.7.6...v1.7.7
 [v1.7.6]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.7.5...v1.7.6
 [v1.7.5]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.7.4...v1.7.5
