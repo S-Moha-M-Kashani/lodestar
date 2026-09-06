@@ -254,6 +254,7 @@
                 <button id="toggle-tags" class="menu-item" aria-pressed="false" title="Hide the tag filters — the # bar and the tags dropdown"># Tags</button>
                 <button id="toggle-prios" class="menu-item" aria-pressed="false" title="Hide the priority filter dropdown">Priorities</button>
                 <button id="toggle-types" class="menu-item" aria-pressed="false" title="Hide the type filter dropdown">Types</button>
+                <button id="toggle-columns" class="menu-item" aria-pressed="false" title="Hide the column filter — and with it the rule that keeps Done cards off every view but the Board">Columns</button>
                 <hr class="menu-sep">
                 <button id="toggle-done-col" class="menu-item" aria-pressed="false" title="Hide the Done column on the Board view">Done column</button>
               </div>
@@ -313,6 +314,19 @@
     <div class="rail-row">
       <div id="cat-rail" class="cat-rail" role="group" aria-label="Filter by category" hidden></div>
       <div class="rail-filters">
+        <!-- Where the card is filed. Inert on the Board — the Board IS the
+             columns, and a control that would empty two of them is a way to
+             lose your own cards — so it is painted on every other view only.
+             "Open cards" is the default everywhere else: a finished card is a
+             record rather than work, and the map, the matrix and the register
+             all read as busier than the week was with them in. -->
+        <select id="column-filter" aria-label="Filter by column">
+          <option value="">Open cards</option>
+          <option value="inbox">Inbox</option>
+          <option value="in-progress">In Progress</option>
+          <option value="answered">Done</option>
+          <option value="all">All columns</option>
+        </select>
         <select id="type-filter" aria-label="Filter by type">
           <option value="">All types</option>
           <option value="question">? Questions</option>
