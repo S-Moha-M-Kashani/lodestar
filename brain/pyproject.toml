@@ -11,7 +11,7 @@ dependencies = [
   "ddgs>=9.0",
   "chromadb>=1.5.9",
   "langchain>=1.0,<2.0",
-  "langchain-core>=1.0,<2.0",
+  "langchain-core>=1.6.1,<2.0",
   "langchain-openai>=1.0,<2.0",
   # Retrieval, all of it LangChain's rather than ours. EnsembleRetriever and
   # MultiQueryRetriever live in langchain-classic: `langchain.retrievers` does
