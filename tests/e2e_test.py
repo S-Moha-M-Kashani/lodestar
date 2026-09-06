@@ -1272,6 +1272,24 @@ try:
               and page.get_attribute("#toggle-done-col", "aria-pressed") == "true"
               and page.locator('section.column[data-col="inbox"]').is_visible()
               and bool(page.evaluate("localStorage.getItem('lodestar:hideDoneCol')")))
+
+        # This is an end-to-end test. Hiding Done used to leave its grid track
+        # standing: an empty column's worth of paper opened between In Progress
+        # and the rail, so the habits read as adrift on the right of the screen
+        # rather than as the board's margin. The freed width now goes to the two
+        # columns that are left, bar a quarter-column spacer — which is what
+        # keeps the rail a margin instead of something butted up against the
+        # cards. Measured as a ratio, not in pixels, so the check says what it
+        # means at any window width.
+        rail_gap = page.evaluate("""() => {
+          const col = document.querySelector('section.column[data-col="in-progress"]')
+            .getBoundingClientRect();
+          const rail = document.querySelector('.board-rail').getBoundingClientRect();
+          return { gap: rail.left - col.right, col: col.width };
+        }""")
+        check("hide: the rail closes up when the Done column is hidden",
+              0 < rail_gap["gap"] < rail_gap["col"] * 0.4)
+
         toggled_off = menu_toggle("toggle-done-col")
         check("hide: toggling again brings the Done column back",
               toggled_off and not body_has("hide-done-col")
@@ -1943,10 +1961,27 @@ try:
               page.locator('.column[data-col="inbox"]').count() == 1)
 
         # ---- Overview view (semantic map, kept offline for a network-free test) ----
-        n_all = page.locator(".card").count()
+        # Open cards only. The map answers "what am I carrying?", and a finished
+        # card is a record rather than work — it is on the Board, in its own
+        # column, and the column filter is how it is asked for back.
+        n_open = page.locator('.column:not([data-col="answered"]) .card').count()
+        # A tag that is still on an open card, read off the board while the
+        # columns are on screen — the overview has none. The tag used below was
+        # hard-coded as "planning" and the drag-and-drop block earlier in this
+        # run files that very card in Done, so the map correctly showed nothing
+        # and a correct view failed its own test.
+        open_tag = page.evaluate("""() => {
+          for (const c of document.querySelectorAll(
+                 '.column:not([data-col=\"answered\"]) .card')) {
+            const chip = c.querySelector('.card-tag');
+            if (chip) return chip.textContent;
+          }
+          return null;
+        }""")
         page.locator('.view-switch button[data-view="overview"]').click()
         page.wait_for_selector("#board.overview .plot-dot")
-        check("overview: one dot per card", page.locator(".plot-dot").count() == n_all)
+        check("overview: one dot per open card, the finished ones left off",
+              page.locator(".plot-dot").count() == n_open)
         check("overview: view button marked pressed",
               page.get_attribute('.view-switch button[data-view="overview"]', "aria-pressed") == "true")
         check("overview: layout falls back to keyword overlap when the model is offline",
@@ -1958,15 +1993,19 @@ try:
               page.locator(".plot-tip").is_visible()
               and page.locator(".plot-tip .plot-tip-title").inner_text() != "")
 
-        page.locator('.tag-chip:has-text("planning")').first.click()
+        tag_chip = next((c for c in page.locator(".tag-chip").all()
+                         if c.inner_text().strip() == open_tag), None)
+        tag_chip.click()
         page.wait_for_timeout(100)
         k = page.locator(".plot-dot").count()
-        check("overview: tag filter narrows the map", 0 < k < n_all)
+        check(f"overview: tag filter narrows the map (#{open_tag})",
+              open_tag is not None and 0 < k < n_open)
         page.locator('.view-switch button[data-view="board"]').click()
         page.wait_for_selector("#board.board")
         check("overview: its tag filter matches the board's own filtering",
-              page.locator(".card").count() == k)
-        page.locator('.tag-chip:has-text("planning")').first.click()  # clear the filter
+              page.locator('.column:not([data-col="answered"]) .card').count() == k)
+        next(c for c in page.locator(".tag-chip").all()
+             if c.inner_text().strip() == open_tag).click()  # clear the filter
         page.wait_for_timeout(60)
 
         page.locator('.view-switch button[data-view="overview"]').click()
@@ -1985,8 +2024,12 @@ try:
               page.get_attribute('.view-switch button[data-view="matrix"]', "aria-pressed") == "true")
         check("matrix: four quadrants drawn", page.locator(".matrix-quad").count() == 4)
         page.wait_for_timeout(300)
-        placed_expected = sum(1 for c in api_state()["cards"] if c.get("importance") and c.get("urgency"))
-        check("matrix: one dot per question that has both importance and urgency",
+        # Judged *and* still open: the Matrix is a decision about what to do next,
+        # which a finished card is not part of.
+        placed_expected = sum(1 for c in api_state()["cards"]
+                              if c.get("importance") and c.get("urgency")
+                              and c.get("columnId") != "answered")
+        check("matrix: one dot per open question that has both importance and urgency",
               page.locator(".matrix-quad-dots .plot-dot").count() == placed_expected)
         page.screenshot(path=shot("matrix.png"))
 
@@ -4647,11 +4690,13 @@ try:
                   '.matrix-quad[data-imp="high"][data-urg="high"] .matrix-quad-verb')
                   .inner_text().lower())
         srv_cards = api_state()["cards"]
-        n_importance = sum(1 for c in srv_cards if c.get("importance"))
+        # Open cards, the same rule the follow-through lens below already used.
+        n_importance = sum(1 for c in srv_cards
+                           if c.get("importance") and c.get("columnId") != "answered")
         for lens in ("leverage", "serenity"):
             page.click(f'.matrix-switch button[data-matrix="{lens}"]')
             page.wait_for_selector(f'.matrix-switch button[data-matrix="{lens}"][aria-pressed="true"]')
-            check(f"matrices: {lens} shows 6 cells and places every importance-set card",
+            check(f"matrices: {lens} shows 6 cells and places every open importance-set card",
                   page.locator(".matrix-quad").count() == 6
                   and page.locator(".matrix-quad-dots .plot-dot").count() == n_importance)
         page.click('.matrix-switch button[data-matrix="followthrough"]')
@@ -5456,6 +5501,361 @@ try:
         check("plan: the tick reaches the database",
               wait_until(lambda: any(c["columnId"] == "answered" for c in api_state()["cards"]
                                      if c["title"] == "Send the tax forms")))
+
+        # ---- The rail's own edge is draggable --------------------------------
+        # This is an end-to-end test. The rail is the page's right margin and it
+        # was a fixed 200px: a plan row reading "Send the tax forms" clipped on a
+        # narrow window, and on a wide one the margin stayed narrow while the
+        # cards had room to spare. The divider between the three card columns
+        # and the rail is now a real control, and it is a *separator* rather than
+        # a button — a keyboard user has to be able to move it too, which is the
+        # half a pointer-only grip always drops.
+        #
+        # One grip, one property: the three columns share `1fr` each, so taking
+        # room from the rail gives it back to Inbox, In Progress and Done in
+        # equal parts. That is the whole feature — the check reads all four
+        # widths rather than the rail's alone, because a rail that shrank while
+        # only the last column grew would pass a narrower test and look wrong.
+        page.set_viewport_size({"width": 1200, "height": 800})
+        page.wait_for_timeout(200)
+
+        def board_widths():
+            return page.evaluate("""() => {
+              const w = (sel) => {
+                const el = document.querySelector(sel);
+                return el ? el.getBoundingClientRect().width : null;
+              };
+              return {
+                inbox: w('.column[data-col="inbox"]'),
+                progress: w('.column[data-col="in-progress"]'),
+                done: w('.column[data-col="answered"]'),
+                rail: w('.board-rail'),
+              };
+            }""")
+
+        grip = page.locator(".rail-grip")
+        grip_box = grip.bounding_box() if grip.count() == 1 else None
+        last_col_box = page.locator('.column[data-col="answered"]').bounding_box()
+        rail_box_now = page.locator(".board-rail").bounding_box()
+        check("rail: a separator sits between the last column and the rail",
+              grip.count() == 1
+              and grip.get_attribute("role") == "separator"
+              and grip.get_attribute("aria-orientation") == "vertical"
+              and all(b is not None for b in (grip_box, last_col_box, rail_box_now))
+              and grip_box["x"] + grip_box["width"] >= last_col_box["x"] + last_col_box["width"] - 2
+              and grip_box["x"] <= rail_box_now["x"] + 2
+              # A hairline is not a drag target. 6px is the narrowest thing a
+              # pointer finds without hunting for it.
+              and grip_box["width"] >= 6)
+
+        before = board_widths()
+        # Dragging the divider left gives the rail the room, so the rail grows
+        # and each column loses a third of what it gained.
+        page.mouse.move(grip_box["x"] + grip_box["width"] / 2,
+                        grip_box["y"] + grip_box["height"] / 2)
+        page.mouse.down()
+        page.mouse.move(grip_box["x"] + grip_box["width"] / 2 - 60,
+                        grip_box["y"] + grip_box["height"] / 2, steps=10)
+        page.mouse.up()
+        page.wait_for_timeout(200)
+        after = board_widths()
+        check("rail: dragging the divider widens the rail and narrows all three"
+              " columns together",
+              all(v is not None for v in list(before.values()) + list(after.values()))
+              and abs((after["rail"] - before["rail"]) - 60) <= 4
+              and abs((before["inbox"] - after["inbox"]) - 20) <= 4
+              and abs(after["inbox"] - after["progress"]) <= 1
+              and abs(after["progress"] - after["done"]) <= 1)
+
+        # The keyboard half. A separator that only answers the mouse is one a
+        # keyboard user cannot reach at all — and this one carries a size, so it
+        # needs the same arrow keys a slider has.
+        grip.focus()
+        keyed_before = board_widths()["rail"]
+        page.keyboard.press("ArrowLeft")
+        page.wait_for_timeout(150)
+        check("rail: ArrowLeft on the focused separator widens it too",
+              board_widths()["rail"] > keyed_before)
+
+        # It is a size the user set, so it outlives the tab. Stored, not
+        # re-derived: a width that resets on reload is a control that undoes
+        # itself every morning.
+        kept = board_widths()["rail"]
+        page.reload()
+        page.wait_for_selector("#new-card-btn")
+        page.wait_for_timeout(250)
+        check("rail: the width survives a reload",
+              abs(board_widths()["rail"] - kept) <= 2)
+
+        # And with nothing stored the rail is back to the width it always had,
+        # which is what keeps every other layout check in this file honest.
+        page.evaluate("localStorage.removeItem('lodestar:railWidth')")
+        page.reload()
+        page.wait_for_selector("#new-card-btn")
+        page.wait_for_timeout(250)
+        check("rail: with nothing stored it opens at its default width",
+              abs(board_widths()["rail"] - 200) <= 2)
+
+        # ---- Done cards stay on the Board ------------------------------------
+        # This is an end-to-end test. A finished card is a record, not work: it
+        # belongs in the Done column and in the Board's own picture of the week,
+        # and nowhere else. Every other view was showing it beside the open ones,
+        # so the map, the matrix and the areas all read as busier than the week
+        # actually was.
+        #
+        # The escape hatch is a filter of its own — Inbox / In Progress / Done —
+        # beside the three that were already there. It is deliberately inert on
+        # the Board: the Board *is* the columns, and a control that would empty
+        # two of them is a way to lose your own cards.
+        add_card(page, "DONE-probe finished")
+        page.locator('.card', has_text="DONE-probe finished").first.focus()
+        # Two presses, and a beat between them: each move re-renders the board
+        # and puts focus back on the card, so a second key sent inside that
+        # repaint would land on nothing.
+        page.keyboard.press("]")
+        page.wait_for_timeout(200)
+        page.keyboard.press("]")
+        page.wait_for_timeout(200)
+        check("columns: the probe card is in Done to start with",
+              page.locator('[data-col="answered"] .card',
+                           has_text="DONE-probe finished").count() == 1)
+
+        col_filter = page.locator("#column-filter")
+        check("columns: the filter joins the other three on the rail row",
+              col_filter.count() == 1
+              and page.locator(".rail-filters #column-filter").count() == 1
+              and [o.strip() for o in col_filter.locator("option").all_inner_texts()]
+              == ["Open cards", "Inbox", "In Progress", "Done", "All columns"]
+              # Inert on the Board, and therefore not painted there either.
+              and not col_filter.is_visible())
+
+        page.locator('.view-switch button[data-view="overview"]').click()
+        page.wait_for_selector("#board.overview .plot-dot")
+        page.wait_for_timeout(300)
+        dot_titles = """() => [...document.querySelectorAll('.plot-dot')]
+            .map(d => d.getAttribute('aria-label'))"""
+        check("columns: a Done card is off the map, and the filter is offered here",
+              not any("DONE-probe finished" in t for t in page.evaluate(dot_titles))
+              and col_filter.is_visible())
+
+        page.select_option("#column-filter", "answered")
+        page.wait_for_timeout(250)
+        only_done = page.evaluate(dot_titles)
+        page.select_option("#column-filter", "all")
+        page.wait_for_timeout(250)
+        everything = page.evaluate(dot_titles)
+        check("columns: picking Done shows the finished cards, All shows both",
+              only_done
+              and all(", in Done" in t for t in only_done)
+              and any("DONE-probe finished" in t for t in everything)
+              and len(everything) > len(only_done))
+
+        page.select_option("#column-filter", "in-progress")
+        page.wait_for_timeout(250)
+        check("columns: picking In Progress narrows to that column alone",
+              all(", in In Progress" in t for t in page.evaluate(dot_titles)))
+        page.select_option("#column-filter", "")
+        page.wait_for_timeout(250)
+
+        # The other two card views hide it by the same rule, so the default is
+        # one decision rather than four.
+        page.locator('.view-switch button[data-view="matrix"]').click()
+        page.wait_for_selector("#board.matrix .matrix-grid")
+        page.wait_for_timeout(250)
+        matrix_clear = not any("DONE-probe finished" in t
+                               for t in page.evaluate(dot_titles))
+        page.locator('.view-switch button[data-view="areas"]').click()
+        page.wait_for_selector("#board.areas")
+        page.wait_for_timeout(250)
+        areas_clear = page.locator(".area-row", has_text="DONE-probe finished").count() == 0
+        check("columns: the Matrix and the Areas hide it by the same default",
+              matrix_clear and areas_clear)
+
+        # Switched off in the Menu like every other filter, and it takes its
+        # narrowing with it — a hidden control still doing its work is a board
+        # nobody can explain.
+        page.locator('.view-switch button[data-view="overview"]').click()
+        page.wait_for_selector("#board.overview .plot-dot")
+        page.select_option("#column-filter", "answered")
+        page.wait_for_timeout(250)
+        page.click("#menu-btn")
+        page.hover("#menu-show")
+        page.wait_for_selector("#toggle-columns")
+        page.click("#toggle-columns")
+        page.wait_for_timeout(250)
+        hidden_filter = (not col_filter.is_visible()
+                         and page.get_attribute("#toggle-columns", "aria-pressed") == "true")
+        showing_all = page.evaluate(dot_titles)
+        page.click("#toggle-columns")
+        page.wait_for_timeout(250)
+        page.keyboard.press("Escape")
+        check("columns: the Menu hides the filter, and hiding it stops it filtering",
+              hidden_filter and any("DONE-probe finished" in t for t in showing_all))
+        page.select_option("#column-filter", "")
+        page.wait_for_timeout(200)
+        # Left as it was found: the sections after this one open on whatever
+        # view is stored, and a board switch reloads the page into it.
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector("#board.board")
+
+        # ---- The card's actions, wherever the card is shown ------------------
+        # This is an end-to-end test. Re-filing a card is the commonest thing
+        # anyone does to one, and it was reachable only from the Board — on the
+        # Backlog, the map and the Matrix a card could be opened and nothing
+        # else. The right-click that already opens the menu on a card now opens
+        # the same menu on a row and on a dot: one panel, one set of entries,
+        # one dismiss rule.
+        page.locator('.view-switch button[data-view="backlog"]').click()
+        page.wait_for_selector("#board.backlog .backlog-row")
+        row = page.locator(".backlog-row").first
+        row_title = row.locator(".row-title").inner_text()
+        row.click(button="right")
+        page.wait_for_timeout(200)
+        check("card menu: right-clicking a Backlog row opens the same eight actions",
+              [t.strip() for t in page.locator(
+                  ".card-menu-panel:not([hidden]) .menu-item").all_inner_texts()]
+              == ["Edit…", "Duplicate", "Category ▸", "Type ▸", "Deadline ▸",
+                  "Plan ▸", "Move to ▸", "Delete"]
+              # The row's own click opens the editor; the menu's right-click
+              # must not have done both.
+              and page.locator("#card-dialog[open]").count() == 0)
+
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(120)
+        escaped_backlog = page.locator(".card-menu-panel:not([hidden])").count() == 0
+
+        # And it is the real menu, not a painted copy of one: the entry that
+        # moves a card has to move it.
+        row.click(button="right")
+        page.wait_for_timeout(150)
+        page.locator(".card-menu-panel:not([hidden]) .menu-item",
+                     has_text="Move to ▸").click()
+        page.locator(".card-menu-panel:not([hidden]) .menu-item",
+                     has_text="Done").click()
+        page.wait_for_timeout(250)
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector("#board.board")
+        check("card menu: Move to from a Backlog row carries the card to Done",
+              escaped_backlog
+              and page.locator('[data-col="answered"] .card',
+                               has_text=row_title).count() == 1
+              and wait_until(lambda: any(c["columnId"] == "answered"
+                                         for c in api_state()["cards"]
+                                         if c["title"] == row_title)))
+
+        # A dot is the same card at its smallest. The panel cannot hang inside
+        # the dot — a dot is itself a button — so this is the case that proves
+        # the menu is anchored to whatever element was right-clicked.
+        page.locator('.view-switch button[data-view="overview"]').click()
+        page.wait_for_selector("#board.overview .plot-dot")
+        page.wait_for_timeout(250)
+        page.locator(".plot-dot").first.click(button="right")
+        page.wait_for_timeout(200)
+        panel_on_screen = page.evaluate("""() => {
+          const p = document.querySelector('.card-menu-panel:not([hidden])');
+          if (!p) return false;
+          const r = p.getBoundingClientRect();
+          if (r.width < 100 || r.height < 40) return false;
+          // Painted where it can actually be read, and on top: a panel behind
+          // the plot sheet is a menu that is not there.
+          const hit = document.elementFromPoint(r.left + r.width / 2, r.top + 8);
+          return r.top >= 0 && r.bottom <= window.innerHeight + 1 && p.contains(hit);
+        }""")
+        check("card menu: right-clicking a map dot opens the panel, on top and in view",
+              panel_on_screen
+              and page.locator("#card-dialog[open]").count() == 0)
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(120)
+        check("card menu: Escape closes the dot's panel and leaves none behind",
+              page.locator(".card-menu-panel:not([hidden])").count() == 0
+              # The floating panel is torn down, not merely hidden — one left
+              # in the page per right-click is a leak that ends as a stack of
+              # dead menus under the board.
+              and page.locator(".card-menu-floating").count() == 0)
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector("#board.board")
+
+        # ---- Filing a card from the card itself ------------------------------
+        # This is an end-to-end test. Where a card lives was the one thing the
+        # dialog could not say: you closed it, found the card and dragged it.
+        # The control sits above the type stamp and OUTSIDE the settings fold,
+        # because it is not a setting — it is the one question every open card
+        # is asking.
+        # One move, one entry: the save below is a single act and must read as
+        # one in History, not as an edit and a move recorded separately. Read as
+        # the newest actions rather than as a count — the timeline is capped at
+        # HISTORY_LIMIT snapshots and this late in a run it is already full, so
+        # counting rows around the save answers 0 for a correct save.
+        def newest_actions(n=3):
+            menu_click("#history-btn")
+            page.wait_for_selector("#history-dialog[open]")
+            rows = [t.strip() for t in page.locator(
+                "#history-list .history-row .history-action").all_text_contents()][:n]
+            page.click("#close-history")
+            page.wait_for_timeout(120)
+            return rows
+
+        add_card(page, "COLUMN-probe card")
+        page.locator('.card', has_text="COLUMN-probe card").first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        placement = page.evaluate("""() => {
+          const col = document.querySelector('#card-column');
+          const type = document.querySelector('.type-picker');
+          if (!col || !type) return null;
+          return {
+            folded: Boolean(col.closest('#card-details')),
+            beforeType: Boolean(col.compareDocumentPosition(type)
+                                & Node.DOCUMENT_POSITION_FOLLOWING),
+            values: [...col.querySelectorAll('input[name="column"]')].map(i => i.value),
+            checked: col.querySelector('input[name="column"]:checked')?.value,
+          };
+        }""")
+        check("dialog: the column sits above the type stamp, outside the fold",
+              placement is not None
+              and placement["folded"] is False
+              and placement["beforeType"] is True
+              and placement["values"] == ["inbox", "in-progress", "answered"]
+              and placement["checked"] == "inbox"
+              and page.locator("#card-column").is_visible()
+              # Visible on a bare card, whose settings fold is shut.
+              and page.locator("#card-details[open]").count() == 0)
+
+        page.locator('#card-column label:has(input[value="answered"])').click()
+        page.click("#save-card")
+        page.wait_for_timeout(250)
+        check("dialog: picking Done files the card there on save",
+              page.locator('[data-col="answered"] .card',
+                           has_text="COLUMN-probe card").count() == 1
+              and page.locator('[data-col="inbox"] .card',
+                               has_text="COLUMN-probe card").count() == 0
+              and wait_until(lambda: any(c["columnId"] == "answered"
+                                         for c in api_state()["cards"]
+                                         if c["title"] == "COLUMN-probe card")))
+
+        # The two newest entries are this card's save and this card's capture,
+        # with nothing in between: a separate "Moved …" would sit between them.
+        # Asked this way rather than as "no Moved entry anywhere near", because
+        # the block above deliberately moves a card from the Backlog and its
+        # entry is still one of the newest on the board.
+        recent = newest_actions(2)
+        check("dialog: filing on save is one entry, not an edit and a move",
+              len(recent) == 2
+              and recent[0].startswith("Edited") and "COLUMN-probe card" in recent[0]
+              and recent[1].startswith("Added") and "COLUMN-probe card" in recent[1])
+
+        # A habit has no In Progress — the refusal already in columnAccepts —
+        # so the control must say so rather than offer a move that is dropped.
+        page.locator('[data-col="answered"] .card',
+                     has_text="COLUMN-probe card").first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        page.locator('.type-picker label:has(input[value="habit"])').click()
+        page.wait_for_timeout(150)
+        check("dialog: stamping Habit disables In Progress on the column control",
+              page.locator('#card-column input[value="in-progress"]').is_disabled()
+              and not page.locator('#card-column input[value="inbox"]').is_disabled()
+              and not page.locator('#card-column input[value="answered"]').is_disabled())
+        page.click("#cancel-dialog")
+        page.wait_for_timeout(150)
 
         # ---- Several boards --------------------------------------------------
         # Switching reloads the page on purpose (see core/boards.js), so every

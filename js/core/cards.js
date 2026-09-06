@@ -3,7 +3,7 @@ import { COLUMNS, TYPES, priorityOf } from './constants.js';
 import { habitCountVal, habitFreqVal, habitHistoryVal, habitTimesVal, isHabit } from './habits.js';
 import { planSrcVal, planVal, resolvePlan } from './plan.js';
 import { commit } from './history.js';
-import { filters, state } from './state.js';
+import { filters, state, view } from './state.js';
 import { columnTitle, getCard } from '../ui/dom.js';
 
 // A card, from raw JSON to the shape the board trusts: the field validators,
@@ -139,7 +139,32 @@ export function parseState(json) {
   };
 }
 
+/** Which column a card is in, as a filter.
+ *
+ *  Two rules in one, and both of them are about where the reader is. On the
+ *  Board this is inert: the Board *is* the three columns, and a filter that
+ *  emptied two of them would read as cards having gone missing. Everywhere
+ *  else a finished card is a record rather than work — it belongs in the Done
+ *  column and in nothing that is asking what to do next — so Done is out
+ *  unless the reader asks for it by name, or for 'all'.
+ *
+ *  `columnsOff` is the Menu switching the whole idea off: the default goes
+ *  with the control, because a rule still narrowing the board from behind a
+ *  hidden dropdown is a board nobody can explain. */
+// Is the rule in force at all? Off on the Board, and off when the Menu has
+// switched the filter away. Shared with filtersActive below, which would
+// otherwise claim a filter is narrowing the Board — and answer "No cards match"
+// over a column the reader emptied themselves.
+export const columnFilterOn = () => view !== 'board' && !filters.columnsOff;
+
+function matchesColumn(card) {
+  if (!columnFilterOn() || filters.column === 'all') return true;
+  if (filters.column) return card.columnId === filters.column;
+  return card.columnId !== 'answered';
+}
+
 export function matchesFilters(card) {
+  if (!matchesColumn(card)) return false;
   if (filters.type && card.type !== filters.type) return false;
   if (filters.category && card.category !== filters.category) return false;
   if (filters.prio) {
@@ -161,12 +186,24 @@ export function matchesFilters(card) {
 
 const searchNeedle = () => filters.search.trim().toLowerCase();
 
-export const filtersActive = () => Boolean(searchNeedle() || filters.type || filters.category || filters.prio || filters.tags.size);
+// The column filter counts only where it is narrowing to one named column: the
+// default hides Done on its own, and "No cards match" over an empty Backlog
+// would blame a filter the reader never set.
+export const filtersActive = () => Boolean(searchNeedle() || filters.type || filters.category || filters.prio || filters.tags.size
+  || (columnFilterOn() && filters.column && filters.column !== 'all'));
 
-export function moveCard(cardId, columnId, beforeId = null) {
+/** File a card in a column, and record nothing.
+ *
+ *  A card's place in `state.cards` is what decides where it appears in its
+ *  column, so setting `columnId` alone leaves it at whatever index it held in
+ *  the column it left. Split out of moveCard for the card dialog, which files a
+ *  card as part of a save that is already one act: calling moveCard there would
+ *  write a second undo entry and repaint mid-save, and copying these eleven
+ *  lines would be two answers to where a card goes. Returns whether it moved. */
+export function placeCard(cardId, columnId, beforeId = null) {
   const card = getCard(cardId);
-  if (!card || cardId === beforeId) return;
-  if (!columnAccepts(card, columnId)) return;
+  if (!card || cardId === beforeId) return false;
+  if (!columnAccepts(card, columnId)) return false;
   state.cards = state.cards.filter((c) => c.id !== cardId);
   card.columnId = columnId;
   card.updatedAt = Date.now();
@@ -180,5 +217,11 @@ export function moveCard(cardId, columnId, beforeId = null) {
     if (lastInColumn === -1) index = state.cards.length;
   }
   state.cards.splice(index, 0, card);
+  return true;
+}
+
+export function moveCard(cardId, columnId, beforeId = null) {
+  const card = getCard(cardId);
+  if (!placeCard(cardId, columnId, beforeId)) return;
   commit(`Moved ${cardLabel(card)} to ${columnTitle(columnId)}`);
 }

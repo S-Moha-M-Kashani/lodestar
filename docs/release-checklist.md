@@ -57,7 +57,7 @@ entry is invisible to everyone who was not in the room.
 
 | Gate | Check | Pass means |
 | --- | --- | --- |
-| The new version has an entry | `head -20 CHANGELOG.md` | the top heading is the version about to be built |
+| The new version has an entry | `head -20 CHANGELOG.md` | the top heading is the version about to be built — an `Unreleased` heading is renamed to it, and its compare link re-pointed |
 | Its compare link is defined | `grep -c '^\[v' CHANGELOG.md` | one more than before |
 
 ```sh

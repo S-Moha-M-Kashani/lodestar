@@ -2,6 +2,7 @@ import { cardLabel, iuVal } from '../core/cards.js';
 import { catColor, catLabel, categories } from '../core/categories.js';
 import { state } from '../core/state.js';
 import { cardAria, typeBadge } from '../ui/board.js';
+import { wireCardContext } from '../ui/card-menu.js';
 import { columnTitle } from '../ui/dom.js';
 import { openDialog } from '../ui/edit-dialog.js';
 
@@ -111,6 +112,12 @@ export function renderPlotDot(card, leftPct, topPct) {
   dot.append(n);
 
   dot.addEventListener('click', () => openDialog(card.id));
+  // A dot is the same card at its smallest, and it answers the same right-click.
+  // The panel cannot hang inside it — a dot is itself a button — so this is the
+  // case the floating copy exists for. The tooltip goes first: the pointer is
+  // still on the dot, so it would sit over the menu it just summoned.
+  dot.addEventListener('contextmenu', hidePlotTip);
+  wireCardContext(dot, card.id);
   dot.addEventListener('mouseenter', () => showPlotTip(card, dot));
   dot.addEventListener('mouseleave', hidePlotTip);
   dot.addEventListener('focus', () => showPlotTip(card, dot));

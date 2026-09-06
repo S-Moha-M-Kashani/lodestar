@@ -287,7 +287,7 @@ proposals and suggested edits.
   nothing tests it.
 - **Recording which backend answered, per turn.** `assistant.db` already stores
   usage and cost; a `provider` column would let the transcript say *"answered by
-  Codex on Pari's laptop"*, which is a good idea and a different change.
+  Codex on the other laptop in this house"*, which is a good idea and a different change.
 
 ## Alternatives considered
 

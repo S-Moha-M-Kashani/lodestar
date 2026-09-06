@@ -25,6 +25,13 @@ $('#prio-filter').addEventListener('change', (e) => {
   render();
 });
 
+// Where the card is filed. Painted on every view but the Board, where it would
+// be a control for emptying two of the three columns you are looking at.
+$('#column-filter').addEventListener('change', (e) => {
+  filters.column = e.target.value;
+  render();
+});
+
 // The tags dropdown: one tag or all of them. It writes the same Set the #
 // bar toggles, so the two stay one filter with two handles — picking here
 // replaces whatever combination the bar had built, and the empty option
@@ -87,25 +94,25 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// The Show submenu's four paint toggles: tag chips (and the tag filter bar),
-// priority stamps, type stamps, the Done column. Purely visual — a body class
-// the CSS reads — so the
-// stored flag and the class are the whole state; no card data is touched.
-// Same toggle idiom as #habit-mute: aria-pressed announces the state ("true"
-// = hidden), and persisting is done here where the click is. Hidden stores
-// '1', shown removes the key outright, and boot applies whatever is stored so
-// a reload keeps the choice. (The ledger numbers had a toggle here once;
-// review retired it — they are simply never shown now, styles.css.)
-for (const [btnId, cls, key] of [
-  ['#toggle-tags', 'hide-tags', KEY_PREFIX + 'hideTags'],
-  ['#toggle-prios', 'hide-prios', KEY_PREFIX + 'hidePrios'],
-  ['#toggle-types', 'hide-types', KEY_PREFIX + 'hideTypes'],
-  ['#toggle-done-col', 'hide-done-col', KEY_PREFIX + 'hideDoneCol'],
-]) {
+// The Show submenu's switches. Same idiom as #habit-mute: hidden stores '1',
+// shown removes the key outright, and boot applies whatever is stored so a
+// reload keeps the choice.
+/** One switch in the Show submenu: a body class the CSS reads, a remembered
+ *  flag, and an `aria-pressed` that announces the state ("true" = hidden).
+ *
+ *  `onSet` is for a switch that changes *which cards are shown* rather than how
+ *  they are painted, and it is what tells the two kinds apart: the four paint
+ *  toggles pass none and need no repaint, and the one that passes one gets a
+ *  render on every click. Never on the boot pass, which only records the stored
+ *  value — this module is still evaluating, and calling render() from here is
+ *  the "Cannot access before initialization" the module-graph notes are about.
+ */
+function displaySwitch(btnId, cls, key, onSet = null) {
   const btn = $(btnId);
   const apply = (hidden) => {
     document.body.classList.toggle(cls, hidden);
     btn.setAttribute('aria-pressed', String(hidden));
+    onSet?.(hidden);
   };
   apply(localStorage.getItem(key) === '1');
   btn.addEventListener('click', () => {
@@ -113,8 +120,24 @@ for (const [btnId, cls, key] of [
     if (hidden) localStorage.setItem(key, '1');
     else localStorage.removeItem(key);
     apply(hidden);
+    if (onSet) render();
   });
 }
+
+// The four paint toggles: tag chips (and the tag filter bar), priority stamps,
+// type stamps, the Done column. No card data is touched. (The ledger numbers
+// had a toggle here once; review retired it — they are simply never shown now,
+// styles.css.)
+displaySwitch('#toggle-tags', 'hide-tags', KEY_PREFIX + 'hideTags');
+displaySwitch('#toggle-prios', 'hide-prios', KEY_PREFIX + 'hidePrios');
+displaySwitch('#toggle-types', 'hide-types', KEY_PREFIX + 'hideTypes');
+displaySwitch('#toggle-done-col', 'hide-done-col', KEY_PREFIX + 'hideDoneCol');
+
+// And the one that is not paint. Switching the column filter off has to take
+// the hide-Done default with it, or cards go missing behind a dropdown that is
+// no longer there to explain them — so it writes the flag matchesFilters reads.
+displaySwitch('#toggle-columns', 'hide-columns', KEY_PREFIX + 'hideColumns',
+  (hidden) => { filters.columnsOff = hidden; });
 
 // The Assistant's Chat menu closes the same two ways. Registered here, once,
 // rather than in renderChatActions: the rail is rebuilt on every render, and

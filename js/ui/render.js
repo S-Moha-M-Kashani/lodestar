@@ -12,6 +12,7 @@ import { $, announce } from './dom.js';
 import { renderHabitBanner, renderHabitRail } from './habits.js';
 import { renderPlanRail } from './plan.js';
 import { refreshEdits, refreshProposals } from './proposals.js';
+import { railGrip } from './rail-resize.js';
 import { renderAreas } from '../views/areas.js';
 import { renderBacklog } from '../views/backlog.js';
 import { renderMatrix } from '../views/matrix.js';
@@ -22,16 +23,22 @@ import { renderReview } from '../views/review.js';
 // Rendering — the single entry point that paints a view, and the view switch.
 // Every mutation in the app ends in render(); no other module paints #board.
 
-/** The rail beside the board: the habits due, then the plan. Two sections in
- *  one column, so the day's repetitions and the day's shortlist are read in
- *  the order they are done in. */
+/** The rail beside the board: the divider you drag it by, then the habits due,
+ *  then the plan. Two sections in one column, so the day's repetitions and the
+ *  day's shortlist are read in the order they are done in. */
 function boardRail() {
+  const frag = document.createDocumentFragment();
+  // The divider first, and both of them placed into the same grid track by
+  // styles.css: the grip is the rail's left edge rather than a column of its
+  // own, so it costs the cards no width to paint.
+  frag.appendChild(railGrip());
   const rail = document.createElement('aside');
   rail.className = 'board-rail';
   const habits = renderHabitRail();
   if (habits) rail.appendChild(habits);
   rail.appendChild(renderPlanRail());
-  return rail;
+  frag.appendChild(rail);
+  return frag;
 }
 
 export function render() {

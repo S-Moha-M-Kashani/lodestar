@@ -1,26 +1,38 @@
-import { cardLabel, filtersActive, matchesFilters } from '../core/cards.js';
+import { cardLabel, columnFilterOn, filtersActive, matchesFilters } from '../core/cards.js';
 import { catColor, catLabel } from '../core/categories.js';
+import { filters, state } from '../core/state.js';
 import { cardAria, renderCaptureRow, typeBadge } from '../ui/board.js';
 import { sortMenu } from '../ui/card-actions.js';
-import { columnCards } from '../ui/dom.js';
+import { wireCardContext } from '../ui/card-menu.js';
+import { columnCards, columnTitle } from '../ui/dom.js';
 import { openDialog } from '../ui/edit-dialog.js';
 import { onCardKeydown } from '../ui/keyboard.js';
 
 // Backlog view — the Inbox as a scannable ledger register.
 // Backlog view — the Inbox as a scannable ledger register
 
+/** Which column this register is reading out. The Inbox by default — a backlog
+ *  is what has not been started — and whatever the column filter names when one
+ *  is set, so that filter narrows this view rather than emptying it. `null` is
+ *  "All columns", the one case with no single column to name or to sort. */
+function backlogColumn() {
+  if (!columnFilterOn() || !filters.column) return 'inbox';
+  return filters.column === 'all' ? null : filters.column;
+}
+
 export function renderBacklog() {
   const sheet = document.createElement('div');
   sheet.className = 'backlog-sheet';
 
-  const visible = columnCards('inbox').filter(matchesFilters);
+  const col = backlogColumn();
+  const visible = (col ? columnCards(col) : state.cards).filter(matchesFilters);
 
   const head = document.createElement('div');
   head.className = 'backlog-head';
 
   const title = document.createElement('h2');
   title.className = 'backlog-title';
-  title.textContent = 'Inbox backlog';
+  title.textContent = col ? `${columnTitle(col)} backlog` : 'Every card';
 
   const count = document.createElement('span');
   count.className = 'backlog-count';
@@ -28,7 +40,9 @@ export function renderBacklog() {
 
   head.append(title, count);
 
-  if (visible.length > 1) head.append(sortMenu('inbox'));
+  // Sorting reorders one column's cards, so it is offered only when this
+  // register is showing one.
+  if (col && visible.length > 1) head.append(sortMenu(col));
 
   // The same create control the Board shows, not a second one: `#new-card-btn`
   // is an id, and only one view renders into #board at a time.
@@ -103,5 +117,6 @@ function renderBacklogRow(card) {
   row.append(rowNum, badge, main, notes);
   row.addEventListener('click', () => openDialog(card.id));
   row.addEventListener('keydown', (e) => onCardKeydown(e, card.id));
+  wireCardContext(row, card.id);
   return row;
 }

@@ -1,5 +1,4 @@
-import { assistantState } from '../assistant/session.js';
-import { cardLabel, catVal, controlVal, deadlineVal, effortVal, iuVal, matchesFilters, typeVal, uid } from '../core/cards.js';
+import { cardLabel, catVal, columnAccepts, controlVal, deadlineVal, effortVal, iuVal, matchesFilters, placeCard, typeVal, uid } from '../core/cards.js';
 import { catColor, categories } from '../core/categories.js';
 import { COLUMNS, TYPES, TYPE_META } from '../core/constants.js';
 import { blankDraft, cardHasDetails, draftFrom } from '../core/draft.js';
@@ -52,6 +51,14 @@ function syncHabitFields() {
   // A habit repeats on a calendar of its own — planning it for a Tuesday would
   // say nothing — so the plan is hidden rather than ignored.
   $('#card-plan').hidden = habit;
+  // In Progress takes no habit (columnAccepts). Disabled rather than hidden,
+  // so the rule is visible where it applies; and a card sitting in that column
+  // when it is stamped moves its selection to the Inbox, which is exactly what
+  // sanitizeCard does to such a card on the way in — a disabled radio left
+  // checked would be a form saying something the save cannot honour.
+  const inProgress = $('#card-column input[value="in-progress"]');
+  inProgress.disabled = habit;
+  if (habit && inProgress.checked) $('#card-column input[value="inbox"]').checked = true;
 }
 
 // --- The plan: three dropdowns that assemble one partial date ---------------
@@ -245,6 +252,7 @@ function paintForm(shown) {
   $('#card-effort').value = effortVal(shown.effort);
   $('#card-control').value = controlVal(shown.control);
   for (const radio of form.elements.type) radio.checked = radio.value === shown.type;
+  for (const radio of form.elements.column) radio.checked = radio.value === shown.columnId;
   for (const radio of form.elements.category) radio.checked = radio.value === (shown.category || '');
   // A card being stamped Habit for the first time starts at once a day.
   $('#card-habit-freq').value = shown.habitFreq || 'daily';
@@ -320,6 +328,11 @@ function readForm(card) {
     card.habitCount = habitCountVal($('#card-habit-count').value);
     card.habitTimes = readHabitTimes(card.habitCount);
   }
+  // Where it is filed. Refused rather than written when the card cannot be
+  // there, so this control can never put a habit in In Progress — the type is
+  // read above, so `card` already carries the stamp being saved.
+  const column = form.elements.column.value;
+  if (COLUMNS.some((c) => c.id === column) && columnAccepts(card, column)) card.columnId = column;
   card.category = catVal(form.elements.category.value);
   card.importance = iuVal($('#card-importance').value);
   card.urgency = iuVal($('#card-urgency').value);
@@ -367,13 +380,15 @@ form.addEventListener('submit', (e) => {
     return;
   }
   if (card) {
+    // Where it was filed, read before the form overwrites the field: a card's
+    // *place in the array* is what decides where it appears in a column, so a
+    // column changed on the form is a real move and not just a field write.
+    // A suggested move needs no special case any more — the dialog has a column
+    // control now, so the suggestion is painted into it like every other field
+    // and comes back through readForm with the rest.
+    const wasIn = card.columnId;
     readForm(card);
-    // The dialog has no column control, so a suggested move is carried here.
-    // Read from the suggestion rather than the form for that one field.
-    const reviewed = assistantState.edits.find((e) => e.id === reviewingEditId);
-    if (reviewed && COLUMNS.some((c) => c.id === reviewed.fields.columnId)) {
-      card.columnId = reviewed.fields.columnId;
-    }
+    if (card.columnId !== wasIn) placeCard(card.id, card.columnId);
     card.updatedAt = Date.now();
     commit(`Edited ${cardLabel(card)} “${short(card.title)}”`);
     // Answered, so it leaves the list. After the commit: the suggestion is the
@@ -402,19 +417,24 @@ form.addEventListener('submit', (e) => {
     // from. Every other capture goes to the top of the Inbox, where one is
     // looked for — and so does a duplicate whose source was deleted while the
     // copy was being written, rather than landing at array index 0.
-    const after = sourceId ? state.cards.findIndex((c) => c.id === sourceId) : -1;
+    // Only when the copy is still filed where its source is: "immediately after
+    // it" is a position in that column, and a duplicate the form has since sent
+    // to another one would land at an arbitrary place inside it.
+    const source = sourceId ? state.cards.find((c) => c.id === sourceId) : null;
+    const after = source && source.columnId === draft.columnId
+      ? state.cards.indexOf(source) : -1;
     if (after !== -1) {
       state.cards.splice(after + 1, 0, draft);
     } else {
-      // An ordinary capture, and — when a Duplicate's source vanished while the
-      // copy was being written (a delete in another tab, a cross-machine adopt)
-      // — an ordinary capture completely. The column has to be reset too, not
-      // just the index: `draftFrom` copied the source's `columnId`, so leaving
-      // it put the card at an arbitrary position inside a column it was never
-      // placed in, which is not what the fallback below says it does.
-      draft.columnId = 'inbox';
-      const firstInbox = state.cards.findIndex((c) => c.columnId === 'inbox');
-      state.cards.splice(firstInbox === -1 ? state.cards.length : firstInbox, 0, draft);
+      // An ordinary capture — and a Duplicate whose source vanished while the
+      // copy was being written (a delete in another tab, a cross-machine
+      // adopt), or was sent to another column on the form. It goes to the head
+      // of whichever column the form names, which is the Inbox unless the
+      // person said otherwise. The column is no longer forced back to 'inbox'
+      // here: it is a field on the form now, so the value is one somebody saw
+      // and chose rather than one `draftFrom` copied behind their back.
+      const firstInCol = state.cards.findIndex((c) => c.columnId === draft.columnId);
+      state.cards.splice(firstInCol === -1 ? state.cards.length : firstInCol, 0, draft);
     }
     // A search, tag or priority filter could still hide the fresh card —
     // clear those so the capture never vanishes silently.
