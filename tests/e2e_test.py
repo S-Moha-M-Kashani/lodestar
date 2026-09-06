@@ -1272,6 +1272,24 @@ try:
               and page.get_attribute("#toggle-done-col", "aria-pressed") == "true"
               and page.locator('section.column[data-col="inbox"]').is_visible()
               and bool(page.evaluate("localStorage.getItem('lodestar:hideDoneCol')")))
+
+        # This is an end-to-end test. Hiding Done used to leave its grid track
+        # standing: an empty column's worth of paper opened between In Progress
+        # and the rail, so the habits read as adrift on the right of the screen
+        # rather than as the board's margin. The freed width now goes to the two
+        # columns that are left, bar a quarter-column spacer — which is what
+        # keeps the rail a margin instead of something butted up against the
+        # cards. Measured as a ratio, not in pixels, so the check says what it
+        # means at any window width.
+        rail_gap = page.evaluate("""() => {
+          const col = document.querySelector('section.column[data-col="in-progress"]')
+            .getBoundingClientRect();
+          const rail = document.querySelector('.board-rail').getBoundingClientRect();
+          return { gap: rail.left - col.right, col: col.width };
+        }""")
+        check("hide: the rail closes up when the Done column is hidden",
+              0 < rail_gap["gap"] < rail_gap["col"] * 0.4)
+
         toggled_off = menu_toggle("toggle-done-col")
         check("hide: toggling again brings the Done column back",
               toggled_off and not body_has("hide-done-col")

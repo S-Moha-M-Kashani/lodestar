@@ -1286,6 +1286,21 @@ body[data-view="board"] #column-filter { display: none; }
   width: 100%;
 }
 
+/* Hiding the Done column hides the card, and a `display: none` grid item does
+   not take its track with it — the slot stands there holding a full column's
+   width, which put an empty column of paper between In Progress and the rail
+   and made the habits read as adrift rather than as the board's margin. So the
+   template loses a track along with the column it was for.
+   `0.25fr` is a quarter of a card column, and it is a spacer rather than
+   nothing: the rail is a margin, and two columns grown until they touch it
+   would be the same mistake with the sign flipped. It has to say `has-rail`
+   both to outrank the rule above and because that is the only board there is —
+   render() adds the class on every board paint. The narrow-window carousel
+   below is untouched, a flex board reading no template at all. */
+.hide-done-col .board.has-rail {
+  grid-template-columns: repeat(2, minmax(210px, 1fr)) 0.25fr var(--rail-w, 200px);
+}
+
 /* The divider shares the rail's track instead of taking one of its own — a
    fifth column would cost the cards real width to paint a line. Both are
    placed on the last explicit track and the first row, since a grid item with
