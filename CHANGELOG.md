@@ -10,6 +10,63 @@ Dates are the day the release point was built. Versions follow
 [semantic versioning](https://semver.org/) — a major number for a break, a
 minor for a capability, a patch for a fix.
 
+## [v1.9.0] — 2026-09-08
+
+**Four changes: a card can be made of smaller cards, a habit says when each
+repetition is due, every view can be asked what a span of time held, and the
+card dialog is a ledger instead of a form.**
+
+**A card can hold other cards.** "Plan a long weekend in the mountains" is six
+or seven smaller acts, and the only way to hold them was more top-level cards
+that drift apart or a checklist typed into the notes that nothing can count.
+Any card can now hold children, and a child is a card in its own right that
+names one parent — nothing is stamped and nothing is a "project". The link
+lives on the child alone, so two machines editing one board can never disagree
+about it, and deleting a parent leaves its children on the board rather than
+taking them with it. A new scope filter narrows every view to parent cards, so
+a piece of work is counted once; a text search still reaches every card, because
+a control that narrows the board must never hide the thing you asked for by name.
+
+**A habit says when, not only how often.** A habit that repeats three times a
+week can now name a weekday and an hour for each of the three, and the fields a
+cadence cannot use are shown greyed with the reason rather than removed. Every
+reminder that existed before survives the change untouched. A habit is also
+drawn in one place now — one line in the rail beside the board, boxes first and
+the name after — instead of being both a rail row and a board card saying the
+same thing twice.
+
+**Every view can be asked what a span of time held.** A card records the day it
+was finished, which the weekly review had been guessing from the last time the
+card was edited — so a card finished in July and edited in September counted as
+September's work. The board, the backlog, the map, the matrix, the areas and the
+review can all be narrowed to what was captured or finished inside a range, and
+the range is remembered between visits and stated back in words. Asking about
+finished work stands the hide-Done default down for as long as the question is
+being asked, so the answer is never an empty screen.
+
+**The card dialog is one ledger of properties.** Every setting used to sit in
+its own framed box with a shouted heading, and most of them were folded away
+behind a Details flap so the lot would fit. Each one is now a single row — the
+name of the property on the left, its value on the right — with no box drawn
+around a control until you hover or click it. Nothing folds any more except the
+list of child cards, so a setting can no longer hide from the person editing it.
+
+**The map opens in half a second instead of nineteen.** Each card's meaning is
+worked out once and kept in the database, and the drawing is done by the Python
+service rather than by the browser, so a three-hundred-card board no longer
+re-reads every card it has already read. A second visit costs a fifth of a
+second and changing a filter costs milliseconds. The map still draws with the
+service stopped, and says which way it is drawing.
+
+**The rail beside the board is sorted.** The habits and the plan are short lists
+grouped by how often or how soon, each named by a coloured strip down its left
+edge instead of by a heading that ate the margin's height.
+
+**Fixed.** Asking what you finished this month with the Done column switched off
+kept the right cards and hid the one column that draws them, so the board came
+back empty. A lineage line above a card's title was drawn on every card, naming
+nothing.
+
 ## [v1.8.0] — 2026-09-06
 
 **Four changes: the card's actions, where it is filed, what each view shows,
@@ -252,6 +309,7 @@ back through, and the board travels as a JSON file.
 **The board exists.** Three columns you drag cards between, saved in the
 browser.
 
+[v1.9.0]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.8.0...v1.9.0
 [v1.8.0]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.7.7...v1.8.0
 [v1.7.7]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.7.6...v1.7.7
 [v1.7.6]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.7.5...v1.7.6
