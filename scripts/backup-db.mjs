@@ -76,6 +76,15 @@ function stampOf(filename) {
  * values are exported raw rather than re-validated (sanitizeCard on import is
  * the validator, and duplicating its rules here would let them drift).
  *
+ * EVERY field the card model carries has to be listed here, and the list is the
+ * one thing about this file that goes stale in silence: a field added to the
+ * card and forgotten here exports as absent, and absent reads on import as
+ * unset — so the recovery path quietly returns a board with every hand-set plan
+ * back on its deadline, every child detached and every finished card's date
+ * re-approximated. A column a pre-migration snapshot does not have reads as
+ * undefined and is simply omitted, which is the same thing and is correct:
+ * that board never held the field.
+ *
  * One file per LIVE board — `<name>-<boardId>-<stamp>.json`, board ids because
  * they are stable where names are not — holding only that board's live cards.
  * The Import dialog merges into ONE board, so a merged export imports other
@@ -122,10 +131,14 @@ function exportJsons(snapPath, jsonDir, name, stamp) {
       effortSrc: r.effort_src,
       controlSrc: r.control_src,
       deadline: r.deadline,
+      plan: r.plan,
+      planSrc: r.plan_src,
       habitFreq: r.habit_freq,
       habitCount: r.habit_count,
       habitTimes: parsed(r.habit_times, []),
       habitHistory: parsed(r.habit_history, {}),
+      parentId: r.parent_id,
+      doneAt: r.done_at,
       num: r.num,
       tags: parsed(r.tags, []),
       createdAt: r.created_at,
