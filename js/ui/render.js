@@ -3,6 +3,7 @@ import { renderAssistant } from '../assistant/sheet.js';
 import { renderAssistantTools, rescueAssistantTools } from '../assistant/tools.js';
 import { widgetShowing } from '../assistant/shell.js';
 import { renderAssistantWidget } from '../assistant/widget.js';
+import { askingAboutFinished } from '../core/cards.js';
 import { COLUMNS, VIEWS, VIEW_LABELS } from '../core/constants.js';
 import { timeline } from '../core/history.js';
 import { VIEW_KEY } from '../core/keys.js';
@@ -49,6 +50,16 @@ export function render() {
   // whether they are furniture that does nothing. Text search is not among
   // them: it is painted into the board itself, beside `+ New card`.
   document.body.dataset.view = view;
+  // The Menu's `Done column` switch stands down while the range is asking
+  // about finished cards — the same rule `matchesColumn` already applies to
+  // the hide-Done *default*, one layer out. Without it the two halves of one
+  // decision disagree: the filter correctly keeps the finished cards and the
+  // stylesheet hides the only column that paints them, so "finished this
+  // month" answers with a wholly empty board and two columns reading "No cards
+  // match" over work the reader asked for by name. It is an override class
+  // rather than a change to the switch, so the switch keeps its own state and
+  // the column hides itself again the moment the span is cleared.
+  document.body.classList.toggle('show-done-col', askingAboutFinished());
   // The assistant's tools live in the sheet's head while the Assistant is
   // open, and the sheet is about to be torn down — rescue the wired-once node
   // back to its header parking spot BEFORE the wipe destroys it.
