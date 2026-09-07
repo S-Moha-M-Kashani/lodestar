@@ -188,6 +188,40 @@ function sectionHead(label, n) {
   return head;
 }
 
+/** One section's cards, behind a spine down its left edge — the habit rail's
+ *  idiom (2026-09-07), applied to the other list in the same margin.
+ *
+ *  The stacked layout named six sections with six horizontal headings, which
+ *  is six lines of the one panel whose whole job is to be narrow: on a board
+ *  with one card planned for each, the headings took as much height as the
+ *  cards. The spine is the group's **label**, so the group carries
+ *  `role="group"` and an accessible name — rotated glyphs are not an accessible
+ *  name — and the count travels on the spine rather than being dropped, because
+ *  unlike a habit's punch strip a list of rows does not print its own total.
+ *
+ *  Only the stacked layout uses this. The dropdown layout shows one section at
+ *  a time and the picker above it already says which; a spine there would be
+ *  the same word a third time. */
+function planSectionGroup(id, label, cards, today) {
+  const group = document.createElement('div');
+  group.className = 'plan-group';
+  group.dataset.section = id;
+  group.setAttribute('role', 'group');
+  group.setAttribute('aria-label', `${label} — ${cards.length} planned`);
+
+  const spine = document.createElement('span');
+  spine.className = 'plan-spine';
+  spine.textContent = `${label} · ${cards.length}`;
+  // Clipped to the group's own height, like the habit rail's: the rail's height
+  // belongs to the rows. The tooltip is what a sighted reader gets back.
+  spine.title = `${label} — ${cards.length} planned`;
+  spine.setAttribute('aria-hidden', 'true');
+  group.append(spine);
+
+  for (const card of cards) group.append(planRow(card, today));
+  return group;
+}
+
 /** The plan, beside the board. Always present, even empty: unlike the habit
  *  rail it is where a card is *put*, so it has to be somewhere to aim at. */
 export function renderPlanRail() {
@@ -209,11 +243,12 @@ export function renderPlanRail() {
 
   let shown = 0;
   if (planLayout === 'stacked') {
+    // A section with nothing in it paints nothing at all — no heading, no zero,
+    // no placeholder line. Same rule as the habit rail's absent cadence.
     for (const group of planGroups(state.cards, new Date(), pass)) {
       if (!group.cards.length) continue;
       shown += group.cards.length;
-      body.append(sectionHead(group.label, group.cards.length));
-      for (const card of group.cards) body.append(planRow(card, today));
+      body.append(planSectionGroup(group.id, group.label, group.cards, today));
     }
   } else {
     const cards = planCardsIn(state.cards, horizon, new Date(), pass);

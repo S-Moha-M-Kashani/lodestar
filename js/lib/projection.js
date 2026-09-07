@@ -6,10 +6,17 @@ import { catLabel } from '../core/categories.js';
 
 // --- Embeddings + PCA -----------------------------------------------------
 // Each card becomes a vector; PCA projects those vectors to two dimensions
-// (PC-1, PC-2). Real semantic vectors come from a HuggingFace model
-// (Transformers.js) loaded lazily from a CDN; until it's ready — or if it
-// can't load (offline) — a deterministic keyword vector stands in, so the map
-// always renders and never needs the network.
+// (PC-1, PC-2).
+//
+// **This is the offline path, and since 2026-09-07 it is the only one in the
+// browser.** The semantic vectors used to come from a HuggingFace model
+// (Transformers.js) loaded lazily from a CDN and re-earned on every visit;
+// they are now produced once by the brain and stored beside the cards
+// (`card_vectors`), and the reduction runs in numpy. What is here is the
+// deterministic keyword vector that stands in until those arrive — or for as
+// long as the brain is not running — so the map always renders and never needs
+// the network. `js/views/overview.js` memoizes both of these by card text, so
+// a repaint plots rather than computes.
 
 const EMBED_DIM = 128;
 
@@ -20,8 +27,11 @@ const EMBED_DIM = 128;
 // truncated from the tail: a long note must never be able to push a card's
 // category out of its own vector. `catLabel` gives the word the user chose
 // ("Health"), not the id, since that is what an embedding model can read —
-// and renaming a category changes this text, which re-keys the caches below
-// and re-embeds the card, exactly as it should.
+// and renaming a category changes this text, which re-keys the layout cache in
+// views/overview.js and invalidates that card's stored vector, exactly as it
+// should. `map_card_text` in brain/retrieval/projection.py is this function
+// mirrored, and `textHash` below is mirrored there too — the two ends have to
+// agree about which vector is stale and neither can import the other.
 export const cardText = (card) => [
   (card.tags || []).join(' '),
   catLabel(card.category),

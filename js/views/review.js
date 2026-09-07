@@ -8,9 +8,25 @@ import { deleteCard } from '../ui/card-actions.js';
 import { announce, columnCards, getCard } from '../ui/dom.js';
 import { openDialog } from '../ui/edit-dialog.js';
 import { render } from '../ui/render.js';
-import { areaRow, detailPanel, humanAge, isOpen } from './areas.js';
+import { areaRow, detailPanel, humanAge, isOpen, reportCards, scopedCards } from './areas.js';
 import { DAY } from './matrix.js';
-import { mulberry32 } from './overview.js';
+
+/** A seeded PRNG, so today's three resurfaced cards are today's three however
+ *  many times this view is repainted.
+ *
+ *  It lived in views/overview.js until 2026-09-07, where it seeded the
+ *  browser's t-SNE; that t-SNE is deleted and this is the only caller left, so
+ *  it moved to the one module that uses it rather than leaving the map
+ *  exporting a random-number generator to its neighbours. */
+function mulberry32(seed) {
+  let a = seed | 0;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
 // Review view — GTD's weekly review as a screen: the ritual that keeps every
 // other view trustworthy. Stat tiles, week-over-week drift per area, the
@@ -36,7 +52,7 @@ const dateSeed = (key) => {
 // date — a Readwise-style daily re-encounter. Picks are pinned for the day
 // so acting on one ("Still matters") doesn't reshuffle the other two.
 function resurfaceToday() {
-  const open = state.cards.filter(isOpen);
+  const open = scopedCards().filter(isOpen);
   const d = new Date();
   const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   // Today's picks are pinned (and stored) — acting on one, or even trashing
@@ -122,10 +138,25 @@ export function renderReview() {
   const sheet = document.createElement('div');
   sheet.className = 'plot-sheet review-sheet';
   const now = Date.now();
-  const open = state.cards.filter(isOpen);
+  const open = scopedCards().filter(isOpen);
   const wk1 = now - 7 * DAY, wk2 = now - 14 * DAY;
-  const answeredIn = (from, to) => state.cards.filter((c) => !isOpen(c) && c.updatedAt >= from && c.updatedAt < to);
-  const createdIn = (from, to) => state.cards.filter((c) => c.createdAt >= from && c.createdAt < to);
+  // When a card was FINISHED, not when it was last touched. This helper read
+  // `updatedAt` until 2026-09-07, which meant a card answered in June and edited
+  // in September counted as September's work — the one place already asking this
+  // question, answering it with the wrong field. `updatedAt` survives as the
+  // last resort inside this one helper and nowhere else, for a card whose row
+  // predates `doneAt` and has not been written since; every other reader takes
+  // the field as it stands.
+  const finishedAt = (c) => c.doneAt || c.updatedAt;
+  // Both read `reportCards()` and not `scopedCards()`: these two are a report
+  // about spans, and the reader's own time range must not narrow them or the
+  // figures would describe the filter instead of the week. A one-day span would
+  // leave every weekly number reading 0 and every drift arrow comparing nothing
+  // to nothing. The lists on this page do take the range — it is the *counts*
+  // that keep their own axis.
+  const answeredIn = (from, to) =>
+    reportCards().filter((c) => !isOpen(c) && finishedAt(c) >= from && finishedAt(c) < to);
+  const createdIn = (from, to) => reportCards().filter((c) => c.createdAt >= from && c.createdAt < to);
 
   let lastReviewedAt = 0;
   try { lastReviewedAt = Number(localStorage.getItem(REVIEW_KEY)) || 0; } catch (_) { /* private mode */ }
@@ -170,7 +201,10 @@ export function renderReview() {
   sheet.append(tiles);
 
   // Week-over-week drift per life area.
-  const inUse = categories.filter((c) => state.cards.some((k) => k.category === c.id));
+  // Which areas the drift panel names, from the report's own set: an area whose
+  // only cards fall outside the reader's span would otherwise vanish from a
+  // panel whose numbers still count them.
+  const inUse = categories.filter((c) => reportCards().some((k) => k.category === c.id));
   if (inUse.length) {
     const deltas = detailPanel('Week over week', 'New and answered per area — this week against last.');
     deltas.classList.add('review-deltas');

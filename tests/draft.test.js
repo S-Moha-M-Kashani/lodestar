@@ -28,9 +28,11 @@ const habitCard = {
   importance: 'high', urgency: 'low', effort: 'low', control: 'act',
   effortSrc: 'user', controlSrc: 'ai',
   deadline: '2026-12-01', plan: '2026-11', planSrc: 'user',
-  habitFreq: 'daily', habitCount: 2, habitTimes: ['07:00', '21:00'],
+  habitFreq: 'daily', habitCount: 2,
+  habitTimes: [{ month: '', weekday: '', day: '', time: '07:00' },
+    { month: '', weekday: '', day: '', time: '21:00' }],
   habitHistory: { '2026-09-01': ['07:04'], '2026-08-31': ['07:00', '20:58'] },
-  tags: ['calm'], createdAt: 1, updatedAt: 2,
+  parentId: '', tags: ['calm'], createdAt: 1, updatedAt: 2,
 };
 
 // This is a unit test.
@@ -43,7 +45,7 @@ test('a duplicate carries the card and not its identity or its record', () => {
     'deadline', 'plan', 'planSrc', 'habitFreq', 'habitCount']) {
     assert.equal(copy[field], habitCard[field], `${field} should be carried`);
   }
-  assert.deepEqual(copy.habitTimes, ['07:00', '21:00']);
+  assert.deepEqual(copy.habitTimes.map((s) => s.time), ['07:00', '21:00']);
   assert.deepEqual(copy.tags, ['calm']);
 
   // The record does not travel, and the source keeps its own.
@@ -55,10 +57,12 @@ test('a duplicate carries the card and not its identity or its record', () => {
     assert.equal(copy[field], undefined, `${field} must not be carried`);
   }
 
-  // The two arrays are copies, or editing the draft edits the source.
-  copy.habitTimes.push('12:00');
+  // The two arrays are copies, or editing the draft edits the source — and the
+  // slots are copied row by row, since a shallow array copy still shares them.
+  copy.habitTimes.push({ month: '', weekday: '', day: '', time: '12:00' });
+  copy.habitTimes[0].time = '05:00';
   copy.tags.push('later');
-  assert.deepEqual(habitCard.habitTimes, ['07:00', '21:00']);
+  assert.deepEqual(habitCard.habitTimes.map((s) => s.time), ['07:00', '21:00']);
   assert.deepEqual(habitCard.tags, ['calm']);
 
   // A blank draft is the same shape, and a habit gets the cadence the dialog
@@ -72,6 +76,17 @@ test('a duplicate carries the card and not its identity or its record', () => {
   assert.equal(blankDraft({ type: '', category: '' }).type, 'question');
 });
 
+// This is a unit test. A duplicate is another part of the same piece of work,
+// so a child's parent travels; a parent's children never do, and there is
+// nothing to leave out — the link lives on the child, so a card holds no list
+// of them and a duplicate is simply a card nobody is part of yet.
+test('a duplicate keeps its parent and gains no children', () => {
+  const parent = { ...habitCard, id: 'p', parentId: '' };
+  const child = { ...habitCard, id: 'k', parentId: 'p' };
+  assert.equal(draftFrom(child).parentId, 'p');
+  assert.equal(draftFrom(parent).parentId, '');
+});
+
 // This is a unit test.
 test('the fold opens only for a setting somebody actually chose', () => {
   // The standing defaults every card is created with: nothing here was decided.
@@ -80,7 +95,8 @@ test('the fold opens only for a setting somebody actually chose', () => {
     category: '', importance: '', urgency: '',
     effort: 'medium', control: 'influence', effortSrc: 'default', controlSrc: 'default',
     deadline: '', plan: '', planSrc: 'auto',
-    habitFreq: '', habitCount: 1, habitTimes: [], habitHistory: {}, tags: [],
+    habitFreq: '', habitCount: 1, habitTimes: [], habitHistory: {},
+    parentId: '', tags: [],
   };
   assert.equal(cardHasDetails(bare), false);
 

@@ -913,11 +913,15 @@ try:
               and geom["opacity"] == "1" and geom["tab"] >= 0)
 
         probe().locator(".card-menu-btn").click()
-        check("card menu: the + opens the eight actions, and not the card dialog",
+        # Nine on a top-level card: "Add child…" joined them on 2026-09-07.
+        # "Detach from parent" is its opposite and never appears beside it — the
+        # lineage is one level deep, so exactly one of the two applies to any
+        # given card.
+        check("card menu: the + opens the nine actions, and not the card dialog",
               [t.strip() for t in page.locator(
                   ".card-menu-panel:not([hidden]) .menu-item").all_inner_texts()]
-              == ["Edit…", "Duplicate", "Category ▸", "Type ▸", "Deadline ▸",
-                  "Plan ▸", "Move to ▸", "Delete"]
+              == ["Edit…", "Duplicate", "Add child…", "Category ▸", "Type ▸",
+                  "Deadline ▸", "Plan ▸", "Move to ▸", "Delete"]
               and page.locator("#card-dialog[open]").count() == 0)
 
         page.keyboard.press("Escape")
@@ -3640,7 +3644,18 @@ try:
         # Rejecting sends the proposal to the Trash rather than erasing it.
         page.locator('.view-switch button[data-view="assistant"]').click()
         page.wait_for_selector("#chat-input")
-        page.fill("#chat-input", "add: A thought I do not want")
+        # Filled and verified, not filled once. Entering the Assistant fires the
+        # refreshes that repaint the composer, and render() rebuilds the
+        # textarea from `assistantState.draft` — which the `input` listener
+        # writes on every keystroke, so a person typing here never loses a
+        # word. One synthetic `input` event has no such margin: land it in the
+        # same tick as that repaint and the value is painted away.
+        typed = "add: A thought I do not want"
+        for _ in range(6):
+            page.fill("#chat-input", typed)
+            if page.locator("#chat-input").input_value() == typed:
+                break
+            page.wait_for_timeout(200)
         page.click("#chat-send")
         page.wait_for_selector(".proposal")
         page.click(".proposal-reject")
@@ -4643,38 +4658,50 @@ try:
               and page.input_value("#card-control") == "act")
         page.click("#cancel-dialog")
 
-        # ---- Overview: PCA ⇄ t-SNE toggle -----------------------------------
+        # ---- Overview: the map degrades and says which one it is ------------
+        #
+        # Rewritten 2026-09-07. The browser's own t-SNE is deleted — the layout
+        # is the brain's now — and this whole suite runs with
+        # QBOARD_DISABLE_SEMANTIC, so what there is to check here is no longer
+        # "does t-SNE move the dots" but the degradation itself: the map renders
+        # with no service and no network, it names the layout it is showing, and
+        # the control that needs the service says so instead of being absent or
+        # silently doing nothing. That the projection ARITHMETIC is right is
+        # pinned in brain/tests/test_projection.py, where it can be asserted
+        # against numbers rather than against pixel positions.
         page.locator('.view-switch button[data-view="overview"]').click()
         page.wait_for_selector("#board.overview .plot-dot")
         n_dots = page.locator(".plot-dot").count()
-        check("tsne: projection toggle renders with PCA pressed by default",
+        check("map: it renders with the semantic layer switched off", n_dots > 0)
+        check("map: the projection toggle renders with PCA pressed by default",
               page.locator(".plot-proj-toggle button").count() == 2
               and page.get_attribute('.plot-proj-toggle button[data-proj="pca"]', "aria-pressed") == "true"
               and "PC-1" in page.locator(".plot-axis-x").inner_text())
+        check("map: the status line names the keyword layout it is showing",
+              "keyword overlap" in page.locator(".plot-status").inner_text())
+        tsne_btn = page.locator('.plot-proj-toggle button[data-proj="tsne"]')
+        check("map: t-SNE is offered but disabled, and states the reason",
+              tsne_btn.is_disabled()
+              and "t-SNE needs the assistant service" in (tsne_btn.get_attribute("title") or ""))
+        # No network call at all on the offline path — the switch is what makes
+        # this suite network-free, so a request slipping out here would be the
+        # whole contract quietly gone.
+        rag_calls = []
+        page.on("request", lambda r: rag_calls.append(r.url) if "/api/rag/" in r.url else None)
         pca_pos = page.eval_on_selector_all(
             ".plot-dot", "els => els.map(e => e.dataset.id + '@' + e.style.left + ',' + e.style.top)")
-        page.click('.plot-proj-toggle button[data-proj="tsne"]')
-        page.wait_for_selector('.plot-proj-toggle button[data-proj="tsne"][aria-pressed="true"]')
-        check("tsne: axis labels switch to t-SNE-1/2",
-              "t-SNE-1" in page.locator(".plot-axis-x").inner_text())
-        page.wait_for_function(
-            "document.querySelector('.plot-status').textContent.includes('t-SNE layout')",
-            timeout=30000)
-        check("tsne: one dot per question, unchanged by the projection",
-              page.locator(".plot-dot").count() == n_dots)
-        tsne_pos = page.eval_on_selector_all(
-            ".plot-dot", "els => els.map(e => e.dataset.id + '@' + e.style.left + ',' + e.style.top)")
-        check("tsne: layout actually moves the dots (differs from PCA)", tsne_pos != pca_pos)
         page.locator('.view-switch button[data-view="board"]').click()
         page.wait_for_selector("#board.board")
         page.locator('.view-switch button[data-view="overview"]').click()
         page.wait_for_selector("#board.overview .plot-dot")
-        check("tsne: preference survives leaving and re-entering the view",
-              page.get_attribute('.plot-proj-toggle button[data-proj="tsne"]', "aria-pressed") == "true")
-        page.click('.plot-proj-toggle button[data-proj="pca"]')
-        page.wait_for_selector('.plot-proj-toggle button[data-proj="pca"][aria-pressed="true"]')
-        check("tsne: toggling back restores the PCA layout",
-              "PC-1" in page.locator(".plot-axis-x").inner_text())
+        check("map: the offline switch makes no network call", rag_calls == [])
+        # And the layout is cached rather than recomputed: leaving the view and
+        # coming back has to land every dot exactly where it was, not near it.
+        check("map: returning to the view puts every dot back exactly",
+              page.eval_on_selector_all(
+                  ".plot-dot",
+                  "els => els.map(e => e.dataset.id + '@' + e.style.left + ',' + e.style.top)")
+              == pca_pos)
 
         # ---- Matrix: the four-lens picker -----------------------------------
         page.locator('.view-switch button[data-view="matrix"]').click()
@@ -4869,88 +4896,218 @@ try:
         page.locator('.category-picker label:has(input[value="health"])').click()
         page.click('#card-form button[type="submit"]')
 
-        habit_card = page.locator('[data-col="inbox"] .card', has_text="Meditate").first
-        check("habit: the card wears the habit stamp",
-              habit_card.locator(".badge.type-habit").count() == 1)
-        check("habit: the card states the cadence in words",
-              "2× per day" in habit_card.locator(".habit-cadence").inner_text())
+        # This is an end-to-end test. A habit is not painted as a board card any
+        # more: the rail beside the board is the one place it appears, which is
+        # where it is read, punched, retired and brought back. It is still
+        # *filed* in a column — that is what says whether it is running — and
+        # the dialog is how that is changed, which is what makes hiding it from
+        # the column safe rather than stranding the card.
+        check("habit: stamping a card as a habit takes it out of the column",
+              page.locator('[data-col="inbox"] .card', has_text="Meditate").count() == 0)
+
+        rail_row = lambda: page.locator(
+            ".habit-rail .habit-rail-row", has_text="Meditate").first
+        check("habit: the rail lists it instead", rail_row().count() == 1)
         check("habit: the punch strip has one box per repetition",
-              habit_card.locator(".habit-punch .punch-box").count() == 2)
+              rail_row().locator(".punch-box").count() == 2)
         check("habit: no box is stamped yet",
-              habit_card.locator(".habit-punch .punch-box.done").count() == 0)
+              rail_row().locator(".punch-box.done").count() == 0)
 
-        rail_row = page.locator('.habit-rail .habit-rail-row', has_text="Meditate").first
-        check("habit: the rail lists the habit as due", rail_row.count() == 1)
-        check("habit: the rail counts none of two done",
-              "0/2" in rail_row.inner_text())
+        # This is an end-to-end test. The rail is four lists, one per cadence,
+        # daily first, each named by a spine down its left edge. One check for
+        # the whole shape rather than one per group: the ways this breaks are
+        # "the order is not fixed", "an empty cadence takes space" and "the
+        # spine is not a label", and each of those shows up in this one reading.
+        #
+        # Only a daily habit exists at this point in the run, which is what
+        # makes the second half of the claim testable at all: three cadences
+        # with nothing in them must paint nothing at all.
+        rail_groups = page.eval_on_selector_all(".habit-rail .habit-group", """els => els.map(e => ({
+          cadence: e.dataset.cadence,
+          label: e.getAttribute('aria-label'),
+          role: e.getAttribute('role'),
+          spines: e.querySelectorAll('.habit-spine').length,
+          rows: e.querySelectorAll('.habit-rail-row').length,
+        }))""")
+        check("rail: a cadence with no habit paints nothing at all",
+              [g["cadence"] for g in rail_groups] == ["daily"])
+        check("rail: the group is named for a screen reader, and has one spine",
+              rail_groups[0]["role"] == "group"
+              and rail_groups[0]["label"] == "Daily habits"
+              and rail_groups[0]["spines"] == 1)
+        # The spine costs width and never height: laid out as a grid track its
+        # rotated text sets the row height, and a one-row group stood twice as
+        # tall as its own row. Measured, because that is a fact about layout.
+        spine_geom = page.locator(".habit-rail .habit-group").first.evaluate("""el => {
+          const g = el.getBoundingClientRect();
+          const rows = [...el.querySelectorAll('.habit-rail-row')]
+            .reduce((h, r) => h + r.getBoundingClientRect().height, 0);
+          const spine = el.querySelector('.habit-spine').getBoundingClientRect();
+          return { grew: g.height - rows, spineWide: spine.width, leftOfRows:
+            spine.right <= el.querySelector('.habit-rail-row').getBoundingClientRect().left + 1 };
+        }""")
+        check("rail: the spine costs the group width and not height",
+              spine_geom["grew"] < 4 and 0 < spine_geom["spineWide"] <= 20
+              and spine_geom["leftOfRows"])
 
-        # Punching from the rail and from the card must be the same act.
-        rail_row.locator(".punch-box").first.click()
+        # This is an end-to-end test. One line, boxes before the name. Measured
+        # from the browser rather than asserted as a class, because "one line"
+        # is a fact about layout: the row spent two lines on this before
+        # 2026-09-07, in the one panel whose whole job is to be narrow.
+        geom = rail_row().evaluate("""el => {
+          const strip = el.querySelector('.habit-punch').getBoundingClientRect();
+          const name = el.querySelector('.habit-rail-open').getBoundingClientRect();
+          return { boxesFirst: strip.left < name.left,
+                   sameLine: Math.abs(strip.top - name.top) < name.height };
+        }""")
+        check("habit: the row is one line, with the boxes before the name",
+              geom["boxesFirst"] and geom["sameLine"])
+        # Where every repetition has a box the boxes ARE the tally, so `1/2`
+        # printed beside two boxes is one fact told twice.
+        check("habit: the count is not printed beside a strip that shows it",
+              rail_row().locator(".punch-more").count() == 0)
+
+        # This is an end-to-end test. Two things the row must survive: a strip
+        # too long to draw (where the written count is the only thing that knows
+        # the number, so it comes back) and a name longer than the rail is wide
+        # (which must clip on its one line rather than wrap — the rail's width
+        # is the user's to set, and a wrapped name would undo it).
+        long_name = "Drink a full glass of water and note it down in the ledger"
+        add_card(page, long_name)
+        page.locator('[data-col="inbox"] .card', has_text=long_name).first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        page.locator('.type-picker label:has(input[value="habit"])').click()
+        page.fill("#card-habit-count", "12")
+        page.click('#card-form button[type="submit"]')
+        page.wait_for_timeout(200)
+        wide = page.locator(".habit-rail .habit-rail-row", has_text=long_name).first
+        capped = wide.evaluate("""el => {
+          const name = el.querySelector('.habit-rail-open');
+          const strip = el.querySelector('.habit-punch').getBoundingClientRect();
+          const n = name.getBoundingClientRect();
+          return { boxes: el.querySelectorAll('.punch-box').length,
+                   more: (el.querySelector('.punch-more') || {}).textContent || '',
+                   clipped: name.scrollWidth > name.clientWidth + 1,
+                   lines: Math.round(n.height),
+                   sameLine: Math.abs(strip.top - n.top) < n.height,
+                   title: name.title };
+        }""")
+        check("habit: a capped strip states how many out of how many",
+              capped["boxes"] == 5 and capped["more"].strip() == "0/12")
+        check("habit: a long name clips on its one line and keeps the full text on hover",
+              capped["clipped"] and capped["sameLine"] and long_name in capped["title"])
+        # Deleted again, from the rail's own dialog: a 12×-a-day habit nobody
+        # ever punches is due for the rest of the run, and the reminder checks
+        # further down are about exactly one habit being due.
+        wide.locator(".habit-rail-open").click()
+        page.wait_for_selector("#card-dialog[open]")
+        page.click("#delete-card")
+        page.wait_for_selector("#confirm-dialog[open]")
+        page.click("#confirm-ok")
+        page.wait_for_timeout(200)
+        check("habit: a habit is deleted from its own dialog, opened from the rail",
+              page.locator(".habit-rail .habit-rail-row", has_text=long_name).count() == 0)
+
+        # Punching happens in the rail, and there is only one strip to do it in.
+        rail_row().locator(".punch-box").first.click()
         page.wait_for_timeout(120)
-        rail_row = page.locator('.habit-rail .habit-rail-row', has_text="Meditate").first
         check("habit: punching from the rail records one repetition",
-              "1/2" in rail_row.inner_text())
-        habit_card = page.locator('[data-col="inbox"] .card', has_text="Meditate").first
-        check("habit: the card's strip shows the same single stamp",
-              habit_card.locator(".habit-punch .punch-box.done").count() == 1)
-
-        habit_card.locator(".habit-punch .punch-box:not(.done)").first.click()
+              rail_row().locator(".punch-box.done").count() == 1)
+        rail_row().locator(".punch-box:not(.done)").first.click()
         page.wait_for_timeout(120)
-        rail_row = page.locator('.habit-rail .habit-rail-row', has_text="Meditate").first
-        check("habit: punching the card's last box completes the day",
-              "2/2" in rail_row.inner_text())
-        check("habit: a completed habit is marked done in the rail, not removed",
-              rail_row.evaluate("el => el.classList.contains('done')"))
+        check("habit: the last box completes the period and marks the row done",
+              rail_row().locator(".punch-box.done").count() == 2
+              and rail_row().evaluate("el => el.classList.contains('done')"))
 
         # Undo — a mis-tap must be takeable back, or the history stops being true.
-        habit_card = page.locator('[data-col="inbox"] .card', has_text="Meditate").first
-        habit_card.locator(".habit-punch .punch-box.done").last.click()
+        rail_row().locator(".punch-box.done").last.click()
         page.wait_for_timeout(120)
-        rail_row = page.locator('.habit-rail .habit-rail-row', has_text="Meditate").first
         check("habit: clicking the newest stamp takes the repetition back",
-              "1/2" in rail_row.inner_text())
+              rail_row().locator(".punch-box.done").count() == 1)
 
         check("habit: the completions reach the database",
               any(len(c.get("habitHistory", {})) == 1 and c.get("habitFreq") == "daily"
                   for c in api_state()["cards"] if c["title"] == "Meditate"))
 
-        # History lives on the card, behind a button.
-        check("habit: the history tape is closed until asked for",
-              habit_card.locator(".habit-tape").count() == 0)
-        habit_card.locator(".habit-history-toggle").click()
-        page.wait_for_timeout(120)
-        habit_card = page.locator('[data-col="inbox"] .card', has_text="Meditate").first
-        check("habit: the history button opens the tape on the card",
-              habit_card.locator(".habit-tape").count() == 1)
+        # This is an end-to-end test. The history tape lives in the dialog's
+        # schedule block now — beside the cadence that produced it, folded — and
+        # the board holds exactly one punch strip per habit, the rail's.
+        rail_row().locator(".habit-rail-open").click()
+        page.wait_for_selector("#card-dialog[open]")
+        check("habit: the record is one fold away, inside the schedule block",
+              page.locator("#card-habit .habit-history").count() == 1
+              and page.locator("#card-habit-history[open]").count() == 0
+              and page.locator("#card-habit-tape .habit-tape").count() == 1)
+        check("habit: the schedule is read back in plain words",
+              "2× per day" in page.locator("#card-schedule-words").inner_text())
+        page.locator("#card-habit-history summary").click()
+        page.wait_for_timeout(80)
         check("habit: today's cell carries the number punched into it",
-              habit_card.locator(".habit-tape .tape-cell.today").inner_text() == "1")
+              page.locator("#card-habit-tape .tape-cell.today").inner_text() == "1")
+        # One strip per running habit, all of them in the rail. The dialog draws
+        # none: its schedule block holds the tape, not a strip.
+        check("habit: every punch strip on the board is a rail row's",
+              page.locator(".habit-punch").count()
+              == page.locator(".habit-rail .habit-rail-row .habit-punch").count())
         page.screenshot(path=shot("habits.png"))
 
-        # This is an end-to-end test. The card menu's Type quick-edit restamps a
-        # card without opening the dialog, which makes it the fastest way in the
-        # app to mis-stamp a habit — and a mis-stamp must not cost a year of
+        # This is an end-to-end test. A mis-stamp must not cost a year of
         # completions. Out to task and back to habit, with a repetition already
-        # recorded today: the tally and the database have to survive the trip.
-        item = lambda label: page.locator(
-            ".card-menu-panel:not([hidden]) .menu-item", has_text=label)
+        # recorded today. The dialog's type picker is the way now — a habit has
+        # no board card to right-click, so the menu's Type quick-edit (which
+        # used to be the fastest way to mis-stamp one) cannot reach it.
         meditate = lambda: page.locator(
             '[data-col="inbox"] .card', has_text="Meditate").first
-        meditate().locator(".card-menu-btn").click()
-        item("Type").click()
-        item("task").click()
-        page.wait_for_timeout(150)
+        page.locator('.type-picker label:has(input[value="task"])').click()
+        page.click('#card-form button[type="submit"]')
+        page.wait_for_timeout(200)
         as_task = (meditate().locator(".badge.type-task").count() == 1
-                   and meditate().locator(".habit-punch").count() == 0)
-        meditate().locator(".card-menu-btn").click()
-        item("Type").click()
-        item("habit").click()
+                   and page.locator(".habit-rail .habit-rail-row",
+                                    has_text="Meditate").count() == 0)
+        meditate().click()
+        page.wait_for_selector("#card-dialog[open]")
+        page.locator('.type-picker label:has(input[value="habit"])').click()
+        page.click('#card-form button[type="submit"]')
         page.wait_for_timeout(500)
-        check("card menu: restamping a habit out and back keeps its history",
+        check("habit: restamping out and back keeps its history",
               as_task
-              and meditate().locator(".badge.type-habit").count() == 1
-              and meditate().locator(".habit-punch .punch-box.done").count() == 1
+              and rail_row().locator(".punch-box.done").count() == 1
               and any(sum(len(v) for v in c.get("habitHistory", {}).values()) == 1
                       and c.get("habitFreq") == "daily" and c.get("habitCount") == 2
+                      for c in api_state()["cards"] if c["title"] == "Meditate"))
+
+        # This is an end-to-end test. Retiring is filing the card in Done, from
+        # its own dialog — which is what replaced dragging it out of a column.
+        # It leaves the day's list and stays reachable behind the closed line at
+        # the rail's foot, history intact, and it is not in the Done column
+        # either.
+        rail_row().locator(".habit-rail-open").click()
+        page.wait_for_selector("#card-dialog[open]")
+        page.locator('#card-column label:has(input[value="answered"])').click()
+        page.click('#card-form button[type="submit"]')
+        page.wait_for_timeout(250)
+        retired_fold = page.locator(".habit-rail .habit-retired")
+        check("habit: a retired habit leaves the day's list for the rail's foot",
+              page.locator(".habit-rail .habit-group .habit-rail-row",
+                           has_text="Meditate").count() == 0
+              and page.locator('[data-col="answered"] .card',
+                               has_text="Meditate").count() == 0
+              and retired_fold.count() == 1
+              and retired_fold.locator("summary").inner_text().strip() == "1 retired"
+              and page.locator(".habit-retired[open]").count() == 0)
+        retired_fold.locator("summary").click()
+        page.wait_for_timeout(80)
+        check("habit: opening that line lists it, and it can be opened from there",
+              retired_fold.locator(".habit-rail-row", has_text="Meditate").count() == 1)
+        retired_fold.locator(".habit-rail-open").first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        page.locator('#card-column label:has(input[value="inbox"])').click()
+        page.click('#card-form button[type="submit"]')
+        page.wait_for_timeout(250)
+        check("habit: filing it back in the Inbox brings it round, history intact",
+              rail_row().count() == 1
+              and rail_row().locator(".punch-box.done").count() == 1
+              and any(sum(len(v) for v in c.get("habitHistory", {}).values()) == 1
                       for c in api_state()["cards"] if c["title"] == "Meditate"))
 
         # The reminder is the thing that makes a habit a habit.
@@ -5057,9 +5214,12 @@ try:
 
         # ---- A habit has no In Progress -------------------------------------
         # This is an end-to-end test. A habit's progress IS the punch strip in
-        # the rail, so the middle column would tell the same fact twice. Three
-        # ways in, all closed: a board that already has one filed there, the
-        # pointer, and the keyboard.
+        # the rail, so the middle column would tell the same fact twice. The
+        # pointer and the keyboard used to be two of the three ways in and are
+        # no longer reachable at all — a habit is not painted as a board card
+        # since 2026-09-07, so there is nothing in a column to drag or to press
+        # `]` on. The two that remain are what is checked here: a board that
+        # already has one filed there, and the dialog's own control.
         planted = api_state()["cards"]
         for c in planted:
             if c["title"] == "Meditate":
@@ -5067,45 +5227,64 @@ try:
         api_put(planted)
         page.reload()
         page.wait_for_selector("#new-card-btn")
-        check("habit: one already filed in In Progress reads as Inbox",
+        # The DOM is the claim, deliberately, and not the database: the heal
+        # happens in sanitizeCard as the board is *read*, so the browser holds a
+        # card in the Inbox while the row still says in-progress until the next
+        # save carries the correction. What matters is that the card is reachable
+        # and punchable, which is what would have been lost.
+        check("habit: one already filed in In Progress is loaded into the Inbox",
               page.locator('[data-col="in-progress"] .card', has_text="Meditate").count() == 0
-              and page.locator('[data-col="inbox"] .card', has_text="Meditate").count() == 1
-              and page.locator('.habit-rail .habit-rail-row', has_text="Meditate").count() == 1)
+              and page.locator(".habit-rail .habit-group .habit-rail-row",
+                               has_text="Meditate").count() == 1)
 
-        # The zone must refuse the drop rather than swallow the card: one that
-        # vanished into a column it is never painted in reads as data loss.
-        page.locator('[data-col="inbox"] .card', has_text="Meditate").first.drag_to(
-            page.locator('.cards[data-col="in-progress"]'))
-        page.wait_for_timeout(200)
-        check("habit: dragging one onto In Progress leaves it where it was",
-              page.locator('[data-col="in-progress"] .card', has_text="Meditate").count() == 0
-              and page.locator('[data-col="inbox"] .card', has_text="Meditate").count() == 1)
+        # The dialog's control refuses it too, and shows the refusal rather than
+        # hiding the option — a disabled radio left checked would be a form
+        # saying something the save cannot honour, so the selection moves.
+        page.locator(".habit-rail .habit-rail-row", has_text="Meditate").first.locator(
+            ".habit-rail-open").click()
+        page.wait_for_selector("#card-dialog[open]")
+        check("habit: the dialog offers In Progress, disabled, rather than hiding it",
+              page.locator('#card-column input[value="in-progress"]').count() == 1
+              and page.locator('#card-column input[value="in-progress"]').is_disabled()
+              and page.locator('#card-column input[value="inbox"]').is_checked())
 
-        # Done means retired: it leaves the rail and stops reminding, but keeps
-        # its history. One ] gets there from the Inbox, because the column in
-        # between is not a place this card can be.
-        habit_card = page.locator('[data-col="inbox"] .card', has_text="Meditate").first
-        habit_card.focus()
-        page.keyboard.press("]")
-        page.wait_for_timeout(200)
-        check("habit: ] from the Inbox skips In Progress and lands on Done",
-              page.locator('[data-col="in-progress"] .card', has_text="Meditate").count() == 0
-              and page.locator('[data-col="answered"] .card', has_text="Meditate").count() == 1)
-        check("habit: a habit moved to Done is retired from the rail",
-              page.locator('.habit-rail .habit-rail-row', has_text="Meditate").count() == 0)
-        retired = page.locator('[data-col="answered"] .card', has_text="Meditate").first
+        # Done means retired, and the dialog is how a habit gets there now.
+        page.locator('#card-column label:has(input[value="answered"])').click()
+        page.click('#card-form button[type="submit"]')
+        page.wait_for_timeout(250)
+        check("habit: filed in Done it leaves the day's list and no column shows it",
+              page.locator(".habit-rail .habit-group .habit-rail-row",
+                           has_text="Meditate").count() == 0
+              and page.locator('[data-col="answered"] .card',
+                               has_text="Meditate").count() == 0)
         check("habit: a retired habit keeps its history",
               any(sum(len(v) for v in c.get("habitHistory", {}).values()) == 2
                   for c in api_state()["cards"] if c["title"] == "Meditate"))
         check("habit: a retired habit is still stamped a habit",
-              retired.locator(".badge.type-habit").count() == 1)
+              any(c["type"] == "habit" for c in api_state()["cards"]
+                  if c["title"] == "Meditate"))
 
-        # Backlog sorting knows the new type, and the toolbar can filter to it.
+        # This is an end-to-end test. The toolbar can still filter to habits —
+        # but the Board paints none in a column, so filtering it to habits
+        # empties the columns and the Backlog is the view that still lists one.
+        # That is the accepted cost of the rail being the habit's one home, and
+        # it is why the rail keeps the retired ones rather than leaving a card
+        # reachable only from here.
         page.select_option("#type-filter", "habit")
-        page.wait_for_timeout(150)
-        check("habit: the type filter narrows the board to habits",
-              page.locator(".card").count() == 1)
+        page.wait_for_timeout(200)
+        board_cards = page.locator(".card").count()
+        page.locator('.view-switch button[data-view="backlog"]').click()
+        page.wait_for_selector("#board")
+        page.select_option("#column-filter", "all")
+        page.wait_for_timeout(200)
+        rows = page.locator(".backlog-row")
+        check("habit: the type filter narrows the Backlog to habits, and the Board holds none",
+              board_cards == 0 and rows.count() == 1
+              and "Meditate" in rows.first.inner_text())
+        page.select_option("#column-filter", "")
         page.select_option("#type-filter", "")
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector("#board.board")
         page.wait_for_timeout(150)
 
         # ---- The card dialog's settings fold ---------------------------------
@@ -5168,15 +5347,20 @@ try:
         page.locator('.category-picker label:has(input[value="health"])').click()
         page.click("#save-card")
         page.wait_for_timeout(250)
-        src = lambda: page.locator('.card', has_text="DUP-probe stretch").first
+        # The rail, not a column: a habit is not painted as a board card, so the
+        # rail row is where it is punched and where its actions are reached.
+        src = lambda: page.locator(".habit-rail .habit-rail-row",
+                                   has_text="DUP-probe stretch").first
         # Punched to completion, so this habit stops being due and cannot banner
         # over a later block's clicks.
         # Punching itself is already covered above; here it is setup, and the
         # last check re-reads this card's history from the database anyway.
-        src().locator(".habit-punch .punch-box:not(.done)").first.click()
+        src().locator(".punch-box:not(.done)").first.click()
         page.wait_for_timeout(250)
 
-        # Right-click, deliberately: the accelerator and the + drop one panel.
+        # Right-click on the rail row. That is `wireCardContext`, the same
+        # handler the Backlog rows and the map dots carry, and on a habit it is
+        # the only way to the card's actions — there is no `+` without a card.
         src().click(button="right")
         page.wait_for_selector(".card-menu-panel:not([hidden])")
         no_dialog_yet = page.locator("#card-dialog[open]").count() == 0
@@ -5194,10 +5378,12 @@ try:
               page.locator("#dialog-title").text_content().strip() == "New card"
               and page.locator("#save-card").text_content().strip() == "Add card"
               and not page.locator("#delete-card").is_visible()
-              and page.locator('.card', has_text="DUP-probe stretch").count() == 1)
+              and page.locator(".habit-rail .habit-rail-row",
+                               has_text="DUP-probe stretch").count() == 1)
         page.fill("#card-title", "DUP-probe copy")
         page.click("#save-card")
-        wait_until(lambda: page.locator('.card', has_text="DUP-probe copy").count() == 1)
+        wait_until(lambda: page.locator(".habit-rail .habit-rail-row",
+                                        has_text="DUP-probe copy").count() == 1)
         page.wait_for_timeout(700)
         cards = api_state()["cards"]
         titles = [c["title"] for c in cards]
@@ -5215,7 +5401,8 @@ try:
               and titles.index("DUP-probe copy") == titles.index("DUP-probe stretch") + 1)
         # Retire the copy: it has no completions, so it would be due and would
         # banner over every board open in the blocks below.
-        page.locator('.card', has_text="DUP-probe copy").first.click(button="right")
+        page.locator(".habit-rail .habit-rail-row",
+                     has_text="DUP-probe copy").first.click(button="right")
         page.wait_for_selector(".card-menu-panel:not([hidden])")
         item("Move to").click()
         item("Done").click()
@@ -5238,7 +5425,8 @@ try:
         page.locator('.category-picker label:has(input[value="work"])').click()
         page.click("#cancel-dialog")
         page.wait_for_timeout(150)
-        page.locator('.card', has_text="DUP-probe stretch").first.click(button="right")
+        page.locator(".habit-rail .habit-rail-row",
+                     has_text="DUP-probe stretch").first.click(button="right")
         page.wait_for_selector(".card-menu-panel:not([hidden])")
         item("Duplicate").click()
         page.wait_for_selector("#card-dialog[open]")
@@ -5264,21 +5452,54 @@ try:
         # moves to Done and leaves the list.
         add_card(page, "Send the tax forms")
         plan_row = lambda: page.locator(".plan-rail .plan-rail-row", has_text="Send the tax forms")
-        # Which groups a card is listed under — the headings above its rows.
-        # A list, because a dated dream belongs to two of them.
+        # Which groups a card is listed under. A list, because a dated dream
+        # belongs to two of them.
+        #
+        # A section is a real container since 2026-09-07 — it was a heading
+        # followed by loose sibling rows, and this walked the siblings keeping
+        # track of the last heading seen. The spine that replaced the heading is
+        # the group's label, so the group carries the accessible name and the
+        # rows sit inside it, which is both the better markup and the simpler
+        # query. The name reads "Day — 2 planned"; the label is the half before
+        # the dash.
         groups_of = lambda title: page.evaluate("""(t) => {
           const found = [];
-          let group = null;
-          for (const el of document.querySelectorAll('.plan-rail-body > *')) {
-            if (el.classList.contains('plan-group-head')) {
-              group = el.querySelector('.plan-group-title').textContent;
-            } else if (el.textContent.includes(t)) found.push(group);
+          for (const group of document.querySelectorAll('.plan-rail-body .plan-group')) {
+            const label = (group.getAttribute('aria-label') || '').split(' — ')[0];
+            for (const row of group.querySelectorAll('.plan-rail-row')) {
+              if (row.textContent.includes(t)) found.push(label);
+            }
           }
           return found;
         }""", title)
         group_of = lambda title: (groups_of(title) or [''])[0]
 
         check("plan: a card with no plan is not in the block", plan_row().count() == 0)
+
+        # This is an end-to-end test. The plan's sections are named by a spine
+        # down each one's left edge, the habit rail's idiom applied to the other
+        # list in the same margin (2026-09-07). One check for the shape: the
+        # heading is gone, the spine is the group's label, and it costs the
+        # group width and never height — which is the half that broke first,
+        # because a rotated word laid out as a grid track sets the row height
+        # and a one-row section stood twice as tall as its own row.
+        def plan_spine_shape():
+            return page.evaluate("""() => {
+              const g = document.querySelector('.plan-rail-body .plan-group');
+              if (!g) return null;
+              const rows = [...g.querySelectorAll('.plan-rail-row')]
+                .reduce((h, r) => h + r.getBoundingClientRect().height, 0);
+              const spine = g.querySelector('.plan-spine');
+              return {
+                headings: document.querySelectorAll('.plan-rail-body .plan-group-head').length,
+                role: g.getAttribute('role'),
+                label: g.getAttribute('aria-label'),
+                spines: g.querySelectorAll('.plan-spine').length,
+                grew: g.getBoundingClientRect().height - rows,
+                wide: spine.getBoundingClientRect().width,
+              };
+            }""")
+
 
         # A deadline is enough: nobody has set a plan, so the plan follows it.
         page.locator(".card", has_text="Send the tax forms").first.locator(".card-menu-btn").click()
@@ -5287,6 +5508,12 @@ try:
         page.wait_for_timeout(150)
         check("plan: a deadline of today plans the card for today",
               plan_row().count() == 1 and group_of("Send the tax forms") == "Day")
+        shape = plan_spine_shape()
+        check("plan: the section is named by a spine, not by a heading",
+              shape is not None and shape["headings"] == 0 and shape["spines"] == 1
+              and shape["role"] == "group" and shape["label"] == "Day — 1 planned")
+        check("plan: the spine costs the section width and not height",
+              shape["grew"] < 4 and 0 < shape["wide"] <= 20)
         check("plan: the plan reaches the database with the card",
               wait_until(lambda: any(c.get("plan") == datetime.now().strftime("%Y-%m-%d")
                                      for c in api_state()["cards"]
@@ -5693,6 +5920,94 @@ try:
               hidden_filter and any("DONE-probe finished" in t for t in showing_all))
         page.select_option("#column-filter", "")
         page.wait_for_timeout(200)
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector("#board.board")
+
+        # ---- The time range --------------------------------------------------
+        # This is an end-to-end test. One predicate, so the ways this breaks are
+        # "two views disagree about what a span holds", "the hide-Done default
+        # swallows the very thing the reader asked for by name", and "the span
+        # is silently still in force with nothing saying so". One check each,
+        # rather than one per preset — the presets are pinned in
+        # tests/timespan.test.js, where they can be asserted against a fixed
+        # moment instead of against today.
+        titles_on = lambda sel: sorted(
+            t.strip() for t in page.locator(sel).all_inner_texts())
+
+        page.select_option("#range-preset", "week")
+        page.wait_for_timeout(250)
+        # Against the Inbox column on both sides, which is the register the
+        # Backlog reads by default: the Board paints no habit in a column and
+        # the Backlog lists them, so comparing the whole of each view would be
+        # asking the two to agree about something they never agreed about.
+        board_inbox = set(titles_on('[data-col="inbox"] .card .card-title'))
+        # Habits are painted in the rail and in no column, so they are on the
+        # Backlog and not on the Board — a difference that predates the range
+        # and is not the range disagreeing with itself. Read off the rail rather
+        # than named, or this check would go stale the next time a habit is
+        # added to the run.
+        rail_habits = set(titles_on(".habit-rail .habit-rail-open"))
+        page.locator('.view-switch button[data-view="backlog"]').click()
+        page.wait_for_selector("#board.backlog")
+        page.wait_for_timeout(200)
+        backlog_now = set(titles_on(".backlog-row .row-title"))
+        check("range: the Board and the Backlog narrow to the same cards",
+              board_inbox and backlog_now
+              and backlog_now - rail_habits == board_inbox - rail_habits)
+        check("range: the read-back states the span in words",
+              page.locator("#range-readback").is_visible()
+              and page.locator("#range-readback").inner_text().strip()
+              == "Captured this week")
+
+        # Finished cards on the Backlog: the hide-Done default stands down for a
+        # reader who asked for a finished span by name. This card was moved to
+        # Done earlier in this run, so "finished this week" has to reach it.
+        page.select_option("#range-field", "done")
+        page.wait_for_timeout(250)
+        check("range: asking for finished cards lists them despite the hide-Done default",
+              page.locator(".backlog-row", has_text="DONE-probe finished").count() == 1
+              and page.locator("#range-readback").inner_text().strip()
+              == "Finished this week")
+        # A column the reader picked by name still applies: "Inbox, finished
+        # this week" is a question with no answer, not a filter in the way.
+        page.select_option("#column-filter", "inbox")
+        page.wait_for_timeout(250)
+        check("range: a named column plus a finished span is a question with no answer",
+              page.locator(".backlog-row", has_text="DONE-probe finished").count() == 0)
+        page.select_option("#column-filter", "")
+        page.wait_for_timeout(200)
+
+        # It is remembered, unlike everything else on this row that is not: a
+        # filter you set is a filter you meant. What pays for that is the
+        # read-back above and the active-filter count, which is why a reader who
+        # opens the app to three cards is told why.
+        page.reload()
+        page.wait_for_selector("#board.backlog")
+        page.wait_for_timeout(300)
+        check("range: a span survives a reload, in the controls and in force",
+              page.input_value("#range-field") == "done"
+              and page.input_value("#range-preset") == "week"
+              and page.locator("#range-readback").inner_text().strip()
+              == "Finished this week")
+
+        # And a span nothing falls into says a FILTER is hiding the cards,
+        # rather than showing an empty board.
+        page.select_option("#range-preset", "custom")
+        page.wait_for_timeout(150)
+        page.fill("#range-from", "2001-01-01")
+        page.fill("#range-to", "2001-01-02")
+        page.wait_for_timeout(300)
+        check("range: an empty result blames the filter and reads back in words",
+              page.locator(".backlog-row").count() == 0
+              and page.locator("#range-readback").inner_text().strip()
+              == "Finished 1 Jan 2001 – 2 Jan 2001")
+        page.select_option("#range-preset", "")
+        page.select_option("#range-field", "created")
+        page.wait_for_timeout(250)
+        check("range: clearing it puts every card back and hides the read-back",
+              page.locator(".backlog-row").count() > 0
+              and not page.locator("#range-readback").is_visible())
+
         # Left as it was found: the sections after this one open on whatever
         # view is stored, and a board switch reloads the page into it.
         page.locator('.view-switch button[data-view="board"]').click()
@@ -5711,11 +6026,11 @@ try:
         row_title = row.locator(".row-title").inner_text()
         row.click(button="right")
         page.wait_for_timeout(200)
-        check("card menu: right-clicking a Backlog row opens the same eight actions",
+        check("card menu: right-clicking a Backlog row opens the same nine actions",
               [t.strip() for t in page.locator(
                   ".card-menu-panel:not([hidden]) .menu-item").all_inner_texts()]
-              == ["Edit…", "Duplicate", "Category ▸", "Type ▸", "Deadline ▸",
-                  "Plan ▸", "Move to ▸", "Delete"]
+              == ["Edit…", "Duplicate", "Add child…", "Category ▸", "Type ▸",
+                  "Deadline ▸", "Plan ▸", "Move to ▸", "Delete"]
               # The row's own click opens the editor; the menu's right-click
               # must not have done both.
               and page.locator("#card-dialog[open]").count() == 0)
@@ -5857,6 +6172,409 @@ try:
         page.click("#cancel-dialog")
         page.wait_for_timeout(150)
 
+        # ---- A card and the smaller cards it is made of ----------------------
+        # This is an end-to-end test. A card can hold children — no stamp, no
+        # conversion, no "project" type — and a child is a card in its own
+        # right: its own ledger number, type, column and history. The link
+        # lives on the child, one level deep, and the children are listed at
+        # the foot of the parent wherever the parent is shown.
+        # A card whose OWN title is this, and not one that merely lists it: a
+        # parent's closed children fold holds its children's titles in the DOM,
+        # so `has_text` on .card matches the parent for every child's name.
+        titled = lambda t: page.locator(f'.card:has(> .card-title:text-is("{t}"))')
+        add_card(page, "NEST-probe weekend")
+        titled("NEST-probe weekend").first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        check("nest: a childless card's fold says so, and is shut",
+              page.locator("#card-children").is_visible()
+              and page.locator("#card-children[open]").count() == 0
+              and page.locator("#card-children-count").inner_text().strip() == ""
+              and page.locator("#card-children-body .child-row").count() == 0)
+        page.click("#card-children > summary")
+        page.wait_for_selector("#card-children[open]")
+        page.click("#card-add-child")
+        page.wait_for_selector("#card-dialog[open]")
+        check("nest: Add a child card opens a draft that already names the parent",
+              page.locator("#dialog-title").text_content().strip() == "New card"
+              and page.locator("#card-parent-line").is_visible()
+              and "NEST-probe weekend" in page.locator("#card-parent-open").inner_text())
+        page.fill("#card-title", "NEST-probe book the hut")
+        # Judged, so the Matrix has somewhere to plot it: that view shows only
+        # cards carrying both an importance and an urgency.
+        open_details(page)
+        page.select_option("#card-importance", "high")
+        page.select_option("#card-urgency", "high")
+        page.click("#save-card")
+        page.wait_for_timeout(300)
+
+        # One card and one History entry — the draft was never on the board, so
+        # there is no "Added" plus a separate "Edited" to explain.
+        recent = newest_actions(2)
+        check("nest: adding a child writes one card and one History entry",
+              recent[0].startswith("Added")
+              and "NEST-probe book the hut" in recent[0]
+              and "NEST-probe book the hut" not in recent[1]
+              and wait_until(lambda: any(
+                  c["title"] == "NEST-probe book the hut" and c["parentId"]
+                  for c in api_state()["cards"])))
+
+        # A second child, from the parent's own actions menu, so both ways in
+        # are covered — and one of them finished, which the fold's label says.
+        titled("NEST-probe weekend").first.click(button="right")
+        page.wait_for_selector(".card-menu-panel:not([hidden])")
+        item("Add child").click()
+        page.wait_for_selector("#card-dialog[open]")
+        page.fill("#card-title", "NEST-probe pack the boots")
+        page.locator('#card-column label:has(input[value="answered"])').click()
+        page.click("#save-card")
+        page.wait_for_timeout(300)
+
+        parent = lambda: titled("NEST-probe weekend").first
+        fold = lambda: parent().locator(".card-children-inline")
+
+        def open_kids():
+            """Open the parent card's children fold if it is shut.
+
+            Idempotent, like open_details: the fold is remembered per card
+            (js/ui/children.js), so a blind click on the summary shuts the very
+            block the caller needs the second time round."""
+            if fold().evaluate("el => el.open") is False:
+                fold().locator("summary").click()
+                page.wait_for_timeout(150)
+
+        check("nest: the parent's card carries a shut fold that says two, one done",
+              fold().count() == 1
+              and fold().evaluate("el => el.open") is False
+              and fold().locator("summary .hint").inner_text().strip() == "2 · 1 done")
+
+        # This is an end-to-end test. The default is parents only, on every view
+        # including the Board — a child listed beside its parent is one piece of
+        # work counted twice, and it is already shown inside its parent.
+        check("nest: parents only is the default, and a child has no row of its own",
+              titled("NEST-probe book the hut").count() == 0
+              and page.locator("#nesting-filter").input_value() == ""
+              and page.locator("#nesting-filter").is_visible())
+
+        open_kids()
+        rows = lambda: fold().locator(".child-row")
+        check("nest: opening it lists both, with numbers, titles and columns",
+              rows().count() == 2
+              and rows().first.locator(".child-num").inner_text().startswith("C-")
+              and "Inbox" in rows().first.locator(".child-col").inner_text()
+              and "Done" in rows().last.locator(".child-col").inner_text())
+        # A finished child is marked by its text, never by a colour: colour on
+        # this board means category and could be mistaken for one.
+        struck = rows().last.evaluate(
+            "el => getComputedStyle(el.querySelector('.child-title')).textDecorationLine")
+        check("nest: a finished child is struck through rather than tinted",
+              "line-through" in struck)
+
+        # A click inside the fold is the fold's, not the card's — the same four
+        # guards the actions menu already needed.
+        rows().first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        check("nest: a row opens that child, not the parent it is listed under",
+              page.input_value("#card-title") == "NEST-probe book the hut"
+              and page.locator("#card-parent-line").is_visible()
+              and "NEST-probe weekend" in page.locator("#card-parent-open").inner_text())
+        # A child cannot itself be broken up, and the reason is said out loud
+        # rather than the control being silently absent.
+        page.click("#card-children > summary")
+        page.wait_for_selector("#card-children[open]")
+        check("nest: a child is told why it can hold none of its own",
+              page.locator("#card-add-child").count() == 0
+              and "part of another one" in page.locator("#card-children-body").inner_text())
+        page.click("#cancel-dialog")
+        page.wait_for_timeout(150)
+
+        # This is an end-to-end test. The row answers the same right-click as
+        # every other listing of a card, and the floating panel is removed on
+        # close rather than left behind under the board.
+        open_kids()
+        rows().first.click(button="right")
+        page.wait_for_selector(".card-menu-panel:not([hidden])")
+        panel = page.locator(".card-menu-panel:not([hidden])")
+        under = page.evaluate("""() => {
+          const p = document.querySelector('.card-menu-panel:not([hidden])');
+          const r = p.getBoundingClientRect();
+          const el = document.elementFromPoint(r.left + r.width / 2, r.top + 4);
+          return Boolean(el && el.closest('.card-menu-panel'));
+        }""")
+        check("nest: a child's row drops the card menu, on top of the board",
+              panel.count() == 1 and under
+              and page.locator("#card-dialog[open]").count() == 0)
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(120)
+        check("nest: closing it removes the panel rather than hiding it",
+              page.locator(".card-menu-panel").count()
+              == page.locator(".card .card-menu-panel").count())
+
+        # This is an end-to-end test. The scope control is one choice, and it
+        # reaches the plotted views as well as the Board.
+        page.select_option("#nesting-filter", "all")
+        page.wait_for_timeout(200)
+        check("nest: parents and children shows the child a row of its own",
+              titled("NEST-probe book the hut").count() == 1)
+        page.locator('.view-switch button[data-view="matrix"]').click()
+        page.wait_for_selector("#board.matrix .matrix-grid")
+        page.wait_for_timeout(200)
+        both = page.locator(".plot-dot").count()
+        page.select_option("#nesting-filter", "")
+        page.wait_for_timeout(250)
+        parents_only = page.locator(".plot-dot").count()
+        check("nest: the Matrix plots each piece of work once by default",
+              both > parents_only)
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector("#board.board")
+        page.wait_for_timeout(150)
+
+        # This is an end-to-end test. A search reaches every card whatever the
+        # scope says: a control that narrows the board must never be able to
+        # hide the thing you just asked for by name.
+        page.fill("#search", "book the hut")
+        page.wait_for_timeout(250)
+        found = titled("NEST-probe book the hut").count()
+        page.fill("#search", "")
+        page.wait_for_timeout(250)
+        check("nest: a search finds a child while parents only is set",
+              found == 1
+              and page.locator("#nesting-filter").input_value() == ""
+              and titled("NEST-probe book the hut").count() == 0)
+
+        # This is an end-to-end test. Detaching is part of the save, so one
+        # Cancel undoes it and one Save records it as this card's edit.
+        page.select_option("#nesting-filter", "all")
+        page.wait_for_timeout(200)
+        titled("NEST-probe book the hut").first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        page.click("#card-parent-detach")
+        page.wait_for_timeout(120)
+        gone_from_form = page.locator("#card-parent-line[hidden]").count() == 1
+        page.click("#cancel-dialog")
+        page.wait_for_timeout(200)
+        check("nest: cancelling a detach keeps the link",
+              gone_from_form
+              and any(c["title"] == "NEST-probe book the hut" and c["parentId"]
+                      for c in api_state()["cards"]))
+        titled("NEST-probe book the hut").first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        page.click("#card-parent-detach")
+        page.click("#save-card")
+        page.wait_for_timeout(300)
+        detach = newest_actions(2)
+        check("nest: saving a detach drops the link in one entry",
+              wait_until(lambda: any(
+                  c["title"] == "NEST-probe book the hut" and not c["parentId"]
+                  for c in api_state()["cards"]))
+              and detach[0].startswith("Edited")
+              and "NEST-probe book the hut" in detach[0]
+              and "NEST-probe book the hut" not in detach[1])
+        page.select_option("#nesting-filter", "")
+        page.wait_for_timeout(200)
+
+        # This is an end-to-end test. No cascade: a child has its own ledger
+        # number and its own history, and burying it inside another card's Trash
+        # row would make it unfindable by the name it was given. The count is
+        # named before it happens, and the whole act is one entry in the
+        # timeline — so one undo brings back the card *and* the links.
+        titled("NEST-probe weekend").first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        page.click("#delete-card")
+        page.wait_for_selector("#confirm-dialog[open]")
+        warned = page.locator("#confirm-copy").inner_text()
+        page.click("#confirm-ok")
+        page.wait_for_timeout(300)
+        check("nest: the confirmation says how many children stay behind",
+              "one child card stays" in warned)
+        check("nest: the children survive their parent, unparented",
+              wait_until(lambda: all(
+                  c["title"] != "NEST-probe weekend" for c in api_state()["cards"]))
+              and any(c["title"] == "NEST-probe pack the boots" and not c["parentId"]
+                      for c in api_state()["cards"]))
+        # Undo is History: the entry below "current" is the board as it was
+        # before the delete, and Restore is what puts it back. One entry, so one
+        # Restore brings back the card and its children's links together.
+        menu_click("#history-btn")
+        page.wait_for_selector("#history-dialog[open]")
+        page.locator("#history-list .history-row").nth(1) \
+            .locator("button:has-text('Restore')").click()
+        page.wait_for_timeout(200)
+        page.click("#close-history")
+        page.wait_for_timeout(300)
+        check("nest: one undo restores the card and the link together",
+              wait_until(lambda: any(
+                  c["title"] == "NEST-probe weekend" for c in api_state()["cards"]))
+              and wait_until(lambda: any(
+                  c["title"] == "NEST-probe pack the boots" and c["parentId"]
+                  for c in api_state()["cards"])))
+
+        # ---- The card dialog's three parts -----------------------------------
+        # This is an end-to-end test. The dialog scrolls its own body between a
+        # fixed head and a fixed footer: Save left the screen entirely on a card
+        # carrying long notes and its folds open, which is the one control that
+        # may never be out of reach.
+        titled("NEST-probe weekend").first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        page.fill("#card-notes", "\n".join(f"a long note, line {i}" for i in range(60)))
+        open_details(page)
+        page.click("#card-children > summary")
+        page.wait_for_selector("#card-children[open]")
+        page.wait_for_timeout(150)
+        box = page.evaluate("""() => {
+          const dlg = document.querySelector('#card-dialog');
+          const save = document.querySelector('#save-card');
+          const body = document.querySelector('.card-dialog-body');
+          const meta = document.querySelector('#card-meta');
+          const d = dlg.getBoundingClientRect(), s = save.getBoundingClientRect();
+          const m = meta.getBoundingClientRect();
+          return { fits: d.top >= -1 && d.bottom <= innerHeight + 1,
+                   saveIn: s.top >= 0 && s.bottom <= innerHeight,
+                   scrolls: body.scrollHeight > body.clientHeight + 1,
+                   ledgerIn: m.top >= 0 && m.bottom <= innerHeight };
+        }""")
+        check("dialog: the body scrolls and the dialog stays inside the window",
+              box["fits"] and box["scrolls"])
+        check("dialog: Save is on screen with long notes and both folds open",
+              box["saveIn"] and box["ledgerIn"])
+        # The card's own words, in the face the card is printed in — the one
+        # place the display type is used for something being typed rather than
+        # for a heading, and what stops the dialog reading as a settings screen
+        # the moment it opens. Compared against the dialog's own heading, which
+        # is display type by definition, and against the notes, which are not.
+        faces = page.evaluate("""() => {
+          const f = (sel) => getComputedStyle(document.querySelector(sel)).fontFamily;
+          const px = parseFloat(
+            getComputedStyle(document.querySelector('#card-title')).fontSize);
+          return { title: f('#card-title'), heading: f('#dialog-title'),
+                   notes: f('#card-notes'), size: px };
+        }""")
+        check("dialog: the title is typed in the display face, larger than the notes",
+              faces["title"] == faces["heading"]
+              and faces["title"] != faces["notes"]
+              and faces["size"] >= 18)
+        page.click("#cancel-dialog")
+        page.wait_for_timeout(150)
+
+        # This is an end-to-end test. Each fold's label carries its own
+        # contents, so it can be read without being opened — it named what
+        # *could* be in there until 2026-09-07, on every card alike.
+        add_card(page, "HINT-probe bare")
+        page.locator(".card", has_text="HINT-probe bare").first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        bare_hint = page.locator("#card-details-summary-hint").inner_text().strip()
+        open_details(page)
+        page.locator('.category-picker label:has(input[value="travel"])').click()
+        page.fill("#card-deadline", "2027-09-12")
+        page.fill("#card-tags", "alpha, beta")
+        page.click("#save-card")
+        page.wait_for_timeout(250)
+        page.locator(".card", has_text="HINT-probe bare").first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        filled_hint = page.locator("#card-details-summary-hint").inner_text()
+        check("dialog: a bare card's fold says nothing is set",
+              bare_hint == "nothing set yet")
+        check("dialog: a filled card's fold lists what is actually set",
+              "Travel" in filled_hint and "2027-09-12" in filled_hint
+              and "2 tags" in filled_hint)
+
+        # This is an end-to-end test. The deadline and the plan are one block
+        # because they are the pair the dialog's one refusal is about, and the
+        # refusal marks both — either can resolve it.
+        page.select_option("#card-plan-year", "2028")
+        page.wait_for_timeout(120)
+        page.select_option("#card-plan-month", "03")
+        page.wait_for_timeout(120)
+        check("dialog: the plan is echoed in words at the precision it was given",
+              "March 2028" in page.locator("#card-plan-words").inner_text())
+        page.click("#card-details > summary")   # shut it, so the refusal has to open it
+        page.wait_for_selector("#card-details:not([open])")
+        page.click("#save-card")
+        page.wait_for_timeout(200)
+        refusal = page.evaluate("""() => {
+          const when = document.querySelector('#card-when');
+          const err = document.querySelector('#card-plan-error');
+          return { open: document.querySelector('#card-details').open,
+                   marked: when.classList.contains('has-error'),
+                   shown: !err.hidden,
+                   holdsBoth: Boolean(when.querySelector('#card-deadline')
+                                      && when.querySelector('#card-plan-year')),
+                   focused: document.activeElement?.id };
+        }""")
+        check("dialog: the refusal opens the fold, marks the pair, and focuses the plan",
+              page.locator("#card-dialog[open]").count() == 1
+              and refusal["open"] and refusal["marked"] and refusal["shown"]
+              and refusal["holdsBoth"] and refusal["focused"] == "card-plan-year")
+        page.click("#card-plan-follow")
+        page.wait_for_timeout(150)
+        check("dialog: handing the plan back to the deadline clears the refusal",
+              page.locator("#card-plan-error[hidden]").count() == 1
+              and page.locator("#card-when.has-error").count() == 0)
+        page.click("#cancel-dialog")
+        page.wait_for_timeout(150)
+
+        # This is an end-to-end test. The schedule: one row per repetition, the
+        # rows follow the count as it is typed, and the fields the period cannot
+        # use are shown disabled with an accessible reason rather than removed.
+        add_card(page, "SLOT-probe stretch")
+        page.locator(".card", has_text="SLOT-probe stretch").first.click()
+        page.wait_for_selector("#card-dialog[open]")
+        page.locator('.type-picker label:has(input[value="habit"])').click()
+        page.select_option("#card-habit-freq", "weekly")
+        page.fill("#card-habit-count", "3")
+        page.wait_for_timeout(150)
+        check("schedule: the rows follow the count as it is typed",
+              page.locator("#card-schedule .schedule-row").count() == 3)
+        weekly = page.evaluate("""() => {
+          const row = document.querySelector('#card-schedule .schedule-row');
+          const m = row.querySelector('.slot-month'), w = row.querySelector('.slot-when');
+          return { monthOff: m.disabled, whenOn: !w.disabled,
+                   why: m.getAttribute('aria-label') || '',
+                   whenFirst: w.options[1].textContent };
+        }""")
+        check("schedule: a weekly habit is asked for a weekday, not a month",
+              weekly["monthOff"] and weekly["whenOn"]
+              and "yearly" in weekly["why"] and weekly["whenFirst"] == "Monday")
+        page.select_option("#card-schedule .schedule-row:nth-child(1) .slot-when", "2")
+        page.fill("#card-schedule .schedule-row:nth-child(1) .slot-time", "07:00")
+        page.wait_for_timeout(150)
+        check("schedule: the rows are read back in plain words",
+              "Tue 07:00" in page.locator("#card-schedule-words").inner_text()
+              and "+2 any time" in page.locator("#card-schedule-words").inner_text())
+        page.select_option("#card-habit-freq", "monthly")
+        page.wait_for_timeout(150)
+        monthly = page.evaluate("""() => {
+          const row = document.querySelector('#card-schedule .schedule-row');
+          const w = row.querySelector('.slot-when');
+          return { whenFirst: w.options[1].textContent, whenOn: !w.disabled };
+        }""")
+        check("schedule: a monthly habit is asked for a day of the month",
+              monthly["whenOn"] and monthly["whenFirst"] == "1")
+        # The stored weekday is kept: the period decides which fields are read,
+        # never which are stored.
+        page.select_option("#card-habit-freq", "weekly")
+        page.wait_for_timeout(150)
+        check("schedule: switching period and back gives the weekday again",
+              page.locator(
+                  "#card-schedule .schedule-row:nth-child(1) .slot-when").input_value() == "2")
+        page.click("#save-card")
+        page.wait_for_timeout(300)
+        check("schedule: the slots reach the database as slots",
+              wait_until(lambda: any(
+                  c["title"] == "SLOT-probe stretch"
+                  and len(c["habitTimes"]) == 3
+                  and c["habitTimes"][0]["weekday"] == "2"
+                  and c["habitTimes"][0]["time"] == "07:00"
+                  and c["habitTimes"][1]["time"] == ""
+                  for c in api_state()["cards"])))
+        # Retired, so a 3×-a-week habit nobody punches cannot banner over the
+        # blocks below.
+        page.locator(".habit-rail .habit-rail-row",
+                     has_text="SLOT-probe stretch").first.click(button="right")
+        page.wait_for_selector(".card-menu-panel:not([hidden])")
+        item("Move to").click()
+        item("Done").click()
+        page.wait_for_timeout(250)
+
         # ---- Several boards --------------------------------------------------
         # Switching reloads the page on purpose (see core/boards.js), so every
         # step here waits for the board to be painted again rather than for a
@@ -5903,6 +6621,10 @@ try:
             wait_for_board(text)
 
         before = page.locator(".card").count()
+        # Two counts, because they stopped being the same number on 2026-09-07:
+        # a habit is on the board but is not painted as a board card, so the
+        # database holds more cards than the columns draw.
+        before_db = len(api_state()["cards"])
         check("boards: the picker names the board you are on",
               "Lodestar" in page.locator("#board-select").inner_text())
 
@@ -5919,7 +6641,7 @@ try:
               [c["title"] for c in api_state(new_id)["cards"]] == ["Book the ferry"]
               and all(c["title"] != "Book the ferry" for c in api_state()["cards"]))
         check("boards: the first board kept every card it had",
-              len(api_state()["cards"]) == before)
+              len(api_state()["cards"]) == before_db)
         check("boards: each board numbers its own cards from C-001",
               api_state(new_id)["cards"][0]["num"] == 1)
 
@@ -6568,7 +7290,9 @@ try:
                         has_text="Water the plants").first.click()
         bg_page.wait_for_selector("#card-dialog[open]")
         bg_page.locator('.type-picker label:has(input[value="habit"])').click()
-        bg_page.fill("#card-habit-times", slot)
+        # The schedule's own row, one per repetition. A single comma-separated
+        # clock field used to stand in for all of them; a slot is row n now.
+        bg_page.fill(".schedule-row .slot-time", slot)
         bg_page.click('#card-form button[type="submit"]')
         bg_page.wait_for_timeout(300)
         # Not due yet: the slot is still two (mocked) minutes away.

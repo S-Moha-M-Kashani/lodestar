@@ -6,11 +6,11 @@ import { planConflict } from '../core/plan.js';
 import { filters, setDraggedId, state } from '../core/state.js';
 import { sortMenu } from './card-actions.js';
 import { cardMenu, fromCardMenu, openCardMenu } from './card-menu.js';
+import { childrenFold } from './children.js';
 import { openCatsDialog } from './cats-dialog.js';
 import { clearDropIndicator, wireDropZone } from './dnd.js';
 import { $, columnCards, columnTitle } from './dom.js';
 import { openDialog, openNewCard } from './edit-dialog.js';
-import { habitCardParts } from './habits.js';
 import { onCardKeydown } from './keyboard.js';
 import { render } from './render.js';
 
@@ -23,7 +23,16 @@ export function renderColumn(col) {
   section.dataset.col = col.id;
   section.setAttribute('aria-label', col.title);
 
-  const visible = columnCards(col.id).filter(matchesFilters);
+  // A habit is not painted here. It lives in the rail beside the board, which
+  // is where it is read, punched, retired and brought back — being listed in a
+  // column as well was one fact told twice, in two shapes. It is still *filed*
+  // in a column, and that is what says whether it is running or retired; since
+  // 2026-09-06 the card dialog can change where a card is filed, which is what
+  // makes hiding it here safe. Before that the column was the only way out and
+  // hiding a habit in it would have stranded the card.
+  //
+  // The header count below is `visible.length`, so it counts what is drawn.
+  const visible = columnCards(col.id).filter((c) => !isHabit(c)).filter(matchesFilters);
 
   const header = document.createElement('div');
   header.className = 'column-header';
@@ -245,7 +254,10 @@ function renderCard(card) {
     el.append(tags);
   }
 
-  if (isHabit(card)) habitCardParts(card, el);
+  // The smaller cards this one is made of, at the foot and closed by default —
+  // null for a childless card, which is therefore no taller than it was.
+  const kids = childrenFold(card);
+  if (kids) el.append(kids);
 
   // The whole card is one click target, and the actions menu now lives inside
   // it: a click, a key or a right-click the menu owns must not also do the
@@ -253,12 +265,19 @@ function renderCard(card) {
   // its own panel, Enter on the + does the same, a right-click on an open panel
   // repaints it back to its root and throws away the submenu the user had just
   // stepped into, and a press on a menu row drags the card out of its column.
+  //
+  // The children fold needs the same four, and it is not part of the menu: its
+  // summary is a click and a keypress of its own, and each row is a card with
+  // its own dialog and its own right-click. `fromChildren` is that test, and
+  // the rows stop their own click besides — a row must open the child, not the
+  // parent behind it.
+  const fromChildren = (e) => Boolean(e.target.closest?.('.card-children-inline'));
   el.addEventListener('click', (e) => {
-    if (fromCardMenu(e)) return;
+    if (fromCardMenu(e) || fromChildren(e)) return;
     openDialog(card.id);
   });
   el.addEventListener('keydown', (e) => {
-    if (fromCardMenu(e)) return;
+    if (fromCardMenu(e) || fromChildren(e)) return;
     onCardKeydown(e, card.id);
   });
 
@@ -268,13 +287,13 @@ function renderCard(card) {
   // positioning system for one panel. Repeated right-clicks leave it open: the
   // toggle belongs to the button, which has an aria-expanded to keep honest.
   el.addEventListener('contextmenu', (e) => {
-    if (fromCardMenu(e)) return;
+    if (fromCardMenu(e) || fromChildren(e)) return;
     e.preventDefault();
     openCardMenu(card.id, el.querySelector('.card-menu'));
   });
 
   el.addEventListener('dragstart', (e) => {
-    if (fromCardMenu(e)) { e.preventDefault(); return; }
+    if (fromCardMenu(e) || fromChildren(e)) { e.preventDefault(); return; }
     setDraggedId(card.id);
     e.dataTransfer.setData('text/plain', card.id);
     e.dataTransfer.effectAllowed = 'move';

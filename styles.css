@@ -490,7 +490,8 @@ input, select, textarea { font: inherit; color: inherit; }
   align-items: flex-end;
   gap: 8px;
 }
-.rail-filters select {
+.rail-filters select,
+.rail-filters input[type="date"] {
   box-sizing: border-box;
   height: var(--rail-h);
   font-size: 11px;
@@ -498,6 +499,25 @@ input, select, textarea { font: inherit; color: inherit; }
   position: relative;
   top: 1px; /* seated on the rule, exactly like the tabs */
 }
+
+/* The range filter's read-back: the span in words, beside the controls that
+   set it. Printed only while the filter is narrowing something (js/ui/toolbar.js
+   drives `hidden`), because "Any time" is already what the preset select says
+   and a read-back repeating the control it reads back is noise. Mono ledger
+   hand and plain ink — no new colour and no new token. */
+.range-readback {
+  align-self: center;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+/* `display: none` outranking the UA's [hidden] rule is not a risk here — this
+   element has no display of its own — but it is stated so the pattern holds. */
+.range-readback[hidden] { display: none; }
 
 .cat-tab {
   font-family: var(--mono);
@@ -961,6 +981,10 @@ body[data-view="board"] .cards { min-height: 0; }
    filter has nothing to say there and every card is shown regardless. */
 .hide-columns #column-filter { display: none; }
 body[data-view="board"] #column-filter { display: none; }
+/* #nesting-filter has no rule here on purpose: the scope filter is live on
+   every view, the Board included. Hiding a child on the Board hides it from
+   one place while still showing it in another — its parent's fold — where the
+   column filter would have emptied two of the three columns in front of you. */
 .hide-done-col .column[data-col="answered"] { display: none; }
 
 /* Card type as a rubber stamp — always neutral ink; colour means category */
@@ -1147,20 +1171,6 @@ body[data-view="board"] #column-filter { display: none; }
    neutral like every other type.
 --------------------------------------------------------------------------- */
 
-.habit-cadence {
-  margin: 8px 0 0;
-  font-family: var(--mono);
-  font-size: 10.5px;
-  color: var(--ink-soft);
-}
-.habit-cadence::before { content: "↻ "; opacity: 0.7; }
-
-.habit-line {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 7px;
-}
 
 .habit-punch {
   display: flex;
@@ -1212,20 +1222,6 @@ body[data-view="board"] #column-filter { display: none; }
   align-self: center;
 }
 
-.habit-history-toggle {
-  margin-left: auto;
-  font-family: var(--mono);
-  font-size: 9.5px;
-  letter-spacing: 0.04em;
-  color: var(--ink-soft);
-  background: transparent;
-  border: 1px solid var(--card-line);
-  border-radius: 2px;
-  padding: 1px 5px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.habit-history-toggle:hover { color: var(--ink); border-color: var(--ink-soft); }
 
 /* The history run sideways: one cell per period, dotted where it was missed,
    with the count punched into it. */
@@ -1352,7 +1348,15 @@ body[data-view="board"] .board-rail {
   scrollbar-width: thin;
 }
 
-.habit-rail-head { margin-bottom: 10px; }
+/* One line, like every row below it: the section's name and how many are due.
+   It was a heading over a subtitle, which is two lines of the one panel whose
+   whole job is to be the board's narrow margin. */
+.habit-rail-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 8px;
+}
 .habit-rail-title {
   margin: 0;
   font-family: var(--display);
@@ -1360,29 +1364,123 @@ body[data-view="board"] .board-rail {
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
-.habit-rail-title::before { content: "↻ "; color: var(--ink-soft); }
 .habit-rail-sub {
-  margin: 2px 0 0;
+  margin: 0 0 0 auto;
   font-family: var(--mono);
   font-size: 10px;
   color: var(--ink-soft);
+  white-space: nowrap;
 }
 
+/* --- The rail, grouped by cadence (2026-09-07) ----------------------------
+
+   Four lists on one strip, daily at the top, each named by a narrow spine down
+   its left edge. The spine is the group's LABEL and not decoration: four
+   horizontal headings, in the one panel whose whole job is to be the board's
+   narrow margin, is the height the one-line-per-habit redraw removed.
+
+   The four inks are the ones styles.css already defines in every theme and
+   already uses for exactly this job — `--col-accent` on the three board
+   columns. A cadence group is the same kind of thing as a column, a container
+   the cards sit in. NO new colour and NO new token: the assignment below is
+   shortest period to longest, and it is on the group's edge rather than on a
+   row precisely because colour on this board means category and `--cat` is
+   already on that line. */
+/* The spine idiom, shared by the two lists in the board's margin: the habits
+   grouped by cadence and the plan grouped by section. One rule set with two
+   selectors rather than two copies — the geometry is one decision — while the
+   class names stay separate, because CSS class names are test-stable API and
+   the rule there is add, never rename. Each rail assigns its own inks below. */
+.habit-group,
+.plan-group {
+  /* A fixed narrow inset for the spine and everything else for the rows, so
+     the punch strip keeps its full size and the name keeps a usable width at
+     the narrowest rail the resizer allows.
+
+     The spine is positioned OUT of flow inside it, which is the load-bearing
+     half: laid out as a grid track its rotated text sets the row height, so a
+     one-row weekly group stood twice as tall as its own row and the rail spent
+     height on the word naming a list rather than on the list. It costs width
+     and never height — and is therefore clipped to the group it labels, which
+     is exactly what the design's sketch draws: a tall group reads "Daily", a
+     one-row group reads "W". The cadence is still fully available three ways —
+     the group's accessible name, the spine's own tooltip, and its ink. */
+  position: relative;
+  padding-left: 20px;
+  margin-bottom: 6px;
+}
+.habit-group + .habit-group,
+.plan-group + .plan-group { margin-top: 2px; }
+/* `--col-accent` and not a name of its own: it is the property the three board
+   columns already carry, and it means "the accent ink of the container the
+   cards sit in", which is exactly what this is. A synonym would be a second
+   name for one idea, and the argument for reusing the hues in the first place
+   is that a cadence group is the same kind of thing as a column. */
+.habit-group[data-cadence="daily"]   { --col-accent: var(--ink-blue); }
+.habit-group[data-cadence="weekly"]  { --col-accent: var(--ink-violet); }
+.habit-group[data-cadence="monthly"] { --col-accent: var(--ink-amber); }
+.habit-group[data-cadence="yearly"]  { --col-accent: var(--ink-green); }
+
+/* The plan's sections take the SAME four inks for the same four spans, so
+   "this week" is the same violet in both lists — the consistency is the point,
+   and it is what stops the margin reading as two unrelated colour systems.
+
+   The last two are not periods, so they take no hue: `next` is one step softer
+   than the year it comes after and `dreams` is full ink weight, which is the
+   strongest mark on the board and the right one for the thing that has no date
+   at all. Ink WEIGHT rather than a fifth and sixth colour, because there is no
+   fifth and sixth span for a colour to mean. */
+.plan-group[data-section="day"]    { --col-accent: var(--ink-blue); }
+.plan-group[data-section="week"]   { --col-accent: var(--ink-violet); }
+.plan-group[data-section="month"]  { --col-accent: var(--ink-amber); }
+.plan-group[data-section="year"]   { --col-accent: var(--ink-green); }
+.plan-group[data-section="next"]   { --col-accent: var(--ink-soft); }
+.plan-group[data-section="dreams"] { --col-accent: var(--ink); }
+
+.habit-spine,
+.plan-spine {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 14px;
+  writing-mode: vertical-rl;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--col-accent);
+  border-left: 2px solid var(--col-accent);
+  padding: 2px 0 2px 3px;
+  /* Clipped rather than wrapped, for the reason above: the rail's height
+     belongs to the rows. */
+  overflow: hidden;
+  white-space: nowrap;
+  box-sizing: border-box;
+}
+
+/* A habit is one line: its punch boxes, then its name. The boxes lead because
+   punching is what the rail is for; the name is what you read to know which
+   habit you are punching. */
 .habit-rail-row {
-  padding: 7px 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 0;
   border-bottom: 1px dotted var(--card-line);
 }
 .habit-rail-row:last-child { border-bottom: 0; }
 /* Finished habits stay listed, dimmed — the rail is a day's ledger, not a
    nag list that empties itself. */
 .habit-rail-row.done { opacity: 0.45; }
-
-.habit-rail-name {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  margin-bottom: 5px;
+/* The strip keeps its own width and never wraps here: a wrapped strip is a
+   two-line row, which is the thing this redraw removed. */
+.habit-rail-row .habit-punch {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  gap: 4px;
 }
+
 .habit-rail-open {
   font-family: var(--body);
   font-size: 12px;
@@ -1392,20 +1490,46 @@ body[data-view="board"] .board-rail {
   border: 0;
   padding: 0;
   cursor: pointer;
-  overflow-wrap: anywhere;
+  /* The rail's width is the user's to set, so a long name is clipped on its one
+     line rather than wrapped — a wrapped name would undo the width they chose.
+     `min-width: 0` is what lets a flex item shrink below its content at all. */
+  flex: 1 1 auto;
+  /* A floor rather than 0: the strip cannot shrink, so on a narrow rail a
+     many-repetition habit would squeeze the name to nothing — and a button of
+     zero width is a card that cannot be opened. Small enough that the ellipsis
+     still does its job. */
+  min-width: 4ch;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .habit-rail-open:hover { text-decoration: underline; }
 .habit-rail-row.categorized .habit-rail-open::before {
   content: "▪ ";
   color: var(--cat);
 }
-.habit-rail-tally {
-  margin-left: auto;
-  font-family: var(--mono);
-  font-size: 9.5px;
-  color: var(--ink-soft);
-  white-space: nowrap;
+
+/* Retired habits: a closed line at the rail's foot, not a section of the day's
+   list. Dropping them from the rail as well as from the columns would leave a
+   card reachable only from the Backlog. */
+.habit-retired {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px dotted var(--card-line);
 }
+.habit-retired-summary {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  list-style: none;
+}
+.habit-retired-summary::marker,
+.habit-retired-summary::-webkit-details-marker { display: none; }
+.habit-retired-summary::before { content: "▸ "; }
+.habit-retired[open] .habit-retired-summary::before { content: "▾ "; }
+.habit-retired-summary:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 2px; }
+.habit-retired .habit-rail-row { opacity: 0.5; }
 
 /* --- The plan: the day's shortlist, under the habits ---------------------- */
 
@@ -2080,9 +2204,53 @@ dialog::backdrop {
   backdrop-filter: blur(2px);
 }
 
-#card-form { padding: 24px; }
+/* Three parts: a head that keeps the card's identity on screen, a body that
+   scrolls, and a footer whose actions never scroll out of reach. Capped at
+   86vh, which is what makes Save reachable from a card carrying long notes and
+   two open folds — it left the screen entirely before 2026-09-07. */
+#card-form {
+  display: flex;
+  flex-direction: column;
+  max-height: 86vh;
+}
 
-#card-form h2,
+.card-dialog-head { padding: 22px 24px 0; }
+
+/* The act on the left, the ledger line on the right, on one line, with the red
+   rule under both. */
+.card-dialog-titles {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--rule-red) 55%, transparent);
+}
+
+/* `min-height: 0` is what lets a flex child scroll at all: without it the
+   automatic minimum is the content's height and there is nothing to overflow. */
+.card-dialog-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  padding: 18px 24px 4px;
+}
+
+#card-form .dialog-actions {
+  flex: 0 0 auto;
+  padding: 14px 24px 20px;
+  border-top: 1px solid var(--card-line);
+}
+
+#card-form h2 {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 16px;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
 .dialog-body h2 {
   margin: 0 0 18px;
   font-family: var(--display);
@@ -2092,6 +2260,51 @@ dialog::backdrop {
   letter-spacing: 0.08em;
   padding-bottom: 10px;
   border-bottom: 1px solid color-mix(in srgb, var(--rule-red) 55%, transparent);
+}
+
+/* The card's own words, in the face the card is printed in — the one place the
+   display type is used for something being typed rather than for a heading. It
+   is what stops the dialog reading as a settings screen the moment it opens. */
+/* Both classes, so this outranks `.field textarea` below — that rule sets the
+   body face at the same specificity and appears later in the file. */
+.field.field-face textarea {
+  font-family: var(--display);
+  font-size: 19px;
+  line-height: 1.35;
+}
+
+/* The card this one is part of, above its own title. Plain ink: colour means
+   category and a stamp means type, so a lineage is drawn like the ledger rule
+   it is. */
+.card-parent-line {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin: 10px 0 0;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-soft);
+}
+.parent-open {
+  font-family: var(--body);
+  font-size: 12px;
+  text-align: left;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.parent-open:hover { text-decoration: underline; }
+.parent-detach {
+  margin-left: auto;
+  flex: 0 0 auto;
+  font-size: 10px;
+  padding: 2px 7px;
 }
 
 .field {
@@ -2279,10 +2492,184 @@ dialog::backdrop {
 }
 
 .card-meta-line {
+  margin: 0 0 0 auto;
   font-family: var(--mono);
   font-size: 10.5px;
   color: var(--ink-soft);
-  margin: 0 0 18px;
+  text-align: right;
+}
+
+/* When the card was finished, under the meta line and beside the parent line it
+   sits with. The same mono ledger hand as the rest of the head, one step darker
+   than `--ink-soft` because it is the head's one line the reader came for. No
+   new colour and no new token: colour on this board means category. */
+.card-done-line {
+  margin: 8px 0 0;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink);
+}
+
+/* --- The When block: the deadline and the plan, as the pair they are ------ */
+
+/* Drawn as a frame, like the plan fieldset it replaces, because it holds two
+   fields and one refusal that is about both of them. */
+.when-fields {
+  border: 1px solid var(--card-line);
+  border-radius: var(--radius);
+  padding: 12px 13px 4px;
+  margin: 0 0 15px;
+}
+.when-fields legend {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.03em;
+  color: var(--ink-soft);
+  padding: 0 5px;
+}
+/* The refusal marks the whole block, not the plan alone: either field can
+   resolve it, and printing it under one of them read as that one being wrong. */
+.when-fields.has-error { border-color: var(--danger); }
+.when-fields.has-error .plan-fields select { border-color: var(--danger); }
+
+/* The plan, read back at the precision it was given. */
+.plan-words {
+  margin: 0 0 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink);
+}
+
+/* --- The schedule: one row per repetition -------------------------------- */
+
+/* A real ordered list, and the marker is the repetition's own ordinal — these
+   are the repetitions of one period, in order, which is the one place on this
+   board where a numbered list is the honest shape rather than decoration. */
+.schedule-rows {
+  margin: 4px 0 10px;
+  padding-left: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.schedule-row {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-soft);
+}
+.schedule-row::marker { color: var(--ink-soft); }
+
+.schedule-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+.slot-field {
+  flex: 1 1 0;
+  min-width: 0;
+  margin-bottom: 4px;
+}
+.slot-field select,
+.slot-field input {
+  margin-top: 3px;
+  padding: 5px 7px;
+  font-size: 12px;
+}
+/* A field the cadence cannot use is greyed and kept, so the rule is visible
+   where it applies — the same call as In Progress on a habit. Each carries an
+   accessible label saying why, which is set in js/ui/edit-dialog.js. */
+.slot-field select:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* The block scrolls rather than the dialog growing when a habit asks for many
+   repetitions: 99 rows would otherwise push Save off a screen the head and the
+   footer are pinned to. */
+.habit-fields .schedule-rows {
+  max-height: 34vh;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.habit-history { margin-bottom: 4px; }
+
+/* --- The children: ledger lines, not cards ------------------------------- */
+
+.card-children-inline {
+  margin: 10px 0 0;
+  border-top: 1px dotted var(--card-line);
+}
+.child-fold-summary {
+  cursor: pointer;
+  padding: 7px 2px 5px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+.child-fold-summary .hint { text-transform: none; letter-spacing: 0.02em; }
+.child-fold-summary:hover { color: var(--ink); }
+.child-fold-summary:focus-visible {
+  outline: 2px solid var(--ink-blue);
+  outline-offset: 2px;
+}
+
+.child-row {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  width: 100%;
+  text-align: left;
+  padding: 4px 2px;
+  background: transparent;
+  border: 0;
+  border-top: 1px dotted var(--card-line);
+  cursor: pointer;
+}
+.child-row:first-of-type { border-top: 0; }
+.child-row:hover .child-title { text-decoration: underline; }
+.child-row:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 2px; }
+
+.child-num {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-soft);
+}
+.child-row.categorized .child-num::after {
+  content: " ▪";
+  color: var(--cat);
+}
+.child-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--body);
+  font-size: 12px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.child-col {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+/* A finished child is struck through, never tinted: colour on this board means
+   category, so "done" cannot be a colour. */
+.child-row.done .child-title {
+  text-decoration: line-through;
+  color: var(--ink-soft);
+}
+
+.add-child {
+  margin-top: 8px;
+  font-size: 11px;
+  padding: 4px 9px;
 }
 
 .dialog-actions {
@@ -4187,23 +4574,13 @@ button.chat-source-card {
 
 /* --- The plan on a card --------------------------------------------------- */
 
-/* The plan fieldset in the dialog: three dropdowns that assemble one date,
-   each dead until the one to its left has an answer. */
-.plan-fields {
-  margin: 0 0 14px;
-  padding: 10px 12px 12px;
-  border: 1px solid var(--card-line);
-  border-radius: var(--radius);
-}
-.plan-fields legend {
-  padding: 0 4px;
-  font-family: var(--display);
-  font-size: 12px;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
+/* The plan in the dialog: three dropdowns that assemble one date, each dead
+   until the one to its left has an answer. It carries no frame of its own — it
+   sits inside the When block with the deadline since 2026-09-07, and a box
+   inside a box inside a dialog reads as clutter. The refusal marks the block,
+   because it is about the pair. */
+.plan-fields { margin: 0; }
 .plan-fields select:disabled { opacity: 0.45; cursor: not-allowed; }
-.plan-fields.has-error { border-color: var(--high); }
 .plan-follow {
   margin-top: 8px;
   font-family: var(--mono);

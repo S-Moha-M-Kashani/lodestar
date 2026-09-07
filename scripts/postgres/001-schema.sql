@@ -91,7 +91,17 @@ CREATE TABLE IF NOT EXISTS board.cards (
   habit_times   TEXT   NOT NULL DEFAULT '[]',
   habit_history TEXT   NOT NULL DEFAULT '{}',
   plan          TEXT   NOT NULL DEFAULT '',
-  plan_src      TEXT   NOT NULL DEFAULT 'auto'
+  plan_src      TEXT   NOT NULL DEFAULT 'auto',
+  -- The one card this card is part of, or ''. No REFERENCES clause, matching
+  -- SQLite: the link is resolved against the live board on every write, and a
+  -- foreign key would also refuse a card whose parent sits in the Trash, where
+  -- the answer is to blank the link and keep the card.
+  parent_id     TEXT   NOT NULL DEFAULT '',
+  -- When the card was finished, or 0. 0 rather than NULL, matching SQLite:
+  -- "never finished" is one answer and the column is read by arithmetic, not by
+  -- a three-valued test. Mirrored because it is board data — unlike
+  -- `card_vectors`, which is derived from a card and deliberately absent here.
+  done_at       BIGINT NOT NULL DEFAULT 0
 );
 
 -- The agent's suggested edits. Its own table, never `cards`: the user opens

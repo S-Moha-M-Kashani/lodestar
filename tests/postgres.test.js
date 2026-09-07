@@ -85,6 +85,19 @@ function postgresSchema() {
   return tables;
 }
 
+// The one table that is deliberately NOT mirrored, and why — a named set rather
+// than a silent gap, so the exception has to be argued for rather than
+// forgotten into existence.
+//
+// `card_vectors` holds a card's embedding: derived from the card, expensive to
+// recompute and worth nothing on its own. Losing it costs time and no data, the
+// board and every view are fully usable with it empty, and it is outside `rev`
+// and outside the exported JSON for the same reason. Mirroring it would carry
+// megabytes of Float32 blobs into a migration that could regenerate them by
+// opening the map once. The day something reads it that a person would miss,
+// this line is what has to be deleted first.
+const NOT_MIRRORED = new Set(['card_vectors']);
+
 // This is a configuration invariant.
 test('the Postgres schema mirrors every SQLite table, column for column', () => {
   assert.ok(existsSync(join(ROOT, SCHEMA_FILE)),
@@ -92,6 +105,12 @@ test('the Postgres schema mirrors every SQLite table, column for column', () => 
   const sqlite = sqliteSchema();
   const pg = postgresSchema();
   for (const [table, cols] of sqlite) {
+    if (NOT_MIRRORED.has(table)) {
+      assert.ok(!pg.get(table),
+        `"${table}" is on the NOT_MIRRORED list but the schema mirrors it — ` +
+          `one of the two is wrong, and the list is where the argument lives`);
+      continue;
+    }
     const mirrored = pg.get(table);
     assert.ok(mirrored,
       `server.js creates "${table}" but ${SCHEMA_FILE} does not — a mirror ` +
