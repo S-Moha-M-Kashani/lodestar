@@ -81,27 +81,3 @@ export function draftFrom(card) {
   for (const field of CARRIED) draft[field] = card[field];
   return draft;
 }
-
-/** Does this card carry a setting somebody actually chose?
- *
- *  The card dialog folds everything but the card, its notes and its type into
- *  one block, and opens that block when the answer here is yes — so nothing
- *  already set is hidden behind a fold the user did not know to open.
- *
- *  Two fields lie if you read their value. **Effort and control always hold
- *  one**: effortVal returns 'medium' and controlVal 'influence' for anything
- *  unset, so testing the value would open the fold on every card ever made.
- *  Only the provenance says a person or the assistant decided. And **an auto
- *  plan has been resolved to the deadline** by sanitizeCard, so every dated
- *  card carries a plan it was never asked about; there the deadline is the
- *  detail and the plan is it restated. */
-export const cardHasDetails = (card) => Boolean(
-  card.category
-  || card.importance
-  || card.urgency
-  || card.deadline
-  || card.tags?.length
-  || (card.planSrc && card.planSrc !== 'auto')
-  || (card.effortSrc && card.effortSrc !== 'default')
-  || (card.controlSrc && card.controlSrc !== 'default'),
-);

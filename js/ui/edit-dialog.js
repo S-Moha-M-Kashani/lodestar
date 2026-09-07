@@ -1,7 +1,7 @@
 import { cardLabel, catVal, columnAccepts, controlVal, deadlineVal, effortVal, iuVal, matchesFilters, placeCard, typeVal, uid } from '../core/cards.js';
-import { catColor, catLabel, categories } from '../core/categories.js';
-import { COLUMNS, CONTROL_LABEL, TYPES, TYPE_META, priorityOf } from '../core/constants.js';
-import { blankDraft, cardHasDetails, draftFrom } from '../core/draft.js';
+import { catColor, categories } from '../core/categories.js';
+import { COLUMNS, TYPES, TYPE_META } from '../core/constants.js';
+import { blankDraft, draftFrom } from '../core/draft.js';
 import { HABIT_EVERY, habitCountVal, habitFreqVal, habitTimesVal, scheduleSentence } from '../core/habits.js';
 import { canHaveChildren, childrenOf } from '../core/nesting.js';
 import { MONTHS, SLOT_READS, WEEKDAYS, slotsVal } from '../core/schedule.js';
@@ -339,32 +339,6 @@ function updateBalancePreview() {
 $('#card-notes').addEventListener('input', updateBalancePreview);
 $('#card-tags').addEventListener('input', updateBalancePreview);
 
-/** What the settings fold actually holds, as its own label.
- *
- *  The whole point of folding something is being able to read it shut, and this
- *  said "category, priority, dates, plan, tags" until 2026-09-07 — what *could*
- *  be in there, on every card alike, which is the one thing a fold's label must
- *  not do. A bare card says so rather than listing what it does not have.
- *
- *  Reads provenance where the value lies, exactly as `cardHasDetails` does: the
- *  plan is only mentioned when somebody set it (an auto plan is the deadline
- *  restated), and effort and control only when they were judged. */
-function detailsHint(shown) {
-  const bits = [];
-  if (shown.category) bits.push(catLabel(shown.category));
-  const p = priorityOf(shown);
-  if (p) bits.push(`P${p}`);
-  if (shown.deadline) bits.push(`due ${shown.deadline}`);
-  if (shown.planSrc && shown.planSrc !== 'auto' && shown.plan) {
-    bits.push(`plan ${planWords(shown.plan)}`);
-  }
-  if (shown.effortSrc && shown.effortSrc !== 'default') bits.push(`${shown.effort} effort`);
-  if (shown.controlSrc && shown.controlSrc !== 'default') bits.push(CONTROL_LABEL[shown.control]);
-  const tags = (shown.tags || []).length;
-  if (tags) bits.push(`${tags} tag${tags === 1 ? '' : 's'}`);
-  return bits.length ? bits.join(' · ') : 'nothing set yet';
-}
-
 /** The children block: the count in the label, the rows, and the way to add
  *  one — or, where a card can hold none, the reason said out loud.
  *
@@ -474,11 +448,6 @@ function paintForm(shown) {
   planSrcNow = planSrcVal(shown.planSrc);
   paintPlan(shown.plan);
   syncHabitFields();
-  // The details fold: derived here on every open and stored nowhere, so it
-  // cannot go stale against the card in front of it. A suggested edit forces it
-  // open — a change to a folded setting must never be approved unseen.
-  $('#card-details-summary-hint').textContent = detailsHint(shown);
-  $('#card-details').open = cardHasDetails(shown) || Boolean(reviewingEditId);
   // Closed on every open, whether or not there are any: it is a list of other
   // cards rather than a setting of this one, so the rule above does not apply.
   $('#card-children').open = false;
@@ -655,15 +624,13 @@ form.addEventListener('submit', (e) => {
   if (!subject) { dialog.close(); return; }
   // The one save this app refuses: a plan that starts after the deadline is a
   // promise to begin after the thing was already due. Nothing is written, the
-  // error stands under the fieldset, and the focus goes to the field that can
-  // fix it — but the plan fieldset now lives inside the details fold, and
-  // focus() on an element inside a closed <details> does nothing, so from a
-  // collapsed dialog this refusal showed no message and moved no caret: Save
-  // appeared to do nothing at all. The fold is opened first. And the type is
-  // read off the draft as well as the card, because a guard written against
-  // `card` alone skipped the check entirely for every new card.
+  // error stands in the When row, and the focus goes to the field that can fix
+  // it. Nothing in the dialog folds any more, so the refusal has nothing to
+  // open first — that guard existed for the settings fold, which is gone, and
+  // a message inside a closed <details> is what it was protecting against. The
+  // type is read off the draft as well as the card, because a guard written
+  // against `card` alone skipped the check entirely for every new card.
   if (subject.type !== 'habit' && planConflict(readPlan(), deadlineVal($('#card-deadline').value))) {
-    $('#card-details').open = true;
     syncPlanFields();
     announce($('#card-plan-error').textContent);
     // The plan, of the two: it is the field the message names, and the deadline

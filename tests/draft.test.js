@@ -20,7 +20,7 @@
 // the moment it reaches ui/dom.js this file stops loading under node.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { blankDraft, cardHasDetails, draftFrom } from '../js/core/draft.js';
+import { blankDraft, draftFrom } from '../js/core/draft.js';
 
 const habitCard = {
   id: 'src-id', num: 14, columnId: 'in-progress',
@@ -87,37 +87,3 @@ test('a duplicate keeps its parent and gains no children', () => {
   assert.equal(draftFrom(parent).parentId, '');
 });
 
-// This is a unit test.
-test('the fold opens only for a setting somebody actually chose', () => {
-  // The standing defaults every card is created with: nothing here was decided.
-  const bare = {
-    columnId: 'inbox', title: 'A thought', notes: '', type: 'question',
-    category: '', importance: '', urgency: '',
-    effort: 'medium', control: 'influence', effortSrc: 'default', controlSrc: 'default',
-    deadline: '', plan: '', planSrc: 'auto',
-    habitFreq: '', habitCount: 1, habitTimes: [], habitHistory: {},
-    parentId: '', tags: [],
-  };
-  assert.equal(cardHasDetails(bare), false);
-
-  // Trap one: effort and control always hold a value. Only who set it counts.
-  assert.equal(cardHasDetails({ ...bare, effort: 'high' }), false);
-  assert.equal(cardHasDetails({ ...bare, control: 'none' }), false);
-  assert.equal(cardHasDetails({ ...bare, effort: 'high', effortSrc: 'user' }), true);
-  assert.equal(cardHasDetails({ ...bare, control: 'none', controlSrc: 'ai' }), true);
-
-  // Trap two: an auto plan has been resolved to the deadline, so a dated card
-  // carries a plan it was never asked about. The deadline is the detail there.
-  assert.equal(cardHasDetails({ ...bare, plan: '2026-12-01', planSrc: 'auto' }), false);
-  assert.equal(cardHasDetails({ ...bare, plan: '2027', planSrc: 'user' }), true);
-
-  // The plain ones.
-  assert.equal(cardHasDetails({ ...bare, category: 'work' }), true);
-  assert.equal(cardHasDetails({ ...bare, importance: 'high' }), true);
-  assert.equal(cardHasDetails({ ...bare, urgency: 'low' }), true);
-  assert.equal(cardHasDetails({ ...bare, deadline: '2026-12-01' }), true);
-  assert.equal(cardHasDetails({ ...bare, tags: ['planning'] }), true);
-
-  // A duplicate of a filled card opens showing what it copied.
-  assert.equal(cardHasDetails(draftFrom(habitCard)), true);
-});
