@@ -217,21 +217,6 @@ def add_card(page, title):
                                     has_text=title).count() >= 1)
 
 
-def open_details(page):
-    """Open the card dialog's settings fold if it is shut.
-
-    Category, importance, urgency, deadline, plan, effort, control and tags all
-    live behind it now, and Playwright's fill/click/select_option each wait for
-    visibility — so a call site that reaches one of those fields without this
-    raises a TimeoutError, which abandons every check after it rather than
-    failing one. Clicks the real summary rather than setting `open` from script,
-    because that is the control a person uses. Idempotent on purpose: the dialog
-    opens the fold by itself for a card that already carries a setting, and a
-    blind click would then shut the very block the caller needs."""
-    if page.locator("#card-details[open]").count() == 0:
-        page.click("#card-details > summary")
-    page.wait_for_selector("#card-details[open]")
-
 def open_meta(page):
     """Unfold the evidence strip under the newest reply.
 
@@ -829,7 +814,6 @@ try:
         page.wait_for_selector("#card-dialog[open]")
         page.fill("#card-notes", "Draft tokens from a small model, verify with the big one.")
         page.locator('.type-picker label:has(input[value="problem"])').click()
-        open_details(page)
         page.locator('.category-picker label:has(input[value="work"])').click()
         page.fill("#card-tags", "inference, decoding")
         page.click('#card-form button[type="submit"]')
@@ -2044,7 +2028,6 @@ try:
         page.wait_for_selector("#board.board")
         page.locator('.card', has_text="speculative decoding").first.click()
         page.wait_for_selector("#card-dialog[open]")
-        open_details(page)
         page.select_option("#card-importance", "high")
         page.select_option("#card-urgency", "low")
         page.click('#card-form button[type="submit"]')
@@ -2082,7 +2065,6 @@ try:
         def set_judgements(title, importance, urgency, deadline=None):
             page.locator('.card', has_text=title).first.click()
             page.wait_for_selector("#card-dialog[open]")
-            open_details(page)
             page.select_option("#card-importance", importance)
             page.select_option("#card-urgency", urgency)
             if deadline is not None:
@@ -2315,7 +2297,6 @@ try:
         page.wait_for_timeout(150)
         page.locator('[data-col="inbox"] .card', has_text="new framework").first.click()
         page.wait_for_selector("#card-dialog[open]")
-        open_details(page)
         page.fill("#card-tags", "decision")
         page.fill("#card-notes", "+ faster builds\n+ better types\n- migration cost\n- team ramp-up")
         page.dispatch_event("#card-notes", "input")
@@ -3708,8 +3689,8 @@ try:
         # The deadline used to be painted from the stored card while every other
         # field came from the suggestion, so the reviewer read the old date,
         # pressed Save, and wrote the old date back — the suggestion dropped
-        # with no error anywhere. The fold is forced open for a review, which is
-        # why this needs no open_details.
+        # with no error anywhere. Nothing in the dialog folds since 2026-09-08,
+        # so every field of a suggestion is on screen the moment it opens.
         check("edits: a suggested deadline is what the reviewer is shown",
               page.input_value("#card-deadline") == "2027-03-04")
         # The user's own wording wins — that is the whole point of reviewing.
@@ -3741,17 +3722,15 @@ try:
               and next(c for c in api_state()["cards"]
                        if c["id"] == target["id"])["notes"] != "notes the agent wanted")
 
-        # The second half of the dialog's fold predicate:
-        # `cardHasDetails(shown) || Boolean(reviewingEditId)`. Every review
-        # above lands on a seed card that already carries settings, so the FIRST
-        # clause is true there and the second could be deleted without a single
-        # red line — while a suggested change to a folded setting would then be
-        # approved unseen. This one reviews a card straight out of add_card,
-        # which carries nothing folded at all, and the suggestion names `notes`,
-        # a field that lives outside the fold, so the card-plus-suggestion
-        # overlay cannot make the first clause true either. The card's emptiness
-        # is asserted rather than assumed: a stray filter leaking a category
-        # into a future add_card would otherwise make this check vacuous.
+        # A review of a card carrying nothing at all. This once tested the
+        # second half of a fold predicate — `cardHasDetails(shown) ||
+        # reviewingEditId` — which existed so that a suggested change to a
+        # folded setting could not be approved unseen. The dialog folds nothing
+        # since 2026-09-08, so the guarantee is now structural rather than
+        # conditional, and this is what asserts it holds for the emptiest card
+        # the app can make. The card's emptiness is asserted rather than
+        # assumed: a stray filter leaking a category into a future add_card
+        # would otherwise make the check vacuous.
         page.locator('.view-switch button[data-view="board"]').click()
         page.wait_for_selector("#board.board")
         add_card(page, "EDIT-probe bare card")
@@ -3759,7 +3738,7 @@ try:
                                for c in api_state()["cards"]))
         bare = next((c for c in api_state()["cards"]
                      if c["title"] == "EDIT-probe bare card"), None)
-        nothing_folded = bare is not None and not (
+        nothing_set = bare is not None and not (
             bare.get("category") or bare.get("importance") or bare.get("urgency")
             or bare.get("deadline") or bare.get("tags")
             or bare.get("planSrc") != "auto" or bare.get("effortSrc") != "default"
@@ -3769,10 +3748,11 @@ try:
         page.wait_for_selector(".suggestion")
         page.click(".suggestion-review")
         page.wait_for_selector("#card-dialog[open]")
-        check("edits: a review opens the fold even on a card with nothing folded",
-              nothing_folded
-              and page.locator("#card-details[open]").count() == 1
-              and page.locator("#card-tags").is_visible())
+        check("edits: a review shows every field, with no fold to open first",
+              nothing_set
+              and page.locator("#card-tags").is_visible()
+              and page.locator("#card-deadline").is_visible()
+              and page.locator(".category-picker").is_visible())
         page.click("#cancel-dialog")
         page.wait_for_timeout(100)
         page.click(".suggestion-dismiss")
@@ -4640,7 +4620,6 @@ try:
         check("editor: effort & control default to the middle of the scale",
               page.input_value("#card-effort") == "medium"
               and page.input_value("#card-control") == "influence")
-        open_details(page)
         page.select_option("#card-effort", "low")
         page.select_option("#card-control", "act")
         page.click('#card-form button[type="submit"]')
@@ -4822,7 +4801,6 @@ try:
         page.wait_for_timeout(100)
         page.locator('[data-col="inbox"] .card').first.click()
         page.wait_for_selector("#card-dialog[open]")
-        open_details(page)
         page.locator('.category-picker label:has(input[value="photography"])').click()
         page.click('#card-form button[type="submit"]')
         page.wait_for_timeout(100)
@@ -4880,19 +4858,16 @@ try:
               page.locator("#card-habit[hidden]").count() == 1)
         page.locator('.type-picker label:has(input[value="habit"])').click()
         # is_visible(), not `#card-habit:not([hidden])`: the attribute stays
-        # absent whatever happens to the fieldset's surroundings, so an
-        # attribute check would pass just as happily with the cadence moved
-        # inside the collapsed fold and invisible. "Meditate" carries nothing
-        # folded, so the fold is shut here — which is what makes this the
-        # spec's assertion: the cadence appears beside the stamp that governs
-        # it, without the user opening the block.
+        # absent whatever happens to the row's surroundings, so an attribute
+        # check would pass just as happily with the cadence moved inside a fold
+        # and invisible. `.prop-row[hidden]` is load-bearing here — `display:
+        # grid` outranks the UA's `[hidden]` rule, so without it the cadence
+        # would be drawn on every card that is not a habit.
         check("habit: stamping Habit reveals the cadence fields",
               page.locator("#card-habit").is_visible()
-              and page.locator("#card-habit-freq").is_visible()
-              and page.locator("#card-details[open]").count() == 0)
+              and page.locator("#card-habit-freq").is_visible())
         page.select_option("#card-habit-freq", "daily")
         page.fill("#card-habit-count", "2")
-        open_details(page)
         page.locator('.category-picker label:has(input[value="health"])').click()
         page.click('#card-form button[type="submit"]')
 
@@ -5287,44 +5262,71 @@ try:
         page.wait_for_selector("#board.board")
         page.wait_for_timeout(150)
 
-        # ---- The card dialog's settings fold ---------------------------------
-        # This is an end-to-end test. Everything but the card, its notes and its
-        # type folds away, so the dialog a capture faces is three fields instead
-        # of eleven. The fold then opens itself for any card that already holds
-        # one of the folded settings — a short dialog must never hide a category
-        # somebody chose. Collapsing is not clearing: a save made with the block
-        # shut has to write exactly the values it is holding.
-        add_card(page, "FOLD-probe bare")
-        page.locator('.card', has_text="FOLD-probe bare").first.click()
+        # ---- The card dialog's property ledger -------------------------------
+        # This is an end-to-end test. Every property the card carries is a row
+        # of one ledger — its name in a left gutter, its value beside it — and
+        # nothing folds. It was nine framed fieldsets with legends and four
+        # paragraphs of explanation stacked in a 540px column, with the category,
+        # the dates, the priority and the tags folded away behind a summary; a
+        # setting behind a fold is a setting nobody edits, and the reason the
+        # fold had to open itself for half the cards that opened it.
+        add_card(page, "LEDGER-probe bare")
+        page.locator('.card', has_text="LEDGER-probe bare").first.click()
         page.wait_for_selector("#card-dialog[open]")
-        check("fold: a bare card opens with its settings folded away",
-              page.locator("#card-details[open]").count() == 0
+        # Reached with no click of any kind first: the whole claim is that a
+        # bare card shows every row it could fill in.
+        check("ledger: a bare card shows every property, in no fold",
+              page.locator("#card-dialog details:visible").count() == 1
               and page.locator("#card-title").is_visible()
               and page.locator("#card-notes").is_visible()
               and page.locator(".type-picker").is_visible()
-              and not page.locator("#card-tags").is_visible())
-        open_details(page)
+              and page.locator("#card-column").is_visible()
+              and page.locator(".category-picker").is_visible()
+              and page.locator("#card-importance").is_visible()
+              and page.locator("#card-deadline").is_visible()
+              and page.locator("#card-plan-year").is_visible()
+              and page.locator("#card-effort").is_visible()
+              and page.locator("#card-tags").is_visible())
+        # The gutter names the property and the value cell holds the control, so
+        # each row reads left to right with nothing between the two. The label is
+        # what a legend was, which is why it is asked of the row rather than of
+        # the stylesheet.
+        rows = page.evaluate("""() => {
+          const out = [];
+          for (const row of document.querySelectorAll('.prop-table .prop-row')) {
+            if (row.hidden) continue;
+            const label = row.querySelector('.prop-label');
+            const value = row.querySelector('.prop-value');
+            if (!label || !value) { out.push(null); continue; }
+            const l = label.getBoundingClientRect(), v = value.getBoundingClientRect();
+            out.push({ name: label.textContent.trim(), leftOf: l.right <= v.left + 1 });
+          }
+          return out;
+        }""")
+        check("ledger: every row is a name in the gutter and a value beside it",
+              len(rows) == 8 and all(r and r["leftOf"] for r in rows)
+              and [r["name"] for r in rows] == ["Where", "Type", "Category",
+                                                "Priority", "When", "Effort",
+                                                "Control", "Tags"])
         page.locator('.category-picker label:has(input[value="work"])').click()
-        page.fill("#card-tags", "folded, probe")
+        page.fill("#card-tags", "ledger, probe")
         page.click("#save-card")
         page.wait_for_timeout(250)
 
-        page.locator('.card', has_text="FOLD-probe bare").first.click()
+        page.locator('.card', has_text="LEDGER-probe bare").first.click()
         page.wait_for_selector("#card-dialog[open]")
-        check("fold: a card that already carries a setting opens with it showing",
-              page.locator("#card-details[open]").count() == 1
-              and page.locator("#card-tags").is_visible())
-        page.click("#card-details > summary")
-        page.wait_for_selector("#card-details:not([open])")
-        page.fill("#card-title", "FOLD-probe renamed")
+        check("ledger: reopening reads the saved values back out of the rows",
+              page.locator('.category-picker input[value="work"]').is_checked()
+              and page.input_value("#card-tags") == "ledger, probe")
+        page.fill("#card-title", "LEDGER-probe renamed")
         page.click("#save-card")
-        wait_until(lambda: page.locator('.card', has_text="FOLD-probe renamed").count() == 1)
+        wait_until(lambda: page.locator('.card', has_text="LEDGER-probe renamed").count() == 1)
         page.wait_for_timeout(700)
-        folded = next((c for c in api_state()["cards"]
-                       if c["title"] == "FOLD-probe renamed"), None)
-        check("fold: a save made with the block shut keeps every folded value",
-              folded is not None and folded.get("category") == "work"
-              and folded.get("tags") == ["folded", "probe"])
+        saved = next((c for c in api_state()["cards"]
+                      if c["title"] == "LEDGER-probe renamed"), None)
+        check("ledger: a save writes exactly what the rows are holding",
+              saved is not None and saved.get("category") == "work"
+              and saved.get("tags") == ["ledger", "probe"])
 
         # ---- Duplicate: a copy of the card, never a copy of its record -------
         # This is an end-to-end test. A duplicate is a draft like any other: it
@@ -5339,11 +5341,9 @@ try:
         page.locator('.type-picker label:has(input[value="habit"])').click()
         page.select_option("#card-habit-freq", "daily")
         page.fill("#card-habit-count", "1")
-        # A category, so the copy carries a *folded* setting and its draft opens
-        # showing it. The cadence alone would not: those fields sit outside the
-        # fold beside the stamp that governs them, so nothing is hidden and
-        # `cardHasDetails` rightly leaves the block shut.
-        open_details(page)
+        # A category as well as the cadence, so the copy has more than one kind
+        # of field to carry across — a life area is a chip in the ledger and a
+        # cadence is a row that only a habit has at all.
         page.locator('.category-picker label:has(input[value="health"])').click()
         page.click("#save-card")
         page.wait_for_timeout(250)
@@ -5373,7 +5373,7 @@ try:
         check("duplicate: right-click opens a draft prefilled from the card",
               no_dialog_yet
               and page.input_value("#card-title") == "DUP-probe stretch"
-              and page.locator("#card-details[open]").count() == 1)
+              and page.locator('.type-picker input[value="habit"]').is_checked())
         check("duplicate: the dialog says it is creating, not editing",
               page.locator("#dialog-title").text_content().strip() == "New card"
               and page.locator("#save-card").text_content().strip() == "Add card"
@@ -5421,7 +5421,6 @@ try:
         page.click("#new-card-btn")
         page.wait_for_selector("#card-dialog[open]")
         page.fill("#card-title", "CANCEL-probe blank draft")
-        open_details(page)
         page.locator('.category-picker label:has(input[value="work"])').click()
         page.click("#cancel-dialog")
         page.wait_for_timeout(150)
@@ -5539,7 +5538,6 @@ try:
               page.locator("#card-plan-year").count() == 1
               and page.locator("#card-plan-month").count() == 1
               and page.locator("#card-plan-day").count() == 1)
-        open_details(page)
         page.fill("#card-deadline", "2026-01-01")
         page.locator("#card-plan-year").select_option(str(datetime.now().year + 3))
         page.wait_for_timeout(120)
@@ -5551,24 +5549,15 @@ try:
         check("plan: and the card cannot be saved while it says that",
               page.locator("#card-dialog[open]").count() == 1)
 
-        # The same refusal from a COLLAPSED fold — the case the one-line
-        # `$('#card-details').open = true` in edit-dialog.js exists for. Without
-        # it the message and the year select are both inside a closed <details>:
-        # the error is invisible, focus() on an element in a closed fold is a
-        # no-op, and Save simply appears to do nothing at all.
-        #
-        # The fold is collapsed by hand here rather than found shut on open, and
-        # it has to be. A conflict needs a deadline in the form, and any card
-        # carrying a deadline makes `cardHasDetails` true, so the fold opens
-        # itself on every card that could produce one — "shut on open AND
-        # conflicting on save" is unreachable by construction. Collapsing it is
-        # the reachable half of the same scenario and fails in the same way.
-        page.click("#card-details > summary")
-        page.wait_for_selector("#card-details:not([open])")
+        # The refusal has to move the caret to a field that can fix it, not
+        # merely print a line. It used to live inside a collapsed fold, where
+        # focus() is a no-op and the message was invisible — Save appeared to do
+        # nothing at all. Nothing folds any more, so the message and the caret
+        # are simply where the reader is looking.
         page.click('#card-form button[type="submit"]')
         page.wait_for_timeout(200)
-        check("plan: a refusal from a collapsed fold opens it and focuses the plan",
-              page.locator("#card-details[open]").count() == 1
+        check("plan: a refusal focuses the plan, on a dialog that folds nothing",
+              page.locator("#card-plan-year").is_visible()
               and page.evaluate("() => document.activeElement.id") == "card-plan-year")
         check("plan: and that refusal says why, where it can be read",
               page.locator("#card-plan-error").is_visible()
@@ -5578,10 +5567,6 @@ try:
               and all(c.get("deadline") != "2026-01-01"
                       for c in api_state()["cards"]
                       if c["title"] == "Send the tax forms"))
-        # Reopen the fold whatever the checks found, so the two clicks below
-        # reach visible controls instead of raising a TimeoutError that would
-        # abandon every check after this block.
-        open_details(page)
         page.click("#card-plan-follow")
         page.wait_for_timeout(100)
         check("plan: following the deadline again clears the error",
@@ -6151,22 +6136,20 @@ try:
           const type = document.querySelector('.type-picker');
           if (!col || !type) return null;
           return {
-            folded: Boolean(col.closest('#card-details')),
+            folded: Boolean(col.closest('details')),
             beforeType: Boolean(col.compareDocumentPosition(type)
                                 & Node.DOCUMENT_POSITION_FOLLOWING),
             values: [...col.querySelectorAll('input[name="column"]')].map(i => i.value),
             checked: col.querySelector('input[name="column"]:checked')?.value,
           };
         }""")
-        check("dialog: the column sits above the type stamp, outside the fold",
+        check("dialog: the column sits above the type stamp, in no fold at all",
               placement is not None
               and placement["folded"] is False
               and placement["beforeType"] is True
               and placement["values"] == ["inbox", "in-progress", "answered"]
               and placement["checked"] == "inbox"
-              and page.locator("#card-column").is_visible()
-              # Visible on a bare card, whose settings fold is shut.
-              and page.locator("#card-details[open]").count() == 0)
+              and page.locator("#card-column").is_visible())
 
         page.locator('#card-column label:has(input[value="answered"])').click()
         page.click("#save-card")
@@ -6234,7 +6217,6 @@ try:
         page.fill("#card-title", "NEST-probe book the hut")
         # Judged, so the Matrix has somewhere to plot it: that view shows only
         # cards carrying both an importance and an urgency.
-        open_details(page)
         page.select_option("#card-importance", "high")
         page.select_option("#card-urgency", "high")
         page.click("#save-card")
@@ -6268,7 +6250,7 @@ try:
         def open_kids():
             """Open the parent card's children fold if it is shut.
 
-            Idempotent, like open_details: the fold is remembered per card
+            Idempotent on purpose: the fold is remembered per card
             (js/ui/children.js), so a blind click on the summary shuts the very
             block the caller needs the second time round."""
             if fold().evaluate("el => el.open") is False:
@@ -6444,12 +6426,11 @@ try:
         # ---- The card dialog's three parts -----------------------------------
         # This is an end-to-end test. The dialog scrolls its own body between a
         # fixed head and a fixed footer: Save left the screen entirely on a card
-        # carrying long notes and its folds open, which is the one control that
-        # may never be out of reach.
+        # carrying long notes and the whole property ledger below them, which is
+        # the one control that may never be out of reach.
         titled("NEST-probe weekend").first.click()
         page.wait_for_selector("#card-dialog[open]")
         page.fill("#card-notes", "\n".join(f"a long note, line {i}" for i in range(60)))
-        open_details(page)
         page.click("#card-children > summary")
         page.wait_for_selector("#card-children[open]")
         page.wait_for_timeout(150)
@@ -6467,7 +6448,7 @@ try:
         }""")
         check("dialog: the body scrolls and the dialog stays inside the window",
               box["fits"] and box["scrolls"])
-        check("dialog: Save is on screen with long notes and both folds open",
+        check("dialog: Save is on screen with long notes and the children open",
               box["saveIn"] and box["ledgerIn"])
         # The card's own words, in the face the card is printed in — the one
         # place the display type is used for something being typed rather than
@@ -6488,14 +6469,23 @@ try:
         page.click("#cancel-dialog")
         page.wait_for_timeout(150)
 
-        # This is an end-to-end test. Each fold's label carries its own
-        # contents, so it can be read without being opened — it named what
-        # *could* be in there until 2026-09-07, on every card alike.
+        # This is an end-to-end test. What a card carries is read off the rows
+        # themselves now — there is no fold label left to summarise them, which
+        # is what the summary hint was for and the reason it had to be derived
+        # on every open. A control at rest is a ghost: transparent border, no
+        # background, the value reading as written ink. That is what stops nine
+        # rows of properties reading as a form, so it is asserted rather than
+        # left to the eye.
         add_card(page, "HINT-probe bare")
         page.locator(".card", has_text="HINT-probe bare").first.click()
         page.wait_for_selector("#card-dialog[open]")
-        bare_hint = page.locator("#card-details-summary-hint").inner_text().strip()
-        open_details(page)
+        rest = page.evaluate("""() => {
+          const s = getComputedStyle(document.querySelector('#card-tags'));
+          return { bg: s.backgroundColor, border: s.borderTopColor };
+        }""")
+        check("dialog: a control at rest draws no box and no background",
+              rest["bg"] == "rgba(0, 0, 0, 0)"
+              and rest["border"] == "rgba(0, 0, 0, 0)")
         page.locator('.category-picker label:has(input[value="travel"])').click()
         page.fill("#card-deadline", "2027-09-12")
         page.fill("#card-tags", "alpha, beta")
@@ -6503,12 +6493,10 @@ try:
         page.wait_for_timeout(250)
         page.locator(".card", has_text="HINT-probe bare").first.click()
         page.wait_for_selector("#card-dialog[open]")
-        filled_hint = page.locator("#card-details-summary-hint").inner_text()
-        check("dialog: a bare card's fold says nothing is set",
-              bare_hint == "nothing set yet")
-        check("dialog: a filled card's fold lists what is actually set",
-              "Travel" in filled_hint and "2027-09-12" in filled_hint
-              and "2 tags" in filled_hint)
+        check("dialog: what the card carries is read straight off its own rows",
+              page.locator('.category-picker input[value="travel"]').is_checked()
+              and page.input_value("#card-deadline") == "2027-09-12"
+              and page.input_value("#card-tags") == "alpha, beta")
 
         # This is an end-to-end test. The deadline and the plan are one block
         # because they are the pair the dialog's one refusal is about, and the
@@ -6519,23 +6507,20 @@ try:
         page.wait_for_timeout(120)
         check("dialog: the plan is echoed in words at the precision it was given",
               "March 2028" in page.locator("#card-plan-words").inner_text())
-        page.click("#card-details > summary")   # shut it, so the refusal has to open it
-        page.wait_for_selector("#card-details:not([open])")
         page.click("#save-card")
         page.wait_for_timeout(200)
         refusal = page.evaluate("""() => {
           const when = document.querySelector('#card-when');
           const err = document.querySelector('#card-plan-error');
-          return { open: document.querySelector('#card-details').open,
-                   marked: when.classList.contains('has-error'),
+          return { marked: when.classList.contains('has-error'),
                    shown: !err.hidden,
                    holdsBoth: Boolean(when.querySelector('#card-deadline')
                                       && when.querySelector('#card-plan-year')),
                    focused: document.activeElement?.id };
         }""")
-        check("dialog: the refusal opens the fold, marks the pair, and focuses the plan",
+        check("dialog: the refusal marks the pair and focuses the plan",
               page.locator("#card-dialog[open]").count() == 1
-              and refusal["open"] and refusal["marked"] and refusal["shown"]
+              and refusal["marked"] and refusal["shown"]
               and refusal["holdsBoth"] and refusal["focused"] == "card-plan-year")
         page.click("#card-plan-follow")
         page.wait_for_timeout(150)

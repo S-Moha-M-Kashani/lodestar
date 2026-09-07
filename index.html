@@ -416,13 +416,16 @@
       </div>
 
       <div class="card-dialog-body">
-        <!-- The card's own words, in the face the card is printed in. -->
-        <label class="field field-face">Card
-          <textarea id="card-title" rows="2" required></textarea>
-        </label>
-        <label class="field">Notes
-          <textarea id="card-notes" rows="5" placeholder="Research notes, links, the answer…"></textarea>
-        </label>
+        <!-- The card's own words, in the face the card is printed in and with
+             no box around them. This is the one thing in the dialog that is
+             being *written* rather than set, and a border would file it beside
+             the properties below as one more field to fill in. -->
+        <div class="card-words">
+          <textarea id="card-title" rows="2" required aria-label="Card"
+                    placeholder="What is it?"></textarea>
+          <textarea id="card-notes" rows="4" aria-label="Notes"
+                    placeholder="Notes, links, the answer…"></textarea>
+        </div>
         <!-- Decisional balance: on cards tagged “decision”, notes lines starting
              with + / − read back as a two-column pro/con sheet. -->
         <div id="balance-preview" class="balance-sheet" hidden>
@@ -435,133 +438,153 @@
             <ul></ul>
           </div>
         </div>
-        <!-- Where the card is filed. OUTSIDE the settings fold, because it is
-             not a setting: it is the one question every open card is asking,
-             and answering it used to mean closing the dialog, finding the card
-             and dragging it. In Progress is disabled for a habit — the refusal
-             already in columnAccepts, said out loud rather than dropped on
-             save. -->
-        <fieldset id="card-column" class="column-picker">
-          <legend>Where it lives</legend>
-          <div class="picker-options">
-            <label><input type="radio" name="column" value="inbox"><span class="col-chip">Inbox</span></label>
-            <label><input type="radio" name="column" value="in-progress"><span class="col-chip">In Progress</span></label>
-            <label><input type="radio" name="column" value="answered"><span class="col-chip">Done</span></label>
-          </div>
-        </fieldset>
-        <fieldset class="type-picker">
-          <legend>Type</legend>
-          <div id="type-picker-options" class="picker-options"></div>
-        </fieldset>
-        <!-- The cadence and its schedule, outside both folds and beside the
-             stamp that decides whether they apply at all. One row per
-             repetition; the fields the period cannot use are disabled and
-             visible, so the rule is shown where it applies. -->
-        <fieldset id="card-habit" class="habit-fields" hidden>
-          <legend>How often</legend>
-          <div class="field-row">
-            <label class="field">Times
-              <input id="card-habit-count" type="number" min="1" max="99" step="1" value="1">
-            </label>
-            <label class="field">Per
-              <select id="card-habit-freq">
-                <option value="daily">Day</option>
-                <option value="weekly">Week</option>
-                <option value="monthly">Month</option>
-                <option value="yearly">Year</option>
-              </select>
-            </label>
-          </div>
-          <ol id="card-schedule" class="schedule-rows"></ol>
-          <p id="card-schedule-words" class="field-hint"></p>
-          <details id="card-habit-history" class="card-details habit-history">
-            <summary class="card-details-summary">What you have done</summary>
-            <div id="card-habit-tape"></div>
-          </details>
-        </fieldset>
-        <!-- Everything a card can carry besides its words. Folded shut for a
-             bare card and opened by edit-dialog.js for any card that already
-             holds one of these, so a setting is never hidden from the person
-             editing it. The summary is written from what is actually set —
-             it said what *could* be in there until 2026-09-07, which is the
-             one thing a fold's label must not do. -->
-        <details id="card-details" class="card-details">
-          <summary class="card-details-summary">Details <span id="card-details-summary-hint" class="hint"></span></summary>
-          <fieldset class="category-picker">
-            <legend>Category</legend>
-            <div id="category-picker-options" class="picker-options"></div>
-          </fieldset>
-          <div class="field-row">
-            <label class="field">Importance
-              <select id="card-importance">
-                <option value="">Not set</option>
-                <option value="high">High</option>
-                <option value="low">Low</option>
-              </select>
-            </label>
-            <label class="field">Urgency
-              <select id="card-urgency">
-                <option value="">Not set</option>
-                <option value="high">High</option>
-                <option value="low">Low</option>
-              </select>
-            </label>
-          </div>
-          <p class="field-hint">Set both to place this card on the <strong>Matrix</strong> and stamp its priority.</p>
-          <!-- The deadline and the plan as one block: they are the pair the
-               dialog's one refusal is about, and they sat apart with the error
-               under only one of them until 2026-09-07. Inside the plan, right
-               to left, each field needs the one to its left — the Month list is
-               dead until a Year is picked, the Day list until a Month is. Empty
-               is a real answer. -->
-          <fieldset id="card-when" class="when-fields">
-            <legend>When</legend>
-            <label class="field">Due <span class="hint">(optional)</span>
-              <input id="card-deadline" type="date">
-            </label>
-            <div id="card-plan" class="plan-fields">
-              <div class="field-row">
-                <label class="field">Plan — year
-                  <select id="card-plan-year"></select>
-                </label>
-                <label class="field">Month
-                  <select id="card-plan-month" disabled></select>
-                </label>
-                <label class="field">Day
-                  <select id="card-plan-day" disabled></select>
-                </label>
-              </div>
-              <p id="card-plan-words" class="plan-words"></p>
-              <p id="card-plan-hint" class="field-hint"></p>
-              <button type="button" id="card-plan-follow" class="btn ghost plan-follow" hidden>↻ follow the deadline</button>
+
+        <!-- Everything else the card carries, as one ledger of rows: the name
+             of the property in the left gutter, its value in the right. Nine
+             framed fieldsets with legends, boxed inputs and explanatory
+             paragraphs became this on 2026-09-08, and nothing folds any more —
+             a setting behind a fold is a setting nobody edits.
+
+             A row holding one control is a <label>, so the association is the
+             browser's; a row holding several is a role="group" naming the same
+             gutter text, because a <label> can only ever speak for the first
+             control inside it. -->
+        <div class="prop-table">
+          <!-- Where the card is filed — the one question every open card is
+               asking, and answering it used to mean closing the dialog, finding
+               the card and dragging it. In Progress is disabled for a habit
+               (columnAccepts), said out loud rather than dropped on save. -->
+          <div class="prop-row column-picker" id="card-column" role="group"
+               aria-labelledby="prop-column-label">
+            <span class="prop-label" id="prop-column-label">Where</span>
+            <div class="picker-options prop-value">
+              <label><input type="radio" name="column" value="inbox"><span class="col-chip">Inbox</span></label>
+              <label><input type="radio" name="column" value="in-progress"><span class="col-chip">In Progress</span></label>
+              <label><input type="radio" name="column" value="answered"><span class="col-chip">Done</span></label>
             </div>
-            <p id="card-plan-error" class="field-error" role="alert" hidden></p>
-          </fieldset>
-          <div class="field-row">
-            <label class="field">Effort
+          </div>
+
+          <div class="prop-row type-picker" role="group" aria-labelledby="prop-type-label">
+            <span class="prop-label" id="prop-type-label">Type</span>
+            <div id="type-picker-options" class="picker-options prop-value"></div>
+          </div>
+
+          <div class="prop-row category-picker" role="group" aria-labelledby="prop-cat-label">
+            <span class="prop-label" id="prop-cat-label">Category</span>
+            <div id="category-picker-options" class="picker-options prop-value"></div>
+          </div>
+
+          <!-- The cadence and its schedule, in the ledger beside the stamp that
+               decides whether they apply at all. One row per repetition; the
+               fields the period cannot use are disabled and visible, so the
+               rule is shown where it applies. -->
+          <div class="prop-row habit-fields" id="card-habit" role="group"
+               aria-labelledby="prop-habit-label" hidden>
+            <span class="prop-label" id="prop-habit-label">How often</span>
+            <div class="prop-value">
+              <div class="prop-line">
+                <input id="card-habit-count" type="number" min="1" max="99" step="1"
+                       value="1" aria-label="Times">
+                <span class="prop-caption">times per</span>
+                <select id="card-habit-freq" aria-label="Per">
+                  <option value="daily">day</option>
+                  <option value="weekly">week</option>
+                  <option value="monthly">month</option>
+                  <option value="yearly">year</option>
+                </select>
+              </div>
+              <ol id="card-schedule" class="schedule-rows"></ol>
+              <p id="card-schedule-words" class="field-hint"></p>
+              <details id="card-habit-history" class="card-details habit-history">
+                <summary class="card-details-summary">What you have done</summary>
+                <div id="card-habit-tape"></div>
+              </details>
+            </div>
+          </div>
+
+          <!-- Two selects, one row. Each option says which control it belongs
+               to, because the gutter names the pair and not the halves — a bare
+               "Not set" twice over would be two dropdowns saying nothing. -->
+          <div class="prop-row" role="group" aria-labelledby="prop-prio-label">
+            <span class="prop-label" id="prop-prio-label"
+                  title="Set both to place this card on the Matrix and stamp its priority.">Priority</span>
+            <div class="prop-value prop-line">
+              <select id="card-importance" aria-label="Importance">
+                <option value="">importance —</option>
+                <option value="high">important</option>
+                <option value="low">not important</option>
+              </select>
+              <select id="card-urgency" aria-label="Urgency">
+                <option value="">urgency —</option>
+                <option value="high">urgent</option>
+                <option value="low">not urgent</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- The deadline and the plan as one row: they are the pair the
+               dialog's one refusal is about, and the error belongs to both.
+               Inside the plan, right to left, each field needs the one to its
+               left — the Month list is dead until a Year is picked, the Day
+               list until a Month is. Empty is a real answer. -->
+          <div class="prop-row when-fields" id="card-when" role="group"
+               aria-labelledby="prop-when-label">
+            <span class="prop-label" id="prop-when-label">When</span>
+            <div class="prop-value">
+              <div class="prop-line">
+                <span class="prop-caption">due</span>
+                <input id="card-deadline" type="date" aria-label="Deadline">
+              </div>
+              <div id="card-plan" class="plan-fields">
+                <div class="prop-line">
+                  <span class="prop-caption">plan</span>
+                  <select id="card-plan-year" aria-label="Plan — year"></select>
+                  <select id="card-plan-month" aria-label="Plan — month" disabled></select>
+                  <select id="card-plan-day" aria-label="Plan — day" disabled></select>
+                  <span id="card-plan-words" class="plan-words"></span>
+                </div>
+                <p id="card-plan-hint" class="field-hint"></p>
+                <button type="button" id="card-plan-follow" class="btn ghost plan-follow" hidden>↻ follow the deadline</button>
+              </div>
+              <p id="card-plan-error" class="field-error" role="alert" hidden></p>
+            </div>
+          </div>
+
+          <label class="prop-row">
+            <span class="prop-label"
+                  title="Rough calls are fine — effort and control both start at the midpoint until you (or the assistant) judge them.">Effort</span>
+            <span class="prop-value">
               <select id="card-effort">
                 <option value="low">Low</option>
                 <option value="medium">Medium</option>
                 <option value="high">High</option>
               </select>
-            </label>
-            <label class="field">Control
+            </span>
+          </label>
+
+          <label class="prop-row">
+            <span class="prop-label">Control</span>
+            <span class="prop-value">
               <select id="card-control">
                 <option value="act">I can act</option>
                 <option value="influence">I can influence</option>
                 <option value="none">Out of my hands</option>
               </select>
-            </label>
-          </div>
-          <p class="field-hint">Rough calls are fine — both start at the midpoint until you (or the assistant) judge them.</p>
-          <label class="field">Tags <span class="hint">(comma separated)</span>
-            <input id="card-tags" type="text" placeholder="planning, ideas, follow-up">
+            </span>
           </label>
-        </details>
+
+          <label class="prop-row">
+            <span class="prop-label">Tags</span>
+            <span class="prop-value">
+              <input id="card-tags" type="text" placeholder="comma separated">
+            </span>
+          </label>
+        </div>
+
         <!-- The smaller cards this one is made of, at the foot and closed on
              every open — it is a list of other cards rather than a setting of
-             this one, so the rule that opens the settings fold does not apply.
-             Hidden on a draft: a child needs a parent that exists. -->
+             this one, so it is the dialog's one fold. Hidden on a draft: a
+             child needs a parent that exists. -->
         <details id="card-children" class="card-details card-children">
           <summary class="card-details-summary">Children <span id="card-children-count" class="hint"></span></summary>
           <div id="card-children-body"></div>

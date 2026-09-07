@@ -1742,9 +1742,6 @@ body[data-view="board"] .board-rail {
 }
 .habit-banner-hide:hover { color: var(--ink); border-color: var(--ink-soft); }
 
-/* The cadence fields, revealed by the Habit stamp */
-.habit-fields { border: 1px dashed var(--line); border-radius: var(--radius); }
-
 /* Red-pencil insertion mark while dragging */
 .drop-indicator {
   height: 2px;
@@ -2204,6 +2201,12 @@ dialog {
   width: min(540px, calc(100vw - 32px));
 }
 
+/* The card dialog alone is wider than the rest. Every property is a row of a
+   ledger now — the name of the thing in a left gutter, its value beside it —
+   and at 540px the gutter ate the type stamps. Nothing folds, so the width can
+   never move once the dialog is open. */
+#card-dialog { width: min(620px, calc(100vw - 32px)); }
+
 dialog::backdrop {
   background: rgba(24, 32, 26, 0.45);
   backdrop-filter: blur(2px);
@@ -2267,15 +2270,40 @@ dialog::backdrop {
   border-bottom: 1px solid color-mix(in srgb, var(--rule-red) 55%, transparent);
 }
 
-/* The card's own words, in the face the card is printed in — the one place the
-   display type is used for something being typed rather than for a heading. It
-   is what stops the dialog reading as a settings screen the moment it opens. */
-/* Both classes, so this outranks `.field textarea` below — that rule sets the
-   body face at the same specificity and appears later in the file. */
-.field.field-face textarea {
+/* The card's own words: the display face, and no box at all. This is the one
+   thing in the dialog being *written* rather than set, and a border round it
+   filed it beside the properties as one more field to fill in. The frame
+   appears on focus, where it is a caret's home rather than decoration. */
+.card-words {
+  margin: 0 0 6px;
+}
+.card-words textarea {
+  display: block;
+  width: 100%;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  margin: 0 0 2px;
+  color: var(--ink);
+  resize: vertical;
+}
+.card-words #card-title {
   font-family: var(--display);
-  font-size: 19px;
-  line-height: 1.35;
+  font-size: 20px;
+  line-height: 1.3;
+}
+.card-words #card-notes {
+  font-family: var(--body);
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+.card-words textarea::placeholder { color: var(--ink-soft); opacity: 0.55; }
+.card-words textarea:hover { border-color: var(--card-line); }
+.card-words textarea:focus {
+  outline: none;
+  background: var(--paper);
+  border-color: var(--line);
 }
 
 /* The card this one is part of, above its own title. Plain ink: colour means
@@ -2290,6 +2318,12 @@ dialog::backdrop {
   font-size: 10.5px;
   color: var(--ink-soft);
 }
+/* `display: flex` above outranks the UA's `[hidden]` rule — the fifth instance
+   of that trap in this file, after .assistant-tools, .board-switch,
+   #assistant-widget and #assistant-launcher. Without this the lineage line is
+   drawn on every card, naming nothing, above the card's own words. */
+.card-parent-line[hidden] { display: none; }
+
 .parent-open {
   font-family: var(--body);
   font-size: 12px;
@@ -2339,14 +2373,6 @@ dialog::backdrop {
   resize: vertical;
 }
 
-/* Importance + urgency sit side by side, above the Matrix hint */
-.field-row {
-  display: flex;
-  gap: 12px;
-  margin-bottom: 4px;
-}
-.field-row .field { flex: 1; margin-bottom: 11px; }
-
 .field-hint {
   font-family: var(--mono);
   font-size: 10.5px;
@@ -2394,28 +2420,110 @@ dialog::backdrop {
   color: var(--ink-soft);
 }
 
-/* Type & category pickers — choose by stamping / by tab colour */
-.type-picker,
-.category-picker {
-  border: none;
-  padding: 0;
-  margin: 0 0 15px;
+/* --- The property ledger -------------------------------------------------
+   Every property the card carries is one row: its name in a left gutter, its
+   value beside it. It was nine framed fieldsets with legends, boxed inputs and
+   four paragraphs of explanation, stacked in a 540px column with most of it
+   folded away — the dialog read as a settings screen and hid the settings.
+   No frame, no legend, and no box round a control until the pointer or the
+   keyboard reaches it: at rest the values read as written ink, which is what a
+   ledger is. */
+.prop-table {
+  border-top: 1px solid var(--card-line);
 }
 
-.type-picker legend,
-.category-picker legend {
+.prop-row {
+  display: grid;
+  grid-template-columns: 76px 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 8px 0;
+  border-bottom: 1px dotted var(--card-line);
+}
+/* `display: grid` outranks the UA's `[hidden]` rule, exactly as it does on
+   .assistant-tools and .board-switch — the habit row is hidden on every card
+   that is not one. */
+.prop-row[hidden] { display: none; }
+/* The children fold draws its own rule, so the ledger stops before it. */
+.prop-table .prop-row:last-child { border-bottom: 0; }
+
+.prop-label {
   font-family: var(--mono);
-  font-size: 11px;
-  letter-spacing: 0.03em;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   color: var(--ink-soft);
-  padding: 0;
-  margin-bottom: 7px;
+  padding-top: 6px;
+}
+/* A label carrying its own explanation says so, rather than the row below
+   spending a paragraph on it. */
+.prop-label[title] { cursor: help; border-bottom: 1px dotted var(--card-line); justify-self: start; }
+
+.prop-value {
+  min-width: 0;
+  align-self: center;
 }
 
+/* Controls in the ledger are ghosts: transparent until reached. */
+.prop-value select,
+.prop-value input[type="text"],
+.prop-value input[type="date"],
+.prop-value input[type="number"],
+.prop-value input[type="time"] {
+  font-family: var(--body);
+  font-size: 13px;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  padding: 4px 6px;
+  max-width: 100%;
+}
+.prop-value input[type="text"] { width: 100%; }
+.prop-value input[type="number"] { width: 58px; }
+.prop-value select:hover,
+.prop-value input:hover {
+  border-color: var(--card-line);
+  background: var(--paper);
+}
+.prop-value select:focus,
+.prop-value input:focus {
+  outline: none;
+  border-color: var(--line);
+  background: var(--paper);
+}
+.prop-value input::placeholder { color: var(--ink-soft); opacity: 0.6; }
+.prop-value select:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Several controls reading as one sentence — "3 times per week", "due …". */
+.prop-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+/* The three plan lists at fixed widths. A native select sizes to its widest
+   option, so an empty Month sat twice as wide as an empty Year and the row read
+   as ragged rather than as one date. */
+#card-plan-year { width: 78px; }
+#card-plan-month { width: 106px; }
+#card-plan-day { width: 66px; }
+
+.prop-caption {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  flex: 0 0 auto;
+}
+
+/* The pickers keep their class names — those are test-stable API — and lost
+   only their frames and legends, which the gutter now carries. */
 .picker-options {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
 }
 
 .picker-options label { cursor: pointer; }
@@ -2427,8 +2535,8 @@ dialog::backdrop {
 }
 
 .type-picker .badge {
-  font-size: 11px;
-  padding: 4px 11px;
+  font-size: 10.5px;
+  padding: 4px 8px;
   display: inline-block;
   opacity: 0.4;
   transition: all 0.15s ease;
@@ -2515,35 +2623,34 @@ dialog::backdrop {
   color: var(--ink);
 }
 
-/* --- The When block: the deadline and the plan, as the pair they are ------ */
+/* --- The When row: the deadline and the plan, as the pair they are -------- */
 
-/* Drawn as a frame, like the plan fieldset it replaces, because it holds two
-   fields and one refusal that is about both of them. */
-.when-fields {
-  border: 1px solid var(--card-line);
-  border-radius: var(--radius);
-  padding: 12px 13px 4px;
-  margin: 0 0 15px;
+/* No frame any more — it is a row of the ledger like every other property. The
+   refusal is what needs a mark, and it takes the row's own left edge: a rule in
+   --danger against the gutter, so the message, the two fields and the mark are
+   one block without a box being drawn round them. */
+.when-fields.has-error {
+  border-left: 2px solid var(--danger);
+  padding-left: 8px;
+  margin-left: -10px;
 }
-.when-fields legend {
-  font-family: var(--mono);
-  font-size: 10.5px;
-  letter-spacing: 0.03em;
-  color: var(--ink-soft);
-  padding: 0 5px;
-}
-/* The refusal marks the whole block, not the plan alone: either field can
-   resolve it, and printing it under one of them read as that one being wrong. */
-.when-fields.has-error { border-color: var(--danger); }
 .when-fields.has-error .plan-fields select { border-color: var(--danger); }
 
-/* The plan, read back at the precision it was given. */
+.plan-fields[hidden] { display: none; }
+
+/* The plan, read back at the precision it was given — beside the three
+   dropdowns rather than under them, since it is what they add up to. */
 .plan-words {
-  margin: 0 0 6px;
+  margin: 0;
   font-family: var(--mono);
   font-size: 11px;
   color: var(--ink);
 }
+
+/* A hint inside the ledger is a line of the row, not a paragraph after it. */
+.prop-value .field-hint { margin: 3px 0 0; }
+.prop-value .plan-follow { margin-top: 5px; font-size: 10px; padding: 3px 8px; }
+.prop-value .field-error { margin-top: 5px; }
 
 /* --- The schedule: one row per repetition -------------------------------- */
 
@@ -2551,8 +2658,8 @@ dialog::backdrop {
    are the repetitions of one period, in order, which is the one place on this
    board where a numbered list is the honest shape rather than decoration. */
 .schedule-rows {
-  margin: 4px 0 10px;
-  padding-left: 22px;
+  margin: 6px 0 4px;
+  padding-left: 20px;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -2597,7 +2704,8 @@ dialog::backdrop {
   scrollbar-width: thin;
 }
 
-.habit-history { margin-bottom: 4px; }
+.habit-history { margin: 4px 0 0; border-top: 0; }
+.habit-history .card-details-summary { padding: 6px 0; font-size: 11px; }
 
 /* --- The children: ledger lines, not cards ------------------------------- */
 
