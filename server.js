@@ -313,13 +313,50 @@ const habitCountVal = (v) => {
   return Number.isFinite(n) ? Math.min(HABIT_MAX_COUNT, Math.max(1, n)) : 1;
 };
 
-/** Reminder slots: real clock times, in order, no repeats, never more than the
- *  target — a fifth slot on a 4×-a-day habit reminds you of nothing. */
+/** The schedule: one slot per repetition, saying when that repetition is
+ *  expected. `{ month, weekday, day, time }`, every field an optional string;
+ *  which of them the cadence actually *reads* is the browser's business
+ *  (js/core/schedule.js) and no concern of the store's.
+ *
+ *  Exactly `count` slots, padded and truncated from the end, and **neither
+ *  sorted nor de-duplicated** — the rule this replaced on 2026-09-07 did both,
+ *  and a slot is now row *n*, the *n*th repetition. Two repetitions may
+ *  legitimately fall at one hour, and reordering rows under the hand filling
+ *  them in is worse than asking twice.
+ *
+ *  A plain 'HH:MM' string coerces to a slot naming that hour, which is the
+ *  whole migration: every board written before this change holds clock strings
+ *  in this column, and there is no backfill and no second column.
+ *
+ *  This duplicates js/core/schedule.js deliberately, as every other validator
+ *  in this file duplicates its counterpart there. tests/databases.test.js boots
+ *  a copy of server.js in a temp directory with no `js/` beside it, to prove the
+ *  backend is self-sufficient; a static import of the leaf module would turn
+ *  that guarantee into a boot failure. */
+const slotNum = (v, min, max, width) => {
+  if (typeof v !== 'string' && typeof v !== 'number') return '';
+  const n = Math.trunc(Number(v));
+  return Number.isFinite(n) && n >= min && n <= max ? String(n).padStart(width, '0') : '';
+};
+const slotVal = (raw) => {
+  if (typeof raw === 'string') {
+    return { month: '', weekday: '', day: '', time: HABIT_TIME_RE.test(raw) ? raw : '' };
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { month: '', weekday: '', day: '', time: '' };
+  }
+  return {
+    month: slotNum(raw.month, 1, 12, 2),
+    weekday: slotNum(raw.weekday, 1, 7, 1),
+    day: slotNum(raw.day, 1, 31, 2),
+    time: typeof raw.time === 'string' && HABIT_TIME_RE.test(raw.time) ? raw.time : '',
+  };
+};
 const habitTimesVal = (v, count) => {
-  if (!Array.isArray(v)) return [];
-  const seen = new Set();
-  for (const t of v) if (typeof t === 'string' && HABIT_TIME_RE.test(t)) seen.add(t);
-  return [...seen].sort().slice(0, count);
+  const list = Array.isArray(v) ? v : [];
+  const out = [];
+  for (let i = 0; i < count; i++) out.push(slotVal(list[i]));
+  return out;
 };
 
 /** Validate the completions entry by entry rather than accepting or rejecting
@@ -451,7 +488,8 @@ db.exec(`
     habit_times   TEXT    NOT NULL DEFAULT '[]',
     habit_history TEXT    NOT NULL DEFAULT '{}',
     plan          TEXT    NOT NULL DEFAULT '',
-    plan_src      TEXT    NOT NULL DEFAULT 'auto'
+    plan_src      TEXT    NOT NULL DEFAULT 'auto',
+    parent_id     TEXT    NOT NULL DEFAULT ''
   );
 `);
 
@@ -478,6 +516,12 @@ if (!columnNames.has('habit_times')) db.exec("ALTER TABLE cards ADD COLUMN habit
 if (!columnNames.has('habit_history')) db.exec("ALTER TABLE cards ADD COLUMN habit_history TEXT NOT NULL DEFAULT '{}'");
 if (!columnNames.has('plan')) db.exec("ALTER TABLE cards ADD COLUMN plan TEXT NOT NULL DEFAULT ''");
 if (!columnNames.has('plan_src')) db.exec("ALTER TABLE cards ADD COLUMN plan_src TEXT NOT NULL DEFAULT 'auto'");
+// The id of the one card this card is part of, or ''. No REFERENCES clause: the
+// link is resolved against the *live* board on every write (see resolveLineage
+// below), and a foreign key would additionally refuse a card whose parent sits
+// in the Trash — where the answer is to blank the link and keep the card, not
+// to reject the save.
+if (!columnNames.has('parent_id')) db.exec("ALTER TABLE cards ADD COLUMN parent_id TEXT NOT NULL DEFAULT ''");
 // Every card written before boards existed belongs to the default board, which
 // the column default says without a single UPDATE. The REFERENCES clause is
 // carried across too, so a migrated database and a fresh one have one schema
@@ -1195,6 +1239,7 @@ const rowToCard = (r, catIds) => ({
   habitCount: habitCountVal(r.habit_count),
   habitTimes: habitTimesVal(safeJson(r.habit_times, []), habitCountVal(r.habit_count)),
   habitHistory: habitHistoryVal(safeJson(r.habit_history, {})),
+  parentId: parentIdVal(r.parent_id),
   num: r.num,
   tags: safeTags(r.tags),
   createdAt: r.created_at,
@@ -1268,6 +1313,46 @@ function readTrash(boardId) {
   return { version: 1, cards: rows.map((r) => rowToCard(r, catIds)) };
 }
 
+// --- The lineage ----------------------------------------------------------
+// A card can be part of one other card, and the link lives on the child as
+// `parentId`. Mirrors js/core/nesting.js, for the same reason every validator
+// in this file mirrors its counterpart there — see the note on habitTimesVal.
+
+const parentIdVal = (v) => (typeof v === 'string' ? v.trim() : '');
+
+/** Blank every link the board cannot honour, and keep every card.
+ *
+ *  The `category` precedent: an unknown category blanks and the card stays,
+ *  because refusing the card would lose real work to a dangling pointer. A
+ *  child outlives its parent whenever two machines merge, half a board is
+ *  imported, or a parent is purged.
+ *
+ *  Two phases over one snapshot, which is what makes the answer independent of
+ *  the order the cards arrive in: first drop the links that are impossible
+ *  whatever else is on the board (an absent parent, the card itself, a habit at
+ *  either end), then drop any link whose parent *still* holds one. That second
+ *  pass is the one-level rule, and judging it on the survivors is deliberately
+ *  the generous reading — a middle card whose own link just broke is not a child
+ *  any more, so the link pointing at it is legitimate. A cycle has no such
+ *  escape: every card in it still holds a link, so every link goes and every
+ *  card stays. */
+function resolveLineage(cards) {
+  const byId = new Map(cards.map((c) => [c.id, c]));
+  const isHabitCard = (c) => c && c.type === 'habit' && Boolean(c.habitFreq);
+
+  const kept = new Map();
+  for (const c of cards) {
+    const id = c.parentId;
+    const parent = id && id !== c.id ? byId.get(id) : undefined;
+    kept.set(c.id, parent && !isHabitCard(parent) && !isHabitCard(c) ? id : '');
+  }
+  for (const c of cards) {
+    const id = kept.get(c.id);
+    c.parentId = id && kept.get(id) ? '' : id;
+  }
+  return cards;
+}
+
 /** Validate and coerce one incoming card; returns null if it has no title. */
 function cleanCard(raw, now, catIds) {
   if (!raw || typeof raw !== 'object' || typeof raw.title !== 'string' || !raw.title.trim()) {
@@ -1294,6 +1379,10 @@ function cleanCard(raw, now, catIds) {
     habitCount,
     habitTimes: habitTimesVal(raw.habitTimes, habitCount),
     habitHistory: habitHistoryVal(raw.habitHistory),
+    // Shape only. Whether that id names a card this board holds, is a habit,
+    // is this very card or is itself a child are questions about the *list*,
+    // which is resolveLineage's job once the whole board is in hand.
+    parentId: parentIdVal(raw.parentId),
     num: Number.isInteger(raw.num) && raw.num > 0 ? raw.num : 0,
     tags: Array.isArray(raw.tags) ? raw.tags.map((t) => String(t).trim().toLowerCase()).filter(Boolean) : [],
     createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : now,
@@ -1321,7 +1410,12 @@ const cryptoId = () => 'id-' + Math.random().toString(36).slice(2) + Date.now().
 function writeBoard(cards, boardId) {
   const now = Date.now();
   const catIds = categoryIds(boardId);
-  const clean = cards.map((c) => cleanCard(c, now, catIds)).filter(Boolean);
+  // The lineage is resolved here and not in cleanCard because "does this parent
+  // exist, is it itself a child, is it a habit" are questions about the list.
+  // `clean` is this board's incoming cards and nothing else, so a parent on
+  // another board is simply absent — the same scoping the sweep below depends
+  // on, restated for this field.
+  const clean = resolveLineage(cards.map((c) => cleanCard(c, now, catIds)).filter(Boolean));
   const keep = new Set(clean.map((c) => c.id));
 
   // Deliberately every row, not just the live ones: a card restored from the
@@ -1335,8 +1429,8 @@ function writeBoard(cards, boardId) {
     INSERT INTO cards (id, board_id, column_id, title, notes, type, category, importance, urgency,
                        effort, control, effort_src, control_src, deadline,
                        habit_freq, habit_count, habit_times, habit_history, plan, plan_src,
-                       num, tags, created_at, updated_at, position, deleted_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                       parent_id, num, tags, created_at, updated_at, position, deleted_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
     ON CONFLICT(id) DO UPDATE SET
       column_id = excluded.column_id, title = excluded.title, notes = excluded.notes,
       type = excluded.type, category = excluded.category,
@@ -1347,6 +1441,7 @@ function writeBoard(cards, boardId) {
       habit_freq = excluded.habit_freq, habit_count = excluded.habit_count,
       habit_times = excluded.habit_times, habit_history = excluded.habit_history,
       plan = excluded.plan, plan_src = excluded.plan_src,
+      parent_id = excluded.parent_id,
       num = excluded.num, tags = excluded.tags,
       created_at = excluded.created_at, updated_at = excluded.updated_at, position = excluded.position,
       deleted_at = NULL
@@ -1358,6 +1453,11 @@ function writeBoard(cards, boardId) {
   // keeps the board it is on, so no whole-board save can move a card between
   // boards. Moving one is a feature with its own questions to answer, not a
   // side effect of a save.
+  //
+  // `parent_id` is in the SET, and that is the opposite call for the opposite
+  // reason: where a card sits under another is a field the board's own dialog
+  // edits, so a save has to be able to change it — and to clear it, which is
+  // what detaching a child is. Left out, a link could only ever be added.
 
   db.exec('BEGIN IMMEDIATE');
   try {
@@ -1371,7 +1471,7 @@ function writeBoard(cards, boardId) {
       upsert.run(c.id, boardId, c.columnId, c.title, c.notes, c.type, c.category, c.importance, c.urgency,
         c.effort, c.control, c.effortSrc, c.controlSrc, c.deadline,
         c.habitFreq, c.habitCount, JSON.stringify(c.habitTimes), JSON.stringify(c.habitHistory),
-        c.plan, c.planSrc,
+        c.plan, c.planSrc, c.parentId,
         c.num, JSON.stringify(c.tags), c.createdAt, c.updatedAt, i));
     db.exec('COMMIT');
   } catch (err) {
@@ -1433,8 +1533,26 @@ function mergeBoard(cards, boardId) {
   // Every row of this board, live and trashed alike: the trashed ones are what
   // stop a stale save from undoing a deletion.
   const rows = new Map(db.prepare(
-    'SELECT id, updated_at, deleted_at, pending FROM cards WHERE board_id = ?')
+    'SELECT id, type, habit_freq, parent_id, updated_at, deleted_at, pending FROM cards WHERE board_id = ?')
     .all(boardId).map((r) => [r.id, r]));
+
+  // The lineage is resolved against the board this save will *produce* — the
+  // live rows plus the incoming cards — and not against the incoming list
+  // alone, which is what writeBoard can do because there the list is the whole
+  // board. Here it is a stale client's copy: a child whose parent that copy
+  // never held would have its link blanked, silently detaching a card the board
+  // still has. A trashed or pending row is not a parent, exactly as it is not
+  // on the board.
+  const lineage = new Map();
+  for (const r of rows.values()) {
+    if (r.deleted_at !== null || r.pending) continue;
+    lineage.set(r.id, { id: r.id, type: r.type, habitFreq: r.habit_freq, parentId: r.parent_id });
+  }
+  for (const c of clean) {
+    lineage.set(c.id, { id: c.id, type: c.type, habitFreq: c.habitFreq, parentId: c.parentId });
+  }
+  const parents = new Map(resolveLineage([...lineage.values()]).map((c) => [c.id, c.parentId]));
+  for (const c of clean) c.parentId = parents.get(c.id) || '';
   let nextPos = db.prepare(
     'SELECT COALESCE(MAX(position), -1) AS p FROM cards WHERE board_id = ?').get(boardId).p + 1;
 
@@ -1442,8 +1560,8 @@ function mergeBoard(cards, boardId) {
     INSERT INTO cards (id, board_id, column_id, title, notes, type, category, importance, urgency,
                        effort, control, effort_src, control_src, deadline,
                        habit_freq, habit_count, habit_times, habit_history, plan, plan_src,
-                       num, tags, created_at, updated_at, position, deleted_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                       parent_id, num, tags, created_at, updated_at, position, deleted_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
     ON CONFLICT(id) DO NOTHING
   `);
   const update = db.prepare(`
@@ -1452,7 +1570,7 @@ function mergeBoard(cards, boardId) {
       importance = ?, urgency = ?, effort = ?, control = ?,
       effort_src = ?, control_src = ?, deadline = ?,
       habit_freq = ?, habit_count = ?, habit_times = ?, habit_history = ?,
-      plan = ?, plan_src = ?,
+      plan = ?, plan_src = ?, parent_id = ?,
       tags = ?, updated_at = ?
     WHERE id = ? AND deleted_at IS NULL AND pending = 0
   `);
@@ -1470,7 +1588,7 @@ function mergeBoard(cards, boardId) {
         const { changes } = insert.run(c.id, boardId, c.columnId, c.title, c.notes, c.type, c.category,
           c.importance, c.urgency, c.effort, c.control, c.effortSrc, c.controlSrc, c.deadline,
           c.habitFreq, c.habitCount, JSON.stringify(c.habitTimes), JSON.stringify(c.habitHistory),
-          c.plan, c.planSrc,
+          c.plan, c.planSrc, c.parentId,
           c.num, JSON.stringify(c.tags), c.createdAt, c.updatedAt, nextPos++);
         if (changes) created += 1;
         continue;
@@ -1480,7 +1598,7 @@ function mergeBoard(cards, boardId) {
       update.run(c.columnId, c.title, c.notes, c.type, c.category, c.importance, c.urgency,
         c.effort, c.control, c.effortSrc, c.controlSrc, c.deadline,
         c.habitFreq, c.habitCount, JSON.stringify(c.habitTimes), JSON.stringify(c.habitHistory),
-        c.plan, c.planSrc,
+        c.plan, c.planSrc, c.parentId,
         JSON.stringify(c.tags), c.updatedAt, c.id);
     }
     db.exec('COMMIT');

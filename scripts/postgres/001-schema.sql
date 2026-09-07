@@ -91,7 +91,12 @@ CREATE TABLE IF NOT EXISTS board.cards (
   habit_times   TEXT   NOT NULL DEFAULT '[]',
   habit_history TEXT   NOT NULL DEFAULT '{}',
   plan          TEXT   NOT NULL DEFAULT '',
-  plan_src      TEXT   NOT NULL DEFAULT 'auto'
+  plan_src      TEXT   NOT NULL DEFAULT 'auto',
+  -- The one card this card is part of, or ''. No REFERENCES clause, matching
+  -- SQLite: the link is resolved against the live board on every write, and a
+  -- foreign key would also refuse a card whose parent sits in the Trash, where
+  -- the answer is to blank the link and keep the card.
+  parent_id     TEXT   NOT NULL DEFAULT ''
 );
 
 -- The agent's suggested edits. Its own table, never `cards`: the user opens

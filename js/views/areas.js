@@ -1,4 +1,4 @@
-import { cardLabel, controlVal } from '../core/cards.js';
+import { cardLabel, controlVal, matchesNesting } from '../core/cards.js';
 import { catColor, catLabel, categories } from '../core/categories.js';
 import { CONTROL_LABEL } from '../core/constants.js';
 import { filters, state } from '../core/state.js';
@@ -19,6 +19,14 @@ const SVGNS = 'http://www.w3.org/2000/svg';
 const WEEK = 7 * DAY;
 export const isOpen = (c) => c.columnId !== 'answered';
 
+/** The cards these two views read. `matchesNesting` **alone**, and that is not
+ *  an oversight: neither this view nor the Review has ever applied the
+ *  category, type, priority, tag or column filters, and switching them to
+ *  `matchesFilters` to pick up one new filter would quietly hand them four
+ *  others nobody asked for. Shared with review.js, which renders `areaRow` and
+ *  would otherwise answer a different question from the tile above it. */
+export const scopedCards = () => state.cards.filter(matchesNesting);
+
 export function humanAge(ms) {
   const d = Math.floor(ms / DAY);
   if (d < 1) return 'today';
@@ -29,7 +37,7 @@ export function humanAge(ms) {
 }
 
 function areaStats(catId) {
-  const cards = state.cards.filter((c) => c.category === catId);
+  const cards = scopedCards().filter((c) => c.category === catId);
   const open = cards.filter(isOpen);
   const oldest = open.reduce((m, c) => Math.min(m, c.createdAt), Infinity);
   const top = open.slice().sort((a, b) =>
@@ -280,7 +288,7 @@ function renderAreaDetail(catId) {
   h.textContent = `${catLabel(catId)} — a closer look`;
   wrap.append(h);
 
-  const cards = state.cards.filter((c) => c.category === catId);
+  const cards = scopedCards().filter((c) => c.category === catId);
   const open = cards.filter(isOpen);
 
   const purchases = open.filter((c) => c.tags.includes('purchase'));

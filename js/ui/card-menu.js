@@ -3,6 +3,7 @@ import { catColor, catLabel, categories } from '../core/categories.js';
 import { COLUMNS, TYPES, TYPE_META } from '../core/constants.js';
 import { planConflict, planDay } from '../core/plan.js';
 import { pad2 } from '../core/habits.js';
+import { canHaveChildren } from '../core/nesting.js';
 import { commit, short } from '../core/history.js';
 import { setFocusCard } from '../core/state.js';
 import { deleteCard } from './card-actions.js';
@@ -234,6 +235,22 @@ function paintRoot(cardId, panel) {
       closeCardMenus();
       openNewCard(fresh);
     }),
+    // Break a card into parts, or let go of the one it is a part of. Only
+    // whichever applies is offered: the lineage is one level deep, so exactly
+    // one of the two is ever available on a given card, and a habit takes
+    // neither. The child's draft costs nothing until it is saved, like
+    // Duplicate above.
+    ...(card && canHaveChildren(card)
+      ? [mkItem('Add child…', () => {
+        const fresh = getCard(cardId);
+        if (!fresh) return;
+        closeCardMenus();
+        openNewCard(null, { parentId: cardId, category: fresh.category });
+      })]
+      : []),
+    ...(card && card.parentId
+      ? [mkItem('Detach from parent', () => quickEdit(cardId, (c) => { c.parentId = ''; }, 'no parent'))]
+      : []),
     mkItem('Category ▸', () => paintCategories(cardId, panel)),
     mkItem('Type ▸', () => paintTypes(cardId, panel)),
     mkItem('Deadline ▸', () => paintDeadlines(cardId, panel)),

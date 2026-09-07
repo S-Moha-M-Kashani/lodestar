@@ -32,6 +32,27 @@ $('#column-filter').addEventListener('change', (e) => {
   render();
 });
 
+// How deep to read: parents only, or parents and children. Wired here beside
+// the other filters and deliberately NOT through `displaySwitch`, which is for
+// the Menu's switches — this is a filter with a dropdown of its own, painted on
+// every view including the Board. The stored value is applied before any
+// listener runs and WITHOUT calling render(): this module is still evaluating,
+// and a render() from here is the "Cannot access before initialization" the
+// module-graph notes are about. main.js's first render picks it up.
+const NESTING_KEY = KEY_PREFIX + 'nesting';
+try {
+  const stored = localStorage.getItem(NESTING_KEY);
+  if (stored === 'all') { filters.nesting = 'all'; $('#nesting-filter').value = 'all'; }
+} catch (_) { /* private mode */ }
+$('#nesting-filter').addEventListener('change', (e) => {
+  filters.nesting = e.target.value === 'all' ? 'all' : '';
+  try {
+    if (filters.nesting) localStorage.setItem(NESTING_KEY, filters.nesting);
+    else localStorage.removeItem(NESTING_KEY);
+  } catch (_) { /* private mode */ }
+  render();
+});
+
 // The tags dropdown: one tag or all of them. It writes the same Set the #
 // bar toggles, so the two stay one filter with two handles — picking here
 // replaces whatever combination the bar had built, and the empty option

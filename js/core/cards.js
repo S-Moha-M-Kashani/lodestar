@@ -1,6 +1,7 @@
 import { categories, sanitizeCategories } from './categories.js';
 import { COLUMNS, TYPES, priorityOf } from './constants.js';
 import { habitCountVal, habitFreqVal, habitHistoryVal, habitTimesVal, isHabit } from './habits.js';
+import { parentIdVal, resolveLineage } from './nesting.js';
 import { planSrcVal, planVal, resolvePlan } from './plan.js';
 import { commit } from './history.js';
 import { filters, state, view } from './state.js';
@@ -50,6 +51,7 @@ export function seedCards() {
        effort: 'medium', control: 'influence', effortSrc: 'default', controlSrc: 'default',
        deadline: '', plan: '', planSrc: 'auto',
        habitFreq: '', habitCount: 1, habitTimes: [], habitHistory: {},
+       parentId: '',
        tags, createdAt: now, updatedAt: now });
   // Seeds span categories, types and all four matrix quadrants, so every view
   // has something to show on a fresh board.
@@ -118,6 +120,11 @@ export function sanitizeCard(raw, reg = categories) {
     habitCount,
     habitTimes: habitTimesVal(raw.habitTimes, habitCount),
     habitHistory: habitHistoryVal(raw.habitHistory),
+    // Shape only, like `category` before the registry is consulted. Whether
+    // that id names a card this board holds — and whether the link is one level
+    // deep — are questions about the *list*, which is resolveLineage's job and
+    // runs once over the sanitized board.
+    parentId: parentIdVal(raw.parentId),
     num: Number.isInteger(raw.num) && raw.num > 0 ? raw.num : 0,
     tags: Array.isArray(raw.tags) ? raw.tags.map((t) => String(t).trim().toLowerCase()).filter(Boolean) : [],
     createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : Date.now(),
@@ -135,7 +142,11 @@ export function parseState(json) {
     version: 1,
     columns: COLUMNS,
     categories: cats,
-    cards: ensureNums(data.cards.map((c) => sanitizeCard(c, cats || categories)).filter(Boolean)),
+    // resolveLineage runs once, over the whole sanitized list: an import of
+    // half a board, or a file naming parents it does not carry, lands with the
+    // cards and without the links it cannot honour.
+    cards: resolveLineage(
+      ensureNums(data.cards.map((c) => sanitizeCard(c, cats || categories)).filter(Boolean))),
   };
 }
 
@@ -163,7 +174,30 @@ function matchesColumn(card) {
   return card.columnId !== 'answered';
 }
 
+/** Parents only, or parents and children together?
+ *
+ *  `filters.nesting` is '' for *parents only* — the default, because a child is
+ *  already shown inside its parent, so listing it again counts one piece of
+ *  work twice on the map, the Matrix and the register. 'all' shows everything.
+ *
+ *  Unlike the column filter this is **live on the Board too**, and it does not
+ *  have that filter's problem: hiding a child on the Board hides it from one
+ *  place while still showing it in another — its parent's fold — where the
+ *  column filter would have emptied two of the three columns in front of the
+ *  reader with nowhere else to look.
+ *
+ *  **An active text search outranks it.** A search whose only match is a child
+ *  would otherwise answer "no cards match" over a card the board is holding,
+ *  and a control that narrows the board must never be able to hide the thing
+ *  you just asked for by name. Exported because areas.js and review.js consult
+ *  this predicate alone: they have never applied the category, type, priority
+ *  or tag filters, and making them do so is a different change nobody asked
+ *  for. */
+export const matchesNesting = (card) =>
+  Boolean(filters.nesting === 'all' || searchNeedle() || !card.parentId);
+
 export function matchesFilters(card) {
+  if (!matchesNesting(card)) return false;
   if (!matchesColumn(card)) return false;
   if (filters.type && card.type !== filters.type) return false;
   if (filters.category && card.category !== filters.category) return false;
@@ -190,7 +224,12 @@ const searchNeedle = () => filters.search.trim().toLowerCase();
 // default hides Done on its own, and "No cards match" over an empty Backlog
 // would blame a filter the reader never set.
 export const filtersActive = () => Boolean(searchNeedle() || filters.type || filters.category || filters.prio || filters.tags.size
-  || (columnFilterOn() && filters.column && filters.column !== 'all'));
+  || (columnFilterOn() && filters.column && filters.column !== 'all')
+  // The scope filter counts, and its *default* is the narrowing one — so the
+  // empty-column hint must not say "No cards match" over children the reader
+  // cannot see and did not switch off. It is inert while a search is running,
+  // where the search itself is already in this list.
+  || (filters.nesting !== 'all' && !searchNeedle() && state.cards.some((c) => c.parentId)));
 
 /** File a card in a column, and record nothing.
  *

@@ -50,7 +50,10 @@ export let state = loadState();
 // control and the default it enforces go together, since hiding the control
 // while it still narrows the board leaves cards missing with nothing on screen
 // to explain it.
-export const filters = { search: '', type: '', category: '', prio: '', column: '', columnsOff: false, tags: new Set() };
+// `nesting` is the scope: '' means "parents only" — a child is already shown
+// inside its parent, so a listing of its own counts one piece of work twice —
+// and 'all' means parents and children together.
+export const filters = { search: '', type: '', category: '', prio: '', column: '', columnsOff: false, nesting: '', tags: new Set() };
 export let focusCardId = null; // restore focus after re-render (keyboard moves)
 export let draggedId = null;
 export let dealCards = true; // deal-in animation runs on first render only

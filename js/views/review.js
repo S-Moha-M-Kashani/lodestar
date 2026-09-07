@@ -8,7 +8,7 @@ import { deleteCard } from '../ui/card-actions.js';
 import { announce, columnCards, getCard } from '../ui/dom.js';
 import { openDialog } from '../ui/edit-dialog.js';
 import { render } from '../ui/render.js';
-import { areaRow, detailPanel, humanAge, isOpen } from './areas.js';
+import { areaRow, detailPanel, humanAge, isOpen, scopedCards } from './areas.js';
 import { DAY } from './matrix.js';
 import { mulberry32 } from './overview.js';
 
@@ -36,7 +36,7 @@ const dateSeed = (key) => {
 // date — a Readwise-style daily re-encounter. Picks are pinned for the day
 // so acting on one ("Still matters") doesn't reshuffle the other two.
 function resurfaceToday() {
-  const open = state.cards.filter(isOpen);
+  const open = scopedCards().filter(isOpen);
   const d = new Date();
   const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   // Today's picks are pinned (and stored) — acting on one, or even trashing
@@ -122,10 +122,10 @@ export function renderReview() {
   const sheet = document.createElement('div');
   sheet.className = 'plot-sheet review-sheet';
   const now = Date.now();
-  const open = state.cards.filter(isOpen);
+  const open = scopedCards().filter(isOpen);
   const wk1 = now - 7 * DAY, wk2 = now - 14 * DAY;
-  const answeredIn = (from, to) => state.cards.filter((c) => !isOpen(c) && c.updatedAt >= from && c.updatedAt < to);
-  const createdIn = (from, to) => state.cards.filter((c) => c.createdAt >= from && c.createdAt < to);
+  const answeredIn = (from, to) => scopedCards().filter((c) => !isOpen(c) && c.updatedAt >= from && c.updatedAt < to);
+  const createdIn = (from, to) => scopedCards().filter((c) => c.createdAt >= from && c.createdAt < to);
 
   let lastReviewedAt = 0;
   try { lastReviewedAt = Number(localStorage.getItem(REVIEW_KEY)) || 0; } catch (_) { /* private mode */ }
@@ -170,7 +170,7 @@ export function renderReview() {
   sheet.append(tiles);
 
   // Week-over-week drift per life area.
-  const inUse = categories.filter((c) => state.cards.some((k) => k.category === c.id));
+  const inUse = categories.filter((c) => scopedCards().some((k) => k.category === c.id));
   if (inUse.length) {
     const deltas = detailPanel('Week over week', 'New and answered per area — this week against last.');
     deltas.classList.add('review-deltas');

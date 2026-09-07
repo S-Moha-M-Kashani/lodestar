@@ -21,7 +21,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   PLAN_SECTIONS, planCardsIn, planConflict, planEnd, planGroups, planSection,
-  planSrcVal, planStart, planVal, resolvePlan,
+  planSrcVal, planStart, planVal, planWords, resolvePlan,
 } from '../js/core/plan.js';
 
 // A Wednesday, mid-month, mid-year — every edge is a different date.
@@ -50,6 +50,17 @@ test('a plan is a year, a year and month, or a day — and a bad tail is dropped
   assert.equal(planSrcVal('user'), 'user');
   assert.equal(planSrcVal('ai'), 'ai');
   assert.equal(planSrcVal('nonsense'), 'auto');
+
+  // Read back at exactly the precision it was given, which is what the dialog
+  // prints under the three dropdowns: a year, a month and a day showing in
+  // three selects never *look* wrong, even when they say something else.
+  assert.equal(planWords('2027'), '2027');
+  assert.equal(planWords('2027-03'), 'March 2027');
+  assert.equal(planWords('2027-03-04'), '4 March 2027');
+  assert.equal(planWords(''), '');
+  // A bad tail is dropped before it is spoken, so the words cannot claim a
+  // precision the value does not hold.
+  assert.equal(planWords('2027-02-30'), 'February 2027');
 });
 
 // This is a unit test.

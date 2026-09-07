@@ -4,6 +4,7 @@ import { categories, sanitizeCategories, setCategories } from './categories.js';
 import { saveState, saveTimeline, snapshot, timeline } from './history.js';
 import { HISTORY_LIMIT, SYNC_KEY } from './keys.js';
 import { mergeCardLists } from './merge.js';
+import { resolveLineage } from './nesting.js';
 import { loadedFromStorage, setCards, setDealCards, state } from './state.js';
 import { announce } from '../ui/dom.js';
 import { render } from '../ui/render.js';
@@ -54,8 +55,16 @@ const boardFingerprint = (cards) =>
     c.plan || '', c.planSrc || '',
     // Habit completions belong here: a board that differs only by a punch is
     // not "already in sync", and skipping the adopt would lose the tick.
-    c.habitFreq || '', c.habitCount || 1, (c.habitTimes || []).join('|'),
+    c.habitFreq || '', c.habitCount || 1,
+    // The schedule too, for the same reason one level down: a habit that
+    // differs only by the hour it is expected at is a different reminder. Slots
+    // are objects now, so `join('|')` would have compared '[object Object]'
+    // against itself and quietly called every schedule change a no-op.
+    JSON.stringify(c.habitTimes || []),
     JSON.stringify(c.habitHistory || {}),
+    // And the parent, which is the field whose absence here loses a
+    // re-parenting exactly as it once would have lost a punch.
+    c.parentId || '',
     c.num, (c.tags || []).join('|')].join('␟')).join('␞');
 
 /** FNV-1a, because the watermark stores a hash of the fingerprint rather than
@@ -116,7 +125,10 @@ function applyServerBoard(data) {
   // ensureNums matters here: a card the server created (an agent edit, or a
   // just-confirmed proposal) arrives with num 0, and without this it would
   // render as C-000 until the next reload.
-  const cards = ensureNums(data.cards.map((c) => sanitizeCard(c)).filter(Boolean));
+  // resolveLineage over the whole list, as parseState does: the server sends
+  // only its live cards, so a child whose parent has just been trashed
+  // elsewhere arrives holding a link this board cannot honour.
+  const cards = resolveLineage(ensureNums(data.cards.map((c) => sanitizeCard(c)).filter(Boolean)));
   setCards(cards);
   lastRev = typeof data.rev === 'string' ? data.rev : '';
   saveState({ push: false });
@@ -284,7 +296,11 @@ export async function initServerSync() {
     setCategories([...serverCats, ...categories.filter((c) => !have.has(c.id))]);
   }
 
-  const merged = mergeCardLists(state.cards, serverCards, tombstones);
+  // Resolved after the merge and not before it: the merge is precisely how a
+  // child outlives its parent — this browser keeps a local-only child while the
+  // server's Trash accounts for the parent — which is the case the blank-never-
+  // refuse rule was written for.
+  const merged = resolveLineage(mergeCardLists(state.cards, serverCards, tombstones));
   if (boardFingerprint(merged) === boardFingerprint(state.cards)) {
     pushToServer(); // nothing to show; the server still needs our copy
     return;

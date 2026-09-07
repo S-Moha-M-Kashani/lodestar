@@ -27,10 +27,13 @@ export function onCardKeydown(e, cardId) {
     e.preventDefault();
     const step = e.key === ']' ? 1 : -1;
     let next = columnIndex(card.columnId) + step;
-    // Step over a column this card cannot be in — In Progress takes no habit,
-    // so one ] carries a habit from the Inbox to Done. Without the skip the
-    // key would simply stop working on habits, which reads as a broken board
-    // rather than as a rule.
+    // Step over a column this card cannot be in, rather than stopping dead on
+    // it — a key that silently does nothing reads as a broken board rather than
+    // as a rule. In Progress refusing a habit is the only such rule today and
+    // it is no longer reachable from here (a habit is not painted as a board
+    // card since 2026-09-07, so this handler never sees one); the skip stays
+    // because it is the general answer, and `columnAccepts` is where the rule
+    // itself lives.
     if (COLUMNS[next] && !columnAccepts(card, COLUMNS[next].id)) next += step;
     if (next < 0 || next >= COLUMNS.length) return;
     setFocusCard(cardId);

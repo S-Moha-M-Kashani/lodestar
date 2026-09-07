@@ -1,21 +1,31 @@
 import { catColor } from '../core/categories.js';
-import { HABIT_EVERY, HABIT_NOW, cadenceText, habitCards, habitDoneIn, habitDoneNow, habitDue, habitPeriod, habitPeriodsBack, habitRetired, habitTally, pad2, punchHabit, unpunchHabit } from '../core/habits.js';
+import { HABIT_EVERY, HABIT_NOW, cadenceText, habitCards, habitDoneIn, habitDoneNow, habitDue, habitExpectedBy, habitPeriod, habitPeriodsBack, habitReminding, habitRetired, habitTally, punchHabit, unpunchHabit } from '../core/habits.js';
 import { commit, short } from '../core/history.js';
 import { KEY_PREFIX } from '../core/keys.js';
 import { view } from '../core/state.js';
+import { wireCardContext } from './card-menu.js';
 import { $, announce, getCard } from './dom.js';
 import { openDialog } from './edit-dialog.js';
-import { render } from './render.js';
 
 // Habit UI — the punch strip, the history tape, the rail and the reminder.
 //
 // The strip is the signature object: one box per repetition the period asks
 // for, stamped in the card's own category ink. It is the count, the progress
 // and the control at once, so there is no second widget to keep in step.
+//
+// A habit is drawn here and nowhere else. It was also painted as a card in its
+// board column until 2026-09-07, which meant two shapes for one fact and a
+// second punch strip to keep in step; `habitCardParts` drew that and is gone.
+// The strip is the rail's, and the history tape is the card dialog's.
 
-const PUNCH_MAX_BOXES = 8;  // past this a strip stops being readable at a glance
+// Past this the strip stops being readable at a glance, and — since 2026-09-07
+// — stops leaving room for the name beside it. It was 8 while the strip had a
+// whole line of a board card to itself; the rail's row is one line, 200px wide
+// by default, and eight boxes plus a written count filled all of it, leaving a
+// name of zero width that could not even be clicked. Five plus the count is
+// what fits, and `punch-more` is what still says the real number.
+const PUNCH_MAX_BOXES = 5;
 const TAPE_PERIODS = { daily: 21, weekly: 12, monthly: 12, yearly: 6 };
-const openTapes = new Set(); // card ids whose history is expanded
 
 function punchStrip(card) {
   const strip = document.createElement('div');
@@ -60,8 +70,13 @@ function punchStrip(card) {
 }
 
 /** The history, run sideways: one cell per past period, carrying the number
- *  punched into it, dotted where the period was missed. */
-function habitTape(card) {
+ *  punched into it, dotted where the period was missed.
+ *
+ *  It lives in the card dialog's schedule block since 2026-09-07 — beside the
+ *  cadence that produced it, and folded, which is why nothing here tracks
+ *  whether it is open any more: a `<details>` element holds that. It was drawn
+ *  on the board card until then, and a habit is not drawn as a board card. */
+export function habitTape(card) {
   const n = TAPE_PERIODS[card.habitFreq] || 21;
   const periods = habitPeriodsBack(card.habitFreq, n);
   const current = habitPeriod(card.habitFreq);
@@ -99,82 +114,101 @@ function habitTape(card) {
   return wrap;
 }
 
-/** Everything a habit adds to its card: the cadence in words, the strip, and
- *  the history behind a button. */
-export function habitCardParts(card, el) {
-  const cadence = document.createElement('p');
-  cadence.className = 'habit-cadence';
-  cadence.textContent = habitRetired(card) ? `${cadenceText(card)} · retired` : cadenceText(card);
-  el.append(cadence);
-
-  const line = document.createElement('div');
-  line.className = 'habit-line';
-  if (!habitRetired(card)) line.append(punchStrip(card));
-
-  const toggle = document.createElement('button');
-  toggle.type = 'button';
-  toggle.className = 'habit-history-toggle';
-  toggle.textContent = '↻ history';
-  toggle.title = 'Show what you have done';
-  toggle.setAttribute('aria-expanded', String(openTapes.has(card.id)));
-  toggle.addEventListener('click', (e) => {
-    e.stopPropagation();
-    if (openTapes.has(card.id)) openTapes.delete(card.id);
-    else openTapes.add(card.id);
-    render();
-  });
-  line.append(toggle);
-  el.append(line);
-
-  if (openTapes.has(card.id)) el.append(habitTape(card));
-}
-
-/** The habits section of the rail beside the board. Absent until there is one
- *  — an empty list would cost every non-habit user the top of the panel. */
+/** The rail's habits section — the one place a habit appears.
+ *
+ *  Absent until there is a habit at all: an empty list would cost every
+ *  non-habit user the top of the panel. Retired habits keep it alive on their
+ *  own, though, behind the closed line at its foot — dropping a retired habit
+ *  from the rail *and* from the columns would leave a card reachable only from
+ *  the Backlog, which is how a habit gets lost the day after you finish with
+ *  it.
+ *
+ *  One line per habit, and the punch boxes come first: punching is what the
+ *  rail is *for*, and the name is what you read to know which habit you are
+ *  punching. The rail is the board's narrow margin and its width is the user's
+ *  to set (`--rail-w`), so a name too long for it is truncated on that one line
+ *  rather than wrapped — a wrapped name would undo the width they chose. */
 export function renderHabitRail() {
-  const habits = habitCards().filter((c) => !habitRetired(c));
+  const habits = habitCards();
   if (!habits.length) return null;
+  const running = habits.filter((c) => !habitRetired(c));
+  const retired = habits.filter(habitRetired);
 
   const rail = document.createElement('section');
   rail.className = 'habit-rail';
   rail.setAttribute('aria-label', 'Habits');
 
+  // One line: the section's name and how many are due. It was two — a heading
+  // over a subtitle — in the panel whose whole job is to be narrow.
   const head = document.createElement('div');
   head.className = 'habit-rail-head';
   const title = document.createElement('h2');
   title.className = 'habit-rail-title';
-  title.textContent = 'Habits';
+  title.textContent = '↻ Habits';
   const sub = document.createElement('p');
   sub.className = 'habit-rail-sub';
-  const due = habits.filter(habitDue).length;
-  sub.textContent = due ? `${due} due` : 'All done';
+  const due = running.filter(habitDue).length;
+  sub.textContent = running.length ? (due ? `${due} due` : 'All done') : '';
   head.append(title, sub);
   rail.append(head);
 
   // Due first, finished after — a day's ledger, not a nag list.
-  for (const card of [...habits].sort((a, b) => Number(habitDue(b)) - Number(habitDue(a)))) {
-    const row = document.createElement('div');
-    row.className = 'habit-rail-row' + (habitDue(card) ? '' : ' done');
-    row.style.setProperty('--cat', catColor(card.category));
-    if (card.category) row.classList.add('categorized');
-
-    const top = document.createElement('div');
-    top.className = 'habit-rail-name';
-    const name = document.createElement('button');
-    name.type = 'button';
-    name.className = 'habit-rail-open';
-    name.textContent = card.title;
-    name.title = 'Open this card';
-    name.addEventListener('click', () => openDialog(card.id));
-    const tally = document.createElement('span');
-    tally.className = 'habit-rail-tally';
-    tally.textContent = habitTally(card);
-    top.append(name, tally);
-
-    row.append(top, punchStrip(card));
-    rail.append(row);
+  for (const card of [...running].sort((a, b) => Number(habitDue(b)) - Number(habitDue(a)))) {
+    rail.append(habitRailRow(card));
   }
+
+  if (retired.length) rail.append(retiredFold(retired));
   return rail;
+}
+
+/** One habit, on one line: its boxes, then its name.
+ *
+ *  No written tally beside them. Where every repetition has a box the boxes
+ *  *are* the tally, and `2/3` printed next to three boxes is the same fact
+ *  twice; where the strip is capped, `punchStrip` prints the count itself
+ *  (`punch-more`), which is the one place it knows something the boxes do not. */
+function habitRailRow(card) {
+  const row = document.createElement('div');
+  row.className = 'habit-rail-row' + (habitDue(card) ? '' : ' done');
+  row.style.setProperty('--cat', catColor(card.category));
+  if (card.category) row.classList.add('categorized');
+
+  const name = document.createElement('button');
+  name.type = 'button';
+  name.className = 'habit-rail-open';
+  name.textContent = card.title;
+  // The row is one line and the name is clipped to fit it, so the full name has
+  // to be reachable another way — by hover and by screen reader alike.
+  name.title = `${card.title} — ${cadenceText(card)} · ${habitTally(card)}`;
+  name.setAttribute('aria-label', `Open ${card.title} (${habitTally(card)})`);
+  name.addEventListener('click', () => openDialog(card.id));
+
+  if (!habitRetired(card)) row.append(punchStrip(card));
+  row.append(name);
+  // The card's actions, wherever the card is shown — the 2026-09-06 rule, and
+  // now load-bearing rather than a convenience: a habit has no board card and
+  // therefore no `+`, so without this its Duplicate, Category, Type, Move to
+  // and Delete would be reachable only from the Backlog.
+  wireCardContext(row, card.id);
+  return row;
+}
+
+/** The retired habits, behind a closed line at the rail's foot. Not in the
+ *  day's list above it — a habit you have finished with is not today's work —
+ *  and not gone either, because it is the one most likely to be looked for
+ *  later. Opening one from here and filing it back in the Inbox brings it
+ *  round again, history intact. */
+function retiredFold(retired) {
+  const fold = document.createElement('details');
+  fold.className = 'habit-retired';
+
+  const summary = document.createElement('summary');
+  summary.className = 'habit-retired-summary';
+  summary.textContent = `${retired.length} retired`;
+  fold.append(summary);
+
+  for (const card of retired) fold.append(habitRailRow(card));
+  return fold;
 }
 
 // --- The reminder ---------------------------------------------------------
@@ -195,16 +229,6 @@ let audioCtx = null;
 // Keys of things already sounded, so the bip marks a change rather than
 // repeating on every render.
 const sounded = new Set();
-
-/** How many repetitions the clock has asked for so far. With no slots set the
- *  whole period is fair game, so the full target is expected from its start. */
-function habitExpectedBy(card, at = new Date()) {
-  if (!card.habitTimes.length) return card.habitCount;
-  const now = `${pad2(at.getHours())}:${pad2(at.getMinutes())}`;
-  return card.habitTimes.filter((t) => t <= now).length;
-}
-const habitReminding = (card, at = new Date()) =>
-  habitDue(card) && habitDoneNow(card) < habitExpectedBy(card, at);
 
 // --- The chime -------------------------------------------------------------
 // Four synthesized voices, no audio files. The chosen one is what the

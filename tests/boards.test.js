@@ -44,6 +44,29 @@ test('a whole-board PUT touches only the board it names', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test. The lineage restated as a board question, which
+// is the shape of the first test above: writeBoard resolves a parent link
+// against the cards of the one board it is saving, so an id that names a card
+// on a *different* board is simply absent — and a link the board cannot honour
+// blanks while the card stays.
+test('a parent on another board is no parent at all', async () => {
+  const s = await startServer();
+  try {
+    const home = await newBoard(s.base, 'Home');
+    await put(s.base, [{ id: 'w-parent', columnId: 'inbox', title: 'Work parent' }]);
+    // A card on Home naming a card on the default board as its parent.
+    const body = await (await put(s.base, [
+      { id: 'h-child', columnId: 'inbox', title: 'Home child', parentId: 'w-parent' },
+    ], home.id)).json();
+    assert.equal(body.cards.find((c) => c.id === 'h-child').parentId, '');
+    // And the card is still there, on its own board, with nothing else changed.
+    const home2 = await get(s.base, `/api/state?board=${home.id}`);
+    assert.deepEqual(home2.cards.map((c) => c.id), ['h-child']);
+    const work = await get(s.base, '/api/state');
+    assert.deepEqual(work.cards.map((c) => c.id), ['w-parent']);
+  } finally { await s.stop(); }
+});
+
 // This is an integration test. The 2026-08-22 incident: a second machine loaded
 // this board with a days-old copy, saved it, and the sweep archived the 24 cards
 // that copy had never heard of. A save now says which version of the board it was

@@ -520,27 +520,45 @@ const putCards = (base, cards) => fetch(base + '/api/state', {
   body: JSON.stringify({ version: 1, cards }),
 });
 
-// This is an integration test.
-test('PUT /api/state round-trips the habit fields', async () => {
+// A schedule slot, spelled out: the shape habitTimes entries took on
+// 2026-09-07, when a habit gained a *when* as well as a how-often.
+const SLOT = { month: '', weekday: '', day: '', time: '' };
+const slot = (over) => ({ ...SLOT, ...over });
+
+// This is an integration test. The migration is the load-bearing half: every
+// board stored before 2026-09-07 holds plain 'HH:MM' strings in this column,
+// and reading one back as a slot naming that hour is the whole of what keeps
+// those reminders working — there is no backfill and no second column.
+test('PUT /api/state round-trips the habit fields, clock strings included', async () => {
   const s = await startServer();
   try {
     const put = await putCards(s.base, [{
       id: 'h1', columnId: 'inbox', title: 'Meditate', type: 'habit',
       habitFreq: 'daily', habitCount: 2, habitTimes: ['07:00', '21:00'],
       habitHistory: { '2026-07-30': [1785431613000] },
+    }, {
+      id: 'h2', columnId: 'inbox', title: 'Long walk', type: 'habit',
+      habitFreq: 'weekly', habitCount: 2,
+      habitTimes: [{ weekday: '2', time: '07:00' }, { month: '03', day: '12' }],
+      habitHistory: {},
     }]);
     assert.equal(put.status, 200);
     const echoed = (await put.json()).cards.find((c) => c.id === 'h1');
     assert.equal(echoed.type, 'habit');
     assert.equal(echoed.habitFreq, 'daily');
     assert.equal(echoed.habitCount, 2);
-    assert.deepEqual(echoed.habitTimes, ['07:00', '21:00']);
+    assert.deepEqual(echoed.habitTimes, [slot({ time: '07:00' }), slot({ time: '21:00' })]);
     assert.deepEqual(echoed.habitHistory, { '2026-07-30': [1785431613000] });
+
     // Survives a fresh read, not just the PUT echo.
     const state = await (await fetch(s.base + '/api/state')).json();
     const stored = state.cards.find((c) => c.id === 'h1');
     assert.deepEqual(stored.habitHistory, { '2026-07-30': [1785431613000] });
-    assert.deepEqual(stored.habitTimes, ['07:00', '21:00']);
+    assert.deepEqual(stored.habitTimes, [slot({ time: '07:00' }), slot({ time: '21:00' })]);
+    // Every field of a slot is stored whatever the cadence reads, so a habit
+    // moved from weekly to monthly and back has its weekday again.
+    assert.deepEqual(state.cards.find((c) => c.id === 'h2').habitTimes,
+      [slot({ weekday: '2', time: '07:00' }), slot({ month: '03', day: '12' })]);
   } finally { await s.stop(); }
 });
 
@@ -554,7 +572,10 @@ test('a card that says nothing about habits gets the habit defaults', async () =
     const card = body.cards[0];
     assert.equal(card.habitFreq, '');
     assert.equal(card.habitCount, 1);
-    assert.deepEqual(card.habitTimes, []);
+    // One slot per repetition, and habitCount floors at 1 — so even a card
+    // that is not a habit carries a single empty slot. That is what lets the
+    // dialog draw a row per repetition without measuring the array first.
+    assert.deepEqual(card.habitTimes, [SLOT]);
     assert.deepEqual(card.habitHistory, {});
   } finally { await s.stop(); }
 });
@@ -611,18 +632,82 @@ test('habitCount is clamped to 1..99 and always a whole number', async () => {
   } finally { await s.stop(); }
 });
 
-// This is an integration test.
-test('habitTimes are normalized: valid, sorted, deduped, and never more than the target', async () => {
+// This is an integration test. The rule changed on 2026-09-07 and the change is
+// the point: a slot is the *nth repetition*, so the validator may no longer
+// sort and may no longer de-duplicate. It pads and truncates to the count
+// instead, and a bad entry blanks its own row without shifting the rows after
+// it — a form that rearranges itself under the hand filling it in is worse than
+// one that asks twice, and two repetitions may legitimately fall at one hour.
+test('a habit carries one schedule slot per repetition, in repetition order', async () => {
   const s = await startServer();
   try {
     const body = await (await putCards(s.base, [{
       id: 't1', columnId: 'inbox', title: 'Times', type: 'habit',
-      habitFreq: 'daily', habitCount: 2,
-      // out of order, a duplicate, an unpadded hour, an impossible clock time,
-      // a non-string — and one more than the target allows.
+      habitFreq: 'daily', habitCount: 4,
+      // out of order and holding a repeat, both of which must survive; then an
+      // unpadded hour, an impossible clock time and a non-string, each of which
+      // blanks its own row; and one entry more than the count allows.
       habitTimes: ['21:00', '07:00', '07:00', '7:30', '25:99', 12, '13:15'],
+    }, {
+      id: 't2', columnId: 'inbox', title: 'Padded', type: 'habit',
+      habitFreq: 'daily', habitCount: 3, habitTimes: ['09:00'],
     }])).json();
-    assert.deepEqual(body.cards[0].habitTimes, ['07:00', '13:15']);
+    assert.deepEqual(body.cards.find((c) => c.id === 't1').habitTimes,
+      [slot({ time: '21:00' }), slot({ time: '07:00' }), slot({ time: '07:00' }), SLOT]);
+    // Raising the count adds empty slots rather than leaving a short array.
+    assert.deepEqual(body.cards.find((c) => c.id === 't2').habitTimes,
+      [slot({ time: '09:00' }), SLOT, SLOT]);
+  } finally { await s.stop(); }
+});
+
+// This is an integration test. The parent link is the one card field whose
+// validity is a question about the *list* rather than about the card, so it is
+// resolved once in writeBoard where the whole board is in hand. It blanks and
+// never refuses — the `category` precedent, and for a sharper reason: a child
+// outlives its parent every time two machines merge or half a board is
+// imported, and refusing the card would lose real work to a dangling pointer.
+test('a card’s parent survives a save, and a link the board cannot honour blanks', async () => {
+  const s = await startServer();
+  try {
+    const body = await (await putCards(s.base, [
+      { id: 'p', columnId: 'inbox', title: 'Plan a long weekend' },
+      { id: 'k', columnId: 'inbox', title: 'Book the hut', parentId: 'p' },
+      { id: 'gone', columnId: 'inbox', title: 'Orphan', parentId: 'no-such-card' },
+      { id: 'self', columnId: 'inbox', title: 'Its own parent', parentId: 'self' },
+      { id: 'c1', columnId: 'inbox', title: 'Cycle one', parentId: 'c2' },
+      { id: 'c2', columnId: 'inbox', title: 'Cycle two', parentId: 'c1' },
+      { id: 'deep', columnId: 'inbox', title: 'A grandchild', parentId: 'k' },
+      { id: 'hab', columnId: 'inbox', title: 'Stretch', type: 'habit',
+        habitFreq: 'daily', parentId: 'p' },
+    ])).json();
+    const parentOf = (id) => body.cards.find((c) => c.id === id).parentId;
+
+    assert.equal(parentOf('k'), 'p');       // the one good link
+    assert.equal(parentOf('gone'), '');     // a parent the board does not hold
+    assert.equal(parentOf('self'), '');     // itself
+    assert.equal(parentOf('c1'), '');       // both halves of a cycle …
+    assert.equal(parentOf('c2'), '');
+    assert.equal(parentOf('deep'), '');     // one level deep, so this is dropped
+    assert.equal(parentOf('hab'), '');      // a habit is neither parent nor child
+    // Not one card was refused for the link it carried.
+    assert.equal(body.cards.length, 8);
+
+    // And it is stored, not merely echoed — a re-parenting has to outlive the
+    // request that made it.
+    const state = await (await fetch(s.base + '/api/state')).json();
+    assert.equal(state.cards.find((c) => c.id === 'k').parentId, 'p');
+    assert.equal(state.cards.find((c) => c.id === 'deep').parentId, '');
+
+    // A board save owns this field and must be able to change it, unlike
+    // `pending` and `board_id`: re-filing 'deep' under 'p' has to stick.
+    const again = await (await putCards(s.base, state.cards.map((c) =>
+      (c.id === 'deep' ? { ...c, parentId: 'p' } : c)))).json();
+    assert.equal(again.cards.find((c) => c.id === 'deep').parentId, 'p');
+    // …and detaching it again has to stick too, or a link could only ever be
+    // added. A conflict SET that forgot the column would pass the line above.
+    const off = await (await putCards(s.base, again.cards.map((c) =>
+      (c.id === 'deep' ? { ...c, parentId: '' } : c)))).json();
+    assert.equal(off.cards.find((c) => c.id === 'deep').parentId, '');
   } finally { await s.stop(); }
 });
 
@@ -750,8 +835,11 @@ test('a legacy database gains the habit columns with their defaults', async () =
     assert.ok(card, 'the pre-habit card survived migration');
     assert.equal(card.habitFreq, '');
     assert.equal(card.habitCount, 1);
-    assert.deepEqual(card.habitTimes, []);
+    assert.deepEqual(card.habitTimes, [SLOT]);
     assert.deepEqual(card.habitHistory, {});
+    // The same question for the newest column: a board written before cards
+    // could name a parent opens with no parent named, not with a broken one.
+    assert.equal(card.parentId, '');
   } finally { await s.stop(); }
 });
 
@@ -770,14 +858,14 @@ test('a proposal can carry habit fields through the confirmation gate', async ()
     const proposal = await res.json();
     assert.equal(proposal.type, 'habit');
     assert.equal(proposal.habitFreq, 'daily');
-    assert.deepEqual(proposal.habitTimes, ['08:00']);
+    assert.deepEqual(proposal.habitTimes, [slot({ time: '08:00' })]);
 
     const confirm = await fetch(`${s.base}/api/proposals/${proposal.id}/confirm`, { method: 'POST' });
     assert.equal(confirm.status, 200);
     const state = await (await fetch(s.base + '/api/state')).json();
     const live = state.cards.find((c) => c.id === proposal.id);
     assert.equal(live.habitFreq, 'daily');
-    assert.deepEqual(live.habitTimes, ['08:00']);
+    assert.deepEqual(live.habitTimes, [slot({ time: '08:00' })]);
   } finally { await s.stop(); }
 });
 
