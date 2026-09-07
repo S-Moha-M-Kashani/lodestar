@@ -4658,38 +4658,50 @@ try:
               and page.input_value("#card-control") == "act")
         page.click("#cancel-dialog")
 
-        # ---- Overview: PCA ⇄ t-SNE toggle -----------------------------------
+        # ---- Overview: the map degrades and says which one it is ------------
+        #
+        # Rewritten 2026-09-07. The browser's own t-SNE is deleted — the layout
+        # is the brain's now — and this whole suite runs with
+        # QBOARD_DISABLE_SEMANTIC, so what there is to check here is no longer
+        # "does t-SNE move the dots" but the degradation itself: the map renders
+        # with no service and no network, it names the layout it is showing, and
+        # the control that needs the service says so instead of being absent or
+        # silently doing nothing. That the projection ARITHMETIC is right is
+        # pinned in brain/tests/test_projection.py, where it can be asserted
+        # against numbers rather than against pixel positions.
         page.locator('.view-switch button[data-view="overview"]').click()
         page.wait_for_selector("#board.overview .plot-dot")
         n_dots = page.locator(".plot-dot").count()
-        check("tsne: projection toggle renders with PCA pressed by default",
+        check("map: it renders with the semantic layer switched off", n_dots > 0)
+        check("map: the projection toggle renders with PCA pressed by default",
               page.locator(".plot-proj-toggle button").count() == 2
               and page.get_attribute('.plot-proj-toggle button[data-proj="pca"]', "aria-pressed") == "true"
               and "PC-1" in page.locator(".plot-axis-x").inner_text())
+        check("map: the status line names the keyword layout it is showing",
+              "keyword overlap" in page.locator(".plot-status").inner_text())
+        tsne_btn = page.locator('.plot-proj-toggle button[data-proj="tsne"]')
+        check("map: t-SNE is offered but disabled, and states the reason",
+              tsne_btn.is_disabled()
+              and "t-SNE needs the assistant service" in (tsne_btn.get_attribute("title") or ""))
+        # No network call at all on the offline path — the switch is what makes
+        # this suite network-free, so a request slipping out here would be the
+        # whole contract quietly gone.
+        rag_calls = []
+        page.on("request", lambda r: rag_calls.append(r.url) if "/api/rag/" in r.url else None)
         pca_pos = page.eval_on_selector_all(
             ".plot-dot", "els => els.map(e => e.dataset.id + '@' + e.style.left + ',' + e.style.top)")
-        page.click('.plot-proj-toggle button[data-proj="tsne"]')
-        page.wait_for_selector('.plot-proj-toggle button[data-proj="tsne"][aria-pressed="true"]')
-        check("tsne: axis labels switch to t-SNE-1/2",
-              "t-SNE-1" in page.locator(".plot-axis-x").inner_text())
-        page.wait_for_function(
-            "document.querySelector('.plot-status').textContent.includes('t-SNE layout')",
-            timeout=30000)
-        check("tsne: one dot per question, unchanged by the projection",
-              page.locator(".plot-dot").count() == n_dots)
-        tsne_pos = page.eval_on_selector_all(
-            ".plot-dot", "els => els.map(e => e.dataset.id + '@' + e.style.left + ',' + e.style.top)")
-        check("tsne: layout actually moves the dots (differs from PCA)", tsne_pos != pca_pos)
         page.locator('.view-switch button[data-view="board"]').click()
         page.wait_for_selector("#board.board")
         page.locator('.view-switch button[data-view="overview"]').click()
         page.wait_for_selector("#board.overview .plot-dot")
-        check("tsne: preference survives leaving and re-entering the view",
-              page.get_attribute('.plot-proj-toggle button[data-proj="tsne"]', "aria-pressed") == "true")
-        page.click('.plot-proj-toggle button[data-proj="pca"]')
-        page.wait_for_selector('.plot-proj-toggle button[data-proj="pca"][aria-pressed="true"]')
-        check("tsne: toggling back restores the PCA layout",
-              "PC-1" in page.locator(".plot-axis-x").inner_text())
+        check("map: the offline switch makes no network call", rag_calls == [])
+        # And the layout is cached rather than recomputed: leaving the view and
+        # coming back has to land every dot exactly where it was, not near it.
+        check("map: returning to the view puts every dot back exactly",
+              page.eval_on_selector_all(
+                  ".plot-dot",
+                  "els => els.map(e => e.dataset.id + '@' + e.style.left + ',' + e.style.top)")
+              == pca_pos)
 
         # ---- Matrix: the four-lens picker -----------------------------------
         page.locator('.view-switch button[data-view="matrix"]').click()
@@ -4901,6 +4913,43 @@ try:
         check("habit: no box is stamped yet",
               rail_row().locator(".punch-box.done").count() == 0)
 
+        # This is an end-to-end test. The rail is four lists, one per cadence,
+        # daily first, each named by a spine down its left edge. One check for
+        # the whole shape rather than one per group: the ways this breaks are
+        # "the order is not fixed", "an empty cadence takes space" and "the
+        # spine is not a label", and each of those shows up in this one reading.
+        #
+        # Only a daily habit exists at this point in the run, which is what
+        # makes the second half of the claim testable at all: three cadences
+        # with nothing in them must paint nothing at all.
+        rail_groups = page.eval_on_selector_all(".habit-rail .habit-group", """els => els.map(e => ({
+          cadence: e.dataset.cadence,
+          label: e.getAttribute('aria-label'),
+          role: e.getAttribute('role'),
+          spines: e.querySelectorAll('.habit-spine').length,
+          rows: e.querySelectorAll('.habit-rail-row').length,
+        }))""")
+        check("rail: a cadence with no habit paints nothing at all",
+              [g["cadence"] for g in rail_groups] == ["daily"])
+        check("rail: the group is named for a screen reader, and has one spine",
+              rail_groups[0]["role"] == "group"
+              and rail_groups[0]["label"] == "Daily habits"
+              and rail_groups[0]["spines"] == 1)
+        # The spine costs width and never height: laid out as a grid track its
+        # rotated text sets the row height, and a one-row group stood twice as
+        # tall as its own row. Measured, because that is a fact about layout.
+        spine_geom = page.locator(".habit-rail .habit-group").first.evaluate("""el => {
+          const g = el.getBoundingClientRect();
+          const rows = [...el.querySelectorAll('.habit-rail-row')]
+            .reduce((h, r) => h + r.getBoundingClientRect().height, 0);
+          const spine = el.querySelector('.habit-spine').getBoundingClientRect();
+          return { grew: g.height - rows, spineWide: spine.width, leftOfRows:
+            spine.right <= el.querySelector('.habit-rail-row').getBoundingClientRect().left + 1 };
+        }""")
+        check("rail: the spine costs the group width and not height",
+              spine_geom["grew"] < 4 and 0 < spine_geom["spineWide"] <= 20
+              and spine_geom["leftOfRows"])
+
         # This is an end-to-end test. One line, boxes before the name. Measured
         # from the browser rather than asserted as a class, because "one line"
         # is a fact about layout: the row spent two lines on this before
@@ -5039,7 +5088,7 @@ try:
         page.wait_for_timeout(250)
         retired_fold = page.locator(".habit-rail .habit-retired")
         check("habit: a retired habit leaves the day's list for the rail's foot",
-              page.locator(".habit-rail > .habit-rail-row",
+              page.locator(".habit-rail .habit-group .habit-rail-row",
                            has_text="Meditate").count() == 0
               and page.locator('[data-col="answered"] .card',
                                has_text="Meditate").count() == 0
@@ -5185,7 +5234,7 @@ try:
         # and punchable, which is what would have been lost.
         check("habit: one already filed in In Progress is loaded into the Inbox",
               page.locator('[data-col="in-progress"] .card', has_text="Meditate").count() == 0
-              and page.locator(".habit-rail > .habit-rail-row",
+              and page.locator(".habit-rail .habit-group .habit-rail-row",
                                has_text="Meditate").count() == 1)
 
         # The dialog's control refuses it too, and shows the refusal rather than
@@ -5204,7 +5253,7 @@ try:
         page.click('#card-form button[type="submit"]')
         page.wait_for_timeout(250)
         check("habit: filed in Done it leaves the day's list and no column shows it",
-              page.locator(".habit-rail > .habit-rail-row",
+              page.locator(".habit-rail .habit-group .habit-rail-row",
                            has_text="Meditate").count() == 0
               and page.locator('[data-col="answered"] .card',
                                has_text="Meditate").count() == 0)
@@ -5403,21 +5452,54 @@ try:
         # moves to Done and leaves the list.
         add_card(page, "Send the tax forms")
         plan_row = lambda: page.locator(".plan-rail .plan-rail-row", has_text="Send the tax forms")
-        # Which groups a card is listed under — the headings above its rows.
-        # A list, because a dated dream belongs to two of them.
+        # Which groups a card is listed under. A list, because a dated dream
+        # belongs to two of them.
+        #
+        # A section is a real container since 2026-09-07 — it was a heading
+        # followed by loose sibling rows, and this walked the siblings keeping
+        # track of the last heading seen. The spine that replaced the heading is
+        # the group's label, so the group carries the accessible name and the
+        # rows sit inside it, which is both the better markup and the simpler
+        # query. The name reads "Day — 2 planned"; the label is the half before
+        # the dash.
         groups_of = lambda title: page.evaluate("""(t) => {
           const found = [];
-          let group = null;
-          for (const el of document.querySelectorAll('.plan-rail-body > *')) {
-            if (el.classList.contains('plan-group-head')) {
-              group = el.querySelector('.plan-group-title').textContent;
-            } else if (el.textContent.includes(t)) found.push(group);
+          for (const group of document.querySelectorAll('.plan-rail-body .plan-group')) {
+            const label = (group.getAttribute('aria-label') || '').split(' — ')[0];
+            for (const row of group.querySelectorAll('.plan-rail-row')) {
+              if (row.textContent.includes(t)) found.push(label);
+            }
           }
           return found;
         }""", title)
         group_of = lambda title: (groups_of(title) or [''])[0]
 
         check("plan: a card with no plan is not in the block", plan_row().count() == 0)
+
+        # This is an end-to-end test. The plan's sections are named by a spine
+        # down each one's left edge, the habit rail's idiom applied to the other
+        # list in the same margin (2026-09-07). One check for the shape: the
+        # heading is gone, the spine is the group's label, and it costs the
+        # group width and never height — which is the half that broke first,
+        # because a rotated word laid out as a grid track sets the row height
+        # and a one-row section stood twice as tall as its own row.
+        def plan_spine_shape():
+            return page.evaluate("""() => {
+              const g = document.querySelector('.plan-rail-body .plan-group');
+              if (!g) return null;
+              const rows = [...g.querySelectorAll('.plan-rail-row')]
+                .reduce((h, r) => h + r.getBoundingClientRect().height, 0);
+              const spine = g.querySelector('.plan-spine');
+              return {
+                headings: document.querySelectorAll('.plan-rail-body .plan-group-head').length,
+                role: g.getAttribute('role'),
+                label: g.getAttribute('aria-label'),
+                spines: g.querySelectorAll('.plan-spine').length,
+                grew: g.getBoundingClientRect().height - rows,
+                wide: spine.getBoundingClientRect().width,
+              };
+            }""")
+
 
         # A deadline is enough: nobody has set a plan, so the plan follows it.
         page.locator(".card", has_text="Send the tax forms").first.locator(".card-menu-btn").click()
@@ -5426,6 +5508,12 @@ try:
         page.wait_for_timeout(150)
         check("plan: a deadline of today plans the card for today",
               plan_row().count() == 1 and group_of("Send the tax forms") == "Day")
+        shape = plan_spine_shape()
+        check("plan: the section is named by a spine, not by a heading",
+              shape is not None and shape["headings"] == 0 and shape["spines"] == 1
+              and shape["role"] == "group" and shape["label"] == "Day — 1 planned")
+        check("plan: the spine costs the section width and not height",
+              shape["grew"] < 4 and 0 < shape["wide"] <= 20)
         check("plan: the plan reaches the database with the card",
               wait_until(lambda: any(c.get("plan") == datetime.now().strftime("%Y-%m-%d")
                                      for c in api_state()["cards"]
@@ -5832,6 +5920,94 @@ try:
               hidden_filter and any("DONE-probe finished" in t for t in showing_all))
         page.select_option("#column-filter", "")
         page.wait_for_timeout(200)
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector("#board.board")
+
+        # ---- The time range --------------------------------------------------
+        # This is an end-to-end test. One predicate, so the ways this breaks are
+        # "two views disagree about what a span holds", "the hide-Done default
+        # swallows the very thing the reader asked for by name", and "the span
+        # is silently still in force with nothing saying so". One check each,
+        # rather than one per preset — the presets are pinned in
+        # tests/timespan.test.js, where they can be asserted against a fixed
+        # moment instead of against today.
+        titles_on = lambda sel: sorted(
+            t.strip() for t in page.locator(sel).all_inner_texts())
+
+        page.select_option("#range-preset", "week")
+        page.wait_for_timeout(250)
+        # Against the Inbox column on both sides, which is the register the
+        # Backlog reads by default: the Board paints no habit in a column and
+        # the Backlog lists them, so comparing the whole of each view would be
+        # asking the two to agree about something they never agreed about.
+        board_inbox = set(titles_on('[data-col="inbox"] .card .card-title'))
+        # Habits are painted in the rail and in no column, so they are on the
+        # Backlog and not on the Board — a difference that predates the range
+        # and is not the range disagreeing with itself. Read off the rail rather
+        # than named, or this check would go stale the next time a habit is
+        # added to the run.
+        rail_habits = set(titles_on(".habit-rail .habit-rail-open"))
+        page.locator('.view-switch button[data-view="backlog"]').click()
+        page.wait_for_selector("#board.backlog")
+        page.wait_for_timeout(200)
+        backlog_now = set(titles_on(".backlog-row .row-title"))
+        check("range: the Board and the Backlog narrow to the same cards",
+              board_inbox and backlog_now
+              and backlog_now - rail_habits == board_inbox - rail_habits)
+        check("range: the read-back states the span in words",
+              page.locator("#range-readback").is_visible()
+              and page.locator("#range-readback").inner_text().strip()
+              == "Captured this week")
+
+        # Finished cards on the Backlog: the hide-Done default stands down for a
+        # reader who asked for a finished span by name. This card was moved to
+        # Done earlier in this run, so "finished this week" has to reach it.
+        page.select_option("#range-field", "done")
+        page.wait_for_timeout(250)
+        check("range: asking for finished cards lists them despite the hide-Done default",
+              page.locator(".backlog-row", has_text="DONE-probe finished").count() == 1
+              and page.locator("#range-readback").inner_text().strip()
+              == "Finished this week")
+        # A column the reader picked by name still applies: "Inbox, finished
+        # this week" is a question with no answer, not a filter in the way.
+        page.select_option("#column-filter", "inbox")
+        page.wait_for_timeout(250)
+        check("range: a named column plus a finished span is a question with no answer",
+              page.locator(".backlog-row", has_text="DONE-probe finished").count() == 0)
+        page.select_option("#column-filter", "")
+        page.wait_for_timeout(200)
+
+        # It is remembered, unlike everything else on this row that is not: a
+        # filter you set is a filter you meant. What pays for that is the
+        # read-back above and the active-filter count, which is why a reader who
+        # opens the app to three cards is told why.
+        page.reload()
+        page.wait_for_selector("#board.backlog")
+        page.wait_for_timeout(300)
+        check("range: a span survives a reload, in the controls and in force",
+              page.input_value("#range-field") == "done"
+              and page.input_value("#range-preset") == "week"
+              and page.locator("#range-readback").inner_text().strip()
+              == "Finished this week")
+
+        # And a span nothing falls into says a FILTER is hiding the cards,
+        # rather than showing an empty board.
+        page.select_option("#range-preset", "custom")
+        page.wait_for_timeout(150)
+        page.fill("#range-from", "2001-01-01")
+        page.fill("#range-to", "2001-01-02")
+        page.wait_for_timeout(300)
+        check("range: an empty result blames the filter and reads back in words",
+              page.locator(".backlog-row").count() == 0
+              and page.locator("#range-readback").inner_text().strip()
+              == "Finished 1 Jan 2001 – 2 Jan 2001")
+        page.select_option("#range-preset", "")
+        page.select_option("#range-field", "created")
+        page.wait_for_timeout(250)
+        check("range: clearing it puts every card back and hides the read-back",
+              page.locator(".backlog-row").count() > 0
+              and not page.locator("#range-readback").is_visible())
+
         # Left as it was found: the sections after this one open on whatever
         # view is stored, and a board switch reloads the page into it.
         page.locator('.view-switch button[data-view="board"]').click()

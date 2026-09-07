@@ -1,4 +1,4 @@
-import { cardLabel, columnFilterOn, filtersActive, matchesFilters } from '../core/cards.js';
+import { askingAboutFinished, cardLabel, columnFilterOn, filtersActive, matchesFilters } from '../core/cards.js';
 import { catColor, catLabel } from '../core/categories.js';
 import { filters, state } from '../core/state.js';
 import { cardAria, renderCaptureRow, typeBadge } from '../ui/board.js';
@@ -14,9 +14,19 @@ import { onCardKeydown } from '../ui/keyboard.js';
 /** Which column this register is reading out. The Inbox by default — a backlog
  *  is what has not been started — and whatever the column filter names when one
  *  is set, so that filter narrows this view rather than emptying it. `null` is
- *  "All columns", the one case with no single column to name or to sort. */
+ *  "All columns", the one case with no single column to name or to sort.
+ *
+ *  **The Inbox default stands down while the range asks about finished cards**
+ *  (2026-09-07), the same suspension `matchesColumn` makes and for the same
+ *  reason: a reader who asks for what they finished last month and is answered
+ *  with an empty register has been shown a control hiding the thing they named.
+ *  This view needs the rule of its own because it does not go through
+ *  `matchesColumn` to choose a column — it picks one — which is exactly why the
+ *  predicate is imported rather than re-derived here. A column the reader named
+ *  still wins above: "Inbox, finished last month" is a question with no answer,
+ *  and it should read as one. */
 function backlogColumn() {
-  if (!columnFilterOn() || !filters.column) return 'inbox';
+  if (!columnFilterOn() || !filters.column) return askingAboutFinished() ? 'answered' : 'inbox';
   return filters.column === 'all' ? null : filters.column;
 }
 

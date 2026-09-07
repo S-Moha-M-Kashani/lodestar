@@ -1,7 +1,7 @@
 // tests/server.test.js
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { startServer } from './helpers/server-harness.mjs';
+import { rawFetch, startServer, TEST_SERVICE_TOKEN } from './helpers/server-harness.mjs';
 import { createServer } from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdtempSync, readFileSync, existsSync, readdirSync } from 'node:fs';
@@ -708,6 +708,232 @@ test('a card’s parent survives a save, and a link the board cannot honour blan
     const off = await (await putCards(s.base, again.cards.map((c) =>
       (c.id === 'deep' ? { ...c, parentId: '' } : c)))).json();
     assert.equal(off.cards.find((c) => c.id === 'deep').parentId, '');
+  } finally { await s.stop(); }
+});
+
+// This is an integration test. `doneAt` is the first card field the server sets
+// on its own rather than merely validating, and the one approximation this
+// change makes: a card that is in Done and carries no finished date is given
+// its `updatedAt`, once. That is the date `answeredIn` has been reading as the
+// completion date all along, so the weekly report's existing figures do not
+// move — they merely stop moving again every time an old card is edited. The
+// other half of the rule is the clear: a card that is not in Done must not
+// carry a finished date, or a reopened card would still answer a query about
+// what was finished last month.
+test('a finished card keeps its date, an unfinished one cannot have one', async () => {
+  const s = await startServer();
+  try {
+    const long_ago = Date.UTC(2026, 5, 14, 9, 30); // June 2026
+    const body = await (await putCards(s.base, [
+      { id: 'obs', columnId: 'answered', title: 'Book the dentist', doneAt: long_ago },
+      // In Done with nothing said: backfilled from updatedAt, which is the
+      // approximation, applied here and in no second place.
+      { id: 'old', columnId: 'answered', title: 'A card that predates the field',
+        createdAt: long_ago, updatedAt: long_ago },
+      // Not in Done, but claiming a finished date — a reopened card whose
+      // client forgot to clear it, or an import. Cleared.
+      { id: 'open', columnId: 'in-progress', title: 'Still going', doneAt: long_ago },
+      { id: 'fresh', columnId: 'inbox', title: 'Nothing finished here' },
+    ])).json();
+    const byId = Object.fromEntries(body.cards.map((c) => [c.id, c]));
+
+    assert.equal(byId.obs.doneAt, long_ago);
+    assert.equal(byId.old.doneAt, long_ago);   // == its updatedAt
+    assert.equal(byId.open.doneAt, 0);         // 0, not the date it claimed
+    assert.equal(byId.fresh.doneAt, 0);        // never finished, and that is a
+    //                                            different answer from "finished, time unknown"
+
+    // Stored, not merely echoed.
+    const state = await (await fetch(s.base + '/api/state')).json();
+    assert.equal(state.cards.find((c) => c.id === 'obs').doneAt, long_ago);
+
+    // Editing a finished card does not re-date it — the whole reason the field
+    // exists rather than Review going on reading `updatedAt`.
+    const edited = await (await putCards(s.base, state.cards.map((c) =>
+      (c.id === 'obs' ? { ...c, notes: 'Went well.', updatedAt: Date.now() } : c)))).json();
+    assert.equal(edited.cards.find((c) => c.id === 'obs').doneAt, long_ago);
+
+    // And a board save owns the field, so reopening the card clears it and
+    // finishing it again sets it: a conflict SET that forgot the column would
+    // pass every line above and fail this one.
+    const reopened = await (await putCards(s.base, edited.cards.map((c) =>
+      (c.id === 'obs' ? { ...c, columnId: 'in-progress' } : c)))).json();
+    assert.equal(reopened.cards.find((c) => c.id === 'obs').doneAt, 0);
+    const refinished = await (await putCards(s.base, reopened.cards.map((c) =>
+      (c.id === 'obs' ? { ...c, columnId: 'answered' } : c)))).json();
+    assert.ok(refinished.cards.find((c) => c.id === 'obs').doneAt > long_ago);
+  } finally { await s.stop(); }
+});
+
+// --- The stored card vectors ----------------------------------------------
+//
+// A card's embedding is DERIVED data that happens to be expensive, and every
+// case below is about that one sentence holding. The table exists so a card is
+// embedded once rather than on every visit to the map; it must never become
+// something the board's own record depends on, and it must never make the
+// user's own next save look stale.
+
+const VEC = [0.5, -0.25, 0.125, 0]; // exact in binary32, so a round-trip is comparable
+// The write route is the brain's, so these servers are started knowing the
+// brain's credential — the same way tests/boundary.test.js does it. A server
+// with no token configured cannot be reached by an empty Bearer, which is the
+// property the last test here is about.
+const startWithToken = () => startServer({ env: { LODESTAR_SERVICE_TOKEN: TEST_SERVICE_TOKEN } });
+// Read the vector table directly for the one assertion no route can make: the
+// purge leaves no ROW behind. GET /api/vectors answers the live board, so it
+// says nothing about a row belonging to a card that has been destroyed, and
+// "the read returns nothing" would pass over exactly the orphan being looked
+// for.
+const vectorRows = (s) => {
+  const conn = new DatabaseSync(s.dbPath, { readOnly: true });
+  try { return conn.prepare('SELECT COUNT(*) AS n FROM card_vectors').get().n; }
+  finally { conn.close(); }
+};
+const putVectors = (base, body) => rawFetch(base + '/api/vectors', {
+  method: 'PUT',
+  headers: { 'content-type': 'application/json', authorization: `Bearer ${TEST_SERVICE_TOKEN}` },
+  body: JSON.stringify(body),
+});
+
+// This is an integration test.
+test('a card vector round-trips, is scoped to its board, and is refused for a card the board does not hold', async () => {
+  const s = await startWithToken();
+  try {
+    await putCards(s.base, [
+      { id: 'a', columnId: 'inbox', title: 'Learn the intro' },
+      { id: 'b', columnId: 'inbox', title: 'Book the hut' },
+    ]);
+    const other = await (await fetch(s.base + '/api/boards', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Second' }),
+    })).json();
+    const otherId = other.board.id;
+
+    const wrote = await putVectors(s.base, { model: 'm1', vectors: [
+      { cardId: 'a', fingerprint: 'fp-a', vec: VEC },
+      { cardId: 'b', fingerprint: 'fp-b', vec: [1, 0, 0, 0] },
+      // A card this board does not hold is refused rather than stored: a vector
+      // must not be able to outlive, or precede, the card it describes.
+      { cardId: 'ghost', fingerprint: 'fp-g', vec: VEC },
+    ] });
+    assert.equal(wrote.status, 200);
+    const wroteBody = await wrote.json();
+    assert.equal(wroteBody.written, 2);
+    assert.deepEqual(wroteBody.refused, ['ghost']);
+
+    const read = await (await fetch(s.base + '/api/vectors?model=m1')).json();
+    const byId = Object.fromEntries(read.vectors.map((v) => [v.cardId, v]));
+    assert.equal(read.vectors.length, 2);
+    // Element for element: the blob is Float32 little-endian both ways, and a
+    // value-equal-but-reordered answer would pass a length check.
+    assert.deepEqual(byId.a.vec, VEC);
+    assert.equal(byId.a.fingerprint, 'fp-a');
+    assert.equal(byId.a.dim, 4);
+
+    // Scoped to ?board=. The other board holds none of these cards, so it can
+    // read none of their vectors.
+    const elsewhere = await (await fetch(`${s.base}/api/vectors?board=${otherId}&model=m1`)).json();
+    assert.deepEqual(elsewhere.vectors, []);
+
+    // And a model is a namespace, so two embedders' geometries can never be
+    // mixed inside one answer.
+    const m2 = await (await fetch(s.base + '/api/vectors?model=m2')).json();
+    assert.deepEqual(m2.vectors, []);
+  } finally { await s.stop(); }
+});
+
+// This is an integration test. The two directions of "derived data": a board
+// save must not touch a vector, and a vector must not touch the board's rev —
+// the second one is what stops a background embed making the user's own next
+// save look stale, which would cost them the right to delete.
+test('a board save carries no vectors, and writing one does not move the rev', async () => {
+  const s = await startWithToken();
+  try {
+    await putCards(s.base, [{ id: 'a', columnId: 'inbox', title: 'Learn the intro' }]);
+    await putVectors(s.base, { model: 'm1', vectors: [{ cardId: 'a', fingerprint: 'fp-a', vec: VEC }] });
+    const before = await (await fetch(s.base + '/api/state')).json();
+
+    // A whole-board PUT neither creates, changes nor deletes a vector: the
+    // column list has no vector in it and the sweep does not reach the table.
+    await putCards(s.base, [
+      { id: 'a', columnId: 'answered', title: 'Learn the intro', notes: 'done' },
+      { id: 'new', columnId: 'inbox', title: 'A card with no vector' },
+    ]);
+    const after = await (await fetch(s.base + '/api/vectors?model=m1')).json();
+    assert.equal(after.vectors.length, 1);
+    assert.deepEqual(after.vectors[0].vec, VEC);
+    // The board's exported record does not carry them either — a vector is not
+    // a card, and the JSON export is a record of cards.
+    assert.ok(!Object.hasOwn(before, 'vectors'));
+
+    // The rev moved because the CARDS changed; writing a vector must not move
+    // it again. A save written against this rev is still current.
+    const rev = (await (await fetch(s.base + '/api/state')).json()).rev;
+    await putVectors(s.base, { model: 'm1', vectors: [{ cardId: 'new', fingerprint: 'fp-n', vec: VEC }] });
+    const saved = await (await fetch(s.base + '/api/state', {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ version: 1, rev, cards: [
+        { id: 'a', columnId: 'answered', title: 'Learn the intro', notes: 'done' },
+      ] }),
+    })).json();
+    // Not `stale`, and the sweep it was authorised to do actually happened.
+    assert.ok(!saved.stale);
+    assert.equal(saved.cards.length, 1);
+  } finally { await s.stop(); }
+});
+
+// This is an integration test. A vector follows its card through the two-step
+// deletion: the Trash keeps it (restoring one must cost nothing) and the purge
+// takes it, because a row for a card that no longer exists is an orphan nothing
+// will ever clean up.
+test('the Trash keeps a vector and the purge destroys it', async () => {
+  const s = await startWithToken();
+  try {
+    await putCards(s.base, [{ id: 'a', columnId: 'inbox', title: 'Learn the intro' }]);
+    await putVectors(s.base, { model: 'm1', vectors: [{ cardId: 'a', fingerprint: 'fp-a', vec: VEC }] });
+
+    // Soft-delete. The read answers the LIVE board, so a trashed card's vector
+    // is not listed — but it is not destroyed either, which is what restoring
+    // costing nothing means and is the claim this test is here to make.
+    await putCards(s.base, []);
+    assert.deepEqual((await (await fetch(s.base + '/api/vectors?model=m1')).json()).vectors, []);
+    await putCards(s.base, [{ id: 'a', columnId: 'inbox', title: 'Learn the intro' }]);
+    const restored = await (await fetch(s.base + '/api/vectors?model=m1')).json();
+    assert.equal(restored.vectors.length, 1, 'the Trash kept it, so the restore re-computes nothing');
+    assert.deepEqual(restored.vectors[0].vec, VEC);
+
+    // The purge is the one hard delete, and it takes the row: a vector keyed to
+    // a card id nothing will ever look up again is an orphan nobody cleans up.
+    await putCards(s.base, []);
+    await fetch(s.base + '/api/cards/a', { method: 'DELETE' });
+    assert.equal((await (await fetch(s.base + '/api/trash')).json()).cards.length, 0);
+    assert.equal(vectorRows(s), 0, 'a purge leaves no orphan row');
+  } finally { await s.stop(); }
+});
+
+// This is an integration test. The write is the brain's, so it needs the brain's
+// credential — the same rule as every other surface the brain reaches. The read
+// is the browser's and is reached by the ordinary session.
+test('writing a vector needs the service token; reading one needs only the login', async () => {
+  const s = await startWithToken();
+  try {
+    await putCards(s.base, [{ id: 'a', columnId: 'inbox', title: 'Learn the intro' }]);
+    // No credential at all.
+    const bare = await rawFetch(s.base + '/api/vectors', {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'm1', vectors: [{ cardId: 'a', fingerprint: 'f', vec: VEC }] }),
+    });
+    assert.equal(bare.status, 401);
+    // A logged-in browser is not the brain: the write is the brain's alone.
+    const asBrowser = await fetch(s.base + '/api/vectors', {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'm1', vectors: [{ cardId: 'a', fingerprint: 'f', vec: VEC }] }),
+    });
+    assert.equal(asBrowser.status, 403);
+    assert.deepEqual((await (await fetch(s.base + '/api/vectors?model=m1')).json()).vectors, []);
+    // The read is the map's, and the harness's own login reaches it.
+    assert.equal((await fetch(s.base + '/api/vectors?model=m1')).status, 200);
+    assert.equal((await rawFetch(s.base + '/api/vectors?model=m1')).status, 401);
   } finally { await s.stop(); }
 });
 

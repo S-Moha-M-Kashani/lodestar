@@ -65,6 +65,11 @@ const boardFingerprint = (cards) =>
     // And the parent, which is the field whose absence here loses a
     // re-parenting exactly as it once would have lost a punch.
     c.parentId || '',
+    // And when the card was finished, which is the third field to earn its
+    // place here for the same reason: a board that differs only by a card
+    // having been finished is not "already in sync", and an adopt that skipped
+    // would discard the completion date silently.
+    c.doneAt || 0,
     c.num, (c.tags || []).join('|')].join('␟')).join('␞');
 
 /** FNV-1a, because the watermark stores a hash of the fingerprint rather than

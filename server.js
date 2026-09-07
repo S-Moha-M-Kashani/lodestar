@@ -489,7 +489,8 @@ db.exec(`
     habit_history TEXT    NOT NULL DEFAULT '{}',
     plan          TEXT    NOT NULL DEFAULT '',
     plan_src      TEXT    NOT NULL DEFAULT 'auto',
-    parent_id     TEXT    NOT NULL DEFAULT ''
+    parent_id     TEXT    NOT NULL DEFAULT '',
+    done_at       INTEGER NOT NULL DEFAULT 0
   );
 `);
 
@@ -522,6 +523,14 @@ if (!columnNames.has('plan_src')) db.exec("ALTER TABLE cards ADD COLUMN plan_src
 // in the Trash — where the answer is to blank the link and keep the card, not
 // to reject the save.
 if (!columnNames.has('parent_id')) db.exec("ALTER TABLE cards ADD COLUMN parent_id TEXT NOT NULL DEFAULT ''");
+// When the card was finished, or 0. The one card field the server *sets* rather
+// than merely validating: a card sitting in Done with no date is given its
+// `updated_at` (see cleanCard), which is an acknowledged approximation and not
+// an observation. 0 rather than NULL because "never finished" is one answer and
+// the column is read by arithmetic, not by a three-valued test — and it is
+// distinguishable from a real moment, since no card was ever finished at the
+// epoch.
+if (!columnNames.has('done_at')) db.exec('ALTER TABLE cards ADD COLUMN done_at INTEGER NOT NULL DEFAULT 0');
 // Every card written before boards existed belongs to the default board, which
 // the column default says without a single UPDATE. The REFERENCES clause is
 // carried across too, so a migrated database and a fresh one have one schema
@@ -542,6 +551,43 @@ if (!columnNames.has('board_id')) {
     throw new Error(`${orphans.length} card(s) reference a board that does not exist`);
   }
 }
+
+// A card's embedding, so the map's meaning is computed once instead of on every
+// visit. Its own table and not a column on `cards`, for a measured reason:
+// `readBoard` does `SELECT *` on every board read — every thirty seconds of
+// ordinary use — and the runtime notes already record that row-fetch dominates
+// there, which is why the `cards_board` index was measured and left out. A
+// ~3 KB Float32 blob on the row would make that read carry megabytes nothing on
+// that path looks at. A second table is read by exactly one caller, the map.
+//
+// `(card_id, model)` is the key, and the model half is what stops two
+// embedders' geometries being mixed in one answer: a layout is computed from
+// one model's rows or from none. Switching the brain's embedder invalidates
+// nothing — it starts filling a second namespace, and the first is still
+// correct for the model that wrote it.
+//
+// `fingerprint` is a digest of the exact text the vector was made from, so a
+// card whose words have not changed is never embedded twice, and one whose
+// words HAVE changed has no usable vector until a new one is written. No
+// REFERENCES clause and no cascade: the write route checks the card is on the
+// board, the hard delete removes the rows, and a row whose fingerprint is stale
+// is never used and is overwritten on the next fill.
+//
+// Nothing here is board data. It is outside `rev` (see revOf), outside the
+// exported JSON and outside the Postgres mirror, all three deliberately: losing
+// this table costs time and nothing else.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS card_vectors (
+    card_id     TEXT    NOT NULL,
+    board_id    TEXT    NOT NULL,
+    model       TEXT    NOT NULL,
+    dim         INTEGER NOT NULL,
+    fingerprint TEXT    NOT NULL,
+    vec         BLOB    NOT NULL,
+    updated_at  INTEGER NOT NULL,
+    PRIMARY KEY (card_id, model)
+  );
+`);
 
 // An edit the Assistant wants is a SUGGESTION, and it lives here rather than in
 // `cards`. A pending row in `cards` would be a card — it would need a title, a
@@ -822,6 +868,10 @@ function purgeBoard(id) {
   db.exec('BEGIN IMMEDIATE');
   try {
     db.prepare(`DELETE FROM card_edits WHERE card_id IN (SELECT id FROM cards WHERE board_id = ?)`).run(id);
+    // The vectors go with the cards, for the same reason they go with one card
+    // in purgeCard: this is the other place a card is really destroyed, and a
+    // row keyed to a card id nothing will look up again is an orphan.
+    db.prepare('DELETE FROM card_vectors WHERE board_id = ?').run(id);
     cards = db.prepare('DELETE FROM cards WHERE board_id = ?').run(id).changes;
     db.prepare('DELETE FROM categories WHERE board_id = ?').run(id);
     db.prepare('DELETE FROM boards WHERE id = ?').run(id);
@@ -1244,6 +1294,11 @@ const rowToCard = (r, catIds) => ({
   tags: safeTags(r.tags),
   createdAt: r.created_at,
   updatedAt: r.updated_at,
+  // Resolved rather than read straight through, and by the same helper the
+  // write path uses, so a board that predates the column answers with a date
+  // the first time it is *loaded* rather than waiting for someone to save it.
+  // The next write then persists what this read already said.
+  doneAt: resolveDoneAt(r.column_id, r.done_at, r.updated_at),
 });
 
 function safeTags(json) {
@@ -1282,6 +1337,14 @@ function readBoard(boardId) {
  * working with nothing to notice it. Hashing what was actually sent cannot be
  * forgotten. sha1 (not sha256) and 16 hex chars because this is a
  * change-detector, never a security claim.
+ *
+ * What is deliberately NOT in it: `card_vectors`. A vector is derived from a
+ * card and is not the board's record — losing every row costs time and no data
+ * — and a rev that moved because a background embed finished would tell the
+ * user their own next save was written against a board the server has moved
+ * past. That save then loses the right to delete, in silence. The rule is not
+ * "hash less"; it is that this hash covers what a client can *adopt*, and there
+ * is nothing here for a client to adopt.
  */
 const revOf = (board) => createHash('sha1').update(JSON.stringify(board)).digest('hex').slice(0, 16);
 
@@ -1359,9 +1422,15 @@ function cleanCard(raw, now, catIds) {
     return null;
   }
   const habitCount = habitCountVal(raw.habitCount);
+  // Both hoisted because resolveDoneAt below reads the *cleaned* column and
+  // the resolved timestamp, not the raw claims: a card naming a column that
+  // does not exist lands in the Inbox, and it must not carry a finished date
+  // for having said 'answered' in a way the board rejected.
+  const columnId = COLUMN_IDS.includes(raw.columnId) ? raw.columnId : 'inbox';
+  const updatedAt = Number.isFinite(raw.updatedAt) ? raw.updatedAt : now;
   return {
     id: typeof raw.id === 'string' && raw.id ? raw.id : cryptoId(),
-    columnId: COLUMN_IDS.includes(raw.columnId) ? raw.columnId : 'inbox',
+    columnId,
     title: raw.title.trim(),
     notes: typeof raw.notes === 'string' ? raw.notes : '',
     type: typeVal(raw.type),
@@ -1386,8 +1455,38 @@ function cleanCard(raw, now, catIds) {
     num: Number.isInteger(raw.num) && raw.num > 0 ? raw.num : 0,
     tags: Array.isArray(raw.tags) ? raw.tags.map((t) => String(t).trim().toLowerCase()).filter(Boolean) : [],
     createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : now,
-    updatedAt: Number.isFinite(raw.updatedAt) ? raw.updatedAt : now,
+    updatedAt,
+    doneAt: resolveDoneAt(columnId, raw.doneAt, updatedAt),
   };
+}
+
+/** A finished moment, or 0. A positive finite number and nothing else: a
+ *  string, a negative, an Infinity and an absent field are all "never
+ *  finished", which the browser's own validator answers the same way. */
+const doneAtVal = (v) => (Number.isFinite(v) && v > 0 ? v : 0);
+
+/** Where the finished date is decided, and the ONE place the approximation is
+ *  made.
+ *
+ *  Two rules, and neither is negotiable per caller, which is why they live here
+ *  and not in a route:
+ *
+ *   - **A card not in Done carries no finished date.** Cleared unconditionally,
+ *     so a reopened card whose client forgot, or an import that invented one,
+ *     cannot answer a query about what was finished last month.
+ *   - **A card in Done with no date is given its `updatedAt`.** The backfill,
+ *     applied once per card because the answer is then stored. It is the date
+ *     `answeredIn` (js/views/review.js) has been reading as the completion date
+ *     all along, so the weekly report's existing figures do not move; they
+ *     merely stop moving again every time an old card is edited. Stated as an
+ *     approximation in CLAUDE.md, in the spec and in the changelog rather than
+ *     presented as an observation.
+ *
+ *  The browser stamps the real moment in `placeCard`, which is the only site
+ *  that assigns a column, so an ordinary finish is observed and never guessed. */
+function resolveDoneAt(columnId, claimed, updatedAt) {
+  if (columnId !== 'answered') return 0;
+  return doneAtVal(claimed) || updatedAt;
 }
 
 const cryptoId = () => 'id-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -1429,8 +1528,8 @@ function writeBoard(cards, boardId) {
     INSERT INTO cards (id, board_id, column_id, title, notes, type, category, importance, urgency,
                        effort, control, effort_src, control_src, deadline,
                        habit_freq, habit_count, habit_times, habit_history, plan, plan_src,
-                       parent_id, num, tags, created_at, updated_at, position, deleted_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                       parent_id, done_at, num, tags, created_at, updated_at, position, deleted_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
     ON CONFLICT(id) DO UPDATE SET
       column_id = excluded.column_id, title = excluded.title, notes = excluded.notes,
       type = excluded.type, category = excluded.category,
@@ -1441,7 +1540,7 @@ function writeBoard(cards, boardId) {
       habit_freq = excluded.habit_freq, habit_count = excluded.habit_count,
       habit_times = excluded.habit_times, habit_history = excluded.habit_history,
       plan = excluded.plan, plan_src = excluded.plan_src,
-      parent_id = excluded.parent_id,
+      parent_id = excluded.parent_id, done_at = excluded.done_at,
       num = excluded.num, tags = excluded.tags,
       created_at = excluded.created_at, updated_at = excluded.updated_at, position = excluded.position,
       deleted_at = NULL
@@ -1458,6 +1557,11 @@ function writeBoard(cards, boardId) {
   // reason: where a card sits under another is a field the board's own dialog
   // edits, so a save has to be able to change it — and to clear it, which is
   // what detaching a child is. Left out, a link could only ever be added.
+  //
+  // `done_at` is in the SET for the same shape of reason, and it needs both
+  // directions just as sharply: finishing a card sets it and reopening one
+  // clears it, so a SET that carried only the insert would leave a reopened
+  // card answering "finished last month" for ever.
 
   db.exec('BEGIN IMMEDIATE');
   try {
@@ -1471,7 +1575,7 @@ function writeBoard(cards, boardId) {
       upsert.run(c.id, boardId, c.columnId, c.title, c.notes, c.type, c.category, c.importance, c.urgency,
         c.effort, c.control, c.effortSrc, c.controlSrc, c.deadline,
         c.habitFreq, c.habitCount, JSON.stringify(c.habitTimes), JSON.stringify(c.habitHistory),
-        c.plan, c.planSrc, c.parentId,
+        c.plan, c.planSrc, c.parentId, c.doneAt,
         c.num, JSON.stringify(c.tags), c.createdAt, c.updatedAt, i));
     db.exec('COMMIT');
   } catch (err) {
@@ -1560,8 +1664,8 @@ function mergeBoard(cards, boardId) {
     INSERT INTO cards (id, board_id, column_id, title, notes, type, category, importance, urgency,
                        effort, control, effort_src, control_src, deadline,
                        habit_freq, habit_count, habit_times, habit_history, plan, plan_src,
-                       parent_id, num, tags, created_at, updated_at, position, deleted_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                       parent_id, done_at, num, tags, created_at, updated_at, position, deleted_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
     ON CONFLICT(id) DO NOTHING
   `);
   const update = db.prepare(`
@@ -1570,7 +1674,7 @@ function mergeBoard(cards, boardId) {
       importance = ?, urgency = ?, effort = ?, control = ?,
       effort_src = ?, control_src = ?, deadline = ?,
       habit_freq = ?, habit_count = ?, habit_times = ?, habit_history = ?,
-      plan = ?, plan_src = ?, parent_id = ?,
+      plan = ?, plan_src = ?, parent_id = ?, done_at = ?,
       tags = ?, updated_at = ?
     WHERE id = ? AND deleted_at IS NULL AND pending = 0
   `);
@@ -1588,7 +1692,7 @@ function mergeBoard(cards, boardId) {
         const { changes } = insert.run(c.id, boardId, c.columnId, c.title, c.notes, c.type, c.category,
           c.importance, c.urgency, c.effort, c.control, c.effortSrc, c.controlSrc, c.deadline,
           c.habitFreq, c.habitCount, JSON.stringify(c.habitTimes), JSON.stringify(c.habitHistory),
-          c.plan, c.planSrc, c.parentId,
+          c.plan, c.planSrc, c.parentId, c.doneAt,
           c.num, JSON.stringify(c.tags), c.createdAt, c.updatedAt, nextPos++);
         if (changes) created += 1;
         continue;
@@ -1598,7 +1702,7 @@ function mergeBoard(cards, boardId) {
       update.run(c.columnId, c.title, c.notes, c.type, c.category, c.importance, c.urgency,
         c.effort, c.control, c.effortSrc, c.controlSrc, c.deadline,
         c.habitFreq, c.habitCount, JSON.stringify(c.habitTimes), JSON.stringify(c.habitHistory),
-        c.plan, c.planSrc, c.parentId,
+        c.plan, c.planSrc, c.parentId, c.doneAt,
         JSON.stringify(c.tags), c.updatedAt, c.id);
     }
     db.exec('COMMIT');
@@ -1778,8 +1882,101 @@ function backupAfterNewCards() {
 // always asked twice; that was never a guarantee, because the browser is not a
 // security boundary and never was the only thing that can call this.
 function purgeCard(id) {
-  return db.prepare('DELETE FROM cards WHERE id = ? AND deleted_at IS NOT NULL')
-    .run(id).changes > 0;
+  // The vector goes with the card, inside the same transaction: this is the
+  // board's only hard delete, so it is the only place a vector can become an
+  // orphan — a row keyed to a card id nothing will ever look up again. The
+  // Trash is deliberately not this: a soft-deleted card keeps its vector, so
+  // restoring one costs nothing and re-computes nothing.
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const gone = db.prepare('DELETE FROM cards WHERE id = ? AND deleted_at IS NOT NULL')
+      .run(id).changes > 0;
+    if (gone) db.prepare('DELETE FROM card_vectors WHERE card_id = ?').run(id);
+    db.exec('COMMIT');
+    return gone;
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
+// --------------------------------------------------------------------------
+// The stored card vectors
+// --------------------------------------------------------------------------
+//
+// Two routes over one table. `GET /api/vectors` is the map's, reached by the
+// ordinary session; `PUT /api/vectors` is the brain's alone and takes the
+// service token, as every other brain-facing surface does. The brain never
+// touches SQLite (invariant 2), so it writes here, and the browser never writes
+// vectors at all — it asks the brain to fill them and then reads them back.
+
+/** A vector, as bytes. Float32 little-endian, which is what the browser's own
+ *  Float32Array is on every machine this runs on and what numpy writes with
+ *  '<f4' — so neither end has to say which way round it is. Float32 rather than
+ *  Float64 halves the table for a precision nobody plotting a two-dimensional
+ *  map can see. */
+const vecToBlob = (nums) => {
+  const f = new Float32Array(nums);
+  return Buffer.from(f.buffer, f.byteOffset, f.byteLength);
+};
+const blobToVec = (buf) => Array.from(
+  new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4));
+
+/** One model's vectors for one board's live cards, newest fingerprint per card.
+ *  Joined against `cards` rather than filtered on `board_id` alone, so a row
+ *  left behind by a card that moved boards — which no save can do, but the
+ *  column exists — cannot be read by the board it no longer belongs to. */
+function readVectors(boardId, model) {
+  const rows = db.prepare(`
+    SELECT v.card_id, v.dim, v.fingerprint, v.vec, v.updated_at
+      FROM card_vectors v
+      JOIN cards c ON c.id = v.card_id
+     WHERE v.board_id = ? AND v.model = ? AND c.board_id = ?
+       AND c.deleted_at IS NULL AND c.pending = 0`).all(boardId, model, boardId);
+  return rows.map((r) => ({
+    cardId: r.card_id, dim: r.dim, fingerprint: r.fingerprint,
+    vec: blobToVec(r.vec), updatedAt: r.updated_at,
+  }));
+}
+
+/** Store vectors for cards this board actually holds, and name the ones it does
+ *  not. Refusing rather than storing is what keeps a vector from preceding or
+ *  outliving its card; naming them rather than failing the request is what
+ *  keeps a stale brain from 500-ing the map. */
+function writeVectors(boardId, model, incoming) {
+  const live = new Set(db.prepare(
+    'SELECT id FROM cards WHERE board_id = ? AND deleted_at IS NULL AND pending = 0')
+    .all(boardId).map((r) => r.id));
+  const now = Date.now();
+  const upsert = db.prepare(`
+    INSERT INTO card_vectors (card_id, board_id, model, dim, fingerprint, vec, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(card_id, model) DO UPDATE SET
+      board_id = excluded.board_id, dim = excluded.dim,
+      fingerprint = excluded.fingerprint, vec = excluded.vec,
+      updated_at = excluded.updated_at`);
+  const refused = [];
+  let written = 0;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const v of incoming) {
+      const cardId = typeof v?.cardId === 'string' ? v.cardId : '';
+      const vec = Array.isArray(v?.vec) ? v.vec.filter((n) => Number.isFinite(n)) : [];
+      if (!cardId || vec.length !== (Array.isArray(v?.vec) ? v.vec.length : -1) || !vec.length) {
+        if (cardId) refused.push(cardId);
+        continue;
+      }
+      if (!live.has(cardId)) { refused.push(cardId); continue; }
+      upsert.run(cardId, boardId, model, vec.length,
+        typeof v.fingerprint === 'string' ? v.fingerprint : '', vecToBlob(vec), now);
+      written += 1;
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  return { written, refused };
 }
 
 // --------------------------------------------------------------------------
@@ -2562,6 +2759,42 @@ async function handleRequest(req, res) {
         // A merge counts: it is exactly when never-seen cards arrive.
         if (created > 0) backupAfterNewCards();
         return;
+      } catch (err) {
+        if (!(err instanceof SyntaxError) && !err.badRequest) throw err;
+        return sendJson(res, 400, { error: 'Invalid JSON: ' + err.message });
+      }
+    }
+    return sendJson(res, 405, { error: 'Method not allowed' });
+  }
+
+  // The stored card vectors. The map reads; the brain alone writes.
+  //
+  // Deliberately NOT under /api/rag/*: those paths proxy to the brain, and this
+  // one is the board's own table. It carries no `rev` and does not mint one —
+  // see the table's own note for why a vector must never move the board's
+  // version.
+  if (path === '/api/vectors') {
+    if (boardId === null) return noSuchBoard();
+    // A model is a namespace, not an option: an answer mixing two embedders'
+    // geometries is worse than no answer, so a request that names none gets
+    // nothing rather than everything.
+    const model = (url.searchParams.get('model') || '').trim();
+    if (req.method === 'GET') {
+      if (!model) return sendJson(res, 400, { error: 'Missing model' });
+      return sendJson(res, 200, { model, vectors: readVectors(boardId, model) });
+    }
+    if (req.method === 'PUT') {
+      // The brain's credential, as on every other surface the brain reaches. A
+      // logged-in browser is refused here on purpose: the board has exactly one
+      // producer of vectors, and a second would put two geometries in one
+      // table.
+      if (who !== 'service') return sendJson(res, 403, { error: 'Forbidden' });
+      try {
+        const body = JSON.parse(await readBody(req));
+        const named = (body?.model || '').trim();
+        if (!named) return sendJson(res, 400, { error: 'Missing model' });
+        if (!Array.isArray(body.vectors)) return sendJson(res, 400, { error: 'Missing vectors' });
+        return sendJson(res, 200, { model: named, ...writeVectors(boardId, named, body.vectors) });
       } catch (err) {
         if (!(err instanceof SyntaxError) && !err.badRequest) throw err;
         return sendJson(res, 400, { error: 'Invalid JSON: ' + err.message });

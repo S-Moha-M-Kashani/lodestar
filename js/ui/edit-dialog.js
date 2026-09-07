@@ -397,6 +397,12 @@ function paintChildren(card) {
   body.append(why);
 }
 
+// The head's dates, all three of them, in one place: the meta line's added and
+// updated, and the finished line below it. A second formatter would be a second
+// answer to how this dialog writes a day.
+const fmtDay = (ts) =>
+  new Date(ts).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+
 /** The parent line, above the card's own title and outside every fold.
  *
  *  Painted from the hidden input rather than from the card, because that field
@@ -484,6 +490,13 @@ function paintForm(shown) {
   $('#card-habit-history').open = false;
   $('#card-habit-tape').replaceChildren(
     ...(shown.type === 'habit' && shown.habitFreq ? [habitTape(shown)] : []));
+  // When it was finished, if it was. Derived from the card like the parent line
+  // and stored nowhere, so it cannot go stale against the card in front of it —
+  // and it is `doneAt` alone, never `updatedAt`, because a date that is really
+  // "when this was last touched" is the untruth the field was added to end.
+  const done = $('#card-done-line');
+  done.hidden = !shown.doneAt;
+  done.textContent = shown.doneAt ? `✓ finished ${fmtDay(shown.doneAt)}` : '';
 }
 
 // `suggested` prefills the form with an Assistant suggestion instead of what
@@ -502,9 +515,8 @@ export function openDialog(cardId, suggested = null) {
   const shown = suggested ? { ...card, ...suggested } : card;
   paintMode(false);
   paintForm(shown);
-  const fmt = (ts) => new Date(ts).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
   $('#card-meta').textContent =
-    `${cardLabel(card)} · in ${columnTitle(card.columnId)} · added ${fmt(card.createdAt)} · updated ${fmt(card.updatedAt)}`;
+    `${cardLabel(card)} · in ${columnTitle(card.columnId)} · added ${fmtDay(card.createdAt)} · updated ${fmtDay(card.updatedAt)}`;
   paintChildren(shown);
   // Only when it is not already showing. Navigating from a child to its parent
   // (or from a parent to a new child) repaints this dialog in place: showModal

@@ -24,6 +24,8 @@ from .llm import make_chat_model, served_models
 from .middleware import configure_tracing
 from .pricing import model_prices, turn_cost
 from .safety import make_url_safety
+from .retrieval.projection import (LayoutCache, card_fingerprint, layout_key,
+                                   map_card_text, project, vector_model_id)
 from .retrieval import (CardIndex, ChatStore, coverage, expand_queries,
                         gate_llm, make_embeddings, make_reranker)
 from .topics import detect_drift
@@ -107,6 +109,21 @@ class TranscribeBody(BaseModel):
 
 class KeyBody(BaseModel):
     key: str
+
+
+class VectorsBody(BaseModel):
+    """Nothing to say: which board is a query parameter (the browser reaches
+    this through the Node proxy, which forwards the query string as it is) and
+    which cards is not the caller's business — the route embeds whatever on the
+    board has no usable vector."""
+
+
+class ProjectionBody(BaseModel):
+    ids: list[str] = Field(default_factory=list, max_length=5000)
+    # 'pca' or 'tsne'. Validated in the route against `project`'s own seam rule
+    # rather than by an Enum here, so there is one place that decides what a
+    # projection may be and one message when it is not.
+    kind: str = 'pca'
 
 
 class RecallBody(BaseModel):
@@ -558,6 +575,100 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except TranscriptionError as exc:  # the backend let us down
             raise HTTPException(502, str(exc)) from exc
         return {'text': text}
+
+    # --- The map -----------------------------------------------------------
+    #
+    # Two routes, and the split between them is deliberate: the set that needs
+    # embedding is the whole board, and the set that needs laying out is
+    # whatever the reader's filters left on screen. Joining them would make
+    # changing a filter ask for embeddings.
+    vector_model = vector_model_id(embeddings)
+    layouts = LayoutCache()
+
+    @app.post('/rag/vectors')
+    async def fill_vectors(body: VectorsBody | None = None,
+                           board_id: str = Query('', alias='board')) -> dict:
+        """Embed the cards whose stored vector is missing or stale, and write
+        them back through the board's own API.
+
+        Never on the write path: a card save must not wait for a model, so this
+        is asked for by the one screen that needs it. And it **answers partially
+        rather than failing** — a board whose embedder cannot be reached gets
+        back the vectors that already exist and the names of the cards that have
+        none, with the reason, and the map plots keyword positions in the
+        meantime. A debugging aid or a slow download must not 500 the screen it
+        is there to improve.
+        """
+        board_doc = await board.list_board(board_id)
+        cards = board_doc.get('cards') or []
+        labels = {c.get('id'): c.get('label') or ''
+                  for c in (board_doc.get('categories') or []) if c.get('id')}
+        wanted = {c['id']: card_fingerprint(c, labels) for c in cards if c.get('id')}
+        stored = {v['cardId']: v.get('fingerprint') or ''
+                  for v in await board.list_vectors(vector_model, board_id)}
+        # Missing OR stale, which is the same test the browser makes and the
+        # reason the fingerprint is one function in one place: a card whose
+        # words have not changed is never embedded twice, on this visit, on the
+        # next one, or from another machine reading the same board.
+        todo = [c for c in cards
+                if c.get('id') and stored.get(c['id']) != wanted[c['id']]]
+        if not todo:
+            return {'model': vector_model, 'embedded': 0,
+                    'reused': len(stored), 'missing': [], 'error': None}
+        by_id = {c['id']: c for c in todo}
+        try:
+            vectors = await embeddings.aembed_documents(
+                [map_card_text(c, labels) for c in by_id.values()])
+        except Exception as exc:
+            # The 2.2 GB first download, a stopped Ollama, a revoked key. Named,
+            # not raised: the map has somewhere to fall back to and this route
+            # exists to improve it, not to gate it.
+            logging.getLogger(__name__).warning('card embedding unavailable: %s', exc)
+            return {'model': vector_model, 'embedded': 0, 'reused': len(stored),
+                    'missing': list(by_id), 'error': str(exc)}
+        written = await board.write_vectors(vector_model, [
+            {'cardId': card_id, 'fingerprint': wanted[card_id], 'vec': vec}
+            for card_id, vec in zip(by_id, vectors)
+        ], board_id)
+        return {'model': vector_model, 'embedded': written.get('written', 0),
+                'reused': len(stored) - len(todo) if len(stored) > len(todo) else 0,
+                'missing': written.get('refused', []), 'error': None}
+
+    @app.post('/rag/projection')
+    async def projection(body: ProjectionBody,
+                         board_id: str = Query('', alias='board')) -> dict:
+        """One set of cards as one set of dots.
+
+        The set is the cards the reader's filters left visible, so narrowing the
+        board lays out what is being looked at rather than always the whole
+        board — twelve cards spread across the field say more than the same
+        twelve huddled in a corner of everything. `cached` is reported rather
+        than inferred: "switching a filter back is free" is a claim the browser
+        and the e2e can check.
+
+        A card with no stored vector is named in `missing` and left out of the
+        layout, never given a placeholder position — a dot in a spot nothing
+        computed is worse than a dot that has not arrived yet.
+        """
+        if body.kind not in ('pca', 'tsne'):
+            raise HTTPException(400, f'unknown projection: {body.kind!r}; '
+                                     'expected pca or tsne')
+        stored = {v['cardId']: v for v in await board.list_vectors(vector_model, board_id)}
+        # The caller's order is not read: `layout_key` sorts and so does
+        # `project`, which is what makes two requests for the same cards one
+        # cache entry and one answer.
+        have = [card_id for card_id in body.ids if card_id in stored]
+        missing = [card_id for card_id in body.ids if card_id not in stored]
+        key = layout_key([(i, stored[i].get('fingerprint') or '') for i in have],
+                         body.kind, vector_model)
+        hit = layouts.get(key)
+        if hit is not None:
+            return {'coords': hit, 'model': vector_model, 'kind': body.kind,
+                    'cached': True, 'missing': missing}
+        coords = project(have, [stored[i]['vec'] for i in have], kind=body.kind)
+        layouts.put(key, coords)
+        return {'coords': coords, 'model': vector_model, 'kind': body.kind,
+                'cached': False, 'missing': missing}
 
     @app.post('/rag/reindex')
     async def reindex() -> dict:

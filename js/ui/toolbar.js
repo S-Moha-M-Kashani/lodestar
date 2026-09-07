@@ -5,6 +5,7 @@ import { widgetShowing } from '../assistant/shell.js';
 import { closeWidget, toggleWidget } from '../assistant/widget.js';
 import { KEY_PREFIX } from '../core/keys.js';
 import { filters } from '../core/state.js';
+import { RANGE_FIELDS, RANGE_PRESETS, rangeText, rangeVal, spanOf } from '../core/timespan.js';
 import { $, announce } from './dom.js';
 import { render } from './render.js';
 
@@ -52,6 +53,70 @@ $('#nesting-filter').addEventListener('change', (e) => {
   } catch (_) { /* private mode */ }
   render();
 });
+
+// What a span of time held: which date on the card (`Captured` / `Finished`)
+// and which span. Wired here beside the other filters and deliberately NOT
+// through `displaySwitch`, which is for the Menu's switches — this is a filter
+// with dropdowns of its own, painted on every view including the Board.
+//
+// Remembered between visits, the way NESTING_KEY is, and applied the same way:
+// before any listener runs and WITHOUT calling render(). This module is still
+// evaluating at that point and a render() from here is the "Cannot access
+// before initialization" the module-graph notes are about; main.js's first
+// render picks it up. What comes back out of storage goes through `rangeVal`,
+// so a value written by an older build — or edited by hand — is discarded
+// rather than trusted: a preset nothing can name would narrow the board by a
+// rule nothing on screen explains.
+const RANGE_KEY = KEY_PREFIX + 'range';
+for (const { id, label } of RANGE_FIELDS) {
+  $('#range-field').append(new Option(label, id));
+}
+for (const { id, label } of RANGE_PRESETS) {
+  $('#range-preset').append(new Option(label, id));
+}
+
+/** The two date inputs are shown only for `Between…`, and the read-back only
+ *  while the filter is actually narrowing something — "Any time" is already
+ *  what the preset select says, so printing it twice would be the one thing a
+ *  read-back must not do. */
+function syncRangeControls() {
+  const custom = filters.range.preset === 'custom';
+  $('#range-from').hidden = !custom;
+  $('#range-to').hidden = !custom;
+  const active = spanOf(filters.range) !== null;
+  const back = $('#range-readback');
+  back.hidden = !active;
+  back.textContent = active ? rangeText(filters.range) : '';
+}
+
+/** One writer for all four controls, so the stored value, the read-back and the
+ *  repaint cannot be updated by one handler and forgotten by another. */
+function setRange(next) {
+  filters.range = rangeVal(next);
+  try {
+    if (spanOf(filters.range) !== null) localStorage.setItem(RANGE_KEY, JSON.stringify(filters.range));
+    else localStorage.removeItem(RANGE_KEY);
+  } catch (_) { /* private mode */ }
+  syncRangeControls();
+  render();
+}
+
+try {
+  const stored = localStorage.getItem(RANGE_KEY);
+  if (stored) {
+    filters.range = rangeVal(JSON.parse(stored));
+    $('#range-field').value = filters.range.field;
+    $('#range-preset').value = filters.range.preset;
+    $('#range-from').value = filters.range.from;
+    $('#range-to').value = filters.range.to;
+  }
+} catch (_) { /* private mode, or a stored value that is not JSON */ }
+syncRangeControls();
+
+for (const [sel, key] of [['#range-field', 'field'], ['#range-preset', 'preset'],
+  ['#range-from', 'from'], ['#range-to', 'to']]) {
+  $(sel).addEventListener('change', (e) => setRange({ ...filters.range, [key]: e.target.value }));
+}
 
 // The tags dropdown: one tag or all of them. It writes the same Set the #
 // bar toggles, so the two stay one filter with two handles — picking here

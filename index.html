@@ -362,6 +362,20 @@
         <select id="tag-filter" aria-label="Filter by tag">
           <option value="">All tags</option>
         </select>
+        <!-- What a span of time held. Two selects in the order the sentence
+             reads — which date, then which span — and `Between…` reveals two
+             date inputs, either of which may be left empty so that "since the
+             first of March" and "up to the first of March" are both sayable.
+             Remembered between visits, like the scope filter: a filter you set
+             is a filter you meant. What pays for that is the read-back below,
+             which states the span in words — three controls showing a field, a
+             preset and two dates never LOOK wrong even when they say something
+             other than what the filter is applying. -->
+        <select id="range-field" aria-label="Measure the span against"></select>
+        <select id="range-preset" aria-label="Filter by time span"></select>
+        <input type="date" id="range-from" aria-label="Span starts" hidden>
+        <input type="date" id="range-to" aria-label="Span ends" hidden>
+        <span id="range-readback" class="range-readback" hidden></span>
       </div>
     </div>
     <div id="tag-bar" class="tag-bar" role="group" aria-label="Filter by tag" hidden></div>
@@ -393,6 +407,12 @@
           <button type="button" id="card-parent-open" class="parent-open"></button>
           <button type="button" id="card-parent-detach" class="btn ghost parent-detach">Detach</button>
         </p>
+        <!-- When the card was finished. In the head, outside every fold, and
+             text rather than a control: when a card was finished is an
+             observation, and it is the question every open finished card is
+             being asked. Absent on a card that has never been finished, which
+             is a different answer from "finished at a time nobody recorded". -->
+        <p id="card-done-line" class="card-done-line" hidden></p>
       </div>
 
       <div class="card-dialog-body">

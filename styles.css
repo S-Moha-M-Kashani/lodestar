@@ -490,7 +490,8 @@ input, select, textarea { font: inherit; color: inherit; }
   align-items: flex-end;
   gap: 8px;
 }
-.rail-filters select {
+.rail-filters select,
+.rail-filters input[type="date"] {
   box-sizing: border-box;
   height: var(--rail-h);
   font-size: 11px;
@@ -498,6 +499,25 @@ input, select, textarea { font: inherit; color: inherit; }
   position: relative;
   top: 1px; /* seated on the rule, exactly like the tabs */
 }
+
+/* The range filter's read-back: the span in words, beside the controls that
+   set it. Printed only while the filter is narrowing something (js/ui/toolbar.js
+   drives `hidden`), because "Any time" is already what the preset select says
+   and a read-back repeating the control it reads back is noise. Mono ledger
+   hand and plain ink — no new colour and no new token. */
+.range-readback {
+  align-self: center;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+/* `display: none` outranking the UA's [hidden] rule is not a risk here — this
+   element has no display of its own — but it is stated so the pattern holds. */
+.range-readback[hidden] { display: none; }
 
 .cat-tab {
   font-family: var(--mono);
@@ -1350,6 +1370,93 @@ body[data-view="board"] .board-rail {
   font-size: 10px;
   color: var(--ink-soft);
   white-space: nowrap;
+}
+
+/* --- The rail, grouped by cadence (2026-09-07) ----------------------------
+
+   Four lists on one strip, daily at the top, each named by a narrow spine down
+   its left edge. The spine is the group's LABEL and not decoration: four
+   horizontal headings, in the one panel whose whole job is to be the board's
+   narrow margin, is the height the one-line-per-habit redraw removed.
+
+   The four inks are the ones styles.css already defines in every theme and
+   already uses for exactly this job — `--col-accent` on the three board
+   columns. A cadence group is the same kind of thing as a column, a container
+   the cards sit in. NO new colour and NO new token: the assignment below is
+   shortest period to longest, and it is on the group's edge rather than on a
+   row precisely because colour on this board means category and `--cat` is
+   already on that line. */
+/* The spine idiom, shared by the two lists in the board's margin: the habits
+   grouped by cadence and the plan grouped by section. One rule set with two
+   selectors rather than two copies — the geometry is one decision — while the
+   class names stay separate, because CSS class names are test-stable API and
+   the rule there is add, never rename. Each rail assigns its own inks below. */
+.habit-group,
+.plan-group {
+  /* A fixed narrow inset for the spine and everything else for the rows, so
+     the punch strip keeps its full size and the name keeps a usable width at
+     the narrowest rail the resizer allows.
+
+     The spine is positioned OUT of flow inside it, which is the load-bearing
+     half: laid out as a grid track its rotated text sets the row height, so a
+     one-row weekly group stood twice as tall as its own row and the rail spent
+     height on the word naming a list rather than on the list. It costs width
+     and never height — and is therefore clipped to the group it labels, which
+     is exactly what the design's sketch draws: a tall group reads "Daily", a
+     one-row group reads "W". The cadence is still fully available three ways —
+     the group's accessible name, the spine's own tooltip, and its ink. */
+  position: relative;
+  padding-left: 20px;
+  margin-bottom: 6px;
+}
+.habit-group + .habit-group,
+.plan-group + .plan-group { margin-top: 2px; }
+/* `--col-accent` and not a name of its own: it is the property the three board
+   columns already carry, and it means "the accent ink of the container the
+   cards sit in", which is exactly what this is. A synonym would be a second
+   name for one idea, and the argument for reusing the hues in the first place
+   is that a cadence group is the same kind of thing as a column. */
+.habit-group[data-cadence="daily"]   { --col-accent: var(--ink-blue); }
+.habit-group[data-cadence="weekly"]  { --col-accent: var(--ink-violet); }
+.habit-group[data-cadence="monthly"] { --col-accent: var(--ink-amber); }
+.habit-group[data-cadence="yearly"]  { --col-accent: var(--ink-green); }
+
+/* The plan's sections take the SAME four inks for the same four spans, so
+   "this week" is the same violet in both lists — the consistency is the point,
+   and it is what stops the margin reading as two unrelated colour systems.
+
+   The last two are not periods, so they take no hue: `next` is one step softer
+   than the year it comes after and `dreams` is full ink weight, which is the
+   strongest mark on the board and the right one for the thing that has no date
+   at all. Ink WEIGHT rather than a fifth and sixth colour, because there is no
+   fifth and sixth span for a colour to mean. */
+.plan-group[data-section="day"]    { --col-accent: var(--ink-blue); }
+.plan-group[data-section="week"]   { --col-accent: var(--ink-violet); }
+.plan-group[data-section="month"]  { --col-accent: var(--ink-amber); }
+.plan-group[data-section="year"]   { --col-accent: var(--ink-green); }
+.plan-group[data-section="next"]   { --col-accent: var(--ink-soft); }
+.plan-group[data-section="dreams"] { --col-accent: var(--ink); }
+
+.habit-spine,
+.plan-spine {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 14px;
+  writing-mode: vertical-rl;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--col-accent);
+  border-left: 2px solid var(--col-accent);
+  padding: 2px 0 2px 3px;
+  /* Clipped rather than wrapped, for the reason above: the rail's height
+     belongs to the rows. */
+  overflow: hidden;
+  white-space: nowrap;
+  box-sizing: border-box;
 }
 
 /* A habit is one line: its punch boxes, then its name. The boxes lead because
@@ -2390,6 +2497,17 @@ dialog::backdrop {
   font-size: 10.5px;
   color: var(--ink-soft);
   text-align: right;
+}
+
+/* When the card was finished, under the meta line and beside the parent line it
+   sits with. The same mono ledger hand as the rest of the head, one step darker
+   than `--ink-soft` because it is the head's one line the reader came for. No
+   new colour and no new token: colour on this board means category. */
+.card-done-line {
+  margin: 8px 0 0;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink);
 }
 
 /* --- The When block: the deadline and the plan, as the pair they are ------ */

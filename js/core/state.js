@@ -3,6 +3,7 @@ import { parseState, seedCards } from './cards.js';
 import { setCategories } from './categories.js';
 import { COLUMNS, VIEWS } from './constants.js';
 import { STORAGE_KEY, VIEW_KEY } from './keys.js';
+import { rangeVal } from './timespan.js';
 
 // The board's shared mutable state — the one module every other one reads.
 //
@@ -53,7 +54,14 @@ export let state = loadState();
 // `nesting` is the scope: '' means "parents only" — a child is already shown
 // inside its parent, so a listing of its own counts one piece of work twice —
 // and 'all' means parents and children together.
-export const filters = { search: '', type: '', category: '', prio: '', column: '', columnsOff: false, nesting: '', tags: new Set() };
+// `range` is the span of time the reader is asking about: which date on the
+// card it measures (`created` | `done`), a named preset, and two typed dates
+// the `custom` preset reads. Off by default — an empty preset means "any time",
+// which is a real value and not an absent one. Unlike the scope filter it is
+// only ever in force because the reader set it, and unlike the *rail's* other
+// filters it is remembered between visits (js/ui/toolbar.js).
+export const filters = { search: '', type: '', category: '', prio: '', column: '', columnsOff: false, nesting: '',
+  range: rangeVal(null), tags: new Set() };
 export let focusCardId = null; // restore focus after re-render (keyboard moves)
 export let draggedId = null;
 export let dealCards = true; // deal-in animation runs on first render only
