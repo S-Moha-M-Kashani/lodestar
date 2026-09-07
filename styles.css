@@ -985,7 +985,12 @@ body[data-view="board"] #column-filter { display: none; }
    every view, the Board included. Hiding a child on the Board hides it from
    one place while still showing it in another — its parent's fold — where the
    column filter would have emptied two of the three columns in front of you. */
-.hide-done-col .column[data-col="answered"] { display: none; }
+/* `:not(.show-done-col)` is the suspension render() applies while the range
+   asks about finished cards: the Done column is the only place those cards
+   are painted, so hiding it there would answer "what did I finish this
+   month" with an empty board. Both rules take it, because a column that
+   comes back also needs its grid track back. */
+.hide-done-col:not(.show-done-col) .column[data-col="answered"] { display: none; }
 
 /* Card type as a rubber stamp — always neutral ink; colour means category */
 .badge {
@@ -1293,7 +1298,7 @@ body[data-view="board"] #column-filter { display: none; }
    both to outrank the rule above and because that is the only board there is —
    render() adds the class on every board paint. The narrow-window carousel
    below is untouched, a flex board reading no template at all. */
-.hide-done-col .board.has-rail {
+.hide-done-col:not(.show-done-col) .board.has-rail {
   grid-template-columns: repeat(2, minmax(210px, 1fr)) 0.25fr var(--rail-w, 200px);
 }
 

@@ -6008,6 +6008,39 @@ try:
               page.locator(".backlog-row").count() > 0
               and not page.locator("#range-readback").is_visible())
 
+        # The Menu's `Done column` switch is the *other* half of the hide-Done
+        # decision, and it lives in the stylesheet rather than in
+        # `matchesColumn` — so the suspension had to be applied twice or the two
+        # halves disagree. Found on the real board: with the column switched
+        # off, "Finished this month" kept the right three cards and hid the only
+        # column that paints them, answering a question the reader asked by name
+        # with a wholly empty board and two columns reading "No cards match".
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector("#board.board")
+        menu_toggle("toggle-done-col")
+        page.wait_for_timeout(150)
+        done_col = page.locator('.column[data-col="answered"]')
+        hidden_before = not done_col.is_visible()
+        page.select_option("#range-field", "done")
+        page.select_option("#range-preset", "week")
+        page.wait_for_timeout(300)
+        check("range: a finished span brings the switched-off Done column back",
+              hidden_before and body_has("hide-done-col") and done_col.is_visible()
+              and done_col.locator(".card", has_text="DONE-probe finished").count() == 1)
+        # And it is a suspension, not a change to the switch: the reader's own
+        # setting is untouched and takes hold again the moment the span goes.
+        page.select_option("#range-preset", "")
+        page.select_option("#range-field", "created")
+        page.wait_for_timeout(300)
+        check("range: clearing the span gives the reader their hidden column back",
+              body_has("hide-done-col") and not done_col.is_visible()
+              and page.get_attribute("#toggle-done-col", "aria-pressed") == "true")
+        menu_toggle("toggle-done-col")  # leave the board as this block found it
+        page.wait_for_timeout(150)
+        page.locator('.view-switch button[data-view="backlog"]').click()
+        page.wait_for_selector("#board.backlog")
+        page.wait_for_timeout(150)
+
         # Left as it was found: the sections after this one open on whatever
         # view is stored, and a board switch reloads the page into it.
         page.locator('.view-switch button[data-view="board"]').click()
