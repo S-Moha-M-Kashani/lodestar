@@ -27,6 +27,11 @@ let editingId = null;
 // would be a field nothing reads and `cleanCard` would have to learn to drop.
 let draft = null;
 let sourceId = null;
+// Import-review mode: the step being weighed up, and the driver to answer with.
+// The step is held here rather than passed to the buttons because the three of
+// them are wired once, like every other control in this file.
+let reviewStep = null;
+let reviewDecide = null;
 
 // The type picker is built once (types are fixed); the category picker is
 // rebuilt on every open, because the registry is the user's to change.
@@ -564,6 +569,110 @@ export function openNewCard(source = null, prefill = null) {
   $('#card-title').focus();
 }
 
+/** The card an import step would retire, drawn as a reading rather than a form.
+ *
+ *  Ledger number, words, where it is filed and what hangs off it — enough to
+ *  recognise the card being replaced without opening it, and no control at all,
+ *  because the only card being edited here is the one that would land. */
+function paintReplaces(old) {
+  const panel = $('#card-replaces');
+  panel.hidden = !old;
+  if (!old) { panel.replaceChildren(); return; }
+  const kids = childrenOf(state.cards, old.id);
+  const line = (cls, text) => {
+    const el = document.createElement('p');
+    el.className = cls;
+    el.textContent = text;
+    return el;
+  };
+  panel.replaceChildren(
+    line('replaces-lead', 'On the board now'),
+    line('replaces-num', cardLabel(old)),
+    line('replaces-title', old.title),
+    ...(old.notes ? [line('replaces-notes', old.notes)] : []),
+    line('replaces-where', `in ${columnTitle(old.columnId)}`
+      + (kids.length ? ` · ${kids.length} child card${kids.length === 1 ? '' : 's'}` : '')),
+    // Said plainly, because it is the half of the swap nobody asked for. The
+    // children are named too: they are not deleted with it, and a reader who
+    // assumed a cascade would refuse a swap that costs nothing.
+    line('replaces-fate', kids.length
+      ? 'This card will be deleted — it goes to the Trash and can be brought back. Its child cards are not deleted; they move to the card replacing it.'
+      : 'This card will be deleted — it goes to the Trash and can be brought back.'),
+  );
+}
+
+/** Open one step of an import review in the ordinary card dialog.
+ *
+ *  The incoming card is painted as a draft, so every field is editable on the
+ *  way in and there is no second form to learn — and `readForm` stays the one
+ *  place a card is built from form input. `decide` is called with 'accept',
+ *  'all', 'skip' or 'stop', and for the two that take the card, the card the
+ *  form says: a reviewer approves what the form says.
+ *
+ *  @param {object} step     one step from planImport
+ *  @param {object} progress { index, total }, 1-based
+ *  @param {Function} decide the driver in js/ui/transfer.js
+ */
+export function openReviewStep(step, progress, decide) {
+  reviewStep = step;
+  reviewDecide = decide;
+  editingId = null;
+  draft = null;
+  sourceId = null;
+  const swap = step.kind === 'substitute';
+  paintMode(true);
+  paintForm(step.card);
+  $('#dialog-title').textContent = swap ? 'Replace this card?' : 'Import this card?';
+  $('#review-progress').textContent = `${progress.index} of ${progress.total}`;
+  $('#card-actions').hidden = true;
+  $('#review-actions').hidden = false;
+  paintReplaces(swap ? step.replaces : null);
+  dialog.classList.toggle('reviewing-swap', swap);
+  // Never `close()` first: the dialog stays open from one step to the next, and
+  // `close` fires as a queued task that would reset this state underneath the
+  // step just painted — the same trap openDialog documents for a card walking
+  // to its parent.
+  if (!dialog.open) dialog.showModal();
+  $('#card-title').focus();
+}
+
+/** End a review from the driver's side. The state is dropped *before* the
+ *  close, so the close handler does not read it as the reviewer abandoning the
+ *  import and call the driver back a second time. */
+export function closeReview() {
+  reviewStep = null;
+  reviewDecide = null;
+  dialog.close();
+}
+
+/** One decision about the step on screen. */
+function decideReview(kind) {
+  const step = reviewStep;
+  const decide = reviewDecide;
+  if (!step || !decide) return;
+  if (kind === 'skip') { decide('skip'); return; }
+  const title = $('#card-title');
+  title.value = title.value.trim();
+  if (!title.value) { title.reportValidity(); return; }
+  // The same refusal an ordinary save makes, for the same reason: a plan that
+  // starts after the deadline is a promise to begin after the thing was due.
+  // An import must not be the way one gets onto the board.
+  if (form.elements.type.value !== 'habit'
+      && planConflict(readPlan(), deadlineVal($('#card-deadline').value))) {
+    syncPlanFields();
+    announce($('#card-plan-error').textContent);
+    planYear.focus();
+    return;
+  }
+  const card = { ...step.card };
+  readForm(card);
+  decide(kind, card);
+}
+
+$('#review-accept').addEventListener('click', () => decideReview('accept'));
+$('#review-accept-all').addEventListener('click', () => decideReview('all'));
+$('#review-skip').addEventListener('click', () => decideReview('skip'));
+
 /** Write the form into a card-shaped object — the one place on this board a
  *  card is built from form input. The Inbox's quick-add form used to be a
  *  second one, and two construction sites meant two answers to the question of
@@ -729,4 +838,18 @@ dialog.addEventListener('close', () => {
   draft = null;
   sourceId = null;
   setReviewingEditId(null);
+  // The dialog goes back to being the card dialog, whatever closed it. Left as
+  // it was, the next card opened would show an import's footer over a board
+  // card, with no way to save it.
+  $('#card-actions').hidden = false;
+  $('#review-actions').hidden = true;
+  paintReplaces(null);
+  dialog.classList.remove('reviewing-swap');
+  // Escape, or the backdrop: the reviewer walked away, so the import stops here
+  // with everything already accepted left on the board. Read and cleared before
+  // the call, because the driver's own end-of-review path closes this dialog.
+  const decide = reviewDecide;
+  reviewStep = null;
+  reviewDecide = null;
+  if (decide) decide('stop');
 });
