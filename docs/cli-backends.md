@@ -1,6 +1,6 @@
 # Using your Claude or Codex subscription as Lodestar's Assistant
 
-*Last updated 2026-08-20*
+*Last updated 2026-09-08*
 
 Lodestar's Assistant can answer through the `claude` or `codex` command-line tool
 that is **already installed and already logged in on your computer**. No API key,
@@ -26,9 +26,38 @@ logged in on the machine the brain runs on.**
 | Docker on a home server, opened from another laptop | **No** — same reason, and the subscription would be the server's, not yours. |
 
 If you are on Docker, your options today are Ollama (local, free, private) or
-OpenRouter (an API key). Making a container reach the CLI on your own laptop is
-designed but not built — see
-`docs/decisions/2026-08-20-cli-assistant-backends-design.md`.
+OpenRouter (an API key).
+
+### Under Docker, neither subscription works — and here is why, one at a time
+
+Checked on 2026-09-08 by asking the running container itself: it reports both
+subscriptions unavailable, and neither `claude` nor `codex` is inside it — nor
+Node, which both of them need to run.
+
+- **Claude: not possible, not merely not done.** Your Claude login is not a
+  file. Claude Code keeps it in the **macOS Keychain** — your operating system's
+  own password store — and a Linux container cannot read a Keychain at all.
+  There is no path to share and nothing to mount, so no amount of Docker
+  configuration reaches it.
+- **Codex: possible, deliberately not built.** Your Codex login *is* a file
+  (`~/.codex/auth.json`), so a container could in principle be given it. Three
+  costs stopped it, and none of them buys you anything you cannot already have:
+  the brain's image would need a Node runtime and the `codex` program added on
+  top of the 18 GB it already weighs; a live paid-subscription token would be
+  handed to a container that runs whatever the model writes; and sharing it
+  read-only would likely break Codex's own renewal of that token. If you want
+  this anyway, say so — it is a decision, not an oversight.
+
+**So the way to use either subscription is to run the brain on your own
+machine** — Step 3 below. Everything else can still be in Docker: `docker
+compose up chroma` gives you chat memory, and the board and the brain run from
+your own user account, which is where your logins already live.
+
+The older sketch of a container reaching the CLI on the host is in
+`docs/decisions/2026-08-20-cli-assistant-backends-design.md`. It was weighed
+again on 2026-09-08 and turned down: it would hand a container the ability to
+run a coding assistant on your laptop, which is a much bigger permission than
+answering a chat message.
 
 ## Step 1 — install the CLI on your own computer
 

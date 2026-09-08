@@ -284,6 +284,62 @@ test('no brain mount shadows the container virtualenv', () => {
   }
 });
 
+// --- One model download per machine (2026-09-08) ----------------------------
+// The brain image is Python and packages; the ~2.2 GB of
+// heydariAI/persian-embeddings is fetched at run time into the container's own
+// writable layer, which a recreate throws away. So without a host mount the
+// download is a per-container cost, and it is not a background one: measured on
+// this machine 2026-09-08, one image, runs differing only in BRAIN_CHROMA_URL,
+// a cold container with chat memory on refused connections on /health for the
+// whole 120 s the run was watched while the weights were still arriving, where
+// the same image with chat memory off answered in 6 s having downloaded
+// nothing. `ChatStore.__init__` asks the embedder for its identity and that
+// getattr is the lazy `.model` property, so the deferral the embeddings class
+// implements is undone before uvicorn has a process to answer with.
+//
+// This is therefore the mapping that decides whether `docker compose up` is a
+// 20-second start or a three-hour one, and nothing else in the file says so.
+//
+// The container path is a literal, like HOME_LAN below and for the same reason:
+// it is one exact location — the cache directory huggingface_hub picks from the
+// container's own HOME, which is root's — and a pattern here would match more
+// than it means.
+const MODEL_CACHE = '/root/.cache/huggingface';
+
+// This is a configuration invariant.
+test('the composed brain mounts the model cache from the host', () => {
+  const mounts = mountsOf(serviceBlock('brain'));
+  const mount = mounts.find((m) => m.split(':')[1] === MODEL_CACHE);
+  assert.ok(
+    mount,
+    `the brain service does not mount ${MODEL_CACHE}, so the ~2.2 GB embedding ` +
+      `model lands in the container's writable layer and every recreate ` +
+      `re-downloads it — with /health refusing connections until it finishes. ` +
+      `Expected a volume "\${HOME}/.cache/huggingface:${MODEL_CACHE}", got ` +
+      `[${mounts.join(', ')}]`,
+  );
+  // The host side has to be the host's own cache, which is what makes the
+  // download shared with a native `uv run --project brain --extra
+  // local-embeddings` run rather than merely persisted for the container.
+  assert.match(
+    mount.split(':')[0],
+    /\$\{?HOME\}?\/\.cache\/huggingface$/,
+    `the model cache is mounted from "${mount.split(':')[0]}" — it must be the ` +
+      `host user's own cache, or the composed brain downloads its own copy ` +
+      `beside the native brain's`,
+  );
+  // Writable, and deliberately so: :ro was verified to work when the model is
+  // already cached, but on a machine with no cache a read-only mount cannot
+  // persist the download at all, so every start would re-fetch. That is the
+  // one cost this mapping exists to pay once.
+  assert.ok(
+    !mount.endsWith(':ro'),
+    `the model cache is mounted read-only ("${mount}") — a machine with no ` +
+      `cached weights could then never persist the download, which is the ` +
+      `whole point of the mapping`,
+  );
+});
+
 // --- The project's own Chroma (Session 7, stage 3) --------------------------
 // Chat-memory chunks and their vectors are derived data (rebuilt from
 // assistant.db) and live beside the other databases, in databases/real/.

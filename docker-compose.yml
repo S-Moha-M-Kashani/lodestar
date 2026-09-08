@@ -97,12 +97,27 @@ services:
       # 0.617 recall on the Farsi corpus against ~0.01 for the Latin-only
       # alternative, a ~60x gap where every other retrieval knob was worth under
       # 2%. BRAIN_EMBED_MODEL is deliberately left unset — '' already resolves to
-      # heydariAI/persian-embeddings. It costs a ~2.2 GB download, paid on the
-      # first retrieval rather than at boot: the weights load lazily so /health
-      # answers while the container is still cold, which is what keeps a fresh
-      # `docker compose up` from looking hung. The image can never install the
-      # 'voice' extra, since parakeet-mlx is Apple-Silicon only — hence
-      # OpenRouter for dictation. The chat model is the opposite way round:
+      # heydariAI/persian-embeddings. It costs a ~2.2 GB download, and with chat
+      # memory configured — which is the default below — it is paid at BOOT and
+      # not on the first retrieval. `_PrefixedEmbeddings.model` really is a lazy
+      # property, but `ChatStore.__init__` asks the embedder for its identity and
+      # reads that very property (retrieval/chat.py, `_embedder_identity`), so
+      # the deferral is undone one line into the store's constructor — which runs
+      # inside `create_app`, at import, before uvicorn has a server process to
+      # answer /health with. retrieval/cards.py avoids the same trap on purpose
+      # and says so above `embedder_identity`.
+      #
+      # Measured on this machine 2026-09-08, one image, runs differing only in
+      # BRAIN_CHROMA_URL: with chat memory off, /health answered 200 in 6 s and
+      # nothing was downloaded at all; with it on, /health refused connections
+      # for the whole 120 s the run was watched while the weights were still
+      # arriving. So a cold container does not answer /health until the model is
+      # present, and the cache mount under `volumes` is what makes that a
+      # one-time cost per machine rather than one per container.
+      #
+      # The image can never install the 'voice' extra, since parakeet-mlx is
+      # Apple-Silicon only — hence OpenRouter for dictation. The chat model is
+      # the opposite way round:
       # BRAIN_LLM=ollama reaches the daemon on the host, so the composed brain is
       # local-first like the native one.
       # tests/compose.test.js fails if either pin goes missing.
@@ -147,6 +162,34 @@ services:
       # editable, so lodestar_brain resolves to this mount. Python has no reload
       # here, so a change needs `docker compose restart brain`, not a rebuild.
       - ./brain/src:/app/src:ro
+      # The embedding model's cache, kept on the host. Without it the ~2.2 GB of
+      # heydariAI/persian-embeddings lands in the container's own writable layer
+      # and a recreate throws it away, so the boot download above is paid again
+      # for nothing. Measured 2026-09-08: with this mount over a host cache that
+      # already held the model, /health answered 200 in 18 s.
+      #
+      # Read-write, and that is the point rather than an oversight. `:ro` was
+      # verified to work when the model is ALREADY cached — but on a machine
+      # with no cache a read-only mount cannot persist the download, so every
+      # start would re-fetch, which is the exact cost this mapping exists to pay
+      # once. HF_HUB_OFFLINE is deliberately not set either: it saved 2 s of
+      # those 18 and would turn a model nobody has downloaded yet into a hard
+      # failure instead of a slow first run.
+      #
+      # It is the same directory the native brain fills (`uv run --project brain
+      # --extra local-embeddings …`), which is why on a machine that has ever run
+      # the brain natively the composed brain pays nothing at all — one download
+      # per machine, not one per way of starting it. The container runs as root
+      # and this is the user's own cache: on macOS Docker Desktop a bind mount
+      # maps ownership to the host user, so container-root writes leave no
+      # root-owned files behind. That is the reason sharing the cache is
+      # acceptable here, and it is a property of this platform rather than
+      # something measured on Linux.
+      #
+      # It shadows nothing the service imports: the image's virtualenv is at
+      # /app/.venv and this mapping touches only /root/.cache.
+      # tests/compose.test.js fails if it goes missing.
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
     restart: unless-stopped
 
   # Chat memory — the project's own Chroma, persisting to
