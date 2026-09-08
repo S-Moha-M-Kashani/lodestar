@@ -1,23 +1,41 @@
 import { cardLabel } from '../core/cards.js';
 import { TYPE_RANK, priorityOf } from '../core/constants.js';
 import { commit, short } from '../core/history.js';
+import { childrenOf } from '../core/nesting.js';
 import { state } from '../core/state.js';
 import { ask } from './dialogs.js';
 import { announce, columnCards, columnTitle, getCard } from './dom.js';
 
 // Card actions — deleting a card, and sorting a column.
 
+/** Delete one card, and only that card.
+ *
+ *  A parent's children stay on the board, unparented — no cascade. Each has its
+ *  own ledger number and its own history, and burying it inside another card's
+ *  Trash row would make it unfindable by the name it was given. The
+ *  confirmation says how many will be left behind *before* it happens, since
+ *  losing a link is not something to discover afterwards, and the orphaning is
+ *  part of the same `commit`: one act, one entry in History, so a single undo
+ *  puts the card back and its children name it again. */
 export async function deleteCard(cardId) {
   const card = getCard(cardId);
   if (!card) return;
+  const kids = childrenOf(state.cards, cardId);
+  const kidsNote = kids.length
+    ? ` Its ${kids.length === 1 ? 'one child card stays' : `${kids.length} child cards stay`} on the board, no longer part of anything.`
+    : '';
   const sure = await ask({
     title: 'Delete this card?',
-    message: `${cardLabel(card)} “${card.title}” will be moved off the board. It stays recoverable — bring it back with Undo, or from the History panel — until you delete it permanently there.`,
+    message: `${cardLabel(card)} “${card.title}” will be moved off the board. It stays recoverable — bring it back with Undo, or from the History panel — until you delete it permanently there.${kidsNote}`,
     okLabel: 'Delete card',
     danger: true,
   });
   if (!sure) return;
   state.cards = state.cards.filter((c) => c.id !== cardId);
+  for (const kid of kids) {
+    kid.parentId = '';
+    kid.updatedAt = Date.now();
+  }
   commit(`Deleted ${cardLabel(card)} “${short(card.title)}”`);
   announce(`Deleted “${card.title}”`);
 }

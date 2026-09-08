@@ -1,13 +1,17 @@
 import { cardLabel, catVal, columnAccepts, controlVal, deadlineVal, effortVal, iuVal, matchesFilters, placeCard, typeVal, uid } from '../core/cards.js';
 import { catColor, categories } from '../core/categories.js';
 import { COLUMNS, TYPES, TYPE_META } from '../core/constants.js';
-import { blankDraft, cardHasDetails, draftFrom } from '../core/draft.js';
-import { habitCountVal, habitFreqVal, habitTimesVal } from '../core/habits.js';
-import { planConflict, planSrcVal, planVal } from '../core/plan.js';
+import { blankDraft, draftFrom } from '../core/draft.js';
+import { HABIT_EVERY, habitCountVal, habitFreqVal, habitTimesVal, scheduleSentence } from '../core/habits.js';
+import { canHaveChildren, childrenOf } from '../core/nesting.js';
+import { MONTHS, SLOT_READS, WEEKDAYS, slotsVal } from '../core/schedule.js';
+import { planConflict, planSrcVal, planVal, planWords } from '../core/plan.js';
 import { commit, short } from '../core/history.js';
 import { filters, nextNum, state } from '../core/state.js';
 import { deleteCard } from './card-actions.js';
+import { childRow, childrenSummary } from './children.js';
 import { $, announce, columnTitle, getCard } from './dom.js';
+import { habitTape } from './habits.js';
 import { discardEdit, reviewingEditId, setReviewingEditId } from './proposals.js';
 
 // The card dialog — the one place a card is edited by hand, and the same path
@@ -23,6 +27,11 @@ let editingId = null;
 // would be a field nothing reads and `cleanCard` would have to learn to drop.
 let draft = null;
 let sourceId = null;
+// Import-review mode: the step being weighed up, and the driver to answer with.
+// The step is held here rather than passed to the buttons because the three of
+// them are wired once, like every other control in this file.
+let reviewStep = null;
+let reviewDecide = null;
 
 // The type picker is built once (types are fixed); the category picker is
 // rebuilt on every open, because the registry is the user's to change.
@@ -71,8 +80,6 @@ function syncHabitFields() {
 const planYear = $('#card-plan-year');
 const planMonth = $('#card-plan-month');
 const planDay = $('#card-plan-day');
-const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December'];
 let planSrcNow = 'auto';
 
 const pad2 = (n) => String(n).padStart(2, '0');
@@ -105,7 +112,7 @@ function paintPlan(plan) {
   const [y = '', m = '', d = ''] = planVal(plan).split('-');
   fillOptions(planYear, yearOptions(y), y);
   fillOptions(planMonth,
-    [['', '—'], ...MONTH_NAMES.map((name, i) => [pad2(i + 1), name])], m);
+    [['', '—'], ...MONTHS.map((name, i) => [pad2(i + 1), name])], m);
   const days = y && m ? new Date(Number(y), Number(m), 0).getDate() : 31;
   fillOptions(planDay,
     [['', '—'], ...Array.from({ length: days }, (_, i) => [pad2(i + 1), String(i + 1)])], d);
@@ -127,7 +134,16 @@ function syncPlanFields() {
   error.textContent = bad
     ? `This plan starts after the deadline (${deadline}). Move the plan earlier or the deadline later — the card cannot be saved like this.`
     : '';
-  $('#card-plan').classList.toggle('has-error', bad);
+  // Marked across the whole When block, not just the plan: the refusal is a
+  // statement about the *pair*, and either field can resolve it. It sat under
+  // the plan alone until 2026-09-07, which read as the plan being at fault.
+  $('#card-when').classList.toggle('has-error', bad);
+
+  // The plan read back at the precision it was given. Three dropdowns showing
+  // a year, a month and a day never look wrong even when they say something
+  // else, so the words are the honest check.
+  const words = planWords(plan);
+  $('#card-plan-words').textContent = words ? `→ ${words}` : '';
 
   $('#card-plan-follow').hidden = planSrcNow === 'auto' || !deadline;
   $('#card-plan-hint').textContent = planSrcNow === 'auto'
@@ -161,10 +177,120 @@ $('#card-deadline').addEventListener('change', () => {
   else syncPlanFields(); // the pair may have just become impossible
 });
 
-// Forgiving on the way in, strict on the way out: "7:30" is what people type.
-const padTime = (t) => (/^\d:\d\d$/.test(t) ? '0' + t : t);
-const readHabitTimes = (count) => habitTimesVal(
-  $('#card-habit-times').value.split(',').map((t) => padTime(t.trim())).filter(Boolean), count);
+// --- The schedule: one row per repetition -----------------------------------
+// A habit says how often *and* when. `slotsNow` is the working schedule while
+// the dialog is open — painted from the card, written by the controls, read at
+// the save — the same shape `planSrcNow` above already has. It holds all four
+// slot fields whatever the cadence reads, which is what lets a weekly habit
+// moved to monthly and back have its weekday again: the row simply stops
+// *showing* a field, it never clears it.
+
+let slotsNow = [];
+
+// Which control the middle column is. A weekday for the two cadences whose
+// period is measured in days, a day of the month for the two that are not —
+// so a daily habit is shown that a weekday exists and does not apply, rather
+// than being shown a 1–31 list that would never apply to it either.
+const middleIsWeekday = (freq) => freq === 'daily' || freq === 'weekly';
+
+/** A slot select: the options, the value, and — when the cadence does not read
+ *  this field — disabled with an accessible reason. Disabled and *visible*
+ *  rather than removed, so the rule is shown where it applies; a control that
+ *  greys without saying why is a rule the reader has to guess. */
+function slotSelect(cls, label, options, value, reads, why) {
+  const wrap = document.createElement('label');
+  wrap.className = 'field slot-field';
+  wrap.append(document.createTextNode(label));
+  const sel = document.createElement('select');
+  sel.className = cls;
+  fillOptions(sel, options, value);
+  sel.disabled = !reads;
+  if (!reads) {
+    sel.title = why;
+    sel.setAttribute('aria-label', `${label} — ${why}`);
+  } else {
+    sel.setAttribute('aria-label', label);
+  }
+  wrap.append(sel);
+  return wrap;
+}
+
+const dayOptions = () =>
+  [['', '—'], ...Array.from({ length: 31 }, (_, i) => [pad2(i + 1), String(i + 1)])];
+const monthOptions = () => [['', '—'], ...MONTHS.map((n, i) => [pad2(i + 1), n])];
+const weekdayOptions = () => [['', '—'], ...WEEKDAYS.map((n, i) => [String(i + 1), n])];
+
+/** Paint one row per repetition, from `slotsNow`.
+ *
+ *  An <ol>, because these genuinely are a sequence — the repetitions of one
+ *  period, in order — and the marker is that repetition's own ordinal. This is
+ *  the one place a numbered list is the honest shape rather than decoration. */
+function paintSchedule() {
+  const freq = habitFreqVal($('#card-habit-freq').value) || 'daily';
+  const count = habitCountVal($('#card-habit-count').value);
+  slotsNow = slotsVal(slotsNow, count);
+  const reads = SLOT_READS[freq];
+  const noun = HABIT_EVERY[freq];
+
+  const list = $('#card-schedule');
+  list.replaceChildren();
+  slotsNow.forEach((slot, i) => {
+    const li = document.createElement('li');
+    li.className = 'schedule-row';
+
+    li.append(slotSelect('slot-month', 'Month', monthOptions(), slot.month, reads.month,
+      `only a yearly habit falls in a particular month; this one repeats every ${noun}`));
+
+    if (middleIsWeekday(freq)) {
+      li.append(slotSelect('slot-when', 'Day', weekdayOptions(), slot.weekday, reads.weekday,
+        `a daily habit is expected every day, so it names no weekday`));
+    } else {
+      li.append(slotSelect('slot-when', 'Date', dayOptions(), slot.day, reads.day,
+        `this habit repeats every ${noun}, which has no day of the month to name`));
+    }
+
+    const timeWrap = document.createElement('label');
+    timeWrap.className = 'field slot-field';
+    timeWrap.append(document.createTextNode('At'));
+    const time = document.createElement('input');
+    time.type = 'time';
+    time.className = 'slot-time';
+    time.value = slot.time;
+    time.setAttribute('aria-label', `Time of repetition ${i + 1}`);
+    timeWrap.append(time);
+    li.append(timeWrap);
+
+    // Every control writes only the field its cadence reads, straight into the
+    // working slot — so the fields it does not show keep whatever they held.
+    li.addEventListener('change', () => {
+      const s = slotsNow[i];
+      if (reads.month) s.month = li.querySelector('.slot-month').value;
+      if (reads.weekday) s.weekday = li.querySelector('.slot-when').value;
+      if (reads.day) s.day = li.querySelector('.slot-when').value;
+      s.time = li.querySelector('.slot-time').value;
+      slotsNow = slotsVal(slotsNow, count); // re-validate what was just typed
+      syncScheduleWords();
+    });
+
+    list.append(li);
+  });
+  syncScheduleWords();
+}
+
+/** The schedule in plain words, under the rows. */
+function syncScheduleWords() {
+  $('#card-schedule-words').textContent = scheduleSentence({
+    habitFreq: habitFreqVal($('#card-habit-freq').value) || 'daily',
+    habitCount: habitCountVal($('#card-habit-count').value),
+    habitTimes: slotsNow,
+  });
+}
+
+// The rows follow the count as it is typed, and the cadence decides which of
+// their fields are live — so both controls repaint them. `input` on the count,
+// not `change`: typing 5 should show five rows before the field is left.
+$('#card-habit-count').addEventListener('input', paintSchedule);
+$('#card-habit-freq').addEventListener('change', paintSchedule);
 
 function rebuildCategoryPicker() {
   const catWrap = $('#category-picker-options');
@@ -218,6 +344,61 @@ function updateBalancePreview() {
 $('#card-notes').addEventListener('input', updateBalancePreview);
 $('#card-tags').addEventListener('input', updateBalancePreview);
 
+/** The children block: the count in the label, the rows, and the way to add
+ *  one — or, where a card can hold none, the reason said out loud.
+ *
+ *  A control that is silently absent is a rule nobody can learn. A child cannot
+ *  itself be broken up (the lineage is one level deep) and a habit is at neither
+ *  end of one, and both of those are worth a sentence. */
+function paintChildren(card) {
+  const kids = childrenOf(state.cards, card.id);
+  $('#card-children-count').textContent = childrenSummary(kids);
+  const body = $('#card-children-body');
+  body.replaceChildren();
+
+  for (const kid of kids) body.append(childRow(kid));
+
+  if (canHaveChildren(card)) {
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.id = 'card-add-child';
+    add.className = 'btn ghost add-child';
+    add.textContent = '+ Add a child card';
+    add.addEventListener('click', () => addChildOf(card.id));
+    body.append(add);
+    return;
+  }
+  const why = document.createElement('p');
+  why.className = 'field-hint';
+  why.textContent = card.parentId
+    ? 'This card is part of another one, and the parts of a card are not themselves broken up.'
+    : 'A habit is neither a parent nor a child — its repetitions are the punch strip in the rail.';
+  body.append(why);
+}
+
+// The head's dates, all three of them, in one place: the meta line's added and
+// updated, and the finished line below it. A second formatter would be a second
+// answer to how this dialog writes a day.
+const fmtDay = (ts) =>
+  new Date(ts).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+
+/** The parent line, above the card's own title and outside every fold.
+ *
+ *  Painted from the hidden input rather than from the card, because that field
+ *  is what the save reads: detaching has to be visible before it is saved, and
+ *  a line painted from the record would go on naming a parent the form has
+ *  already let go of. */
+function syncParentLine() {
+  const id = $('#card-parent-id').value;
+  const parent = id ? getCard(id) : null;
+  const line = $('#card-parent-line');
+  line.hidden = !parent;
+  if (!parent) return;
+  const open = $('#card-parent-open');
+  open.textContent = `${cardLabel(parent)} ${parent.title}`;
+  open.title = 'Open the card this one is part of';
+}
+
 /** The dialog's chrome, set from the mode on *every* open rather than only in
  *  create mode. A draft that hid Delete and the meta line and left them hidden
  *  would leave the next card it opened with no way to delete it and no history
@@ -228,6 +409,10 @@ function paintMode(creating) {
   // A draft has no number, no column it has ever been in and no dates.
   $('#card-meta').hidden = creating;
   $('#delete-card').hidden = creating;
+  // And no children, nor anywhere to put one: a child names a parent by id,
+  // and a draft has none until it is saved. Hidden rather than shown empty,
+  // which would be a fold over a list that cannot exist yet.
+  $('#card-children').hidden = creating;
 }
 
 /** Paint every field of the form from the card being shown.
@@ -257,14 +442,35 @@ function paintForm(shown) {
   // A card being stamped Habit for the first time starts at once a day.
   $('#card-habit-freq').value = shown.habitFreq || 'daily';
   $('#card-habit-count').value = String(shown.habitCount || 1);
-  $('#card-habit-times').value = shown.habitTimes.join(', ');
+  // Copied row by row: the rows are what the controls write into, and writing
+  // through to the card's own slots would edit it before the save.
+  slotsNow = slotsVal((shown.habitTimes || []).map((x) => ({ ...x })),
+    habitCountVal(shown.habitCount));
+  paintSchedule();
+  // The parent, as a form field like every other one.
+  $('#card-parent-id').value = shown.parentId || '';
+  syncParentLine();
   planSrcNow = planSrcVal(shown.planSrc);
   paintPlan(shown.plan);
   syncHabitFields();
-  // The details fold: derived here on every open and stored nowhere, so it
-  // cannot go stale against the card in front of it. A suggested edit forces it
-  // open — a change to a folded setting must never be approved unseen.
-  $('#card-details').open = cardHasDetails(shown) || Boolean(reviewingEditId);
+  // Closed on every open, whether or not there are any: it is a list of other
+  // cards rather than a setting of this one, so the rule above does not apply.
+  $('#card-children').open = false;
+  // The completion history, in the block where the cadence that produced it is
+  // set. It was drawn on the board card until 2026-09-07, and a habit is not
+  // drawn as a board card. Folded, and rebuilt here rather than in openDialog
+  // because the dialog is repainted in place when it walks from a card to its
+  // parent — a tape left behind would be the previous card's record.
+  $('#card-habit-history').open = false;
+  $('#card-habit-tape').replaceChildren(
+    ...(shown.type === 'habit' && shown.habitFreq ? [habitTape(shown)] : []));
+  // When it was finished, if it was. Derived from the card like the parent line
+  // and stored nowhere, so it cannot go stale against the card in front of it —
+  // and it is `doneAt` alone, never `updatedAt`, because a date that is really
+  // "when this was last touched" is the untruth the field was added to end.
+  const done = $('#card-done-line');
+  done.hidden = !shown.doneAt;
+  done.textContent = shown.doneAt ? `✓ finished ${fmtDay(shown.doneAt)}` : '';
 }
 
 // `suggested` prefills the form with an Assistant suggestion instead of what
@@ -275,15 +481,60 @@ export function openDialog(cardId, suggested = null) {
   const card = getCard(cardId);
   if (!card) return;
   editingId = cardId;
+  // Cleared here rather than by the close handler, because the dialog may be
+  // open already: a child's dialog reaches its parent's, and a parent's reaches
+  // a new child's, without the dialog ever shutting. See `showModal` below.
+  draft = null;
+  sourceId = null;
   const shown = suggested ? { ...card, ...suggested } : card;
   paintMode(false);
   paintForm(shown);
-  const fmt = (ts) => new Date(ts).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
   $('#card-meta').textContent =
-    `${cardLabel(card)} · in ${columnTitle(card.columnId)} · added ${fmt(card.createdAt)} · updated ${fmt(card.updatedAt)}`;
-  dialog.showModal();
+    `${cardLabel(card)} · in ${columnTitle(card.columnId)} · added ${fmtDay(card.createdAt)} · updated ${fmtDay(card.updatedAt)}`;
+  paintChildren(shown);
+  // Only when it is not already showing. Navigating from a child to its parent
+  // (or from a parent to a new child) repaints this dialog in place: showModal
+  // on an open dialog throws, and closing it first is worse — `close` fires as
+  // a *queued task*, so it would run after the new card had been painted and
+  // reset `draft`, `editingId` and `sourceId` out from under it.
+  if (!dialog.open) dialog.showModal();
   $('#card-title').focus();
 }
+
+/** Add a child to this card: the dialog re-opens on a draft that already names
+ *  it as its parent, in the hidden input the save reads. One card and one
+ *  History entry when it is saved, none at all if it is cancelled — a draft
+ *  costs nothing, which is the whole reason the create path works this way. */
+function addChildOf(parentId) {
+  const parent = getCard(parentId);
+  if (!parent) return;
+  // The dialog is repainted in place, not closed and reopened — see the note on
+  // showModal in openDialog. What the close handler would have cleared is
+  // cleared by openNewCard itself, except the review flag, which is set by the
+  // caller that opens a suggestion and so has to be dropped by hand.
+  setReviewingEditId(null);
+  openNewCard(null, { parentId, category: parent.category });
+}
+
+// Up to the card this one is part of. Unsaved edits are left behind exactly as
+// Cancel leaves them: this is a way to the other card, not a second save.
+$('#card-parent-open').addEventListener('click', () => {
+  const id = $('#card-parent-id').value;
+  if (!id) return;
+  setReviewingEditId(null);
+  openDialog(id);
+});
+
+// Detaching writes the form, not the card: it is applied by the save like every
+// other change, so one Cancel undoes it and one Save records it as part of the
+// same edit rather than as a second entry in History.
+$('#card-parent-detach').addEventListener('click', () => {
+  $('#card-parent-id').value = '';
+  syncParentLine();
+  const card = getCard(editingId);
+  if (card) paintChildren({ ...card, parentId: '' });
+  announce('Detached — save the card to keep it');
+});
 
 /** Create mode: the dialog opens on a draft the board has never seen.
  *
@@ -295,7 +546,7 @@ export function openDialog(cardId, suggested = null) {
  *
  *  `source` is the card a Duplicate was asked for; `draftFrom` decides which of
  *  its fields travel (and that its completion history does not). */
-export function openNewCard(source = null) {
+export function openNewCard(source = null, prefill = null) {
   editingId = null;
   sourceId = source ? source.id : null;
   // A blank capture inherits the drawer it was written in: with a category tab
@@ -306,11 +557,121 @@ export function openNewCard(source = null) {
   draft = source
     ? draftFrom(source)
     : blankDraft({ type: filters.type, category: filters.category });
+  // `prefill` is the one caller that knows something the filters do not: Add a
+  // child card, which hands over the parent it was pressed on (and that
+  // parent's life area, since a part of a piece of work usually belongs to the
+  // same one). It is merged into the draft and *painted*, so the value is one
+  // somebody saw before saving rather than one written behind the form.
+  if (prefill) Object.assign(draft, prefill);
   paintMode(true);
   paintForm(draft);
-  dialog.showModal();
+  if (!dialog.open) dialog.showModal();
   $('#card-title').focus();
 }
+
+/** The card an import step would retire, drawn as a reading rather than a form.
+ *
+ *  Ledger number, words, where it is filed and what hangs off it — enough to
+ *  recognise the card being replaced without opening it, and no control at all,
+ *  because the only card being edited here is the one that would land. */
+function paintReplaces(old) {
+  const panel = $('#card-replaces');
+  panel.hidden = !old;
+  if (!old) { panel.replaceChildren(); return; }
+  const kids = childrenOf(state.cards, old.id);
+  const line = (cls, text) => {
+    const el = document.createElement('p');
+    el.className = cls;
+    el.textContent = text;
+    return el;
+  };
+  panel.replaceChildren(
+    line('replaces-lead', 'On the board now'),
+    line('replaces-num', cardLabel(old)),
+    line('replaces-title', old.title),
+    ...(old.notes ? [line('replaces-notes', old.notes)] : []),
+    line('replaces-where', `in ${columnTitle(old.columnId)}`
+      + (kids.length ? ` · ${kids.length} child card${kids.length === 1 ? '' : 's'}` : '')),
+    // Said plainly, because it is the half of the swap nobody asked for. The
+    // children are named too: they are not deleted with it, and a reader who
+    // assumed a cascade would refuse a swap that costs nothing.
+    line('replaces-fate', kids.length
+      ? 'This card will be deleted — it goes to the Trash and can be brought back. Its child cards are not deleted; they move to the card replacing it.'
+      : 'This card will be deleted — it goes to the Trash and can be brought back.'),
+  );
+}
+
+/** Open one step of an import review in the ordinary card dialog.
+ *
+ *  The incoming card is painted as a draft, so every field is editable on the
+ *  way in and there is no second form to learn — and `readForm` stays the one
+ *  place a card is built from form input. `decide` is called with 'accept',
+ *  'all', 'skip' or 'stop', and for the two that take the card, the card the
+ *  form says: a reviewer approves what the form says.
+ *
+ *  @param {object} step     one step from planImport
+ *  @param {object} progress { index, total }, 1-based
+ *  @param {Function} decide the driver in js/ui/transfer.js
+ */
+export function openReviewStep(step, progress, decide) {
+  reviewStep = step;
+  reviewDecide = decide;
+  editingId = null;
+  draft = null;
+  sourceId = null;
+  const swap = step.kind === 'substitute';
+  paintMode(true);
+  paintForm(step.card);
+  $('#dialog-title').textContent = swap ? 'Replace this card?' : 'Import this card?';
+  $('#review-progress').textContent = `${progress.index} of ${progress.total}`;
+  $('#card-actions').hidden = true;
+  $('#review-actions').hidden = false;
+  paintReplaces(swap ? step.replaces : null);
+  dialog.classList.toggle('reviewing-swap', swap);
+  // Never `close()` first: the dialog stays open from one step to the next, and
+  // `close` fires as a queued task that would reset this state underneath the
+  // step just painted — the same trap openDialog documents for a card walking
+  // to its parent.
+  if (!dialog.open) dialog.showModal();
+  $('#card-title').focus();
+}
+
+/** End a review from the driver's side. The state is dropped *before* the
+ *  close, so the close handler does not read it as the reviewer abandoning the
+ *  import and call the driver back a second time. */
+export function closeReview() {
+  reviewStep = null;
+  reviewDecide = null;
+  dialog.close();
+}
+
+/** One decision about the step on screen. */
+function decideReview(kind) {
+  const step = reviewStep;
+  const decide = reviewDecide;
+  if (!step || !decide) return;
+  if (kind === 'skip') { decide('skip'); return; }
+  const title = $('#card-title');
+  title.value = title.value.trim();
+  if (!title.value) { title.reportValidity(); return; }
+  // The same refusal an ordinary save makes, for the same reason: a plan that
+  // starts after the deadline is a promise to begin after the thing was due.
+  // An import must not be the way one gets onto the board.
+  if (form.elements.type.value !== 'habit'
+      && planConflict(readPlan(), deadlineVal($('#card-deadline').value))) {
+    syncPlanFields();
+    announce($('#card-plan-error').textContent);
+    planYear.focus();
+    return;
+  }
+  const card = { ...step.card };
+  readForm(card);
+  decide(kind, card);
+}
+
+$('#review-accept').addEventListener('click', () => decideReview('accept'));
+$('#review-accept-all').addEventListener('click', () => decideReview('all'));
+$('#review-skip').addEventListener('click', () => decideReview('skip'));
 
 /** Write the form into a card-shaped object — the one place on this board a
  *  card is built from form input. The Inbox's quick-add form used to be a
@@ -326,13 +687,20 @@ function readForm(card) {
   if (card.type === 'habit') {
     card.habitFreq = habitFreqVal($('#card-habit-freq').value) || 'daily';
     card.habitCount = habitCountVal($('#card-habit-count').value);
-    card.habitTimes = readHabitTimes(card.habitCount);
+    card.habitTimes = slotsVal(slotsNow, card.habitCount);
   }
   // Where it is filed. Refused rather than written when the card cannot be
   // there, so this control can never put a habit in In Progress — the type is
   // read above, so `card` already carries the stamp being saved.
   const column = form.elements.column.value;
   if (COLUMNS.some((c) => c.id === column) && columnAccepts(card, column)) card.columnId = column;
+  // The parent, read off the form like every other field. The button that
+  // opened a child's draft writes it into the hidden input and nowhere else —
+  // a reviewer approves what the form says, so nothing may reach the card by a
+  // route the form does not show. It is *not* validated for existence here:
+  // that is a question about the whole list, and resolveLineage answers it once
+  // over the sanitized board.
+  card.parentId = $('#card-parent-id').value;
   card.category = catVal(form.elements.category.value);
   card.importance = iuVal($('#card-importance').value);
   card.urgency = iuVal($('#card-urgency').value);
@@ -365,17 +733,18 @@ form.addEventListener('submit', (e) => {
   if (!subject) { dialog.close(); return; }
   // The one save this app refuses: a plan that starts after the deadline is a
   // promise to begin after the thing was already due. Nothing is written, the
-  // error stands under the fieldset, and the focus goes to the field that can
-  // fix it — but the plan fieldset now lives inside the details fold, and
-  // focus() on an element inside a closed <details> does nothing, so from a
-  // collapsed dialog this refusal showed no message and moved no caret: Save
-  // appeared to do nothing at all. The fold is opened first. And the type is
-  // read off the draft as well as the card, because a guard written against
-  // `card` alone skipped the check entirely for every new card.
+  // error stands in the When row, and the focus goes to the field that can fix
+  // it. Nothing in the dialog folds any more, so the refusal has nothing to
+  // open first — that guard existed for the settings fold, which is gone, and
+  // a message inside a closed <details> is what it was protecting against. The
+  // type is read off the draft as well as the card, because a guard written
+  // against `card` alone skipped the check entirely for every new card.
   if (subject.type !== 'habit' && planConflict(readPlan(), deadlineVal($('#card-deadline').value))) {
-    $('#card-details').open = true;
     syncPlanFields();
     announce($('#card-plan-error').textContent);
+    // The plan, of the two: it is the field the message names, and the deadline
+    // is a date somebody has already committed to. The message and the mark now
+    // cover both, so either can be the one they reach for.
     planYear.focus();
     return;
   }
@@ -469,4 +838,18 @@ dialog.addEventListener('close', () => {
   draft = null;
   sourceId = null;
   setReviewingEditId(null);
+  // The dialog goes back to being the card dialog, whatever closed it. Left as
+  // it was, the next card opened would show an import's footer over a board
+  // card, with no way to save it.
+  $('#card-actions').hidden = false;
+  $('#review-actions').hidden = true;
+  paintReplaces(null);
+  dialog.classList.remove('reviewing-swap');
+  // Escape, or the backdrop: the reviewer walked away, so the import stops here
+  // with everything already accepted left on the board. Read and cleared before
+  // the call, because the driver's own end-of-review path closes this dialog.
+  const decide = reviewDecide;
+  reviewStep = null;
+  reviewDecide = null;
+  if (decide) decide('stop');
 });

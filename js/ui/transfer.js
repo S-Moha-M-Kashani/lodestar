@@ -1,11 +1,13 @@
 import { assistantState, newSessionId, refreshChatSessions } from '../assistant/session.js';
 import { asanaToLodestar, isAsanaExport } from '../core/asana.js';
 import { activeBoardId, boardUrl } from '../core/boards.js';
-import { ensureNums, parseState, uid } from '../core/cards.js';
+import { cardLabel, ensureNums, parseState, uid } from '../core/cards.js';
 import { CAT_LIMIT, catById, categories, setCategories } from '../core/categories.js';
-import { commit } from '../core/history.js';
+import { commit, short } from '../core/history.js';
+import { applyStep, planImport } from '../core/importplan.js';
 import { setCards, setDealCards, state } from '../core/state.js';
 import { ask } from './dialogs.js';
+import { closeReview, openReviewStep } from './edit-dialog.js';
 import { $, announce } from './dom.js';
 
 // Export and import — the board or one conversation, as JSON, Markdown or
@@ -199,6 +201,7 @@ const IMPORT_SCHEMA = `{
 "version": 1,
 "cards": [
   {
+    "id": "any string, unique in the file  (optional — one is minted; needed only so another card can name it as its parent)",
     "title": "The card's text (required)",
     "columnId": "inbox | in-progress | answered",
     "type": "question | problem | task | idea | dream | habit",
@@ -212,12 +215,14 @@ const IMPORT_SCHEMA = `{
     "planSrc": "auto | user  (optional — 'auto', the default, keeps the plan equal to the deadline)",
     "habitFreq": "daily | weekly | monthly | yearly  (habits only)",
     "habitCount": "how many times per period, 1-99  (habits only, defaults to 1)",
-    "habitTimes": ["HH:MM reminder slots (habits only, optional)"],
+    "habitTimes": [{ "month": "01-12 (yearly only)", "weekday": "1-7, Monday first (weekly only)", "day": "01-31 (monthly and yearly)", "time": "HH:MM" }],
+    "parentId": "the id of the card this one is part of  (optional — one level deep; a link this board cannot honour is dropped and the card kept)",
     "notes": "Optional free-form notes or the answer",
     "tags": ["optional", "lowercase", "tags"],
     "num": 12,
     "createdAt": 1721606400000,
-    "updatedAt": 1721606400000
+    "updatedAt": 1721606400000,
+    "doneAt": "when it was finished, ms since epoch  (optional — kept only on a card in Done, and one in Done that names none is given its updatedAt)"
   }
 ],
 "categories": [
@@ -269,9 +274,20 @@ $('#import-input').addEventListener('change', async (e) => {
     pendingImport = parseState(
       isAsanaExport(parsed) ? JSON.stringify(asanaToLodestar(parsed)) : text);
     const n = pendingImport.cards.length;
+    // What adding it would actually do, worked out before the choice rather
+    // than reported after it. Advisory only — the plan that is applied is built
+    // again when Add is pressed, against the board as it stands then.
+    const { steps, skipped } = planImport(pendingImport.cards, state.cards, uid);
+    const replaced = steps.filter((st) => st.kind === 'substitute').length;
+    const effect = [
+      `${steps.length - replaced} new`,
+      ...(replaced ? [`${replaced} replacing a card you have`] : []),
+      ...(skipped ? [`${skipped} already on the board`] : []),
+    ].join(', ');
     $('#import-mode-copy').textContent =
-      `The file contains ${n} card${n === 1 ? '' : 's'}. Add ${n === 1 ? 'it' : 'them'} to the current board, ` +
-      `or substitute the whole board with the file's contents?`;
+      `The file contains ${n} card${n === 1 ? '' : 's'}: ${effect}. Add `
+      + `${n === 1 ? 'it' : 'them'} to the current board, or substitute the whole `
+      + "board with the file's contents?";
     importModeDialog.showModal();
   } catch (err) {
     pendingImport = null;
@@ -288,6 +304,96 @@ $('#cancel-import-mode').addEventListener('click', () => {
   importModeDialog.close();
 });
 
+// The import being reviewed one card at a time, or null. `index` is the step on
+// screen; the counts are what the closing announcement reports.
+let review = null;
+
+/** Accept one step of a review: apply it, record it, and count it.
+ *
+ *  One History entry per accepted step, naming the card — which is what makes a
+ *  reviewed import traceable afterwards and every step of it separately
+ *  undoable. A substitution is ONE entry naming both cards, not an "added" and
+ *  a "deleted": accepting it was one decision, and two entries would mean two
+ *  presses of undo to put back what one press of Accept did.
+ *
+ *  The ledger number is read after `ensureNums`, since that is where a card
+ *  earns one — the same order the card dialog's own create path uses. Reached
+ *  only from a running review, which is why it can count into `review` without
+ *  asking whether there is one. */
+function acceptStep(step) {
+  const now = Date.now();
+  const card = { ...step.card, createdAt: step.card.createdAt || now, updatedAt: now };
+  state.cards = ensureNums(applyStep(state.cards, { ...step, card }));
+  commit(step.kind === 'substitute'
+    ? `Replaced ${cardLabel(step.replaces)} “${short(step.replaces.title)}” with ${cardLabel(card)}`
+    : `Imported ${cardLabel(card)} “${short(card.title)}”`);
+  review[step.kind === 'substitute' ? 'replaced' : 'added'] += 1;
+}
+
+/** What an import did, in one sentence, whether or not it was reviewed. */
+function importReport({ added, replaced, skipped }) {
+  const bits = [];
+  if (added) bits.push(`Added ${added} card${added === 1 ? '' : 's'}`);
+  if (replaced) bits.push(`replaced ${replaced}`);
+  if (skipped) bits.push(`skipped ${skipped} already on the board`);
+  return bits.length ? bits.join(', ') : 'Nothing to import';
+}
+
+/** Apply a whole plan as one act.
+ *
+ *  One History entry for the lot, deliberately: an import nobody reviewed is one
+ *  decision, and the timeline keeps only HISTORY_LIMIT snapshots — a 200-card
+ *  file writing 200 of them would push every earlier state off the end of the
+ *  log to record something the user never looked at card by card. */
+function takeAll(steps, skipped) {
+  const replaced = steps.filter((s) => s.kind === 'substitute').length;
+  const now = Date.now();
+  let cards = state.cards;
+  for (const step of steps) {
+    cards = applyStep(cards, { ...step, card: { ...step.card, updatedAt: now } });
+  }
+  state.cards = ensureNums(cards);
+  setDealCards(true);
+  const report = importReport({ added: steps.length - replaced, replaced, skipped });
+  commit(`${report} — imported`);
+  announce(report);
+}
+
+function nextReviewStep() {
+  if (!review) return;
+  if (review.index >= review.steps.length) { endReview(); return; }
+  openReviewStep(review.steps[review.index],
+    { index: review.index + 1, total: review.steps.length }, onReviewDecision);
+}
+
+function endReview() {
+  if (!review) return;
+  const report = importReport(review);
+  review = null;
+  closeReview();
+  setDealCards(true);
+  announce(report);
+}
+
+/** One answer from the review dialog: 'accept', 'all', 'skip' or 'stop'. */
+function onReviewDecision(kind, card) {
+  if (!review) return;
+  if (kind === 'stop') { review = null; return; }   // the dialog is already closed
+  const step = review.steps[review.index];
+  // The card the form says, not the card the file sent — the edits made in
+  // review are the whole point of it.
+  if (kind !== 'skip') acceptStep(card ? { ...step, card } : step);
+  review.index += 1;
+  if (kind === 'all') {
+    // Everything left, as the file has it. The current card was taken above
+    // with its edits, so "all the rest" is exactly what it says.
+    for (; review.index < review.steps.length; review.index += 1) {
+      acceptStep(review.steps[review.index]);
+    }
+  }
+  nextReviewStep();
+}
+
 $('#import-add').addEventListener('click', () => {
   if (!pendingImport) return;
   // Categories the file defines but this board doesn't yet: adopt them, so
@@ -295,14 +401,25 @@ $('#import-add').addEventListener('click', () => {
   for (const cat of pendingImport.categories || []) {
     if (!catById(cat.id) && categories.length < CAT_LIMIT) categories.push({ ...cat });
   }
-  // Fresh ids and ledger numbers so the same file can be imported twice safely
-  const added = pendingImport.cards.map((c) => ({ ...c, id: uid(), num: 0 }));
-  state.cards = ensureNums([...state.cards, ...added]);
+  // What the file means for this board, decided in full before anything is
+  // written: which cards it adds, which of the board's it replaces, and which it
+  // says nothing new about. Ids are re-issued here (that is what lets the same
+  // file be imported twice safely) and every parent link is re-pointed with
+  // them — a child left naming the id its *file* gave its parent would be
+  // detached by the next save with nothing on screen saying so. Substituting the
+  // whole board keeps the file's own ids and needs none of this.
+  const { steps, skipped } = planImport(pendingImport.cards, state.cards, uid);
+  const reviewing = $('#import-review').checked;
   pendingImport = null;
   importModeDialog.close();
-  setDealCards(true);
-  commit(`Imported ${added.length} card(s), added to the board`);
-  announce(`Added ${added.length} imported card(s) to the board`);
+  if (!steps.length) {
+    announce(`Nothing to import — all ${skipped} card${skipped === 1 ? '' : 's'} in that file `
+      + 'are already on the board');
+    return;
+  }
+  if (!reviewing) { takeAll(steps, skipped); return; }
+  review = { steps, skipped, index: 0, added: 0, replaced: 0 };
+  nextReviewStep();
 });
 
 $('#import-replace').addEventListener('click', async () => {

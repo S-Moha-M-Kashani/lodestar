@@ -1,17 +1,20 @@
+import { expectedBy, slotsText, slotsVal } from './schedule.js';
 import { state } from './state.js';
 
 // Habits — the one card type that is not finished but repeated.
 //
-// `habitCount` times per `habitFreq` calendar period; `habitTimes` are
-// optional clock slots that decide when the reminder fires, never the target
-// (which is why "2× per year" needs no clock at all). `habitHistory` maps a
-// period id to the instants it was done. None of it is cleared when the card
-// changes type: a mis-stamp must not cost a year of completions.
+// `habitCount` times per `habitFreq` calendar period; `habitTimes` holds one
+// schedule slot per repetition, saying when that repetition is expected —
+// never how many there are, which is why "2× per year" needs no clock at all.
+// The slot shape and its arithmetic live in core/schedule.js, which imports
+// nothing and is therefore unit-testable; what is left here is the habit as a
+// *card*. `habitHistory` maps a period id to the instants it was done. None of
+// it is cleared when the card changes type: a mis-stamp must not cost a year of
+// completions.
 
 const HABIT_FREQS = ['daily', 'weekly', 'monthly', 'yearly'];
 const HABIT_MAX_COUNT = 99;
 const HABIT_MAX_PERIODS = 400;
-const HABIT_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 const HABIT_PERIOD_RE =
   /^\d{4}(-(0[1-9]|1[0-2])(-(0[1-9]|[12]\d|3[01]))?|-W(0[1-9]|[1-4]\d|5[0-3]))?$/;
 // "2× per day" reads better than "2× per daily"; "0/2 today" better than
@@ -24,12 +27,12 @@ export const habitCountVal = (v) => {
   const n = Math.trunc(Number(v));
   return Number.isFinite(n) ? Math.min(HABIT_MAX_COUNT, Math.max(1, n)) : 1;
 };
-export const habitTimesVal = (v, count) => {
-  if (!Array.isArray(v)) return [];
-  const seen = new Set();
-  for (const t of v) if (typeof t === 'string' && HABIT_TIME_RE.test(t)) seen.add(t);
-  return [...seen].sort().slice(0, count);
-};
+// The schedule is one slot per repetition, validated in core/schedule.js.
+// Re-exported under the field's own name so the card's validators read as a
+// list of fields, and so the one place that knows the slot shape stays the one
+// place: `slotsVal` neither sorts nor de-duplicates, unlike the clock-string
+// validator this replaced — a slot is row n now, not a member of a set.
+export const habitTimesVal = slotsVal;
 export function habitHistoryVal(v) {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return {};
   const kept = [];
@@ -90,9 +93,21 @@ export const habitDue = (card) =>
   isHabit(card) && !habitRetired(card) && habitDoneNow(card) < card.habitCount;
 export const habitCards = () => state.cards.filter(isHabit);
 
+const cadenceBase = (card) => `${card.habitCount}× per ${HABIT_EVERY[card.habitFreq]}`;
 export const cadenceText = (card) => {
-  const base = `${card.habitCount}× per ${HABIT_EVERY[card.habitFreq]}`;
-  return card.habitTimes.length ? `${base} · ${card.habitTimes.join(', ')}` : base;
+  const when = slotsText(card.habitFreq, card.habitTimes, card.habitCount);
+  return when ? `${cadenceBase(card)} · ${when}` : cadenceBase(card);
+};
+
+/** The schedule read back in plain words, under the dialog's rows — the one
+ *  honest check that three dropdowns per row say what the person meant. An
+ *  unplaced schedule says what that means rather than saying nothing. */
+export const scheduleSentence = (card) => {
+  const when = slotsText(card.habitFreq, card.habitTimes, card.habitCount);
+  const every = HABIT_EVERY[card.habitFreq];
+  return when
+    ? `${cadenceBase(card)} — ${when}.`
+    : `${cadenceBase(card)}, due from the start of the ${every}.`;
 };
 export const habitTally = (card) =>
   `${habitDoneNow(card)}/${card.habitCount} ${HABIT_NOW[card.habitFreq]}`;
@@ -122,3 +137,17 @@ export function unpunchHabit(card) {
   card.updatedAt = Date.now();
   return true;
 }
+
+/** How many repetitions the clock has asked for so far, for this card.
+ *
+ *  The arithmetic is core/schedule.js's; what is here is the card-shaped call,
+ *  beside the rest of the habit domain. It read the clock and compared 'HH:MM'
+ *  strings until 2026-09-07, which is why a habit could only ever say how often
+ *  and never on which day. */
+export const habitExpectedBy = (card, at = new Date()) =>
+  expectedBy(card.habitFreq, card.habitTimes, card.habitCount, at);
+
+/** Is this habit asking to be reminded of, right now? Due, and behind what the
+ *  clock has asked for. */
+export const habitReminding = (card, at = new Date()) =>
+  habitDue(card) && habitDoneNow(card) < habitExpectedBy(card, at);

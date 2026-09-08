@@ -19,7 +19,7 @@
 const CARRIED = [
   'columnId', 'title', 'notes', 'type', 'category', 'importance', 'urgency',
   'effort', 'control', 'effortSrc', 'controlSrc', 'deadline', 'plan',
-  'planSrc', 'habitFreq', 'habitCount',
+  'planSrc', 'habitFreq', 'habitCount', 'parentId',
 ];
 
 /** An empty draft, at the standing defaults — the literal the Inbox's
@@ -49,6 +49,7 @@ export const blankDraft = ({ type, category } = {}) => ({
   habitCount: 1,
   habitTimes: [],
   habitHistory: {},
+  parentId: '',
   tags: [],
 });
 
@@ -59,33 +60,24 @@ export const blankDraft = ({ type, category } = {}) => ({
  *  inheriting a year of completions is a record of things that did not happen
  *  — the same reason the agent has no tool to tick a habit. The two arrays are
  *  copied rather than shared, or editing the draft edits the card it came
- *  from, which is a mutation nobody asked for and nothing would undo. */
+ *  from, which is a mutation nobody asked for and nothing would undo.
+ *
+ *  `parentId` travels, so duplicating a child makes a sibling — another part of
+ *  the same piece of work, which is what somebody duplicating a child wants.
+ *  The *children* of a parent never travel, and there is nothing to leave out:
+ *  the link lives on the child, so a card carries no list of them, and a
+ *  duplicate is simply a card nobody is a part of yet. That is the same shape
+ *  of answer as habitHistory — the design travels, the record does not — and
+ *  the reason the link was put on the child in the first place. */
 export function draftFrom(card) {
-  const draft = { habitTimes: [...card.habitTimes], habitHistory: {}, tags: [...card.tags] };
+  const draft = {
+    // Slots are objects, so a shallow copy of the array would still share every
+    // row with the source card: editing repetition 2 of the duplicate would
+    // edit repetition 2 of the card it came from.
+    habitTimes: card.habitTimes.map((s) => ({ ...s })),
+    habitHistory: {},
+    tags: [...card.tags],
+  };
   for (const field of CARRIED) draft[field] = card[field];
   return draft;
 }
-
-/** Does this card carry a setting somebody actually chose?
- *
- *  The card dialog folds everything but the card, its notes and its type into
- *  one block, and opens that block when the answer here is yes — so nothing
- *  already set is hidden behind a fold the user did not know to open.
- *
- *  Two fields lie if you read their value. **Effort and control always hold
- *  one**: effortVal returns 'medium' and controlVal 'influence' for anything
- *  unset, so testing the value would open the fold on every card ever made.
- *  Only the provenance says a person or the assistant decided. And **an auto
- *  plan has been resolved to the deadline** by sanitizeCard, so every dated
- *  card carries a plan it was never asked about; there the deadline is the
- *  detail and the plan is it restated. */
-export const cardHasDetails = (card) => Boolean(
-  card.category
-  || card.importance
-  || card.urgency
-  || card.deadline
-  || card.tags?.length
-  || (card.planSrc && card.planSrc !== 'auto')
-  || (card.effortSrc && card.effortSrc !== 'default')
-  || (card.controlSrc && card.controlSrc !== 'default'),
-);

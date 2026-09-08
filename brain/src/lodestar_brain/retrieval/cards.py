@@ -38,7 +38,7 @@ from .timescope import resolve_time_scope
 INDEX_FORMAT = 1
 
 
-def _embedder_identity(embeddings: Embeddings) -> str:
+def embedder_identity(embeddings: Embeddings) -> str:
     """What produced the vectors, as a string that changes when the vector space
     does: the class, the checkpoint it loads and the prefixes it prepends.
 
@@ -69,7 +69,7 @@ def _namespace(embeddings: Embeddings, corpus: str = '') -> str:
     reuses vectors from the old space for the cards it thinks are unchanged.
     """
     digest = hashlib.blake2b(digest_size=8)
-    for part in (str(INDEX_FORMAT), _embedder_identity(embeddings),
+    for part in (str(INDEX_FORMAT), embedder_identity(embeddings),
                  f'chunk={CHUNK_SIZE}/{CHUNK_OVERLAP}',
                  'meta=' + ','.join(CARD_META_KEYS), f'corpus={corpus}'):
         digest.update(part.encode())
@@ -418,4 +418,19 @@ that a cold build is a visible wait, which on measured timings is tens of
 thousands of cards — the namespace stops being an in-memory string and becomes a
 row somebody has to reconcile, and that is `SQLRecordManager`'s job rather than
 this module's.
+
+*A postscript that is not a contradiction (2026-09-07).* A `card_vectors` table
+now exists in `board.db`, and every argument above still stands, because it is
+not this index. What was persisted is **one vector per card** for the Overview
+map to plot — no chunking, no BM25, no `idf`, no namespace to reconcile, and one
+reader. What is argued against above is persisting the *index*: the store, the
+chunk-to-card mapping and the corpus statistic that has to be rebuilt whole on
+any change anyway. The two differ in the thing that made a record manager
+expensive — a stale row. A stale `card_vectors` row is never used and is
+overwritten on the next fill, because its key carries a fingerprint of the exact
+text it was made from; a stale row in a *record manager* is a claim that
+something is indexed when it is not. `CardIndex` does not read that table and
+should not start until something measured says otherwise: it would be trading a
+free in-memory manifest for a round trip, to answer a question the manifest
+already answers correctly.
 """

@@ -278,7 +278,9 @@ test('a board DB exports one Import-JSON file per live board under json/', () =>
     effort_src TEXT NOT NULL DEFAULT 'default', control_src TEXT NOT NULL DEFAULT 'default',
     deadline TEXT NOT NULL DEFAULT '', pending INTEGER NOT NULL DEFAULT 0,
     habit_freq TEXT NOT NULL DEFAULT '', habit_count INTEGER NOT NULL DEFAULT 1,
-    habit_times TEXT NOT NULL DEFAULT '[]', habit_history TEXT NOT NULL DEFAULT '{}')`);
+    habit_times TEXT NOT NULL DEFAULT '[]', habit_history TEXT NOT NULL DEFAULT '{}',
+    plan TEXT NOT NULL DEFAULT '', plan_src TEXT NOT NULL DEFAULT 'auto',
+    parent_id TEXT NOT NULL DEFAULT '', done_at INTEGER NOT NULL DEFAULT 0)`);
   db.exec('CREATE TABLE categories (id TEXT PRIMARY KEY, label TEXT, h INTEGER, position INTEGER)');
   const ins = db.prepare(`INSERT INTO cards
     (id, board_id, column_id, title, category, tags, created_at, updated_at, num, deleted_at, pending)
@@ -292,6 +294,15 @@ test('a board DB exports one Import-JSON file per live board under json/', () =>
   // A live card on a deleted board: deleting a board stamps the board row, not
   // its cards — this card must appear in no export at all.
   ins.run('ghost', 'b-gone', 'inbox', 'Live card on a deleted board', '', '[]', 1000, 2000, 10, null, 0);
+  // The four fields the card model gained after this export was first written:
+  // a hand-set plan, a parent, and a finished date. They are here because an
+  // export that omits one is a recovery path that silently un-plans, detaches
+  // and re-dates the board it restores — the failure is invisible until the day
+  // the backup is used.
+  ins.run('parent', 'main', 'answered', 'Finished parent', '', '[]', 1000, 2000, 11, null, 0);
+  db.prepare("UPDATE cards SET done_at = 4242 WHERE id = 'parent'").run();
+  db.prepare("UPDATE cards SET plan = '2027-03', plan_src = 'user', parent_id = 'parent' "
+    + "WHERE id = 'live'").run();
   db.prepare('INSERT INTO categories VALUES (?, ?, ?, ?)').run('work', 'Work', 220, 0);
   db.close();
   // A real SQLite DB with no cards table (assistant.db's shape): snapshotted
@@ -333,11 +344,16 @@ test('a board DB exports one Import-JSON file per live board under json/', () =>
   // exactly its own live cards — not b-two's, not the deleted board's.
   const data = JSON.parse(readFileSync(join(jsonDir, `board-main-${stamp}.json`), 'utf8'));
   assert.equal(data.version, 1);
-  assert.equal(data.cards.length, 1, 'soft-deleted, pending and other-board rows never export');
+  assert.equal(data.cards.length, 2, 'soft-deleted, pending and other-board rows never export');
   const card = data.cards[0];
   assert.equal(card.id, 'live');
   assert.equal(card.columnId, 'inbox');
   assert.equal(card.category, 'work');
+  // Every field the card model carries rides along, or the restore is lossy.
+  assert.equal(card.plan, '2027-03');
+  assert.equal(card.planSrc, 'user', 'without planSrc the plan resolves back to the deadline');
+  assert.equal(card.parentId, 'parent', 'a child restored without its parent is a detached card');
+  assert.equal(data.cards[1].doneAt, 4242, 'a finished date lost here is re-approximated on import');
   assert.deepEqual(card.tags, ['work', 'urgent'], 'tags is a parsed array, not a JSON string');
   assert.equal(card.createdAt, 1000);
   assert.equal(card.updatedAt, 2000);

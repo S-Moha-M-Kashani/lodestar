@@ -91,9 +91,33 @@ export function planVal(v) {
   return `${m[1]}-${m[2]}-${m[3]}`;
 }
 
+// Written out here rather than imported from core/schedule.js, which holds the
+// same list: both modules import nothing, and that rule is what keeps their
+// unit tests loadable under plain node with no DOM. The same trade server.js
+// makes with its validators — and twelve month names are not a rule two copies
+// can disagree about.
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'];
+
 /** '' | 'year' | 'month' | 'day' — how precisely the plan was made. */
 export const planPrecision = (plan) =>
   ({ 4: 'year', 7: 'month', 10: 'day' })[planVal(plan).length] || '';
+
+/** The plan in words, at exactly the precision it was given — '2027' reads as
+ *  "2027", '2027-03' as "March 2027", '2027-03-04' as "4 March 2027". The
+ *  dialog prints it under the three dropdowns, which is the one honest check
+ *  that they say what the person meant: three selects showing a year, a month
+ *  and a day never look wrong even when they are. '' for no plan, so the caller
+ *  can say what *that* means in its own words. */
+export function planWords(plan) {
+  const p = planVal(plan);
+  if (!p) return '';
+  const [y, m, d] = p.split('-');
+  const month = m ? MONTH_NAMES[Number(m) - 1] : '';
+  if (d) return `${Number(d)} ${month} ${y}`;
+  if (m) return `${month} ${y}`;
+  return y;
+}
 
 /** The first day the plan covers. */
 export function planStart(plan) {

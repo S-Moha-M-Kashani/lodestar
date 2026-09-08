@@ -301,5 +301,25 @@ def test_the_brain_has_no_way_to_write_a_card():
     # `record_trace` writes, and deliberately not to a card: it files the turn's
     # own developer trace into a table of its own, the way `record_chat` files
     # the conversation. Neither can reach `cards`.
-    assert surface == {'list_cards', 'list_chat', 'list_all_chat', 'record_chat',
-                       'record_trace', 'create_proposal', 'create_edit'}
+    #
+    # `write_vectors` (2026-09-07) is the third write on this surface and the
+    # argument for it is the same shape: it writes `card_vectors`, a table of
+    # embeddings derived from cards, which the board refuses to fill for a card
+    # it does not hold. Nothing in it is the board's record — losing every row
+    # costs time and no data, it is outside `rev` and outside the exported JSON —
+    # so it can neither create, change nor destroy a card. This set breaking is
+    # how a fourth write gets argued for rather than shipped, which is what it
+    # did here.
+    assert surface == {'list_board', 'list_cards', 'list_chat', 'list_all_chat',
+                       'record_chat', 'record_trace', 'create_proposal',
+                       'create_edit', 'list_vectors', 'write_vectors'}
+    # And the claim the whole test is named for, stated separately from the set
+    # so it cannot be satisfied by adding a name to a list: there is no
+    # whole-board write here at all, under any spelling.
+    # `list_board` reads the whole board document — cards AND the category
+    # registry, which the map needs to embed a card as its labels. A read of
+    # everything is not a write of anything, and it is the same GET
+    # `list_cards` has always made.
+    assert not [name for name in surface
+                if 'save' in name or 'write' in name.replace('write_vectors', '')
+                or name.startswith('put')]

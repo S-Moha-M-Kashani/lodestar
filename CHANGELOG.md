@@ -10,6 +10,110 @@ Dates are the day the release point was built. Versions follow
 [semantic versioning](https://semver.org/) — a major number for a break, a
 minor for a capability, a patch for a fix.
 
+## [v1.9.0] — 2026-09-08
+
+**Six changes: a card can be made of smaller cards, a habit says when each
+repetition is due, every view can be asked what a span of time held, the card
+dialog is a ledger instead of a form, an import no longer duplicates what the
+board already has, and a JSON backup carries the whole card.**
+
+**A card can hold other cards.** "Plan a long weekend in the mountains" is six
+or seven smaller acts, and the only way to hold them was more top-level cards
+that drift apart or a checklist typed into the notes that nothing can count.
+Any card can now hold children, and a child is a card in its own right that
+names one parent — nothing is stamped and nothing is a "project". The link
+lives on the child alone, so two machines editing one board can never disagree
+about it, and deleting a parent leaves its children on the board rather than
+taking them with it. A new scope filter narrows every view to parent cards, so
+a piece of work is counted once; a text search still reaches every card, because
+a control that narrows the board must never hide the thing you asked for by name.
+
+**A habit says when, not only how often.** A habit that repeats three times a
+week can now name a weekday and an hour for each of the three, and the fields a
+cadence cannot use are shown greyed with the reason rather than removed. Every
+reminder that existed before survives the change untouched. A habit is also
+drawn in one place now — one line in the rail beside the board, boxes first and
+the name after — instead of being both a rail row and a board card saying the
+same thing twice.
+
+**Every view can be asked what a span of time held.** A card records the day it
+was finished, which the weekly review had been guessing from the last time the
+card was edited — so a card finished in July and edited in September counted as
+September's work. The board, the backlog, the map, the matrix, the areas and the
+review can all be narrowed to what was captured or finished inside a range, and
+the range is remembered between visits and stated back in words. Asking about
+finished work stands the hide-Done default down for as long as the question is
+being asked, so the answer is never an empty screen.
+
+**The card dialog is one ledger of properties.** Every setting used to sit in
+its own framed box with a shouted heading, and most of them were folded away
+behind a Details flap so the lot would fit. Each one is now a single row — the
+name of the property on the left, its value on the right — with no box drawn
+around a control until you hover or click it. Nothing folds any more except the
+list of child cards, so a setting can no longer hide from the person editing it.
+
+**The map opens in half a second instead of nineteen.** Each card's meaning is
+worked out once and kept in the database, and the drawing is done by the Python
+service rather than by the browser, so a three-hundred-card board no longer
+re-reads every card it has already read. A second visit costs a fifth of a
+second and changing a filter costs milliseconds. The map still draws with the
+service stopped, and says which way it is drawing.
+
+**The rail beside the board is sorted.** The habits and the plan are short lists
+grouped by how often or how soon, each named by a coloured strip down its left
+edge instead of by a heading that ate the margin's height.
+
+**An import no longer duplicates what the board already has.** A card is its
+words: same title, same notes, same thought. Re-importing yesterday's export —
+or a file the Assistant built from the board it had just read — used to write a
+second copy of every card, and the two copies then drifted apart under separate
+ledger numbers. Now a card the board already holds unchanged is skipped, a card
+it has never seen is added, and a card it holds in a different state — a
+property changed, or different cards hanging off it — is **replaced**: the
+file's version lands and the board's copy goes to the Trash, where it can be
+brought back. A replacement never takes its children with it; they move to the
+card that replaced their parent, so no import can lose a card it did not name.
+
+**And you can walk through an import card by card.** Tick *Review each card
+before it lands* and every card the file actually changes opens in the ordinary
+card dialog on its way in, so it can be edited, accepted or refused one at a
+time. Children come before their parents. A replacement is shown as one
+sentence — the card on the board, an arrow, the card that would take its place —
+and refusing it leaves the board's card exactly where it was. Every card you
+accept is its own line in History, naming the card, so a reviewed import can be
+unpicked one decision at a time; an import you did not review stays a single
+line, because a 200-card file must not push the rest of your history off the end
+of the log.
+
+**A JSON backup now carries the whole card.** The `.json` twin written beside
+every database snapshot — the recovery path that pastes straight into Import
+JSON from any machine with a browser — had never been taught about the fields
+the card gained after it was written. A board restored from one came back with
+every hand-set plan collapsed back onto its deadline, every child detached from
+its parent, and every finished card's date re-approximated from the last time
+it was edited. The export now names `plan`, `planSrc`, `parentId` and `doneAt`
+along with the rest, and the test that covers it asserts each of the four,
+because a missing field here fails in silence until the day the backup is used.
+
+**Adding an imported board keeps its cards together.** `Add to the board`
+re-issues every card's id, so the same file can be imported twice without
+colliding with itself — but a child still named the id its *file* had given its
+parent, which nothing on the receiving board has. The link survived the import
+dialog and was then dropped by the next save, so a card came apart from its
+parent with nothing on screen to say so. The ids and the links are now
+re-pointed together. Substituting the board keeps the file's own ids and was
+never affected.
+
+**The import dialog's schema says how to write those links by hand.** It
+documented `parentId` without ever saying that a card may carry an `id` for
+another card to name, and it did not mention `doneAt` at all, although the
+export writes one. Both are listed now.
+
+**Fixed.** Asking what you finished this month with the Done column switched off
+kept the right cards and hid the one column that draws them, so the board came
+back empty. A lineage line above a card's title was drawn on every card, naming
+nothing.
+
 ## [v1.8.0] — 2026-09-06
 
 **Four changes: the card's actions, where it is filed, what each view shows,
@@ -252,6 +356,7 @@ back through, and the board travels as a JSON file.
 **The board exists.** Three columns you drag cards between, saved in the
 browser.
 
+[v1.9.0]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.8.0...v1.9.0
 [v1.8.0]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.7.7...v1.8.0
 [v1.7.7]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.7.6...v1.7.7
 [v1.7.6]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.7.5...v1.7.6

@@ -1,4 +1,4 @@
-import { cardLabel, controlVal } from '../core/cards.js';
+import { cardLabel, controlVal, matchesNesting, matchesRange } from '../core/cards.js';
 import { catColor, catLabel, categories } from '../core/categories.js';
 import { CONTROL_LABEL } from '../core/constants.js';
 import { filters, state } from '../core/state.js';
@@ -19,6 +19,37 @@ const SVGNS = 'http://www.w3.org/2000/svg';
 const WEEK = 7 * DAY;
 export const isOpen = (c) => c.columnId !== 'answered';
 
+/** The cards these two views read. `matchesNesting` **alone**, and that is not
+ *  an oversight: neither this view nor the Review has ever applied the
+ *  category, type, priority, tag or column filters, and switching them to
+ *  `matchesFilters` to pick up one new filter would quietly hand them four
+ *  others nobody asked for. Shared with review.js, which renders `areaRow` and
+ *  would otherwise answer a different question from the tile above it. */
+/** The cards these two views read: the scope filter and the time range, and
+ *  deliberately not the other four.
+ *
+ *  Both predicates are consulted **alone** rather than through
+ *  `matchesFilters`, which is the 2026-09-07 rule restated: neither this view
+ *  nor the Review has ever applied the category, type, priority, tag or column
+ *  filters, and switching them over to pick up one new filter would hand them
+ *  four others nobody asked for. The Review's weekly counts are a report about
+ *  spans and read `scopedCards()` too — see the note on `answeredIn` there for
+ *  why that is not a contradiction. */
+export const scopedCards = () => state.cards.filter((c) => matchesNesting(c) && matchesRange(c));
+
+/** The same cards **without** the time range: the scope filter only.
+ *
+ *  One reader, `answeredIn` / `createdIn` in views/review.js. Those two are a
+ *  report *about* spans — "answered this week", "new this week", this week
+ *  against last — and narrowing them by the reader's own span would measure the
+ *  filter instead of the week. A one-day range would leave every weekly figure
+ *  reading 0 or 1 and the drift arrows comparing nothing to nothing.
+ *
+ *  It is a second function rather than an argument to the first because the
+ *  question is not "how much filtering" but "is this a listing or a report",
+ *  and a boolean at four call sites is that distinction spelled out four times. */
+export const reportCards = () => state.cards.filter(matchesNesting);
+
 export function humanAge(ms) {
   const d = Math.floor(ms / DAY);
   if (d < 1) return 'today';
@@ -29,7 +60,7 @@ export function humanAge(ms) {
 }
 
 function areaStats(catId) {
-  const cards = state.cards.filter((c) => c.category === catId);
+  const cards = scopedCards().filter((c) => c.category === catId);
   const open = cards.filter(isOpen);
   const oldest = open.reduce((m, c) => Math.min(m, c.createdAt), Infinity);
   const top = open.slice().sort((a, b) =>
@@ -280,7 +311,7 @@ function renderAreaDetail(catId) {
   h.textContent = `${catLabel(catId)} — a closer look`;
   wrap.append(h);
 
-  const cards = state.cards.filter((c) => c.category === catId);
+  const cards = scopedCards().filter((c) => c.category === catId);
   const open = cards.filter(isOpen);
 
   const purchases = open.filter((c) => c.tags.includes('purchase'));
