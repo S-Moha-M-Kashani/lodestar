@@ -10,6 +10,57 @@ Dates are the day the release point was built. Versions follow
 [semantic versioning](https://semver.org/) — a major number for a break, a
 minor for a capability, a patch for a fix.
 
+## [Unreleased]
+
+**Importing onto a board that already holds cards, and three ways a card could
+quietly lose part of itself in the JSON that travels between boards.**
+
+**An import no longer duplicates what the board already has.** A card is its
+words: same title, same notes, same thought. Re-importing yesterday's export —
+or a file the Assistant built from the board it had just read — used to write a
+second copy of every card, and the two copies then drifted apart under separate
+ledger numbers. Now a card the board already holds unchanged is skipped, a card
+it has never seen is added, and a card it holds in a different state — a
+property changed, or different cards hanging off it — is **replaced**: the
+file's version lands and the board's copy goes to the Trash, where it can be
+brought back. A replacement never takes its children with it; they move to the
+card that replaced their parent, so no import can lose a card it did not name.
+
+**And you can walk through an import card by card.** Tick *Review each card
+before it lands* and every card the file actually changes opens in the ordinary
+card dialog on its way in, so it can be edited, accepted or refused one at a
+time. Children come before their parents. A replacement is shown as one
+sentence — the card on the board, an arrow, the card that would take its place —
+and refusing it leaves the board's card exactly where it was. Every card you
+accept is its own line in History, naming the card, so a reviewed import can be
+unpicked one decision at a time; an import you did not review stays a single
+line, because a 200-card file must not push the rest of your history off the end
+of the log.
+
+**A JSON backup now carries the whole card.** The `.json` twin written beside
+every database snapshot — the recovery path that pastes straight into Import
+JSON from any machine with a browser — had never been taught about the fields
+the card gained after it was written. A board restored from one came back with
+every hand-set plan collapsed back onto its deadline, every child detached from
+its parent, and every finished card's date re-approximated from the last time
+it was edited. The export now names `plan`, `planSrc`, `parentId` and `doneAt`
+along with the rest, and the test that covers it asserts each of the four,
+because a missing field here fails in silence until the day the backup is used.
+
+**Adding an imported board keeps its cards together.** `Add to the board`
+re-issues every card's id, so the same file can be imported twice without
+colliding with itself — but a child still named the id its *file* had given its
+parent, which nothing on the receiving board has. The link survived the import
+dialog and was then dropped by the next save, so a card came apart from its
+parent with nothing on screen to say so. The ids and the links are now
+re-pointed together. Substituting the board keeps the file's own ids and was
+never affected.
+
+**The import dialog's schema says how to write those links by hand.** It
+documented `parentId` without ever saying that a card may carry an `id` for
+another card to name, and it did not mention `doneAt` at all, although the
+export writes one. Both are listed now.
+
 ## [v1.9.0] — 2026-09-08
 
 **Four changes: a card can be made of smaller cards, a habit says when each

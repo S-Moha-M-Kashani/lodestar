@@ -416,6 +416,13 @@
       </div>
 
       <div class="card-dialog-body">
+        <!-- During an import review, the card this one would replace: the board's
+             copy on the left, the incoming version in the form on the right, and
+             an arrow between them. It is a reading of a card and not a second
+             form — the only card being edited is the one that would land. Empty
+             and hidden on every ordinary open, and on an import step that adds a
+             card the board has never seen. -->
+        <aside id="card-replaces" class="card-replaces" hidden></aside>
         <!-- The card's own words, in the face the card is printed in and with
              no box around them. This is the one thing in the dialog that is
              being *written* rather than set, and a border would file it beside
@@ -591,11 +598,24 @@
         </details>
       </div>
 
-      <div class="dialog-actions">
+      <div class="dialog-actions" id="card-actions">
         <button type="button" id="delete-card" class="btn danger">Delete card</button>
         <span class="spacer"></span>
         <button type="button" id="cancel-dialog" class="btn ghost">Cancel</button>
         <button type="submit" id="save-card" class="btn primary">Save changes</button>
+      </div>
+
+      <!-- The same dialog's footer while an import is being reviewed. A separate
+           row rather than relabelled buttons: Save is a submit, and these three
+           are decisions about a card that is not on the board yet. Every one of
+           them is type="button", or the form would submit through the ordinary
+           save path and write the card twice. -->
+      <div class="dialog-actions" id="review-actions" hidden>
+        <span id="review-progress" class="review-progress" aria-live="polite"></span>
+        <span class="spacer"></span>
+        <button type="button" id="review-skip" class="btn ghost">Skip</button>
+        <button type="button" id="review-accept-all" class="btn ghost">Accept all the rest</button>
+        <button type="button" id="review-accept" class="btn primary">Accept</button>
       </div>
     </form>
   </dialog>
@@ -646,6 +666,13 @@
     <div class="dialog-body">
       <h2>File looks good</h2>
       <p id="import-mode-copy" class="import-copy"></p>
+      <!-- Off unless asked for: a routine re-import should not put a wizard in
+           front of itself. Ticked, every card the file actually changes opens in
+           the ordinary card dialog on its way in, so it can be edited or refused
+           one at a time. It applies to Add alone — substituting the board
+           replaces everything by definition, and there is nothing to weigh up. -->
+      <label class="import-review-row"><input type="checkbox" id="import-review">
+        Review each card before it lands</label>
       <div class="dialog-actions">
         <button type="button" id="cancel-import-mode" class="btn ghost">Cancel</button>
         <span class="spacer"></span>

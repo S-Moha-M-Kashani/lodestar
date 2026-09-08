@@ -2793,6 +2793,118 @@ dialog::backdrop {
 
 .dialog-actions .spacer { flex: 1; }
 
+/* `display: flex` above outranks the UA's `[hidden] { display: none }`, so the
+   review footer would sit under the ordinary one on every card that opens. The
+   fifth instance of that trap, after .assistant-tools, .board-switch,
+   #assistant-widget and #assistant-launcher — and the sixth, .prop-row, is the
+   same rule with `display: grid`. */
+#review-actions[hidden] { display: none; }
+
+.review-progress {
+  font-size: 12px;
+  color: var(--ink-soft);
+  letter-spacing: 0.04em;
+}
+
+/* The card an import step would retire, read beside the one replacing it.
+   Hidden on every ordinary open of this dialog, and on an import step that adds
+   a card the board has never seen. */
+.card-replaces {
+  display: block;
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--card-line);
+  border-left: 3px solid var(--danger);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--danger) 5%, transparent);
+}
+
+.card-replaces[hidden] { display: none; }
+
+.card-replaces p { margin: 0 0 4px; }
+.card-replaces .replaces-lead {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-soft);
+}
+.card-replaces .replaces-num {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+.card-replaces .replaces-title {
+  font-family: var(--display, inherit);
+  font-size: 16px;
+  color: var(--ink);
+}
+.card-replaces .replaces-notes {
+  font-size: 13px;
+  color: var(--ink-soft);
+  white-space: pre-wrap;
+  max-height: 7.5em;
+  overflow: hidden;
+}
+.card-replaces .replaces-where { font-size: 12px; color: var(--ink-soft); }
+.card-replaces .replaces-fate {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--danger);
+}
+
+/* A substitution is read as one sentence: the board's card, an arrow, the card
+   that would take its place. Two columns rather than one panel stacked above
+   the form, because the whole question is which of the two you are keeping.
+   Below 860px the arrow would leave no room for either, so it falls back to the
+   stacked order the panel already reads correctly in. */
+@media (min-width: 860px) {
+  #card-dialog.reviewing-swap { width: min(980px, calc(100vw - 32px)); }
+
+  #card-dialog.reviewing-swap .card-dialog-body {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    column-gap: 34px;
+    align-items: start;
+  }
+
+  /* Auto-placement would drop each field into the next free cell of a two-column
+     grid, so the form is pinned to the right-hand track and the card being
+     retired spans every row of the left one. */
+  #card-dialog.reviewing-swap .card-dialog-body > * { grid-column: 2; }
+
+  #card-dialog.reviewing-swap .card-replaces {
+    grid-column: 1;
+    grid-row: 1 / -1;
+    position: sticky;
+    top: 0;
+    margin-bottom: 0;
+  }
+
+  /* The arrow, drawn in the gutter between the two. Decoration only — the panel
+     already says in words that the card is being replaced, so a screen reader
+     is not being asked to read a glyph for the meaning. */
+  #card-dialog.reviewing-swap .card-replaces::after {
+    content: '→';
+    position: absolute;
+    top: 14px;
+    right: -25px;
+    font-size: 18px;
+    color: var(--ink-soft);
+  }
+}
+
+/* The one control on the add-or-substitute dialog: a choice about how the
+   import runs, so it sits with the copy that describes it rather than in the
+   row of buttons that answer it. */
+.import-review-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: var(--ink);
+}
+
 /* Export / import dialogs — filing instructions for the ledger */
 #import-dialog { width: min(620px, calc(100vw - 32px)); }
 

@@ -2292,6 +2292,189 @@ try:
         page.click("#cancel-dialog")
         page.wait_for_timeout(100)
 
+        # ---- Import: a parent and its child, added onto the board -----------
+        # Add mode re-issues every id so the same file can be imported twice, so
+        # the links between the file's own cards have to be re-pointed with them.
+        # Left alone, the child arrives naming an id no card on this board has,
+        # and the next save detaches it in silence.
+        nest_import = shot("generated-nest-import.json")
+        with open(nest_import, "w") as f:
+            json.dump({"version": 1, "cards": [
+                {"id": "file-parent", "title": "IMPNEST parent trip", "type": "task"},
+                {"id": "file-child", "title": "IMPNEST book the hut", "type": "task",
+                 "parentId": "file-parent"},
+            ]}, f)
+        page.set_input_files("#import-input", nest_import)
+        page.wait_for_selector("#import-mode-dialog[open]")
+        page.click("#import-add")
+        page.wait_for_timeout(200)
+
+        def imported_nest():
+            cards = {c["title"]: c for c in api_state()["cards"]}
+            return cards.get("IMPNEST parent trip"), cards.get("IMPNEST book the hut")
+
+        check("import: an added child still points at its parent, by its new id",
+              wait_until(lambda: all(imported_nest())
+                         and imported_nest()[1]["parentId"] == imported_nest()[0]["id"]))
+        parent, child = imported_nest()
+        check("import: neither card kept the id the file gave it",
+              parent["id"] != "file-parent" and child["id"] != "file-child")
+
+        # ---- Import: a card the board already holds is skipped --------------
+        # A card IS its words: same title, same notes, and nothing else about it
+        # different = the same thought, so re-importing a file adds nothing.
+        # Otherwise yesterday's export — or a file the assistant built from the
+        # board it had just read — writes a second copy of every card, and the
+        # two drift apart under separate ledger numbers.
+        before_dupe = len(api_state()["cards"])
+        page.set_input_files("#import-input", nest_import)
+        page.wait_for_selector("#import-mode-dialog[open]")
+        page.click("#import-add")
+        page.wait_for_timeout(300)
+        check("import: re-importing the same file adds nothing, and says so",
+              len(api_state()["cards"]) == before_dupe
+              and "already on the board" in page.locator("#live-region").inner_text())
+
+        def by_title(t):
+            return next((c for c in api_state()["cards"] if c["title"] == t), None)
+
+        # ---- Import: a card that is out of date is substituted --------------
+        # The file's parent carries a child the board's copy does not, so the two
+        # are the same thought in different states: the file's version is added
+        # and the board's copy is retired to the Trash, earning a ledger number
+        # of its own because a number belongs to a card for life. The board's own
+        # child is NOT deleted with its parent — it moves to the card that
+        # replaced it, so a substitution never loses a card it did not name.
+        old_parent = imported_nest()[0]
+        subst_import = shot("generated-subst-import.json")
+        with open(subst_import, "w") as f:
+            json.dump({"version": 1, "cards": [
+                {"id": "p", "title": "IMPNEST parent trip", "type": "task"},
+                {"id": "c", "title": "IMPNEST wax the skis", "type": "task",
+                 "parentId": "p"},
+            ]}, f)
+        page.set_input_files("#import-input", subst_import)
+        page.wait_for_selector("#import-mode-dialog[open]")
+        page.click("#import-add")
+        page.wait_for_timeout(400)
+        check("import: an out-of-date card is replaced rather than duplicated",
+              wait_until(lambda: by_title("IMPNEST wax the skis") is not None)
+              and len([c for c in api_state()["cards"]
+                       if c["title"] == "IMPNEST parent trip"]) == 1
+              and by_title("IMPNEST parent trip")["id"] != old_parent["id"])
+        check("import: the card it replaced is in the Trash, not destroyed",
+              wait_until(lambda: any(c["id"] == old_parent["id"]
+                                     for c in api_trash()["cards"])))
+        check("import: both children hang off the card that replaced their parent",
+              sorted(c["title"] for c in api_state()["cards"]
+                     if c["parentId"] == by_title("IMPNEST parent trip")["id"])
+              == ["IMPNEST book the hut", "IMPNEST wax the skis"])
+        # An import nobody reviewed is one act, so it is one History entry — a
+        # 200-card file must not push every earlier snapshot off a 50-deep log.
+        # It still has to say that something was replaced, or a card left the
+        # board with nothing on screen admitting it.
+        menu_click("#history-btn")
+        page.wait_for_selector("#history-dialog[open]")
+        newest_import = page.locator(
+            "#history-list .history-row .history-action").first.inner_text()
+        check("import: an unreviewed import is one History entry, and it says what it replaced",
+              "replaced" in newest_import.lower())
+        page.click("#close-history")
+        page.wait_for_timeout(100)
+
+        # ---- Import: reviewing each card before it lands --------------------
+        # Off by default; ticking the box opens each incoming card in the ordinary
+        # card dialog, so every field can be changed on the way in and there is no
+        # second form to learn. Children are reviewed before their parents: a
+        # parent's substitution hands its whole family over, so the family has to
+        # be settled by the time the reviewer is asked about the parent.
+        review_import = shot("generated-review-import.json")
+        with open(review_import, "w") as f:
+            json.dump({"version": 1, "cards": [
+                {"id": "rp", "title": "IMPREV parent trip", "type": "task"},
+                {"id": "rc", "title": "IMPREV book the ferry", "type": "task",
+                 "parentId": "rp"},
+                {"id": "rx", "title": "IMPREV loose card", "type": "task"},
+            ]}, f)
+        page.set_input_files("#import-input", review_import)
+        page.wait_for_selector("#import-mode-dialog[open]")
+        check("import: the review is offered, and is off unless asked for",
+              page.locator("#import-review").count() == 1
+              and not page.locator("#import-review").is_checked())
+        page.check("#import-review")
+        page.click("#import-add")
+        page.wait_for_selector("#card-dialog[open]")
+        check("import review: the first card opens in the card dialog, the child first",
+              page.locator("#card-title").input_value() == "IMPREV book the ferry"
+              and "1 of 3" in page.locator("#review-progress").inner_text())
+        page.screenshot(path=shot("import-review.png"))
+
+        # "Accept" takes the form as it stands, so the reviewer's edit is what
+        # lands — the 2026-09-02 rule that a reviewer approves what the form says.
+        page.fill("#card-title", "IMPREV book the ferry early")
+        page.click("#review-accept")
+        page.wait_for_timeout(200)
+        check("import review: an edit made in review is what lands on the board",
+              wait_until(lambda: by_title("IMPREV book the ferry early") is not None)
+              and by_title("IMPREV book the ferry") is None)
+        check("import review: the review moves on to the next card",
+              "2 of 3" in page.locator("#review-progress").inner_text()
+              and page.locator("#card-title").input_value() == "IMPREV parent trip")
+
+        # Accept all the rest is the way out of a long review, and it closes it.
+        page.click("#review-accept-all")
+        page.wait_for_timeout(300)
+        check("import review: 'Accept all' takes the remaining cards and closes the review",
+              page.locator("#card-dialog[open]").count() == 0
+              and wait_until(lambda: by_title("IMPREV loose card") is not None
+                             and by_title("IMPREV parent trip") is not None))
+        check("import review: the child accepted first is attached to the parent accepted after it",
+              by_title("IMPREV book the ferry early")["parentId"]
+              == by_title("IMPREV parent trip")["id"])
+        # One entry per card, because each acceptance was a separate deliberate
+        # act — and each names the card, which is what makes it findable later.
+        menu_click("#history-btn")
+        page.wait_for_selector("#history-dialog[open]")
+        reviewed = page.locator("#history-list .history-row .history-action").all_inner_texts()[:3]
+        check("import review: each accepted card is its own History entry, naming the card",
+              sum(1 for a in reviewed if "IMPREV" in a) == 3
+              and any("book the ferry early" in a for a in reviewed))
+        page.click("#close-history")
+        page.wait_for_timeout(100)
+
+        # ---- Import review: a substitution, and refusing one -----------------
+        # The old card is shown beside the one that would replace it, and the
+        # reviewer can keep the old one. Refusing the swap must leave the board
+        # exactly as it was, with the card that was accepted before it still in.
+        kept_parent = by_title("IMPREV parent trip")
+        subst_review = shot("generated-subst-review.json")
+        with open(subst_review, "w") as f:
+            json.dump({"version": 1, "cards": [
+                {"id": "rp", "title": "IMPREV parent trip", "type": "task"},
+                {"id": "rc2", "title": "IMPREV pack the bags", "type": "task",
+                 "parentId": "rp"},
+            ]}, f)
+        page.set_input_files("#import-input", subst_review)
+        page.wait_for_selector("#import-mode-dialog[open]")
+        page.check("#import-review")
+        page.click("#import-add")
+        page.wait_for_selector("#card-dialog[open]")
+        page.click("#review-accept")          # the new child
+        page.wait_for_timeout(200)
+        check("import review: a substitution shows the card it would retire",
+              page.locator("#card-replaces").is_visible()
+              and "IMPREV parent trip" in page.locator("#card-replaces").inner_text()
+              and "delet" in page.locator("#card-replaces").inner_text().lower())
+        page.screenshot(path=shot("import-review-substitute.png"))
+        page.click("#review-skip")
+        page.wait_for_timeout(300)
+        check("import review: refusing a substitution keeps the card the board has",
+              page.locator("#card-dialog[open]").count() == 0
+              and wait_until(lambda: by_title("IMPREV pack the bags") is not None)
+              and by_title("IMPREV parent trip")["id"] == kept_parent["id"])
+        check("import review: the refused card is not in the Trash",
+              all(c["id"] != kept_parent["id"] for c in api_trash()["cards"]))
+
         # ---- Decisional-balance preview ---------------------------------------
         add_card(page, "Should we adopt the new framework?")
         page.wait_for_timeout(150)
