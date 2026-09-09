@@ -37,6 +37,7 @@ from lodestar_brain.agent.trace import TraceCollector, TurnTrace
 from lodestar_brain.config import Settings, load_settings
 from lodestar_brain.llm import FakeChat
 from lodestar_brain.server import create_app
+from lodestar_brain.widget2 import Widget2Agent
 
 BOARD = 'http://board.test'
 SETTINGS = Settings(llm_provider='fake')
@@ -164,6 +165,29 @@ def test_the_agent_captures_the_envelope_it_really_sent():
     shown = [(e['role'], e['content']) for e in record['entries'][:-1]]
     assert [(t.replace('human', 'human'), c) for t, c in handed] == shown
     assert record['entries'][-1]['content'] == 'clear skies'
+
+    # Whichever agent answered, and that is the reason this is one test rather
+    # than two: the trace is the review instrument for carrying a tool across,
+    # so an agent whose envelope is never filed cannot be reviewed at all. A
+    # tool-less turn's tape is shorter and has to be just as real — the failure
+    # this catches is a second agent that simply never wires the collector, and
+    # then files an empty record that renders as a turn nobody can explain.
+    seen.clear()
+    bare = Widget2Agent(settings=SETTINGS, system_prompt='you are lodestar',
+                        llm=Recording(script=[AIMessage('no tools here')]))
+    bare_trace = TurnTrace(session_id='chat-5b')
+    bare_result = bare.run([{'role': 'user', 'content': 'weather in bern?'}],
+                           trace=bare_trace)
+    bare_record = bare_trace.as_dict()
+
+    assert bare_result.reply == 'no tools here'
+    assert roles(bare_record) == ['system', 'human', 'ai']
+    assert [(m.type, m.content) for m in seen[-1]] == [
+        (e['role'], e['content']) for e in bare_record['entries'][:-1]]
+    # The system prompt on the tape is the one that turn used, not Widget 1's.
+    assert bare_record['entries'][0]['content'] == 'you are lodestar'
+    assert bare_record['entries'][-1]['content'] == 'no tools here'
+    assert bare_record['status'] == 'completed'
 
 
 # This is an integration test.

@@ -10,6 +10,7 @@ in for the agent — a test that assembled its own three would still pass with t
 composition handing each tool a client of its own, which is the bug.
 """
 import asyncio
+from types import SimpleNamespace
 
 import httpx
 import respx
@@ -38,11 +39,14 @@ def composed_tools(monkeypatch):
     """The tool list `create_app` hands the agent, with its wiring intact."""
     captured = {}
 
-    class Recorder:
-        def __init__(self, *, settings, tools, max_steps):
-            captured['tools'] = tools
+    # At the seam that chooses the agent, not at one agent's constructor: the
+    # composed tool list is what this fixture is for, and it is handed to
+    # whichever agent `BRAIN_AGENT` named.
+    def recorder(settings_, *, tools, max_steps, board):
+        captured['tools'] = tools
+        return SimpleNamespace(tools=tools)
 
-    monkeypatch.setattr(server, 'LodestarAgent', Recorder)
+    monkeypatch.setattr(server, 'make_agent', recorder)
     server.create_app(Settings(llm_provider='fake', embedder='fake',
                                transcriber='fake', board_api_url=BOARD,
                                chroma_url=''))

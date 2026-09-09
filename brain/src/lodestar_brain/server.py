@@ -16,7 +16,8 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.store.sqlite import AsyncSqliteStore
 from pydantic import BaseModel, Field
 
-from .agent import AgentResult, AgentStep, LodestarAgent
+from .agent import AgentResult, AgentStep
+from .agents import make_agent
 from .agent.trace import TurnTrace
 from .board import BoardClient, BoardSnapshot
 from .config import Settings, load_settings
@@ -270,8 +271,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             logging.getLogger(__name__).warning(
                 'chat index not synced from the record: %s', exc)
 
-    agent = LodestarAgent(settings=settings, tools=tools,
-                          max_steps=settings.max_agent_steps)
+    # Which implementation answers, by name. Built here rather than in the
+    # lifespan for the reason every other seam is: an unrecognised BRAIN_AGENT
+    # has to stop the boot, and `create_app` is what runs before a port opens.
+    # The lifespan still hands it the durable state (`attach`), so both agents
+    # share one checkpointer and one long-term store.
+    # `board` and not `snapshot`: the snapshot is Widget 1's one-fetch-per-turn
+    # optimisation, keyed on a `turn_id` Widget 2 does not mint — it has one
+    # board-reading tool, so there is no second fetch to collapse.
+    agent = make_agent(settings, tools=tools,
+                       max_steps=settings.max_agent_steps, board=board)
     transcriber = make_transcriber(settings)
 
     @asynccontextmanager
@@ -313,7 +322,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get('/health')
     def health() -> dict:
-        return {'ok': True, 'service': 'lodestar-brain'}
+        """Alive, and which agent is answering with what.
+
+        `agent` and `capabilities` are here because during the migration the
+        first question about a running brain is which implementation it is
+        serving and what that one holds — and an absent capability has to be
+        visible without reading the source. `capabilities` is read off the
+        agent's own tools, so neither agent has to maintain a second list of
+        itself, and an empty one is a real answer rather than a fault.
+
+        Local-only, like the rest of this service: the board proxies
+        `/api/agent/*` and `/api/rag/*` and never this route.
+        """
+        return {'ok': True, 'service': 'lodestar-brain',
+                'agent': settings.agent,
+                'capabilities': sorted(tool.name for tool in agent.tools)}
 
     @app.get('/agent/models')
     def models() -> dict:

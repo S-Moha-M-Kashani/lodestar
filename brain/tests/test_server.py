@@ -3,6 +3,7 @@ import itertools
 import json
 
 import httpx
+import pytest
 import respx
 from fastapi.testclient import TestClient
 
@@ -12,16 +13,40 @@ from lodestar_brain.voice.fake import FAKE_TRANSCRIPT
 
 
 # This is an integration test.
-def test_health():
-    client = TestClient(create_app(Settings(llm_provider='fake', embedder='fake')))
-    res = client.get('/health')
+def test_health_says_which_agent_it_built_and_what_that_one_holds():
+    """Alive, plus the two facts a migration needs: which implementation is
+    answering, and what it can do.
+
+    Both agents in one test, because the claim is a *comparison* — an operator
+    switching `BRAIN_AGENT` needs the tool list to change, and a `capabilities`
+    key answering the same thing either way would satisfy each half on its own.
+    It is read off the agent's own tools, so neither maintains a second
+    description of itself that could drift.
+
+    Asserted as **each holding something the other does not**, which is the
+    sharpest available form: `list_cards` is Widget 1's and was deliberately not
+    carried, `find_cards` is Widget 2's and was built rather than moved. A test
+    naming only tools they share would pass against a route reporting one
+    agent's list for both.
+    """
+    res = TestClient(create_app(Settings(llm_provider='fake', embedder='fake')))\
+        .get('/health')
     assert res.status_code == 200
-    assert res.json() == {'ok': True, 'service': 'lodestar-brain'}
+    assert res.json()['agent'] == 'widget1'
+    assert 'list_cards' in res.json()['capabilities']
+    assert 'find_cards' not in res.json()['capabilities']
+
+    two = TestClient(create_app(Settings(llm_provider='fake', embedder='fake',
+                                         agent='widget2'))).get('/health')
+    assert two.json() == {'ok': True, 'service': 'lodestar-brain',
+                          'agent': 'widget2',
+                          'capabilities': ['create_card', 'find_cards',
+                                           'update_card']}
 
 
-def fake_app():
+def fake_app(agent='widget1'):
     return create_app(Settings(llm_provider='fake', embedder='fake',
-                               transcriber='fake',
+                               transcriber='fake', agent=agent,
                                board_api_url='http://board.test'))
 
 
@@ -157,8 +182,15 @@ def test_chat_echo_reports_neither_flag():
 
 
 # This is an integration test.
-def test_a_turn_reports_what_it_cost_and_says_nothing_when_it_cannot():
-    """`cost` rides alongside `usage`, on both chat routes.
+@pytest.mark.parametrize('agent', ['widget1', 'widget2'])
+def test_a_turn_reports_what_it_cost_and_says_nothing_when_it_cannot(agent):
+    """`cost` rides alongside `usage`, on both chat routes and for either agent.
+
+    Parameterised rather than copied: whichever agent answered, a turn reports
+    the same facts, because both build their result with the same readers and
+    the route prices whatever it is handed. A second copy of this test would
+    have let the two shapes drift apart while both stayed green.
+
 
     On the wire rather than computed in the browser: the model is chosen per
     request and the prices are a remote document, so a client doing this
@@ -171,11 +203,14 @@ def test_a_turn_reports_what_it_cost_and_says_nothing_when_it_cannot():
     unknown model or an unreachable price list reports None, and the Assistant
     then shows no figure at all.
     """
-    client = TestClient(fake_app())
+    client = TestClient(fake_app(agent))
     body = client.post('/agent/chat', json={
         'messages': [{'role': 'user', 'content': 'just talking'}]}).json()
     assert body['usage'], 'the fake backend reports usage; cost rides with it'
     assert body['cost'] == 0.0
+    # The same keys, in the same shape, from either agent. A tool-less turn's
+    # `steps` is empty — which is a report and not an absence.
+    assert body['steps'] == [] and body['mutated'] is False
 
     # The stream's `done` event carries the same turn, so it must carry the same
     # cost — two routes reporting one turn differently is the drift _turn_json

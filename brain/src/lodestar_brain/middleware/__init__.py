@@ -10,6 +10,8 @@ conversation costs, and what the agent remembers between conversations.
 an `AgentMiddleware`, and it lives here because it is the same kind of thing — a
 decision about the whole turn that belongs to no single tool.
 """
+from langchain.agents.middleware import AgentMiddleware
+
 from .cache import NEVER_CACHED, ToolResultCache
 from .memory import LongTermMemory, facts_namespace
 from .summarize import make_context_editor, make_summarizer
@@ -17,7 +19,30 @@ from .tracing import configure_tracing
 from .untrusted import (BEGIN, END, PROMPT_RULE, UntrustedToolOutput, decode,
                         fence, result_of)
 
+
+def count_hooks(middleware: list, hook: str) -> int:
+    """How many of these middlewares become a graph node at `hook`.
+
+    The test `create_agent` itself applies, restated: a hook counts when the
+    class overrides either the sync or the async form. Asking the instances
+    rather than hard-coding a number means a middleware added later is counted
+    without anyone remembering to.
+
+    Here rather than in an agent, because it is a fact about middleware and not
+    about either agent — and because both agents need it for the same reason.
+    `recursion_limit` counts *nodes*, so a middleware with a state hook silently
+    shortens the tool budget: adding two of them once cut a `max_steps=2` run to
+    one tool call, which reads as the model having got worse. Each agent derives
+    its limit from the stack it actually installed, and a second copy of this
+    function is how the two would come to disagree about what a step costs.
+    """
+    return sum(1 for m in middleware
+               if getattr(m.__class__, hook) is not getattr(AgentMiddleware, hook)
+               or getattr(m.__class__, f'a{hook}')
+               is not getattr(AgentMiddleware, f'a{hook}'))
+
+
 __all__ = ['BEGIN', 'END', 'NEVER_CACHED', 'PROMPT_RULE', 'LongTermMemory',
            'ToolResultCache', 'UntrustedToolOutput', 'configure_tracing',
-           'decode', 'facts_namespace', 'fence', 'make_context_editor',
-           'make_summarizer', 'result_of']
+           'count_hooks', 'decode', 'facts_namespace', 'fence',
+           'make_context_editor', 'make_summarizer', 'result_of']

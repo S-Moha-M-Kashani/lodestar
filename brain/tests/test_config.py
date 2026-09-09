@@ -1,6 +1,8 @@
 import re
 from pathlib import Path
 
+import pytest
+
 from lodestar_brain.config import Settings, load_settings
 
 
@@ -166,6 +168,37 @@ def test_the_checkpoint_file_is_real_from_the_environment_and_inert_in_code():
     assert Settings().checkpoint_db == ':memory:'
     assert load_settings(
         env={'BRAIN_CHECKPOINT_DB': '/tmp/cp.db'}).checkpoint_db == '/tmp/cp.db'
+
+
+# This is a configuration invariant: which agent answers is real in code as
+# well as from the environment, unlike url_safety or tracing. Which
+# implementation answered is the thing under comparison during the migration, so
+# a test or an eval must be able to name one and be given it — and the incumbent
+# is the default from both directions, because nobody who set nothing chose to
+# meet a tool-less agent.
+def test_the_agent_choice_defaults_to_the_incumbent_from_every_direction():
+    assert load_settings(env={}).agent == 'widget1'
+    assert Settings().agent == 'widget1'
+    assert load_settings(env={'BRAIN_AGENT': 'widget2'}).agent == 'widget2'
+
+
+# This is a configuration invariant: no `auto` and no fallback, the same rule
+# BRAIN_TRACING and BRAIN_URL_SAFETY follow. Refused where the seam is read
+# rather than where the value is parsed, because `create_app` is what runs
+# before a port opens — an unknown name must cost the boot, not the first
+# question somebody asks.
+def test_an_unknown_agent_name_is_refused_at_boot():
+    from lodestar_brain.agents import make_agent
+    from lodestar_brain.board.client import BoardClient
+
+    settings = load_settings(env={'BRAIN_AGENT': 'widget2-beta'})
+    with pytest.raises(ValueError) as raised:
+        make_agent(settings, tools=[], max_steps=1,
+                   board=BoardClient('http://board.test'))
+    # The value the operator typed *and* the names that exist: an error naming
+    # only one of the two leaves them guessing at the other.
+    assert 'widget2-beta' in str(raised.value)
+    assert "'widget1' or 'widget2'" in str(raised.value)
 
 
 # Real data and non-real data live in *different Chroma databases*, so all

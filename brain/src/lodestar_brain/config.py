@@ -165,6 +165,18 @@ class Settings:
     # the board — capture and viewing are two switches because they are two
     # risks, each in the service that owns it.
     trace: str = 'off'
+    # 'widget1' | 'widget2' — which agent implementation answers a turn
+    # (`server.py`'s `build_agent`). Real in code as well as from the
+    # environment, unlike url_safety or tracing: which agent answered is the
+    # thing under comparison during the migration, so a test or an eval must be
+    # able to name one and get it.
+    #
+    # An operator switch and never a UI control: the picker chooses an *engine*,
+    # which is a per-turn question the user owns, whereas which implementation
+    # is in service is an operator question for the length of a migration. The
+    # incumbent is the default, so nobody who sets nothing meets a tool-less
+    # agent; an unrecognised name raises at boot, and there is no `auto`.
+    agent: str = 'widget1'
     # The agent's own working memory: LangGraph's checkpointer (one thread per
     # chat, so reopening a conversation resumes it) and its long-term store,
     # sharing one sqlite file. Never board.db and never assistant.db — those are
@@ -262,6 +274,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         # metadata to a third party.
         tracing=env.get('BRAIN_TRACING', 'off'),
         trace=trace,
+        agent=env.get('BRAIN_AGENT', 'widget1'),
         langsmith_api_key=env.get('LANGSMITH_API_KEY', ''),
         # Beside the other real databases, and covered by no backup: it is
         # derived working memory, not a record.
