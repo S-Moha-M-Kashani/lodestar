@@ -16,13 +16,17 @@ The catalogue of what this closes lives in `test_guardrails.py`.
 from __future__ import annotations
 
 import json
+import re
+from pathlib import Path
 
 import httpx
 import respx
 
 from lodestar_brain.tools.board import BoardClient, make_board_tools
+from lodestar_brain.widget2.tools.fields import EDITABLE_BOARD_KEYS
 
 BOARD = 'http://board.test'
+SERVER_JS = Path(__file__).resolve().parents[2] / 'server.js'
 
 
 def _card(id, title, **extra):
@@ -119,3 +123,49 @@ def test_no_tool_mutates_the_board_any_more():
     assert PROPOSING_TOOLS == {'create_card', 'update_card'}
     assert MUTATING_TOOLS == set(), (
         'a tool that mutates the board is a tool that skipped the user')
+
+
+def _server_allowlist():
+    """`EDITABLE_FIELDS` as `server.js` declares it.
+
+    Parsed, because it is a module-local const in a file with no exports and
+    nothing to import it from — and this side is the parsed half deliberately:
+    Python can *import* its own list, so exactly one of the two is read as text
+    rather than as a value. The failure that matters is the two lists
+    disagreeing, and a regex that stopped matching would report that as a
+    missing declaration rather than passing on an empty set.
+    """
+    body = re.search(r'const EDITABLE_FIELDS = \[(.*?)\];', SERVER_JS.read_text(),
+                     re.DOTALL)
+    assert body, f'no EDITABLE_FIELDS declaration in {SERVER_JS}'
+    return set(re.findall(r"'(\w+)'", body.group(1)))
+
+
+# This is a configuration invariant: two lists in two languages that have to be
+# one set, asserted rather than kept in step by hand.
+def test_the_boards_allowlist_and_the_tool_schema_are_the_same_set():
+    """The cure for the 2026-09-02 drops, applied at the seam that caused them.
+
+    Twice now a tool has advertised a field `server.js` silently dropped, and
+    both times the cause was two hand-written lists: `UpdateCardArgs` offered a
+    `deadline` the allowlist did not carry, and `writeProposal`'s INSERT named
+    no `plan` column while `create_card` offered one. Neither failed anything.
+
+    So the set is declared once, in `widget2/tools/fields.py`, and asserted
+    equal here **in both directions**: a field added to the schema and not to
+    the server is a suggestion that becomes a 400 nobody sees, and a field added
+    to the server and not to the schema is a capability nothing can reach. A
+    subset check either way would wave one of those through.
+    """
+    assert _server_allowlist() == set(EDITABLE_BOARD_KEYS), (
+        'server.js EDITABLE_FIELDS and widget2 EDITABLE_BOARD_KEYS have '
+        f'drifted: server-only {_server_allowlist() - set(EDITABLE_BOARD_KEYS)}, '
+        f'schema-only {set(EDITABLE_BOARD_KEYS) - _server_allowlist()}')
+
+    # And what stays out stays out on *both* sides, stated as intent rather than
+    # left as an absence: each has its own reason in fields.py's docstring, and
+    # the equality above would be just as satisfied by adding them to both.
+    for withheld in ('parentId', 'habitHistory', 'doneAt', 'planSrc',
+                     'effortSrc', 'controlSrc', 'num'):
+        assert withheld not in EDITABLE_BOARD_KEYS
+        assert withheld not in _server_allowlist()

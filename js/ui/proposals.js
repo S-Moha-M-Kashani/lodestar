@@ -1,9 +1,11 @@
 import { assistantState } from '../assistant/session.js';
 import { boardUrl } from '../core/boards.js';
-import { cardLabel, typeVal } from '../core/cards.js';
+import { cardLabel, controlVal, effortVal, typeVal } from '../core/cards.js';
 import { catLabel } from '../core/categories.js';
-import { TYPE_META } from '../core/constants.js';
+import { CONTROL_LABEL, TYPE_META } from '../core/constants.js';
+import { habitCountVal, habitFreqVal } from '../core/habits.js';
 import { short } from '../core/history.js';
+import { planWords } from '../core/plan.js';
 import { adoptServerBoard } from '../core/sync.js';
 import { announce, columnTitle, getCard } from './dom.js';
 import { openDialog } from './edit-dialog.js';
@@ -148,7 +150,21 @@ function describeEdit(fields, card) {
     importance: (v) => `importance → ${v || 'none'}`,
     urgency: (v) => `urgency → ${v || 'none'}`,
     deadline: (v) => `deadline → ${v || 'none'}`,
+    plan: (v) => `plan → ${planWords(v) || 'none'}`,
     tags: (v) => `tags → ${(v || []).join(', ') || 'none'}`,
+    // Read back the way the form will read them, never the raw value: the
+    // dialog paints `effortVal`/`controlVal`/`habitFreqVal` of whatever
+    // arrives, so a row quoting something else would describe a change the
+    // reviewer is not being shown.
+    effort: (v) => `effort → ${effortVal(v)}`,
+    control: (v) => `control → ${CONTROL_LABEL[controlVal(v)]}`,
+    habitFreq: (v) => `repeats → ${habitFreqVal(v) || 'daily'}`,
+    habitCount: (v) => `repetitions → ${habitCountVal(v)}`,
+    // Like `notes`, named rather than printed. A schedule reads only in its
+    // cadence's terms ("Mon 07:00", "12th"), and the cadence may be changing in
+    // this very suggestion — the dialog prints the whole strip in the row where
+    // it is set, which is where the reviewer decides.
+    habitTimes: () => 'schedule rewritten',
   };
   return Object.entries(fields)
     .filter(([key]) => say[key])

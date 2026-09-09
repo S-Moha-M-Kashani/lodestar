@@ -1725,17 +1725,41 @@ function writeProposal(raw, boardId) {
   const catIds = categoryIds(boardId);
   const card = cleanCard(raw, now, catIds);
   if (!card) return null;
+  // `plan` and `plan_src` were missing here until 2026-09-08 while `create_card`
+  // advertised `plan` all along: the Assistant proposed a plan date, reported
+  // that it had, and the proposal came back `plan: ''`, read back `''`, and was
+  // still `''` after the user accepted it. The third instance of the 2026-09-02
+  // pattern — a tool offering a field the write path does not carry — and the
+  // same cure: the INSERT names what `cleanCard` produces.
+  //
+  // `plan_src` is as load-bearing as `plan` and not decoration: the column
+  // defaults to 'auto' and `rowToCard` resolves an 'auto' row's plan back to
+  // its deadline, so a plan stored without its provenance is lost again on the
+  // way out. The value is whatever `cleanCard` resolved from the caller, never
+  // one invented here — `create_card` sends `planSrc: 'ai'`, the truthful
+  // provenance for a card no person has looked at yet.
+  //
+  // `parent_id` and `done_at` stay out, each for its own reason and not by
+  // symmetry. Whether a parent id names a card this board holds, is a habit, is
+  // this very card or is itself a child are questions about the whole list —
+  // `resolveLineage`'s job, and this function holds one card — and no writer
+  // offers the field anyway, so storing it would carry a link nothing checked.
+  // `done_at` follows the column: `rowToCard` resolves it on the way out from
+  // the same inputs `cleanCard` used, so a proposal filed in Done still answers
+  // with a finished date, and writing a *claimed* one would let a caller assert
+  // that something was finished on a day nobody finished it.
   db.prepare(`
     INSERT INTO cards (id, board_id, column_id, title, notes, type, category, importance, urgency,
                        effort, control, effort_src, control_src, deadline,
-                       habit_freq, habit_count, habit_times, habit_history,
+                       habit_freq, habit_count, habit_times, habit_history, plan, plan_src,
                        num, tags, created_at, updated_at, position, deleted_at, pending)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1)
   `).run(card.id, boardId, card.columnId, card.title, card.notes, card.type, card.category,
     card.importance, card.urgency, card.effort, card.control, card.effortSrc,
     card.controlSrc, card.deadline,
     card.habitFreq, card.habitCount,
     JSON.stringify(card.habitTimes), JSON.stringify(card.habitHistory),
+    card.plan, card.planSrc,
     // num stays 0: a ledger number is earned at confirmation, so a rejected
     // proposal never burns one.
     0, JSON.stringify(card.tags), card.createdAt, card.updatedAt, 0);
@@ -1764,12 +1788,30 @@ function confirmProposal(id) {
 // `deadline` was missing until 2026-09-02, and the tool has advertised it all
 // along: the model named a due date, this filter dropped it, and the Assistant
 // then said it had suggested one when nothing had been stored. A suggestion
-// naming only a deadline was a 400 the user never saw. `plan` is still absent
-// deliberately — a suggested plan needs `planSrc` to say a person chose it, or
-// the save resolves the plan back to the deadline and discards it, and whether
-// a suggestion may claim that provenance is its own question.
+// naming only a deadline was a 400 the user never saw.
+//
+// Widened on 2026-09-08 to every field the board itself can change: `plan`,
+// `effort`, `control` and the three habit-cadence fields join the nine. Four
+// stay out, each for its own reason — `parentId` (filing a card *under* another
+// card is a separate question), `habitHistory` (a record a model can write into
+// is not a record, the rule that also denies it a completion tool), `doneAt` (it
+// follows the column, stamped by the human's own save in `placeCard`) and
+// `effortSrc`/`controlSrc`/`planSrc` (provenance is *who chose* a value, not
+// what it is).
+//
+// `plan` was the one absent on purpose, because a suggested plan is resolved
+// back to the deadline unless its provenance says otherwise. The reviewer is
+// who claims it now — `openDialog` in js/ui/edit-dialog.js, where the choice
+// between 'user' and the equally workable 'ai' is argued.
+//
+// This list and the tool schema it mirrors must be one set, not two: the two
+// silent drops of 2026-09-02 were two hand-kept lists that disagreed. Pinned
+// from the Python side, which can import its half instead of parsing it —
+// `EDITABLE_BOARD_KEYS` in widget2/tools/fields.py, asserted equal in both
+// directions by brain/tests/test_edit_suggestions.py.
 const EDITABLE_FIELDS = ['title', 'notes', 'type', 'category', 'columnId',
-  'importance', 'urgency', 'deadline', 'tags'];
+  'importance', 'urgency', 'deadline', 'plan', 'tags', 'effort', 'control',
+  'habitFreq', 'habitCount', 'habitTimes'];
 
 /**
  * Store a suggested edit. Returns null when there is nothing to suggest or

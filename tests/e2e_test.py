@@ -3842,7 +3842,8 @@ try:
         target = api_state()["cards"][0]
         api_suggest_edit(target["id"], {"title": "A title the agent suggested",
                                        "columnId": "in-progress",
-                                       "deadline": "2027-03-04"})
+                                       "deadline": "2027-03-04",
+                                       "plan": "2027-03"})
         # Away and back: setView refreshes the waiting lists on entry, and the
         # previous block left us already on the Assistant, where a click is a
         # no-op. A suggestion made by a real chat turn arrives on its own flag.
@@ -3857,7 +3858,12 @@ try:
               "in progress" in page.inner_text(".suggestion-change").lower()
               # Every field the suggestion names has to be named here too, or
               # the row invites the user to review a change it never mentioned.
-              and "2027-03-04" in page.inner_text(".suggestion-change"))
+              and "2027-03-04" in page.inner_text(".suggestion-change")
+              # And the plan at the precision it was given — `describeEdit`
+              # filters on its own table of wordings, so a field it does not
+              # name is dropped from the description while still being applied,
+              # which is the worst shape this bug takes.
+              and "March 2027" in page.inner_text(".suggestion-change"))
         check("edits: the card is untouched while the suggestion waits",
               next(c for c in api_state()["cards"]
                    if c["id"] == target["id"])["title"] == target["title"])
@@ -3876,6 +3882,18 @@ try:
         # so every field of a suggestion is on screen the moment it opens.
         check("edits: a suggested deadline is what the reviewer is shown",
               page.input_value("#card-deadline") == "2027-03-04")
+        # A suggested plan is the field that could not survive being approved:
+        # `planSrc` stayed 'auto', so `readForm` resolved the plan straight back
+        # to the deadline and the reviewer's Save discarded what they had read.
+        # Reviewing a suggestion that names a plan claims the provenance for the
+        # *reviewer* — the person pressing Save is the person choosing — which is
+        # what the hint on screen now says.
+        check("edits: a suggested plan is shown at the precision it was given",
+              page.input_value("#card-plan-year") == "2027"
+              and page.input_value("#card-plan-month") == "03"
+              and page.input_value("#card-plan-day") == ""
+              and "March 2027" in page.inner_text("#card-plan-words")
+              and "deadline no longer changes it" in page.inner_text("#card-plan-hint"))
         # The user's own wording wins — that is the whole point of reviewing.
         page.fill("#card-title", "A title I chose myself")
         page.click("#card-form button[type=submit]")
@@ -3890,14 +3908,32 @@ try:
               wait_until(lambda: saved_card()["columnId"] == "in-progress"))
         check("edits: the deadline the reviewer approved is the one saved",
               wait_until(lambda: saved_card()["deadline"] == "2027-03-04"))
+        check("edits: the plan the reviewer approved survives the save",
+              wait_until(lambda: saved_card()["plan"] == "2027-03")
+              # And it is recorded as the reviewer's own choice, or the next
+              # save resolves it back onto the deadline and loses it again.
+              and saved_card()["planSrc"] == "user")
         check("edits: the answered suggestion leaves the list",
               len(api_edits()["edits"]) == 0)
 
-        # Dismissing answers it the other way and touches nothing.
-        api_suggest_edit(target["id"], {"notes": "notes the agent wanted"})
+        # Dismissing answers it the other way and touches nothing. This one
+        # carries the rest of the widened allowlist, and is dismissed rather than
+        # saved: what is being asserted is that the row NAMES every field, which
+        # is the whole of describeEdit's job — a cadence suggested onto a
+        # question card would be a strange thing to apply, and applying it here
+        # would leave later blocks reading a card this one had restamped.
+        api_suggest_edit(target["id"], {"notes": "notes the agent wanted",
+                                        "effort": "high", "control": "none",
+                                        "habitFreq": "weekly", "habitCount": 3,
+                                        "habitTimes": [{"time": "07:00"}]})
         page.locator('.view-switch button[data-view="board"]').click()
         page.locator('.view-switch button[data-view="assistant"]').click()
         page.wait_for_selector(".suggestion")
+        said = page.inner_text(".suggestion-change")
+        check("edits: the row names every field of the widened allowlist",
+              "notes rewritten" in said and "effort → high" in said
+              and "Out of my hands" in said and "repeats → weekly" in said
+              and "repetitions → 3" in said and "schedule rewritten" in said)
         page.click(".suggestion-dismiss")
         page.wait_for_function("document.querySelectorAll('.suggestion').length === 0")
         check("edits: dismissing clears it and leaves the card alone",
