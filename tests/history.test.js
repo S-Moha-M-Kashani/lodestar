@@ -85,7 +85,7 @@ installIdle();
 // history.js's `timeline`, and a destructured binding would be a copy taken
 // before that — a stale object that recordEntry no longer writes into.
 const hist = await import('../js/core/history.js');
-const { flushHistory, initTimeline, recordEntry, saveTimeline } = hist;
+const { clearTimeline, flushHistory, initTimeline, recordEntry, saveTimeline } = hist;
 const { setCards, state } = await import('../js/core/state.js');
 
 const HISTORY_KEY = 'lodestar:history';
@@ -224,4 +224,32 @@ test('a refused write leaves undo working, and the next flush retries', () => {
     assert.deepEqual(stored().entries.map((e) => e.action),
       ['Board opened', 'edit while storage is full', 'and another']);
   } finally { console.warn = warn; }
+});
+
+// This is a unit test.
+test('emptying the history is written through, and the pending flush cannot undo it', () => {
+  reset();
+  installIdle();
+
+  recordEntry('edit one');
+  recordEntry('edit two');
+  assert.equal(writes.length, 0, 'the burst is still only in memory');
+  assert.equal(idleQueue.length, 1, 'and its flush is still scheduled');
+
+  clearTimeline();
+
+  // Write-through, like a purge: an action that promises the log is gone must
+  // not leave a copy on disk that a reload inside the idle window deals back.
+  assert.equal(writes.length, 1, 'the clear wrote at once rather than queueing');
+  assert.equal(stored().entries.length, 1);
+  assert.equal(hist.timeline.index, 0);
+  assert.equal(stored().entries[0].cards.length, 30, 'the one entry left is the board as it stands');
+
+  // And the outstanding flush was cancelled, not left to fire over the top of
+  // it with the entries the owner just discarded.
+  assert.equal(idleQueue.length, 0);
+  runIdle();
+  assert.equal(writes.length, 1);
+  initTimeline();
+  assert.equal(hist.timeline.entries.length, 1, 'a reload finds one entry, not three');
 });

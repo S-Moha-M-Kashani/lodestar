@@ -190,6 +190,27 @@ export function recordEntry(action) {
   queueTimelineSave();
 }
 
+/** Forget the road here: reduce this board's timeline to one entry holding the
+ *  board as it stands.
+ *
+ *  It writes no card. The board, the server, the Trash and the deleted boards
+ *  are all untouched — which is the only reason an action with no way back is
+ *  allowed to exist at all, and the confirmation says so.
+ *
+ *  One entry rather than none: `initTimeline` reads an empty timeline as a
+ *  fresh board, and `restoreEntry`/`timeline.index` both assume an entry is
+ *  there. And `saveTimeline` rather than the coalesced queue — an action that
+ *  promises the log is gone must not leave a copy in localStorage that a
+ *  reload inside the next idle window would deal back. That call cancels any
+ *  outstanding flush, so the burst that was still pending cannot land on top
+ *  of this either. The same argument that already makes a purge write through.
+ */
+export function clearTimeline() {
+  timeline.entries = [{ ts: Date.now(), action: 'History emptied', cards: snapshot(state.cards) }];
+  timeline.index = 0;
+  saveTimeline();
+}
+
 /** Point the board at timeline entry `i` without writing a new entry. */
 export function restoreEntry(i, message) {
   const entry = timeline.entries[i];

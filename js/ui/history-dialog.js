@@ -1,6 +1,6 @@
 import { fetchDeletedBoards, purgeBoard, restoreBoard } from '../core/boards.js';
 import { cardLabel } from '../core/cards.js';
-import { restoreEntry, timeline } from '../core/history.js';
+import { clearTimeline, restoreEntry, timeline } from '../core/history.js';
 import { serverAvailable } from '../core/sync.js';
 import { fetchTrash, purgeFromTrash, restoreFromTrash } from '../core/trash.js';
 import { refreshBoards } from './boards-picker.js';
@@ -22,6 +22,27 @@ $('#history-btn').addEventListener('click', () => {
 });
 
 $('#close-history').addEventListener('click', () => historyDialog.close());
+
+// Emptying the history is the one action in the app with no way back, and it
+// is allowed to exist because it destroys nothing: the board keeps every card,
+// and the two lists below — deleted cards and deleted boards — are the
+// server's and are not touched. The confirmation says exactly that, so the
+// reader is not left guessing at the blast radius. It reaches this board only:
+// the timeline is one localStorage key per board.
+$('#history-clear').addEventListener('click', async () => {
+  const ok = await ask({
+    title: 'Empty this board\u2019s history?',
+    message: 'The list of past states is replaced by the board as it stands now, and there is no way back to it. '
+      + 'No card is changed, removed or restored, and the deleted cards and deleted boards below stay exactly '
+      + 'where they are. This board only — another board keeps its own history.',
+    okLabel: 'Empty history',
+    danger: true,
+  });
+  if (!ok) return;
+  clearTimeline();
+  renderHistory();
+  announce('History emptied — the board is unchanged');
+});
 
 function renderHistory() {
   const list = $('#history-list');

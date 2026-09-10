@@ -243,6 +243,7 @@
             <button id="history-btn" class="menu-item" title="Board history — every change, deleted cards and deleted boards">History</button>
             <button id="export-btn" class="menu-item" title="Download the board as a JSON file">Export JSON</button>
             <button id="import-btn" class="menu-item" title="Restore the board from a JSON file">Import JSON</button>
+            <button id="dedupe-btn" class="menu-item" title="Find cards holding the same words twice and retire the copies to the Trash">Remove duplicates</button>
             <hr class="menu-sep">
             <div class="menu-flyout">
               <button id="menu-show" class="menu-item" aria-haspopup="true" aria-expanded="false" title="What is painted on the cards">Show ◂</button>
@@ -702,6 +703,7 @@
 
       <div class="dialog-actions">
         <span class="spacer"></span>
+        <button type="button" id="history-clear" class="btn danger" title="Reduce this board's history to the state it is in now — no card is touched">Empty history</button>
         <button type="button" id="close-history" class="btn ghost">Close</button>
       </div>
     </div>

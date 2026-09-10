@@ -1880,6 +1880,100 @@ try:
               .first.inner_text() == newest)
         page.click("#close-history")
 
+        # ---- Board housekeeping: duplicates, and emptying the history ------
+        # This is an end-to-end test.
+        # Two copies of one card are two places one thought can drift apart,
+        # and finding them used to mean reading every card. `Remove duplicates`
+        # reads the board's own identity rule — a card IS its words — and
+        # retires every copy but the one furthest along, to the Trash. Beside
+        # it, the one action that empties the log without touching a single
+        # card: the two promises are checked together because the second one is
+        # only trustworthy if the first one's Trash row survives it.
+        add_card(page, "HOUSEKEEP-twin")
+        page.locator('[data-col="inbox"] .card', has_text="HOUSEKEEP-twin") \
+            .first.locator(".card-menu-btn").click()
+        page.locator(".card-menu-panel:not([hidden]) .menu-item",
+                     has_text="Duplicate").click()
+        page.wait_for_selector("#card-dialog[open]")
+        page.click("#save-card")
+        wait_until(lambda: page.locator(".card", has_text="HOUSEKEEP-twin").count() == 2)
+        cards_before = page.locator(".card").count()
+
+        menu_click("#dedupe-btn")
+        page.wait_for_selector("#confirm-dialog[open]")
+        page.click("#confirm-cancel")
+        page.wait_for_timeout(150)
+        check("dedupe: it asks before anything is retired, and declining keeps both copies",
+              page.locator(".card").count() == cards_before)
+
+        menu_click("#dedupe-btn")
+        page.wait_for_selector("#confirm-dialog[open]")
+        page.click("#confirm-ok")
+        wait_until(lambda: page.locator(".card", has_text="HOUSEKEEP-twin").count() == 1)
+        check("dedupe: exactly one card left the board, and it was the copy",
+              page.locator(".card").count() == cards_before - 1)
+
+        # The save is debounced and the Trash panel is filled once per open, so
+        # the server has to be asked first: a dialog opened before the push
+        # lands paints a list that is right about a board one save behind.
+        landed = wait_until(lambda: any(c["title"] == "HOUSEKEEP-twin"
+                                        for c in api_trash()["cards"]))
+        menu_click("#history-btn")
+        page.wait_for_selector("#history-dialog[open]")
+        page.wait_for_selector("#trash-section:not([hidden])")
+        housekeep_trash = page.locator("#trash-list .history-row",
+                                       has_text="HOUSEKEEP-twin")
+        check("dedupe: the retired copy is in the Trash, not gone",
+              landed and wait_until(lambda: housekeep_trash.count() == 1))
+
+        # One entry for the whole removal, not one per card — so putting it
+        # back is one press, whatever it retired. Restored here and retired
+        # again, because "reversible" is the promise the confirmation makes.
+        removal = page.locator(
+            "#history-list .history-row .history-action").first.inner_text()
+        page.locator("#history-list .history-row").nth(1) \
+            .locator("button:has-text('Restore')").click()
+        page.wait_for_timeout(200)
+        page.click("#close-history")
+        check("dedupe: it is one History entry, and one Restore brings the copy back",
+              removal.lower().startswith("removed 1 duplicate card")
+              and wait_until(lambda: page.locator(".card", has_text="HOUSEKEEP-twin").count() == 2))
+        menu_click("#dedupe-btn")
+        page.wait_for_selector("#confirm-dialog[open]")
+        page.click("#confirm-ok")
+        wait_until(lambda: page.locator(".card", has_text="HOUSEKEEP-twin").count() == 1)
+        wait_until(lambda: any(c["title"] == "HOUSEKEEP-twin"
+                               for c in api_trash()["cards"]))
+        menu_click("#history-btn")
+        page.wait_for_selector("#history-dialog[open]")
+        page.wait_for_selector("#trash-section:not([hidden])")
+        wait_until(lambda: housekeep_trash.count() == 1)
+
+        # And now the log itself. Nothing below the list may move: the deleted
+        # cards and the deleted boards are the server's record, and this action
+        # promises in writing that it does not reach them.
+        trash_before = page.locator("#trash-list .history-row").count()
+        boards_trash_before = page.locator("#boards-trash-list .history-row").count()
+        page.click("#history-clear")
+        page.wait_for_selector("#confirm-dialog[open]")
+        page.click("#confirm-cancel")
+        page.wait_for_timeout(150)
+        declined = page.locator("#history-list .history-row").count()
+        page.click("#history-clear")
+        page.wait_for_selector("#confirm-dialog[open]")
+        page.click("#confirm-ok")
+        check("empty history: declining keeps every entry, accepting leaves one",
+              declined > 1
+              and wait_until(lambda: page.locator("#history-list .history-row").count() == 1)
+              and page.locator("#history-list .history-row.current").count() == 1)
+        check("empty history: the deleted cards and deleted boards below are untouched",
+              wait_until(lambda: page.locator("#trash-list .history-row").count() == trash_before)
+              and page.locator("#boards-trash-list .history-row").count() == boards_trash_before)
+        page.click("#close-history")
+        page.wait_for_timeout(100)
+        check("empty history: every card is still on the board",
+              page.locator(".card").count() == cards_before - 1)
+
         # ---- Responsive -----------------------------------------------------
         page.set_viewport_size({"width": 375, "height": 800})
         page.wait_for_timeout(100)
