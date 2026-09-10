@@ -3,9 +3,12 @@ import { assistantState, refreshChatSessions, refreshChatTrash, startNewChat } f
 import { armHistoryIdle, cancelHistoryIdle, closeChatHistory, closeChatRowMenus, extrasOpen, fromChatRowMenu, renderAssistantTools, setChatMenuOpen, setExtrasOpen } from '../assistant/tools.js';
 import { widgetShowing } from '../assistant/shell.js';
 import { closeWidget, toggleWidget } from '../assistant/widget.js';
+import { planDedupe } from '../core/duplicates.js';
+import { commit } from '../core/history.js';
 import { KEY_PREFIX } from '../core/keys.js';
-import { filters } from '../core/state.js';
+import { filters, setCards, state } from '../core/state.js';
 import { RANGE_FIELDS, RANGE_PRESETS, rangeText, rangeVal, spanOf } from '../core/timespan.js';
+import { ask } from './dialogs.js';
 import { $, announce } from './dom.js';
 import { render } from './render.js';
 
@@ -178,6 +181,53 @@ document.addEventListener('keydown', (e) => {
     setMenuOpen(false);
     menuBtn.focus();
   }
+});
+
+// Remove duplicates — the Menu's one card action.
+//
+// A duplicate is a card whose words another card already holds (js/core/
+// duplicates.js decides all of it); the copies that lose go to the Trash
+// through the ordinary whole-board save, whose existing sweep is what
+// soft-deletes the cards a save omits. No new route, no second deletion path,
+// and one press of undo puts the whole removal back.
+//
+// Nothing else on the board is allowed to change with them: a card hanging off
+// a retired copy is re-pointed at the survivor, which is the "no cascade
+// delete" promise reaching this door — applyStep already keeps it at the
+// import's. What a retired habit recorded rides across too, and that half is
+// the leaf's, so the union is decided where it can be tested without a DOM.
+$('#dedupe-btn').addEventListener('click', async () => {
+  const groups = planDedupe(state.cards);
+  const gone = groups.reduce((n, g) => n + g.drop.length, 0);
+  if (!gone) { announce('No duplicate cards on this board'); return; }
+  const label = `${gone} duplicate card${gone === 1 ? '' : 's'}`;
+
+  const ok = await ask({
+    title: `Remove ${label}?`,
+    message: 'These cards hold words another card on this board already holds. The copy that is furthest along '
+      + '— Done, then In Progress, then the Inbox — is the one kept; the rest go to the Trash, where they stay '
+      + 'restorable, and anything hanging off a retired copy moves to the copy that is kept.',
+    okLabel: 'Remove duplicates',
+    danger: true,
+  });
+  if (!ok) return;
+
+  // Where each retired card's children have to end up, read before the cards
+  // are dropped: the survivor may itself be a card whose habit history was
+  // just merged, so the id is what travels, never the object.
+  const survivorOf = new Map();
+  for (const g of groups) for (const c of g.drop) survivorOf.set(c.id, g.keep.id);
+  const kept = new Map(groups.map((g) => [g.keep.id, g.keep]));
+
+  setCards(state.cards
+    .filter((c) => !survivorOf.has(c.id))
+    .map((c) => {
+      const card = kept.get(c.id) || c;
+      const parentId = survivorOf.get(card.parentId);
+      return parentId ? { ...card, parentId } : card;
+    }));
+  commit(`Removed ${label}`);
+  announce(`Removed ${label} — in the Trash, and one undo brings them back`);
 });
 
 // The Show submenu's switches. Same idiom as #habit-mute: hidden stores '1',
