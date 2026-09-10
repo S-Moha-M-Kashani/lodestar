@@ -58,6 +58,36 @@ const RESUME_WITHIN_MS = 14_400_000;
 // recall_chat — it just stops riding along on every turn, so turn fifty costs
 // what turn five does. tests/context.test.js pins these against the brain's
 // caps.
+//
+// **Measured 2026-09-10, and both numbers stand.** Nine real turns on Widget 2
+// (`BRAIN_LLM=claude-cli`, one repeat on OpenRouter for a clean token count),
+// with every request read out of the developer trace's own envelope rather
+// than estimated, and every post captured off the wire. The full tables are in
+// `openspec/changes/5-widget2-give-direction/measurements.md`, §1.3:
+//
+//   - The **24,000-char cap was never reached.** The transcript slice grew
+//     2,321 → 8,746 chars over the nine turns: **36% of the budget** at its
+//     peak, on a conversation whose 16-message cap first bit at turn 11.
+//   - **The budget governs the smallest of the three growing parts.** Turn 9's
+//     envelope was 29,010 chars: 25% system prompt (7,260 chars, byte-identical
+//     on all nine turns), **30% this window**, and **43% tool results from
+//     turns 5–7 on a turn that called no tool** — the LangGraph thread keeping
+//     its own `ToolMessage`s, which nothing here can trim.
+//   - **84% of turn 1's request was fixed overhead** the window never touches:
+//     of 6,675 tokens, the three tool schemas were 4,042 (**61% on their own**)
+//     and the system prompt 1,578. Both are paid on every model call.
+//   - **No board payload rides along.** Widget 2 pins no snapshot; the board
+//     reaches the model only as `find_cards` output, which is what the
+//     byte-identical system prompt across nine turns proves.
+//
+// So what would have to be true to move either number: raise
+// CONTEXT_MESSAGES only when `.chat-trimmed` is appearing on conversations the
+// model still needs the top of — it appeared at turn 11 and no answer suffered
+// for it. Lower CONTEXT_CHARS only when this window, and not the thread's own
+// tool output, is what makes a late turn expensive — measured, it is the part
+// that is already smallest, so cutting it would cost the conversation its
+// memory and save a fifth of the growth. Neither is a number to change without
+// a new measurement in the same table.
 export const CONTEXT_MESSAGES = 16;
 const CONTEXT_CHARS = 24_000;
 
@@ -134,7 +164,6 @@ function restoredMessage(msg) {
   // measurement instead of the ingredients for one.
   if (Number.isFinite(msg.elapsedMs)) out.elapsedMs = msg.elapsedMs;
   if (Array.isArray(msg.steps)) out.steps = msg.steps;
-  if (Array.isArray(msg.sources)) out.sources = msg.sources;
   if (msg.usage && typeof msg.usage === 'object') out.usage = msg.usage;
   // The session total is the sum of what each turn cost, so the figures have to
   // survive a reload with the transcript they belong to. Only a real number is
@@ -389,10 +418,3 @@ export async function ensureChatSession() {
   startNewChat({ focus: false });
 }
 
-// Model choices for the brain, one per capability. Only the text pick has
-// an effect today — it rides along on every /api/agent/chat request (the
-// brain forwards it to OpenRouter). The omni pick is a stored preference
-// for the media-ingestion feature to come. Embedding is deliberately NOT a
-// pick: the brain runs exactly one embedder (heydariAI/persian-embeddings),
-// so the panel states it instead of offering a dead dropdown. A stale saved
-// `embed` key is ignored by the load sweep and dropped on the next persist.

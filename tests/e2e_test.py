@@ -2715,38 +2715,47 @@ try:
         page.wait_for_selector("#chat-input")
         check("assistant: view opens with composer",
               page.get_attribute('.view-switch button[data-view="assistant"]', "aria-pressed") == "true")
-        # ---- Suggestions: what to ask, on a chat with nothing in it ----------
+        # ---- The direction: what the board says, on a chat with nothing in it -
         # This is an end-to-end test.
-        # An empty transcript is the one place the assistant cannot say what it
-        # is for, and the composer's placeholder has one line to do it in. Eight
-        # chips, one per tool the brain actually builds (server.py's tool list),
-        # asserted on the capability each chip stands for rather than on its
-        # wording — so rephrasing a suggestion stays a copy edit, while dropping
-        # a capability, or offering one no tool backs, stays a failure.
-        capabilities = {"list_cards", "find_related", "web_search", "create_card",
-                        "update_card", "recall_chat", "daily_recap", "remember_fact"}
-        chips = page.locator(".chat-suggest")
-        check("suggestions: an empty chat offers one opener per capability",
-              chips.count() == len(capabilities)
-              and {c.get_attribute("data-capability") for c in chips.all()} == capabilities
-              and all(t.strip() for t in chips.all_inner_texts()))
-        # Clicked, not typed: reaching a first question without having to compose
-        # one is the whole point. What the chip says has to arrive as the user's
-        # own turn — printed where their words go — and be what the brain is
-        # asked, which the fake backend echoes back verbatim.
-        asked = chips.nth(2).inner_text().strip()
-        chips.nth(2).click()
-        page.wait_for_selector(".chat-msg.assistant")
-        check("suggestions: clicking one sends it as the user's own message",
-              wait_until(lambda: asked in page.inner_text(".chat-msg.user")
-                         and f"FAKE: {asked}" in page.inner_text(".chat-log")))
-        # And then they are gone, leaving an empty composer behind them. The
-        # chips are keyed on an empty transcript, which is what makes New chat,
-        # first load and a chat never spoken into all show them with nobody
-        # raising an event — and what takes them away again here.
-        check("suggestions: they leave once the chat has a turn in it",
-              page.locator(".chat-suggest").count() == 0
-              and page.input_value("#chat-input") == "")
+        # An empty transcript held eight suggestion chips until 2026-09-10 — one
+        # per tool the brain builds — which was a list of things to ask a model,
+        # and measured 361px inside a 343px log. What stands there now is the
+        # board's own direction, computed in the browser over the cards already
+        # in memory: at most five cards, each named by its ledger number with
+        # the one phrase that surfaced it, and the record's own reading of the
+        # week beneath them. Asserted on the structure and the rule names rather
+        # than on the wording, which belongs to js/core/direction.js and is
+        # pinned by tests/direction.test.js — so rewording a reason stays a copy
+        # edit while losing a citation stays a failure.
+        RULES = {"overdue", "habit-behind", "due-soon", "planned-now",
+                 "neglected-area"}
+        page.wait_for_selector(".chat-direction")
+        rows = [{"num": it.locator(".chat-direction-num").inner_text().strip(),
+                 "reason": it.locator(".chat-direction-reason").inner_text().strip(),
+                 "rule": it.get_attribute("data-rule")}
+                for it in page.locator(".chat-direction-item").all()]
+        check("direction: an empty chat states what the board says to do next",
+              page.locator(".chat-direction").count() == 1
+              and "what the board says" in page.inner_text(
+                  ".chat-direction-head").lower()
+              # Short, and one line per card — DIRECTION_MAX is 5, whatever the
+              # board holds.
+              and len(rows) <= 5
+              # Every item cites its card by ledger number and states its
+              # reason, and the reason comes from one of the five rules.
+              and all(r["num"].startswith("C-") and r["reason"] for r in rows)
+              and all(r["rule"] in RULES for r in rows)
+              # Nothing to act on is a sentence, never an empty block.
+              and bool(rows or page.locator(".chat-direction-note").count() == 1))
+        # This is an end-to-end test.
+        # Encouragement is a citation or it is nothing. The line is always
+        # painted and `earned` is what says which of the two it is — a data
+        # attribute and not a colour, so a bad week is stated in the same ink as
+        # a good one.
+        record = page.locator(".chat-direction-praise")
+        check("direction: the record's own line says only what it can prove",
+              record.count() == 1 and bool(record.inner_text().strip())
+              and record.get_attribute("data-earned") in ("true", "false"))
 
         page.fill("#chat-input", "hello brain")
         page.click("#chat-send")
@@ -2756,6 +2765,13 @@ try:
         # ".chat-msg.assistant exists" no longer means "the text is all there".
         check("assistant: chat roundtrip through the Node proxy",
               wait_until(lambda: "FAKE: hello brain" in page.inner_text(".chat-log")))
+        # This is an end-to-end test.
+        # The standing state is keyed on an empty transcript and nothing else,
+        # which is the same test that resumes a conversation already under way
+        # instead of replacing it with the direction.
+        check("direction: it gives way to the exchange once a question is asked",
+              page.locator(".chat-direction").count() == 0
+              and page.locator(".chat-msg.user").count() >= 1)
         # What the turn spent. The offline backend reports usage precisely so
         # this path is exercised without a paid model in the loop. Read off the
         # folded indicator, which is where the total lives now: what a turn cost
@@ -3023,6 +3039,14 @@ try:
               and "seeded question 29" in carried
               and "seeded question 0" not in carried
               and "seeded question 5" not in carried)
+        # This is an end-to-end test.
+        # Nothing rides along that the turn does not read. The board reaches the
+        # model only if a tool goes and fetches it, so a request carries the
+        # window, the ask, and the four ids naming which chat, board, model and
+        # backend it is — and an added board snapshot fails here.
+        check("context: a turn carries the window and the ask, and no board payload",
+              set(body) == {"messages", "session_id", "board_id", "model",
+                            "provider"})
         # This is an end-to-end test.
         # Trimming that nobody can see is the quiet loss this project refuses. The
         # transcript keeps every message; the marker is what makes the difference
@@ -4370,7 +4394,7 @@ try:
         # the earlier blocks deliberately failed, and "exactly one banner" is
         # the whole assertion — counted across those it would be meaningless.
         page.click("#chat-new")
-        page.wait_for_selector(".chat-suggest")
+        page.wait_for_selector(".chat-direction")
         n_before = len(errors)
         n_msgs = page.locator(".chat-msg").count()
         page.route("**/api/agent/chat/stream", lambda route: route.fulfill(
@@ -7098,6 +7122,17 @@ try:
         # load this whole change exists to remove.
         check("widget: nothing is shown until the launcher is used",
               not page.locator("#assistant-widget").is_visible())
+        # Every request the open fires, captured before the click. The widget's
+        # standing state is the board's own direction, computed here from the
+        # cards in memory, so opening must cost the assistant nothing: the only
+        # thing that may reach /api/agent/* is the composer's model list, and
+        # only once. It was asked once per repaint until 2026-09-10 — four times
+        # against this suite's brain, twice against a configured one — because
+        # both shells guard the probe on `brainModels.provider`, which only
+        # fills in once the fetch has resolved.
+        on_open = []
+        note_request = lambda r: on_open.append(r.url)
+        page.on("request", note_request)
         page.click("#assistant-launcher")
         page.wait_for_selector("#assistant-widget .chat-log")
         # wait_until on the focus: opening fires the three requests the
@@ -7109,6 +7144,15 @@ try:
               and page.locator("#assistant-widget #chat-input").count() == 1
               and wait_until(lambda: page.evaluate(
                   "() => document.activeElement.id") == "chat-input"))
+        # This is an end-to-end test.
+        # Read after the focus has settled above, so every repaint the open
+        # causes has already had its chance to fetch.
+        page.remove_listener("request", note_request)
+        agent_calls = [u.split("/api/", 1)[1] for u in on_open if "/api/agent/" in u]
+        rag_calls = [u for u in on_open if "/api/rag/" in u]
+        check("widget: opening it asks the assistant for the model list once, "
+              "and for nothing else",
+              agent_calls == ["agent/models"] and not rag_calls)
         # The pill and the card want the same corner, so the pill gives it up
         # while the card is there. Recorded here and checked below, once the
         # other state it hides in — the Assistant view, where the sheet has its
@@ -7320,6 +7364,42 @@ try:
               wait_until(lambda: page.locator(".widget-approvals").count() == 0)
               and page.locator("#assistant-launcher .view-badge").count() == 0)
 
+        # ---- What the corner shows when nothing has been said ----------------
+        # This is an end-to-end test.
+        # The direction is the widget's standing state, and the reason this is
+        # asserted in the corner as well as on the page is the box: the eight
+        # chips it replaced needed 361px of a 343px log. New chat is the
+        # Assistant page's control, so the empty chat is started there and
+        # folded back into the corner — which is also the one path that shows
+        # the same standing state surviving a change of shell.
+        page.click("#assistant-expand")
+        page.wait_for_selector(".assistant-sheet #chat-input")
+        page.click("#chat-new")
+        page.wait_for_selector(".chat-direction")
+        page.click("#assistant-collapse")
+        page.wait_for_selector("#assistant-widget .chat-log")
+        corner = page.locator("#assistant-widget .chat-direction")
+        check("widget: with nothing said, the corner shows the board's direction",
+              corner.count() == 1
+              and page.locator("#assistant-widget .chat-msg").count() == 0
+              and corner.locator(".chat-direction-item").count() <= 5
+              and page.locator("#assistant-widget .chat-direction-praise")
+                      .count() == 1)
+        # And a conversation already under way is resumed rather than replaced:
+        # the standing state is keyed on an empty transcript, so one turn is
+        # enough to take it away and reopening the widget brings the turn back.
+        page.fill("#chat-input", "corner turn")
+        page.click("#chat-send")
+        wait_until(lambda: "FAKE: corner turn" in page.inner_text(".chat-log"))
+        page.click("#assistant-widget-close")
+        page.wait_for_selector("#assistant-launcher:not([hidden])")
+        page.click("#assistant-launcher")
+        page.wait_for_selector("#assistant-widget .chat-log")
+        check("widget: reopening a live conversation resumes it, not the direction",
+              wait_until(lambda: "FAKE: corner turn"
+                         in page.inner_text("#assistant-widget .chat-log"))
+              and page.locator("#assistant-widget .chat-direction").count() == 0)
+
         # Put the world back: closed, and the board in front again.
         page.evaluate("key => localStorage.removeItem(key)", WIDGET_KEY)
         page.reload()
@@ -7379,7 +7459,7 @@ try:
         page.locator('.view-switch button[data-view="assistant"]').click()
         page.wait_for_selector(".assistant-sheet #chat-input")
         page.click("#chat-new")
-        page.wait_for_selector(".chat-suggest")
+        page.wait_for_selector(".chat-direction")
         page.click("#assistant-collapse")
         page.wait_for_selector("#assistant-widget .chat-log")
         cards_before_trace = len(api_state()["cards"])

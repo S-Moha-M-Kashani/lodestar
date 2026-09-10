@@ -95,7 +95,27 @@ function providerOptions() {
     ? offered : [...offered, assistantModels.provider];
 }
 
-export async function probeBrainModels() {
+/** One probe at a time.
+ *
+ *  Both shells ask for the model list with `if (!brainModels.provider)`, and
+ *  that guard only closes once the fetch has *resolved* — so every repaint the
+ *  open causes asked again. Measured 2026-09-10: opening the widget fired six
+ *  requests before a character was typed, two of them this one, and four of
+ *  them this one against the offline test brain, whose answers come back fast
+ *  enough for three repaints to overtake the first fetch. One now.
+ *
+ *  The flag closes the door synchronously and is cleared when the probe
+ *  settles, so a brain that was down when the widget opened is still found on
+ *  the next paint without a reload — which is what the retry on every entry
+ *  exists for. */
+let probing = null;
+export function probeBrainModels() {
+  if (probing) return probing;
+  probing = runProbe().finally(() => { probing = null; });
+  return probing;
+}
+
+async function runProbe() {
   let answered = false;
   try {
     const res = await fetch('/api/agent/models');
