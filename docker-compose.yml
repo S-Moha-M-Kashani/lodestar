@@ -121,13 +121,14 @@ services:
       # BRAIN_LLM=ollama reaches the daemon on the host, so the composed brain is
       # local-first like the native one.
       # tests/compose.test.js fails if either pin goes missing.
-      # Which agent answers a turn. The incumbent is the default here as it is
-      # in the code, so a stack that names nothing is served what it always
-      # was; an unknown name refuses to boot rather than falling back. It has
-      # to be passed through explicitly or the seam is unreachable in the one
-      # deployment that is actually used, which is a switch that exists only
-      # for people running the service by hand.
-      BRAIN_AGENT: ${BRAIN_AGENT:-widget1}
+      # Which agent answers a turn. Widget 2 is the default here as it is in
+      # the code — the same flip, so a composed stack and a native one cannot
+      # disagree about who answers — and `BRAIN_AGENT=widget1` in .env or the
+      # shell puts the incumbent back. An unknown name refuses to boot rather
+      # than falling back. It has to be passed through explicitly or the seam
+      # is unreachable in the one deployment that is actually used, which is a
+      # switch that exists only for people running the service by hand.
+      BRAIN_AGENT: ${BRAIN_AGENT:-widget2}
       BRAIN_EMBEDDER: ${BRAIN_EMBEDDER:-sentence-transformers}
       BRAIN_TRANSCRIBER: ${BRAIN_TRANSCRIBER:-openrouter}
       BOARD_API_URL: http://lodestar:3000

@@ -173,13 +173,18 @@ def test_the_checkpoint_file_is_real_from_the_environment_and_inert_in_code():
 # This is a configuration invariant: which agent answers is real in code as
 # well as from the environment, unlike url_safety or tracing. Which
 # implementation answered is the thing under comparison during the migration, so
-# a test or an eval must be able to name one and be given it — and the incumbent
-# is the default from both directions, because nobody who set nothing chose to
-# meet a tool-less agent.
-def test_the_agent_choice_defaults_to_the_incumbent_from_every_direction():
-    assert load_settings(env={}).agent == 'widget1'
-    assert Settings().agent == 'widget1'
-    assert load_settings(env={'BRAIN_AGENT': 'widget2'}).agent == 'widget2'
+# a test or an eval must be able to name one and be given it.
+#
+# **Widget 2 is the default from both directions since 2026-09-10** — the
+# reversible step of the migration. Both directions are asserted because the
+# default is written twice (the field, and `load_settings`' own `env.get`), and
+# a flip that reached one of them would serve one agent to the service and the
+# other to every test building `Settings()` by hand. The third assert is the
+# revert: naming Widget 1 still gets Widget 1, which is the whole rollback.
+def test_the_agent_choice_defaults_to_widget_2_from_every_direction():
+    assert load_settings(env={}).agent == 'widget2'
+    assert Settings().agent == 'widget2'
+    assert load_settings(env={'BRAIN_AGENT': 'widget1'}).agent == 'widget1'
 
 
 # This is a configuration invariant: no `auto` and no fallback, the same rule
