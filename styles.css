@@ -3579,7 +3579,6 @@ body[data-view="assistant"] .app-footer { display: none; }
   align-items: flex-start;
   gap: 8px;
 }
-.assistant-toolbar .chat-recall { flex: 1 1 auto; min-width: 0; }
 
 /* What the conversation has cost, beside the search fold rather than under the
    transcript: a running total that scrolls out of view is not a running total.
@@ -3935,33 +3934,69 @@ body[data-view="assistant"] .app-footer { display: none; }
   padding: 4px 2px;
 }
 
-/* Openers on an empty chat. Built on .tag-chip's idiom — mono, hairline, hover
-   to full ink — but left-aligned prose rather than a keyword, so each one wraps
-   inside its own chip instead of the row scrolling sideways. Neutral ink and no
-   category hue: colour means life area everywhere else on the board, and a
-   suggestion belongs to no area. Sits above the transcript's first message and
-   inherits the log's 14px gap from it. */
-.chat-suggestions {
+/* What the board says to do next, on a chat with nothing in it. Drawn as the
+   children block's ledger lines rather than as chips — number in mono, a
+   category tick in the card's own hue, the title in body text, the reason
+   underneath in soft ink — because a direction item is the same kind of thing
+   as a child row: a card named in a list. The eight suggestion chips that
+   stood here measured 361 px inside a 343 px .chat-log; five of these plus the
+   record's own line fit without scrolling.
+
+   The reason takes a line of its own (flex-basis 100% against the row's wrap)
+   and is never clipped: citing the rule that surfaced a card is the whole
+   requirement, and an ellipsis through it would be a citation nobody can read.
+   No new colour and no new token — the tick is --cat, everything else is ink
+   weight. */
+.chat-direction-head {
+  margin: 0 0 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+}
+.chat-direction-item {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  align-items: flex-start;
+  align-items: baseline;
+  gap: 2px 7px;
+  padding: 4px 2px;
+  border-top: 1px dotted var(--card-line);
 }
-.chat-suggest {
+.chat-direction-num {
+  flex: 0 0 auto;
   font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-soft);
+}
+.chat-direction-item.categorized .chat-direction-num::after {
+  content: " ▪";
+  color: var(--cat);
+}
+.chat-direction-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--body);
+  font-size: 12px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-direction-reason {
+  flex: 1 0 100%;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  line-height: 1.45;
+  color: var(--ink-soft);
+}
+.chat-direction-note,
+.chat-direction-praise {
+  margin: 6px 0 0;
   font-size: 11px;
   line-height: 1.45;
-  text-align: left;
   color: var(--ink-soft);
-  background: transparent;
-  border: 1px solid var(--line);
-  border-radius: 3px;
-  padding: 5px 9px;
-  max-width: 100%;
-  white-space: normal;
-  transition: color 0.15s ease, border-color 0.15s ease;
 }
-.chat-suggest:hover { color: var(--ink); border-color: var(--ink-soft); }
+.chat-direction-praise { border-top: 1px dotted var(--card-line); padding-top: 6px; }
 
 .chat-msg {
   position: relative;
@@ -4165,9 +4200,7 @@ body[data-view="assistant"] .app-footer { display: none; }
    after the pointer has moved on is not a hint. Same surface as every other
    floating thing; `aria-label` remains the accessible name, so this is
    decoration a screen reader never has to read. */
-.chat-switcher [data-hint],
 .assistant-tools [data-hint] { position: relative; }
-.chat-switcher [data-hint]::after,
 .assistant-tools [data-hint]::after {
   content: attr(data-hint);
   position: absolute;
@@ -4191,12 +4224,9 @@ body[data-view="assistant"] .app-footer { display: none; }
   opacity: 0;
   transition: opacity 90ms ease 120ms;
 }
-.chat-switcher [data-hint]:hover::after,
-.chat-switcher [data-hint]:focus-visible::after,
 .assistant-tools [data-hint]:hover::after,
 .assistant-tools [data-hint]:focus-visible::after { opacity: 1; }
 @media (prefers-reduced-motion: reduce) {
-  .chat-switcher [data-hint]::after,
   .assistant-tools [data-hint]::after { transition: none; }
 }
 

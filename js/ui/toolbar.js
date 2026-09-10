@@ -312,12 +312,12 @@ document.addEventListener('keydown', (e) => {
   // when the keypress happened inside it. Escape pressed on the board behind an
   // open widget is not a request to close the widget, and the two dropdowns
   // this handler has already dealt with above have to keep their first claim on
-  // the key. The extras drawer and the search fold have their own listeners, so
-  // they are asked here rather than assumed shut.
+  // the key. The extras drawer has its own listener, so it is asked here rather
+  // than assumed shut — the search fold was asked beside it until 2026-09-10,
+  // by a selector that has matched nothing since the four tools became the
+  // Assistant page's alone.
   const inWidget = document.activeElement?.closest?.('#assistant-widget');
-  const foldOpen = extrasOpen
-    || document.querySelector('#assistant-widget .chat-recall[open]');
-  if (widgetShowing() && inWidget && !foldOpen) closeWidget();
+  if (widgetShowing() && inWidget && !extrasOpen) closeWidget();
 });
 document.addEventListener('keydown', (e) => {
   // Only when the menu inside it is already shut, so one Escape closes one

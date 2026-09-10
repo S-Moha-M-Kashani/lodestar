@@ -268,4 +268,3 @@ function base64FromBytes(bytes) {
   return btoa(binary);
 }
 
-// Escape discards the take in progress. Registered once; harmless otherwise.

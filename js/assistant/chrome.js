@@ -1,7 +1,7 @@
 import { renderModelPicker } from './models.js';
 import { assistantState, contextWindow, replayable } from './session.js';
 import { chatScroll, isPinnedToBottom, sendChat, setChatScroll, submitChat } from './streaming.js';
-import { renderChatSuggestions } from './suggestions.js';
+import { renderDirection } from './direction.js';
 import { renderChatDrift } from './tools.js';
 import { busyLabel, renderChatMessage } from './transcript.js';
 import { cancelRecording, formatElapsed, startRecording, stopRecording, voiceState, voiceSupported } from './voice.js';
@@ -141,8 +141,8 @@ function renderRecordingBar() {
   return bar;
 }
 
-/** The transcript itself: the openers on an empty chat, the trim marker, and
- *  one node per turn. */
+/** The transcript itself: the board's direction on an empty chat, the trim
+ *  marker, and one node per turn. */
 function renderChatLog(shell) {
   const log = document.createElement('div');
   log.className = 'chat-log';
@@ -153,17 +153,14 @@ function renderChatLog(shell) {
   log.addEventListener('scroll', () => {
     setChatScroll({ top: log.scrollTop, pinned: isPinnedToBottom(log) });
   });
-  // Nothing said yet: the hint, and one opener per thing the assistant can
-  // actually do. Keyed on an empty transcript rather than on a new-chat event,
-  // which is what makes New chat, a first load and reopening a chat nobody ever
-  // spoke into all offer them, with nothing to raise or listen for.
-  if (!assistantState.messages.length) {
-    const hint = document.createElement('p');
-    hint.className = 'chat-status';
-    hint.textContent = 'Ask about your board — or start with one of these.';
-    log.appendChild(hint);
-    log.appendChild(renderChatSuggestions());
-  }
+  // Nothing said yet: what the board itself says to do next. Keyed on an empty
+  // transcript rather than on a new-chat event, which is what makes New chat, a
+  // first load and reopening a chat nobody ever spoke into all show it, with
+  // nothing to raise or listen for — and a conversation already under way is
+  // resumed by the same test, because a transcript with turns in it is not
+  // empty. It is computed from the cards in memory and asks nothing of any
+  // backend, so it is on screen before the first request could have answered.
+  if (!assistantState.messages.length) log.appendChild(renderDirection());
   // Where the sent window begins, marked in the transcript itself. Trimming
   // nobody can see is the quiet loss this project refuses; the marker is the
   // difference between "kept but not sent" and "gone". Computed with the same

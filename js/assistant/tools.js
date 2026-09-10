@@ -559,7 +559,3 @@ export function setChatMenuOpen(open) {
   btn.setAttribute('aria-expanded', String(open));
 }
 
-// Chat memory has been searchable by HTTP since the brain gained a Chroma
-// store, and reachable from the UI only by asking the agent and hoping it
-// chose the tool. `matches: null` is "not asked yet", which is not the same
-// as "asked and found nothing".
