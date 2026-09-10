@@ -589,3 +589,50 @@ def test_an_unreachable_board_is_answered_in_words_and_not_raised():
     # against LangChain's own advice.
     handed = str(result.steps[0].result).lower()
     assert 'error' in handed or '503' in handed, handed
+
+
+# This is an integration test (a real graph, a real tool taking the runtime).
+def test_a_tool_is_handed_the_session_it_is_serving():
+    """`context_schema=TurnContext` is a claim, and for one day it was false.
+
+    Stage 4's parity record (finding F1) measured `runtime.context` as `None`
+    under Widget 2 where Widget 1's tools read
+    `TurnContext(session_id='chat-9')`: the schema was declared and no
+    `context=` was ever passed. None of the three shipped tools reads it, so
+    nothing failed — which is exactly why it needs a test rather than a
+    comment. Asserted through the graph and not on `_run_kwargs`, because what
+    has to hold is that the framework delivers the value to a tool.
+
+    The session travels here rather than as a tool argument so the model cannot
+    name or spoof it, and the framework strips it from the schema the model
+    sees — which this test also shows: the model asks for `probe` with `text`
+    alone and the session arrives anyway.
+    """
+    from typing import Any
+
+    from langchain.tools import ToolRuntime
+    from langchain_core.tools import tool
+
+    from lodestar_brain.agent import TurnContext
+
+    seen: list = []
+
+    @tool
+    def probe(text: str,
+              runtime: ToolRuntime[TurnContext, Any] = None) -> str:
+        """Record the context this turn handed it."""
+        seen.append(runtime.context)
+        return text
+
+    chat = RecordingChat(script=[
+        AIMessage(content='', tool_calls=[{'name': 'probe',
+                                          'args': {'text': 'ping'},
+                                          'id': 'call-1'}]),
+        AIMessage(content='done')])
+    agent = Widget2Agent(settings=SETTINGS, tools=[probe], max_steps=3,
+                         llm=chat)
+    result = agent.run([{'role': 'user', 'content': 'probe it'}],
+                       session_id='chat-9')
+
+    assert result.reply == 'done'
+    assert seen == [TurnContext(session_id='chat-9')]

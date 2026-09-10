@@ -2,8 +2,9 @@
 
 `BRAIN_AGENT` names an implementation. It follows the idiom every other backend
 in this service follows: a named value, an unknown one raising at boot, and no
-`auto` mode. The incumbent is the default, so an operator who sets nothing is
-served exactly what they were served before this module existed.
+`auto` mode. **Widget 2 is the default since 2026-09-10** — the migration's one
+reversible step, landed on its own so that undoing it undoes nothing else, and
+`BRAIN_AGENT=widget1` plus a restart is the whole of that undo.
 
 **Its own module, beside `llm.py` and `safety.py`, and not inside either agent's
 package.** A selector living in `agent/` would die with the package it chooses

@@ -379,15 +379,27 @@ class Widget2Agent:
             config['callbacks'] = [TraceCollector(trace)]
         return config
 
-    def _run_kwargs(self) -> dict:
+    def _run_kwargs(self, session_id: str | None) -> dict:
         """What all three run methods pass alongside the config.
+
+        **`context` is what makes `context_schema` true.** `_graph` declared
+        the schema and nothing ever passed a value, so `runtime.context` read
+        `None` where Widget 1's tools read `TurnContext(session_id=…)` — a
+        half-wired mechanism whose own comment claimed it was whole, found by
+        stage 4's parity record rather than by a failing turn, because none of
+        the three tools reads it yet. Populated rather than declared away: this
+        is the framework's channel for a fact the model must not be able to
+        name, and the next tool needing it must find it wired.
 
         `durability='async'` writes the checkpoint in the background: resume is
         worth a write, not worth waiting for. Omitted rather than passed with
         nothing attached, because LangGraph warns that it has no effect without
         a checkpointer and a warning on every offline turn is one nobody reads.
         """
-        return {'durability': 'async'} if self._checkpointer is not None else {}
+        kwargs: dict = {'context': TurnContext(session_id=session_id or '')}
+        if self._checkpointer is not None:
+            kwargs['durability'] = 'async'
+        return kwargs
 
     def _prepare(self, graph, config: dict, messages: list,
                  session_id: str | None) -> tuple[dict, set]:
@@ -468,7 +480,7 @@ class Widget2Agent:
             # report what it did: GraphRecursionError carries no messages.
             for chunk in graph.stream(payload, config=config,
                                       stream_mode='values',
-                                      **self._run_kwargs()):
+                                      **self._run_kwargs(session_id)):
                 seen = self._fresh(chunk['messages'], before)
         except GraphRecursionError:
             self._traced(trace, seen, interrupted=True)
@@ -490,7 +502,7 @@ class Widget2Agent:
         try:
             async for chunk in graph.astream(payload, config=config,
                                              stream_mode='values',
-                                             **self._run_kwargs()):
+                                             **self._run_kwargs(session_id)):
                 seen = self._fresh(chunk['messages'], before)
         except GraphRecursionError:
             self._traced(trace, seen, interrupted=True)
@@ -539,7 +551,7 @@ class Widget2Agent:
             async for mode, chunk in graph.astream(
                     payload, config=config,
                     stream_mode=['values', 'messages'],
-                    **self._run_kwargs()):
+                    **self._run_kwargs(session_id)):
                 if mode == 'values':
                     seen = self._fresh(chunk['messages'], before)
                     for call in _calls_in(seen):

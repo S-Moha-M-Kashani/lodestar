@@ -28,22 +28,32 @@ def test_health_says_which_agent_it_built_and_what_that_one_holds():
     carried, `find_cards` is Widget 2's and was built rather than moved. A test
     naming only tools they share would pass against a route reporting one
     agent's list for both.
+
+    The *unnamed* half is Widget 2, which is the default since 2026-09-10, so
+    this route is asked what an operator who set nothing is actually served —
+    and Widget 1 is the one named explicitly, which is what reverting the flip
+    looks like from here.
     """
     res = TestClient(create_app(Settings(llm_provider='fake', embedder='fake')))\
         .get('/health')
     assert res.status_code == 200
-    assert res.json()['agent'] == 'widget1'
-    assert 'list_cards' in res.json()['capabilities']
-    assert 'find_cards' not in res.json()['capabilities']
-
-    two = TestClient(create_app(Settings(llm_provider='fake', embedder='fake',
-                                         agent='widget2'))).get('/health')
-    assert two.json() == {'ok': True, 'service': 'lodestar-brain',
+    assert res.json() == {'ok': True, 'service': 'lodestar-brain',
                           'agent': 'widget2',
                           'capabilities': ['create_card', 'find_cards',
                                            'update_card']}
 
+    one = TestClient(create_app(Settings(llm_provider='fake', embedder='fake',
+                                         agent='widget1'))).get('/health')
+    assert one.json()['agent'] == 'widget1'
+    assert 'list_cards' in one.json()['capabilities']
+    assert 'find_cards' not in one.json()['capabilities']
 
+
+# Widget 1 by name, not by default (2026-09-10). These route tests assert its
+# own tool payloads — a `create_card` step whose result is a card dict, where
+# Widget 2's is rendered text — so the flip must not rewrite them, and a pin
+# written down is the list task 3.1 needs. The routes under Widget 2 are covered
+# by the parametrized cost test below and by `test_widget2.py`'s graph tests.
 def fake_app(agent='widget1'):
     return create_app(Settings(llm_provider='fake', embedder='fake',
                                transcriber='fake', agent=agent,
@@ -360,8 +370,9 @@ def test_a_model_that_drops_the_audio_is_reported_not_transcribed():
 # Docker container. The HTTP path lives in test_chat_memory_server.py.
 
 def memory_app(collection):
+    # Widget 1 by name, for the reason above `fake_app`.
     return create_app(Settings(llm_provider='fake', embedder='fake',
-                               transcriber='fake',
+                               transcriber='fake', agent='widget1',
                                board_api_url='http://board.test',
                                chroma_url='memory',
                                chat_collection=str(collection)))

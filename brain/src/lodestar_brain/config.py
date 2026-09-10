@@ -173,10 +173,18 @@ class Settings:
     #
     # An operator switch and never a UI control: the picker chooses an *engine*,
     # which is a per-turn question the user owns, whereas which implementation
-    # is in service is an operator question for the length of a migration. The
-    # incumbent is the default, so nobody who sets nothing meets a tool-less
-    # agent; an unrecognised name raises at boot, and there is no `auto`.
-    agent: str = 'widget1'
+    # is in service is an operator question for the length of a migration. An
+    # unrecognised name raises at boot, and there is no `auto`.
+    #
+    # **`widget2` is the default since 2026-09-10, and that is the reversible
+    # step of the migration** — the one change with a before and after anybody
+    # can see, landed on its own so that undoing it undoes nothing else.
+    # `BRAIN_AGENT=widget1` puts the incumbent back with a restart, and it is
+    # still built, still tested and still holds five tools Widget 2 has not
+    # (parity.md, stage 4). Flipped rather than merely offered because a
+    # migration whose replacement nobody is actually served is a migration that
+    # never finds out what is missing.
+    agent: str = 'widget2'
     # The agent's own working memory: LangGraph's checkpointer (one thread per
     # chat, so reopening a conversation resumes it) and its long-term store,
     # sharing one sqlite file. Never board.db and never assistant.db — those are
@@ -274,7 +282,9 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         # metadata to a third party.
         tracing=env.get('BRAIN_TRACING', 'off'),
         trace=trace,
-        agent=env.get('BRAIN_AGENT', 'widget1'),
+        # Same default as the field, and it has to be said twice because
+        # `load_settings` builds every field from the environment explicitly.
+        agent=env.get('BRAIN_AGENT', 'widget2'),
         langsmith_api_key=env.get('LANGSMITH_API_KEY', ''),
         # Beside the other real databases, and covered by no backup: it is
         # derived working memory, not a record.
