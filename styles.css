@@ -195,11 +195,26 @@
 
 html, body { margin: 0; }
 
+/* A phone browser in landscape inflates the text of anything it decides is a
+   desktop page, which reflows a layout that had already answered the width
+   question itself. */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+
 body {
   font-family: var(--body);
   font-size: 14px;
   color: var(--ink);
+  /* 100dvh is the *visible* window: on a phone 100vh is the window with the
+     address bar pretended away, so every "one window tall" rule in this file
+     measured a box taller than the screen and pushed the footer, the composer
+     and the last row of every column under the browser's own chrome. The vh
+     line stays as the fallback for anything that has not heard of dvh. */
   min-height: 100vh;
+  min-height: 100dvh;
+  /* The grey flash a phone paints over anything tappable, which on a board of
+     cards is most of the page. Focus is still drawn — :focus-visible above
+     owns that, and it is the one that keyboards depend on. */
+  -webkit-tap-highlight-color: transparent;
   display: flex;
   flex-direction: column;
   background-color: var(--paper);
@@ -484,21 +499,124 @@ input, select, textarea { font: inherit; color: inherit; }
 /* The open drawer still pulls up — taller, growing upward off the shared
    bottom edge, instead of the padding trick a fixed height would swallow. */
 .rail-row .cat-tab[aria-pressed="true"] { height: calc(var(--rail-h) + 3px); }
-.rail-filters {
-  display: flex;
-  flex: 1;
-  align-items: flex-end;
-  gap: 8px;
-}
-.rail-filters select,
-.rail-filters input[type="date"] {
+/* One button where seven dropdowns, two date boxes, a read-back and a bar of
+   every tag used to stand, and one chip for each filter actually in force.
+   Dashed, like `+ New card`: this is a control that adds something rather than
+   one that is holding a value. */
+.filter-menu { position: relative; flex: none; }
+
+.filter-btn {
   box-sizing: border-box;
   height: var(--rail-h);
-  font-size: 11px;
-  padding-block: 0;
   position: relative;
   top: 1px; /* seated on the rule, exactly like the tabs */
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-soft);
+  background: transparent;
+  border: 1px dashed var(--line);
+  border-radius: 3px;
+  padding: 0 10px;
+  white-space: nowrap;
 }
+.filter-btn:hover,
+.filter-btn[aria-expanded="true"] { color: var(--ink); border-color: var(--ink-soft); }
+
+/* The panel drops from the button, over the board. `[hidden]` needs its own
+   rule here for the reason five other surfaces in this file already document:
+   `display: grid` outranks the UA's `[hidden]`. */
+.filter-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  display: grid;
+  gap: 10px;
+  min-width: 320px;
+  padding: 12px 14px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lift);
+}
+.filter-panel[hidden] { display: none; }
+
+/* A row is its name in a left gutter and its control beside it — the card
+   dialog's own `.prop-row`, which is what a reader of this app already knows
+   a setting to look like. A row holding several controls names the group. */
+.filter-row {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+.filter-row[hidden] { display: none; }
+.filter-row > label {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-soft);
+}
+.filter-row select,
+.filter-row input[type="date"] {
+  box-sizing: border-box;
+  font-size: 11.5px;
+  min-width: 0;
+}
+/* The tags row and the time row each hold several controls, so their values
+   wrap under the gutter rather than being squeezed onto one line. */
+.filter-row-wide {
+  grid-template-columns: 96px minmax(0, 1fr);
+  align-items: start;
+}
+.filter-row-wide > :not(label) { grid-column: 2; }
+.filter-row-wide .range-readback { grid-column: 2; }
+
+/* The chips: what is in force, out on the rule where the controls used to be.
+   An × on each, and a `Clear` only from two up. */
+.filter-chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  position: relative;
+  top: 1px;
+}
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  box-sizing: border-box;
+  height: var(--rail-h);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-blue);
+  background: color-mix(in srgb, var(--ink-blue) 8%, transparent);
+  border: 1px solid var(--ink-blue);
+  border-radius: 999px;
+  padding: 0 4px 0 10px;
+  white-space: nowrap;
+}
+.filter-chip-x {
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1;
+  color: inherit;
+  opacity: 0.65;
+  padding: 0 4px;
+}
+.filter-chip-x:hover { opacity: 1; }
+.clear-filters {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-soft);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  white-space: nowrap;
+}
+.clear-filters:hover { color: var(--ink); }
 
 /* The range filter's read-back: the span in words, beside the controls that
    set it. Printed only while the filter is narrowing something (js/ui/toolbar.js
@@ -640,14 +758,18 @@ input, select, textarea { font: inherit; color: inherit; }
 }
 .cat-hue input:focus-visible + .cat-hue-dot { outline: 2px solid var(--rule-red); outline-offset: 1px; }
 
-/* Tag filter bar */
+/* Tag filter bar — inside the filter panel since 2026-09-13, under the
+   dropdown that is its other handle. `[hidden]` needs its own rule: `display:
+   flex` outranks the UA's, the trap five other surfaces in this file document. */
 .tag-bar {
   display: flex;
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
-  margin-top: 8px;
+  max-height: 132px;
+  overflow-y: auto;
 }
+.tag-bar[hidden] { display: none; }
 
 .tag-bar .label {
   font-family: var(--mono);
@@ -737,10 +859,12 @@ body[data-view="board"] {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh; /* the visible window on a phone — see body above */
   overflow: hidden;
 }
 body[data-view="board"] .app-header,
 body[data-view="board"] #habit-banner-slot,
+body[data-view="board"] #direction-slot,
 body[data-view="board"] .app-footer { flex: none; }
 /* align-items:start sizes each column to its own content, which is what a
    percentage max-height had nothing to resolve against - so the column grew to
@@ -898,6 +1022,71 @@ body[data-view="board"] .cards { min-height: 0; }
 }
 
 /* ---------------------------------------------------------------------------
+   The board's summary line — what the board is asking for, above the columns
+
+   One line in the ledger's own hand, ruled off on the left in red pencil like
+   a note written in the margin of the day. It is the move that pays for the
+   others: six filters existed so the reader could hunt for what needed
+   attention, and a board that says it in a sentence has ended the hunt.
+--------------------------------------------------------------------------- */
+/* The slot carries the board's own side padding, so the red rule stands on the
+   line the columns stand on and the words start where the card titles do.
+   Empty on every view but the Board, and an empty slot is no slot. */
+#direction-slot { padding: 0 28px; }
+#direction-slot:empty { display: none; }
+
+.board-direction {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 18px;
+  padding: 9px 14px 9px 14px;
+  border-left: 3px solid var(--rule-red);
+  font-family: var(--display);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+/* Each item opens the card it names — a reason nobody can act on from where
+   they are reading it is a notice, not direction. Underlined on hover only:
+   a line of four permanently underlined phrases reads as a navigation bar. */
+.board-direction-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+  border: none;
+  background: none;
+  padding: 2px 0;
+  font: inherit;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+.board-direction-item:hover .board-direction-reason,
+.board-direction-item:focus-visible .board-direction-reason {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.board-direction-num {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--ink-soft);
+}
+
+/* The two rules that name a commitment already past speak in the red pencil
+   the rest of the board marks a passed deadline in; everything else is ink. */
+.board-direction-item[data-rule="overdue"] .board-direction-reason,
+.board-direction-item[data-rule="habit-behind"] .board-direction-reason { color: var(--rule-red); }
+.board-direction-item[data-rule="neglected-area"] .board-direction-reason { color: var(--ink-soft); }
+
+.board-direction-note {
+  margin: 0;
+  color: var(--ink-soft);
+}
+
+/* ---------------------------------------------------------------------------
    Cards — ruled index cards
 --------------------------------------------------------------------------- */
 .card {
@@ -934,15 +1123,24 @@ body[data-view="board"] .cards { min-height: 0; }
   to   { opacity: 1; transform: none; }
 }
 
-/* The index card's red top rule sits under the header row */
-.card-top {
+/* The card's one quiet line, under its words: the type's glyph, the `!` a P1
+   earns, the deadline read as a phrase, the plan when it says more, the notes
+   mark, the ledger number and the actions `+`. One line and one ink, so the
+   eye lands on the card's sentence and finds the marks only when it looks for
+   them. The red top rule went with the header row it underlined — a card whose
+   words come first has nothing above them to rule off. */
+.card-line {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding-bottom: 6px;
-  margin-bottom: 8px;
-  border-bottom: 1px solid color-mix(in srgb, var(--rule-red) 55%, transparent);
+  gap: 9px;
+  margin-top: 7px;
+  min-height: 24px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-soft);
 }
+/* The actions take the right edge, whatever else the line is carrying. */
+.card-line .card-menu { margin-left: auto; }
 
 .card-num {
   font-family: var(--mono);
@@ -951,15 +1149,16 @@ body[data-view="board"] .cards { min-height: 0; }
   color: var(--ink-soft);
 }
 
+/* The notes mark. It took the right edge of the old header row with a
+   `margin-left: auto`; on the card's one line the right edge belongs to the
+   actions, and the auto margin left a hole in the middle of every card
+   carrying notes and no deadline. */
 .notes-dot {
-  margin-left: auto;
   font-family: var(--display);
   font-size: 12px;
   color: var(--ink-soft);
 }
 
-/* When there are no notes, the badge takes the right edge itself */
-.card-num + .badge { margin-left: auto; }
 
 /* The ledger numbers are always painted, and there is deliberately no rule
    here that hides them: a card's number is its identity, not a display
@@ -971,16 +1170,18 @@ body[data-view="board"] .cards { min-height: 0; }
    changes. The Done column is hidden here; nothing else on a card is. */
 /* Show's Filters toggles hide the FILTER CONTROLS — never what is painted on
    the cards. Chips and stamps are the cards' own. */
-.hide-tags #tag-bar,
-.hide-tags #tag-filter { display: none; }
-.hide-prios #prio-filter { display: none; }
-.hide-types #type-filter { display: none; }
+/* Each names the panel ROW, not the control: a row whose select is hidden is a
+   label in a menu naming nothing. The ids are unchanged — the controls moved
+   behind `+ Filter` on 2026-09-13 and were not renamed. */
+.hide-tags #filter-row-tags { display: none; }
+.hide-prios #filter-row-prio { display: none; }
+.hide-types #filter-row-type { display: none; }
 /* Two ways this control is absent, and they mean different things. Switched off
    in the Menu it is gone everywhere, and js/core/cards.js stops applying it.
    On the Board it is merely not painted: the Board is the three columns, so the
    filter has nothing to say there and every card is shown regardless. */
-.hide-columns #column-filter { display: none; }
-body[data-view="board"] #column-filter { display: none; }
+.hide-columns #filter-row-column { display: none; }
+body[data-view="board"] #filter-row-column { display: none; }
 /* #nesting-filter has no rule here on purpose: the scope filter is live on
    every view, the Board included. Hiding a child on the Board hides it from
    one place while still showing it in another — its parent's fold — where the
@@ -1008,6 +1209,20 @@ body[data-view="board"] #column-filter { display: none; }
   white-space: nowrap;
 }
 
+/* The same stamp on a board card, reduced to the glyph: the frame, the rotation
+   and the tracking were all there to make a word read as a rubber stamp, and
+   there is no word left to stamp. It is still `.badge.type-<type>`, so the
+   Backlog's rows and the map's tooltip are untouched. */
+.badge.glyph-only {
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+  opacity: 1;
+}
+
 /* Automatic priority stamp (P1–P4), derived from importance × urgency.
    The one deliberate exception to "colour means category": these four inks
    are fixed signals — red, orange, green, gray — and theme-adapt via tokens. */
@@ -1027,6 +1242,21 @@ body[data-view="board"] #column-filter { display: none; }
 .prio-badge[data-prio="2"] { color: var(--ink-amber); }
 .prio-badge[data-prio="3"] { color: var(--ink-green); }
 .prio-badge[data-prio="4"] { color: var(--ink-soft); }
+
+/* On the card it is `P1` in red and nothing else: no pill, no rotation. It was
+   drawn as a single `!` until the two marks were seen together — `!` is the
+   *problem* type's own glyph, so a problem that was also urgent and important
+   wore `! !`, two identical marks meaning two different things. `P1` is the
+   word the priority filter and the Matrix already use. The ink is unchanged —
+   the one deliberate exception to "colour means category". */
+.card-line .prio-badge {
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  transform: none;
+  font-size: 10.5px;
+  opacity: 1;
+}
 
 /* The card's actions menu — a + at the end of the header row, dropping the
    same panel the toolbar menus use.
@@ -1126,11 +1356,17 @@ body[data-view="board"] #column-filter { display: none; }
 /* A card tilts under the pointer; the menu hanging off it must not tilt too */
 .card.menu-open { transform: none; }
 
+/* The card's own words, and now the first thing on it. This is the one thing
+   on a card that was *written*, so it leads and it carries the ledger's own
+   display face — everything under it is a mark, in mono and in soft ink. */
 .card-title {
   margin: 0;
-  font-size: 13.5px;
-  font-weight: 500;
-  line-height: 1.5;
+  font-family: var(--display);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -0.005em;
+  color: var(--ink);
   overflow-wrap: anywhere;
 }
 
@@ -1154,6 +1390,10 @@ body[data-view="board"] #column-filter { display: none; }
   font-size: 10.5px;
   color: var(--ink-soft);
 }
+/* No flag glyph on the board card: the chip reads `overdue by 2 days` now,
+   which says it in words. The Backlog's rows and the map's tooltip still print
+   the stored date, and there the flag is what marks it as one. */
+.card-line .card-deadline::before { content: none; }
 .card-deadline::before { content: "⚑ "; opacity: 0.7; }
 .card-deadline[data-overdue="true"] { color: var(--rule-red); font-weight: 600; }
 
@@ -3429,6 +3669,7 @@ body[data-view="assistant"] {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh; /* the visible window on a phone — see body above */
   overflow: hidden;
 }
 body[data-view="assistant"] .app-header { flex: none; }
@@ -5050,4 +5291,316 @@ button.chat-source-card {
   }
   .widget-resize { display: none; }
   .widget-head { padding-inline-start: 0; }
+}
+
+/* ---------------------------------------------------------------------------
+   The phone (2026-09-12)
+
+   The board is opened from a phone now, over the owner's own private network,
+   and until this section it had never been laid out for one. Measured at
+   390 x 844 before: the page was 800px wide inside a 390px window, so the whole
+   app slid sideways under the thumb; the seven view tabs stood on one unwrapped
+   493px line, which put Review and Assistant off the right edge where nothing
+   could reach them; the filter row refused to shrink and squeezed the category
+   tabs into a ladder one tab per line; ~1,150px of that chrome stood in front
+   of the first card on an 844px screen; every control was 25-27px against a
+   ~44px fingertip; and every text field was under 16px, which makes iOS Safari
+   zoom the page on focus and never zoom back.
+
+   What it is NOT: a second layout. Every rule here narrows one that already
+   exists, and the desktop board is untouched — which is why the breakpoint is
+   the 640px this file already uses, rather than a pointer query. A phone held
+   in landscape and a small laptop window get the same answer, and that is the
+   right answer for both.
+
+   The pattern used twice is the swipeable strip: the view switch and the
+   category rail each keep their own line and scroll inside it, rather than
+   wrapping into two or three lines of the one panel this board can least
+   afford to make taller. js/ui/render.js scrolls the pressed view tab into
+   view, so the strip never opens showing a tab nobody is on.
+--------------------------------------------------------------------------- */
+@media (max-width: 640px) {
+  /* ---- The window's own edges -------------------------------------------
+     viewport-fit=cover (index.html) lets the page paint under the notch and
+     the home bar, and these buy the room back where it is actually needed.
+     env() is 0 on every other device, so these are the same numbers as before
+     everywhere but a phone. */
+  .app-header {
+    padding: 8px 14px 4px;
+    padding-top: calc(8px + env(safe-area-inset-top));
+    padding-inline: calc(14px + env(safe-area-inset-left))
+                    calc(14px + env(safe-area-inset-right));
+  }
+  .board,
+  #board.assistant,
+  .backlog,
+  .overview,
+  .matrix,
+  .areas,
+  .review {
+    padding-inline: calc(12px + env(safe-area-inset-left))
+                    calc(12px + env(safe-area-inset-right));
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  }
+
+  /* ---- The summary line, stacked ----------------------------------------
+     Four reasons on one wrapped line is four half-sentences on a 390px screen.
+     One item per line reads, and this is the one strip on a phone worth the
+     height: it is what the reader came to find out. The red rule keeps the
+     left edge the board's cards stand on. */
+  #direction-slot {
+    padding-inline: calc(12px + env(safe-area-inset-left))
+                    calc(12px + env(safe-area-inset-right));
+  }
+  .board-direction {
+    flex-direction: column;
+    gap: 2px;
+    font-size: 12.5px;
+    padding: 8px 0 8px 10px;
+  }
+
+  /* ---- The header, in two lines instead of five -------------------------
+     The mark at 42px rather than 79, the tagline gone, and the board picker
+     beside the name instead of under it. What is left is what a person needs
+     to know at a glance: which app, which board, which view. */
+  .header-row { gap: 6px 8px; align-items: center; }
+  .brand { flex: 1 1 auto; min-width: 0; gap: 8px; }
+  .brand-mark { width: 42px; height: 42px; }
+  .brand h1 { font-size: 17px; }
+  .tagline { display: none; }
+  /* The name and the picker share a line. Not `.board-switch` itself: that
+     carries [hidden] until the server has listed the boards, and a display
+     here would outrank the UA's rule — the trap .assistant-tools documents. */
+  .brand > div {
+    display: flex;
+    align-items: center;
+    flex-wrap: nowrap;
+    gap: 8px;
+    min-width: 0;
+  }
+  .brand h1 { white-space: nowrap; }
+  .board-switch { min-width: 0; }
+  /* Shrinkable, not fixed, and its own base width decides where it goes: a
+     flex item wraps when its BASE width will not fit beside its neighbour. On
+     the Board this holds one 40px gear and stays beside the name; on the
+     Assistant it holds the whole tools row, which at 286px cannot, and takes a
+     line of its own rather than pushing 95px of itself off the window. */
+  .header-row .toolbar {
+    flex: 0 1 auto;
+    min-width: 0;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  /* In the sheet this row hangs off the right of the ASSISTANT title, which at
+     this width leaves it a third of a line. The title takes the whole of the
+     first line and the five controls share the second — wrapping them instead
+     spent three lines of a sheet on furniture. The one that gives way is the
+     search fold, because it is the only one whose label is a sentence: it
+     shrinks and ellipses, while History, New chat, the gear and the collapse
+     keep their whole selves. */
+  .assistant-head { flex-wrap: wrap; gap: 8px; }
+  .assistant-head > h2 { flex: 1 0 100%; }
+  .assistant-head .assistant-tools {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+  .assistant-head .assistant-collapse { flex: 0 0 auto; margin-inline-start: auto; }
+  .assistant-tools { flex-wrap: nowrap; min-width: 0; }
+  /* The flex child is the slot the tools row is built out of, not the fold
+     inside it: a shrink rule on .chat-recall alone left the slot at its
+     content width and pushed the gear 17px off the window. */
+  .assistant-tools #chat-recall-slot {
+    flex: 0 1 auto;
+    min-width: 0;
+    display: flex;
+  }
+  .assistant-tools .chat-recall { flex: 0 1 auto; min-width: 0; }
+  .assistant-tools .chat-recall-name {
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* The recall panel hangs off its fold by absolute position, and an
+     absolutely positioned box still widens the page: at 92vw it opened
+     rightwards past the window and put its own results off the screen. It
+     keeps opening rightwards — that is the right way round for a control at
+     the left of the group — and is simply narrowed to what is left of the line
+     from there. (The chats panel beside it ends where the tools do and needs
+     nothing.) */
+  .assistant-tools .chat-recall-drop { width: min(440px, calc(100vw - 56px)); }
+
+  /* ---- The view switch: one line, swiped ---------------------------------
+     `1 0 100%` is what puts it on a line of its own, and order 3 what keeps
+     that line under the name rather than between it and the gear. */
+  .header-row .view-switch {
+    flex: 1 0 100%;
+    order: 3;
+    min-width: 0;
+    display: flex;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+  }
+  .view-switch::-webkit-scrollbar { display: none; }
+  .view-switch button {
+    flex: 0 0 auto;
+    min-height: 44px;
+    padding: 12px 15px;
+    scroll-snap-align: start;
+  }
+
+  /* ---- The category rail and the filters: two swiped lines ---------------
+     Each keeps its own line and scrolls inside it, rather than wrapping into
+     the three or four lines a 390px window would need. Two lines and not one:
+     a single strip held both, which is exactly what the wide window shows, but
+     it put every filter 700px to the right of eleven category tabs — a control
+     nobody would find by swiping past the tabs to look for it.
+
+     The rule the tabs stand on moves to the strip that holds them, and they
+     stand ON it rather than 1px over it: a strip has to clip its own overflow
+     to scroll, and that 1px is what the clip would have taken. */
+  .rail-row {
+    --rail-h: 40px;
+    flex-wrap: wrap;
+    row-gap: 6px;
+    border-bottom: none;
+  }
+  /* One swiped strip now rather than two: the areas keep their line, and what
+     was the second strip — seven selects nobody could see the end of — is one
+     button and the chips it leaves behind, on the line under them. */
+  .cat-rail {
+    flex: 1 0 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    border-bottom: 1px solid var(--line);
+  }
+  .cat-rail::-webkit-scrollbar { display: none; }
+  .cat-tab { flex: 0 0 auto; padding-inline: 14px; }
+  .rail-row .cat-tab { top: 0; }
+  .filter-btn,
+  .filter-chip { top: 0; }
+  .filter-chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .filter-chips::-webkit-scrollbar { display: none; }
+  .filter-chip { flex: 0 0 auto; }
+  /* The panel is a dropdown on a laptop and a sheet against both edges here —
+     a 320px menu hanging off a button on a 390px screen is a menu with its own
+     horizontal scrollbar. */
+  .filter-panel {
+    position: fixed;
+    left: 8px;
+    right: 8px;
+    top: auto;
+    min-width: 0;
+    max-height: 70dvh;
+    overflow-y: auto;
+  }
+  .filter-row { grid-template-columns: 1fr; gap: 4px; }
+  .filter-row-wide > :not(label),
+  .filter-row-wide .range-readback { grid-column: 1; }
+
+  /* The tag filter, the same way, for the same reason: five tags and a label
+     wrapped to two lines and spent 110px of an 844px screen on a filter that
+     is reached for once a session. */
+  .tag-bar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+  .tag-bar::-webkit-scrollbar { display: none; }
+  .tag-bar .label,
+  .tag-chip { flex: 0 0 auto; }
+
+  /* ---- Everything a thumb has to land on --------------------------------
+     40px, against the 24-31px these were drawn at for a pointer. The rail's
+     own tabs and selects are already one height (--rail-h above), so they are
+     raised by that one variable rather than by a rule each. */
+  .assistant-extras-btn { width: 40px; height: 40px; }
+  .board-switch #board-select { min-height: 40px; padding-block: 6px; }
+  .card-menu-btn { min-width: 40px; min-height: 40px; }
+  .new-card-btn { min-height: 40px; }
+  .sort-select { min-height: 40px; }
+  .tag-chip { min-height: 34px; padding: 7px 10px; }
+  .chat-row-menu-btn { min-width: 40px; min-height: 40px; }
+  /* The rail's own section heading is a button — it applies that horizon as a
+     filter — and at 16px tall it was the smallest target on the board. */
+  .plan-rail-title { min-height: 40px; }
+
+  /* ---- No control under 16px --------------------------------------------
+     Below 16px iOS Safari zooms the page the moment a field takes focus, and
+     does not zoom back — the board ends up half off the screen with no way
+     back but a pinch. Every selector here is one this file sizes smaller
+     somewhere above, repeated at its own specificity so that this block, being
+     last, wins. A new rule that sets a smaller size on a typeable control has
+     to be added here too; tests/e2e_test.py measures the smallest one on the
+     page and fails under 16. */
+  input, select, textarea,
+  .toolbar input[type="search"],
+  .toolbar select,
+  #theme-select,
+  .filter-row select,
+  .filter-row input[type="date"],
+  .sort-select,
+  .board-switch #board-select,
+  .board-search,
+  .field textarea,
+  .field input,
+  .field select,
+  .card-words textarea,
+  .card-words #card-title,
+  .card-words #card-notes,
+  .prop-value input,
+  .prop-value input[type="time"],
+  .prop-value select,
+  .slot-field input,
+  .slot-field select,
+  .chat-composer textarea,
+  .chat-settings select,
+  .chat-key-row input,
+  .cat-add-form input[type="text"] { font-size: 16px; }
+
+  /* ---- The board ---------------------------------------------------------
+     A column that nearly fills the screen, with the edge of the next one
+     showing: the peek is the only thing that says there are three. */
+  .column { flex: 0 0 86vw; padding: 0 10px; }
+  .board-rail { flex: 0 0 80vw; }
+  /* A column, the rail and the transcript each scroll themselves; without this
+     the end of one hands the gesture to the page behind it, which on a phone
+     is a pull-to-refresh that throws the board away mid-read. */
+  .cards,
+  .board-rail,
+  .chat-log { overscroll-behavior: contain; }
+
+  /* The dialog is measured against the window it is actually in, like every
+     other full-height box here. */
+  #card-form { max-height: 86dvh; }
+
+  /* The Ask pill sits in the corner the home indicator crosses. */
+  #assistant-launcher {
+    inset-block-end: calc(16px + env(safe-area-inset-bottom));
+    inset-inline-end: calc(16px + env(safe-area-inset-right));
+  }
+
+  /* ---- What a phone cannot use ------------------------------------------
+     The footer explains dragging a card and the keys that move one. There is
+     no drag and no keyboard here, so it is a line of paper spent on two things
+     that are not true. */
+  .app-footer { display: none; }
+}
+
+/* The widget's own threshold, where it stops being a card and becomes a sheet
+   (NARROW_PX in js/assistant/widget.js). The sheet sits exactly where the home
+   indicator does, and a control under that bar is a control the phone
+   swallows. */
+@media (max-width: 639px) {
+  #assistant-widget {
+    inset: calc(8px + env(safe-area-inset-top)) calc(8px + env(safe-area-inset-right))
+           calc(8px + env(safe-area-inset-bottom)) calc(8px + env(safe-area-inset-left));
+  }
 }

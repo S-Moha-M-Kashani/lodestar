@@ -2274,6 +2274,22 @@ const STATIC = {
   '/': ['index.html', 'text/html; charset=utf-8'],
   '/index.html': ['index.html', 'text/html; charset=utf-8'],
   '/styles.css': ['styles.css', 'text/css; charset=utf-8'],
+  // Added to a phone's home screen the board runs as its own window, which is
+  // what gets the browser's address bar out of the way of a board already
+  // short of height. These four files are what that costs, and they are
+  // listed by hand rather than walked: a directory walk is how js/ earns its
+  // whitelist, and four names do not need one.
+  //
+  // Behind the session like every other static file, deliberately: the four
+  // public paths are the door and the liveness ping, and installing is done
+  // from the board itself, which is a page only a logged-in browser ever
+  // sees. Both links carry the session — iOS fetches `apple-touch-icon` as an
+  // ordinary subresource of the page, and the manifest link asks for it with
+  // `crossorigin="use-credentials"`.
+  '/manifest.webmanifest': ['manifest.webmanifest', 'application/manifest+json; charset=utf-8'],
+  '/icons/lodestar-180.png': ['icons/lodestar-180.png', 'image/png'],
+  '/icons/lodestar-192.png': ['icons/lodestar-192.png', 'image/png'],
+  '/icons/lodestar-512.png': ['icons/lodestar-512.png', 'image/png'],
 };
 
 // The frontend is a tree of ES modules under js/, so the whitelist is built

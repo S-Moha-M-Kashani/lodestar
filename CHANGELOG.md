@@ -10,6 +10,40 @@ Dates are the day the release point was built. Versions follow
 [semantic versioning](https://semver.org/) — a major number for a break, a
 minor for a capability, a patch for a fix.
 
+## [Unreleased]
+
+**Two changes: the board is reachable from a phone anywhere in the world, and
+it is finally laid out for one.**
+
+**The phone reaches the board over the private network.** Tailscale answers for
+this machine's tailnet name and hands each request to the board's own loopback
+port, so nothing new is published to any network and the trust boundary does not
+move. The session is encrypted end to end, the password is unchanged as the
+gate, and a device that is not on the network cannot find the door at all. One
+Host-allowlist entry is what the board needed to stop refusing that name, and a
+configuration test pins it, because the security notes plan the edit that
+removes its neighbours.
+
+**And the app is laid out for the screen it is now opened on.** Measured at
+390 x 844 before: the page was 800px wide inside a 390px window, so the whole
+board slid sideways under the thumb; the seven view tabs stood on one line that
+put Review and Assistant off the right edge where no tap could reach them; the
+category tabs stacked one per line; about 1,150px of that chrome stood in front
+of the first card on an 844px screen; every control was sized for a mouse; and
+every text field was small enough to make the phone zoom in on focus and never
+zoom back. Now the page never scrolls sideways, every view is reachable, the
+categories and the filters each keep one swipeable line, the controls are 40px,
+and the cards start 248px down. It is the same app and the same stylesheet —
+no framework, no second layout, no second codebase — and the desktop board is
+untouched.
+
+**It can be added to the home screen.** Added there it opens in its own window
+with no address bar, which is worth real height on a board that is one window
+tall, and the tile carries the nova from the app's own header — rendered from
+that same drawing rather than drawn a second time. Installing is done from the
+board while logged in: the icons and the description file sit behind the session
+like every other file of the app, and the door stays the only public page.
+
 ## [v1.9.0] — 2026-09-08
 
 **Six changes: a card can be made of smaller cards, a habit says when each
