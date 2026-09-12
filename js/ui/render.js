@@ -9,7 +9,9 @@ import { timeline } from '../core/history.js';
 import { VIEW_KEY } from '../core/keys.js';
 import { dealCards, focusCardId, setCurrentView, setDealCards, setFocusCard, view } from '../core/state.js';
 import { renderCatRail, renderColumn, renderTagBar } from './board.js';
+import { renderDirectionLine } from './direction.js';
 import { $, announce } from './dom.js';
+import { renderFilterChips } from './filter-menu.js';
 import { renderHabitBanner, renderHabitRail } from './habits.js';
 import { renderPlanRail } from './plan.js';
 import { refreshEdits, refreshProposals } from './proposals.js';
@@ -85,7 +87,15 @@ export function render() {
   }
   renderCatRail();
   renderTagBar();
+  // What is narrowing the board right now, in words, beside the `+ Filter`
+  // button the controls themselves live behind. Empty when nothing is.
+  renderFilterChips();
   renderHabitBanner();
+  // The board's summary line, between the header and the columns: what the
+  // five rules in core/direction.js found, in the order they found it. Painted
+  // after the board rather than into it — it has a static slot of its own, for
+  // the reason written over renderDirectionLine().
+  renderDirectionLine();
   // The widget, its pill, then the tools. The tools row is the Assistant
   // sheet's alone: the rescue above parked the wired-once node back in the
   // header, the sheet claimed it again while it built, and renderAssistantTools()
@@ -113,6 +123,14 @@ const viewButtons = [...document.querySelectorAll('.view-switch button')];
 
 export function syncViewButtons() {
   for (const btn of viewButtons) btn.setAttribute('aria-pressed', String(btn.dataset.view === view));
+  // On a phone the switch is one line the seven tabs scroll inside (styles.css,
+  // "The phone"), so the view you are on can be off the end of it — a board
+  // opened on the Assistant would show a strip beginning at Board with nothing
+  // pressed in it. `nearest` scrolls only when it has to and never touches the
+  // page, which has its own scroll position to keep; on a wide window every
+  // tab is already in view, so this does nothing at all.
+  const pressed = viewButtons.find((btn) => btn.dataset.view === view);
+  pressed?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   syncProposalBadge();
 }
 

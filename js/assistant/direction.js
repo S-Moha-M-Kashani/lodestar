@@ -1,7 +1,7 @@
 import { direction } from '../core/direction.js';
 import { catColor, catLabel } from '../core/categories.js';
-import { habitDoneIn, habitExpectedBy, habitPeriod } from '../core/habits.js';
 import { state } from '../core/state.js';
+import { habitBehind } from '../ui/direction.js';
 
 // What the chat shows before anybody has said anything: the board's own
 // direction.
@@ -19,19 +19,13 @@ import { state } from '../core/state.js';
 // left here is three spans per item, which is why there is no test of its own:
 // the wording is the leaf's and the surface is the e2e's.
 //
-// The cadence arithmetic is **passed in** rather than imported by the leaf, so
-// this is where the two real modules are composed — `core/habits.js` reaches
-// `core/state.js`, and importing it there would make the whole analysis an
-// e2e-only surface. Same trade `planImport` makes with `newId`.
+// The cadence arithmetic is **passed in** rather than imported by the leaf,
+// because `core/habits.js` reaches `core/state.js` and importing it there would
+// make the whole analysis an e2e-only surface. It is composed once, in
+// `js/ui/direction.js`, and taken from there: the widget and the line at the
+// head of the Board must not be able to disagree about whether a habit is
+// behind. Same trade `planImport` makes with `newId`.
 
-/** How many repetitions this habit has recorded in the period `at` falls in,
- *  and how many the clock has already asked for. `core/habits.js`'s own
- *  answers, so the rail's punch strip and the direction can never disagree
- *  about whether a habit is behind. */
-const habitBehind = (card, at) => ({
-  done: habitDoneIn(card, habitPeriod(card.habitFreq, at)),
-  expected: habitExpectedBy(card, at),
-});
 
 /** One item as a ledger line: the number in mono, a category tick in the
  *  card's own hue, the title in body text, and the reason on the line under

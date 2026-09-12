@@ -139,12 +139,32 @@ function byDeadline(cards, at, keep) {
     .sort(by((x) => x.gap));
 }
 
+/** A stored deadline read as a phrase — the reading, never the raw value.
+ *
+ *  Exported because the card on the board wants the same sentence the
+ *  direction does, and two copies of it are two wordings that drift: the board
+ *  would say `2026-09-09` under a line saying "overdue by 2 days" about the
+ *  very same card. The rule below is this function with its own comparison in
+ *  front of it, so the direction's wording is unchanged by the export.
+ *
+ *  Beyond a week ahead it hands back the date with `due` in front of it.
+ *  "due in 243 days" is arithmetic nobody asked for; a day that far off is a
+ *  date, and `SOON_DAYS` is already the board's word for how far ahead it is
+ *  worth counting in days. */
+export function dueWords(iso, at = new Date()) {
+  const gap = dayGap(iso, at);
+  if (Number.isNaN(gap)) return '';
+  if (gap < 0) return `overdue by ${plural(-gap, 'day')}`;
+  if (gap === 0) return 'due today';
+  if (gap === 1) return 'due tomorrow';
+  return gap <= SOON_DAYS ? `due in ${plural(gap, 'day')}` : `due ${iso}`;
+}
+
 const overdueItems = (cards, at) => byDeadline(cards, at, (g) => g < 0)
-  .map(({ card, gap }) => item('overdue', card, `overdue by ${plural(-gap, 'day')}`));
+  .map(({ card }) => item('overdue', card, dueWords(card.deadline, at)));
 
 const dueSoonItems = (cards, at) => byDeadline(cards, at, (g) => g >= 0 && g <= SOON_DAYS)
-  .map(({ card, gap }) => item('due-soon', card,
-    gap === 0 ? 'due today' : gap === 1 ? 'due tomorrow' : `due in ${plural(gap, 'day')}`));
+  .map(({ card }) => item('due-soon', card, dueWords(card.deadline, at)));
 
 /** Habits behind what the clock has already asked for.
  *

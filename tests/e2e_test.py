@@ -217,6 +217,17 @@ def add_card(page, title):
                                     has_text=title).count() >= 1)
 
 
+def open_filters(page):
+    """Every filter but the life-area tabs lives behind `+ Filter` since
+    2026-09-13, and Playwright will not touch a control it cannot see. Opening
+    the panel is what a person does before reaching for one; it is a no-op when
+    the panel is already open, because a click inside it is use rather than
+    dismissal."""
+    if page.locator("#filter-panel").is_hidden():
+        page.click("#filter-btn")
+        page.wait_for_selector("#filter-panel:not([hidden])")
+
+
 def open_meta(page):
     """Unfold the evidence strip under the newest reply.
 
@@ -819,10 +830,18 @@ try:
         page.click('#card-form button[type="submit"]')
         card = page.locator('[data-col="inbox"] .card').first
         check("modal: type stamp updated to problem", card.locator(".badge.type-problem").count() == 1)
+        # The category is the coloured spine and the accessible name — the card
+        # face stopped printing the word on 2026-09-13, since the spine had been
+        # saying it since the first commit. `categorized` is what inks the spine.
         check("modal: category rendered on the card",
-              card.locator(".card-cat").inner_text() == "Work"
-              and card.evaluate("el => el.classList.contains('categorized')"))
-        check("modal: tags rendered", card.locator(".card-tag").count() == 2)
+              card.evaluate("el => el.classList.contains('categorized')")
+              and "Work" in card.get_attribute("aria-label")
+              and card.evaluate("el => getComputedStyle(el).getPropertyValue('--cat').trim()") != "")
+        # Tags are how you find a card, not what you need once you have found
+        # it: they live in the dialog and in the tag filters, never on the face.
+        check("modal: tags do not ride on the card face",
+              card.locator(".card-tag").count() == 0
+              and page.locator("#board .card-tag").count() == 0)
         check("modal: notes indicator shown", card.locator(".notes-dot").count() == 1)
 
         # Cancel must not change anything
@@ -865,8 +884,12 @@ try:
               {"deadline", "priority", "type", "newest", "oldest"} <= set(sort_values))
         page.select_option('[data-col="in-progress"] .sort-select', 'type')
         page.wait_for_timeout(100)
+        # The board card's stamp is its glyph alone since 2026-09-13 — the word
+        # is on its tooltip and in the card's accessible name — so the type is
+        # read off the class the stamp has always carried.
         first_badge = page.locator('[data-col="in-progress"] .card .badge').first
-        check("sort: problem card sorts ahead of tasks", "problem" in first_badge.inner_text().lower())
+        check("sort: problem card sorts ahead of tasks",
+              "type-problem" in (first_badge.get_attribute("class") or ""))
         check("sort: menu snaps back to its placeholder after sorting",
               page.input_value('[data-col="in-progress"] .sort-select') == "")
 
@@ -967,7 +990,7 @@ try:
         item("Health").click()
         page.wait_for_timeout(120)
         check("card menu: Category re-inks the card in place, with no dialog",
-              probe().locator(".card-cat").inner_text() == "Health"
+              "Health" in probe().get_attribute("aria-label")
               and probe().evaluate("el => el.classList.contains('categorized')")
               and page.locator("#card-dialog[open]").count() == 0)
 
@@ -983,8 +1006,13 @@ try:
         item("Today").click()
         page.wait_for_timeout(120)
         today = time.strftime("%Y-%m-%d")
+        # The chip is the *reading* of the date since 2026-09-13 — `due today`,
+        # `overdue by 2 days` — which is core/direction.js's own sentence
+        # (`dueWords`), so the card and the board's summary line cannot say two
+        # different things about one deadline. The stored value is on its title.
         check("card menu: Deadline dates the card in place",
-              probe().locator(".card-deadline").inner_text() == today)
+              probe().locator(".card-deadline").inner_text().strip() == "due today"
+              and today in probe().locator(".card-deadline").get_attribute("title"))
 
         probe().locator(".card-menu-btn").click()
         item("Move to").click()
@@ -1040,6 +1068,7 @@ try:
         page.wait_for_timeout(50)
         check("filter: clearing search restores the board", page.locator(".card").count() == 7)
 
+        open_filters(page)
         page.select_option("#type-filter", "problem")
         page.wait_for_timeout(100)
         check("filter: type=problem shows only problem stamps",
@@ -1051,6 +1080,10 @@ try:
         page.wait_for_timeout(100)
         check("filter: tag chip 'planning' shows 1 card", page.locator(".card").count() == 1)
         page.locator('.tag-chip:has-text("planning")').first.click()
+        # The panel drops over the top of the board, so it has to be put away
+        # before anything reaches for a card underneath it.
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(100)
 
         # ---- Drag & drop ----------------------------------------------------
         src = page.locator('[data-col="inbox"] .card').first
@@ -1191,20 +1224,33 @@ try:
 
         # Show's three Filters toggles act on the FILTER CONTROLS — the tag
         # bar and tag dropdown, the priority dropdown, the type dropdown —
-        # never on what is painted on the cards. Chips and stamps are the
-        # cards' own; a filter you don't use is the thing worth hiding.
-        tags_total = page.locator("#board .card-tag").count()
-        check("show: the tag filters start visible, chips always on the cards",
-              tags_total > 0 and page.locator("#board .card-tag").first.is_visible()
+        # never on what is painted on the cards. A filter you don't use is the
+        # thing worth hiding. Since 2026-09-13 each switch hides the panel ROW
+        # rather than the control alone: a row whose select is gone is a label
+        # in a menu naming nothing, so the name has to leave with the value.
+        # Asked of the row AND of the control inside it, because a rule that
+        # named only one of the two would let the other survive its own switch.
+        # (Tags left the card face the same day, so the half of this contract
+        # that named `.card-tag` on the board is asserted as its absence
+        # instead — the switch must not be the reason.)
+        open_filters(page)
+        check("show: the tag filters start visible, and no card wears a tag",
+              page.locator("#board .card-tag").count() == 0
+              and page.locator("#board .card").count() > 0
+              and page.locator("#filter-row-tags").is_visible()
               and page.locator("#tag-bar").is_visible()
               and page.locator("#tag-filter").is_visible())
 
+        # Every toggle goes through the Menu, which dismisses the filter panel
+        # on its way past — so each verdict below opens it again first.
         toggled = menu_toggle("toggle-tags")
-        check("show: the Tags toggle hides both tag filters, never the chips",
+        open_filters(page)
+        check("show: the Tags toggle hides both tag filters and nothing else",
               toggled and body_has("hide-tags")
+              and not page.locator("#filter-row-tags").is_visible()
               and not page.locator("#tag-bar").is_visible()
               and not page.locator("#tag-filter").is_visible()
-              and page.locator("#board .card-tag").first.is_visible()
+              and page.locator("#board .card").first.is_visible()
               and page.get_attribute("#toggle-tags", "aria-pressed") == "true")
         check("show: the choice is stored under the lodestar: prefix",
               bool(page.evaluate("localStorage.getItem('lodestar:hideTags')")))
@@ -1212,43 +1258,58 @@ try:
         # Persistence: a reload must come back with the filters still hidden.
         page.reload()
         page.wait_for_selector(".card")
+        open_filters(page)
         check("show: the tag filters stay hidden across a reload",
               body_has("hide-tags")
+              and not page.locator("#filter-row-tags").is_visible()
               and not page.locator("#tag-filter").is_visible()
-              and page.locator("#board .card-tag").first.is_visible())
+              and page.locator("#board .card").first.is_visible())
 
         toggled_off = menu_toggle("toggle-tags")
+        open_filters(page)
         check("show: toggling Tags again brings the filters back",
               toggled_off and not body_has("hide-tags")
+              and page.locator("#filter-row-tags").is_visible()
               and page.locator("#tag-filter").is_visible()
               and page.locator("#tag-bar").is_visible()
               and page.get_attribute("#toggle-tags", "aria-pressed") == "false"
               and not page.evaluate("localStorage.getItem('lodestar:hideTags')"))
 
-        # Priorities and Types, same contract: the toggle hides the dropdown,
-        # the stamps on the cards stay exactly as they were.
-        check("show: priority and type stamps are on the cards to stay",
-              page.locator("#board .prio-badge").first.is_visible()
-              and page.locator("#board .card .badge").first.is_visible())
+        # Priorities and Types, same contract: the toggle hides the row, the
+        # stamps on the cards stay exactly as they were. Every card wears a
+        # type stamp, so that one is asked of the cards; the priority mark is
+        # P1's alone now, so it is asked of the filter and of whatever marks
+        # the board happens to be carrying.
+        prios_before = page.locator("#board .prio-badge").count()
+        check("show: type stamps are on the cards to stay",
+              page.locator("#board .card .badge").first.is_visible())
         toggled = menu_toggle("toggle-prios")
-        check("show: the Priorities toggle hides the priority filter, stamps stay",
+        open_filters(page)
+        check("show: the Priorities toggle hides the priority filter, marks stay",
               toggled and body_has("hide-prios")
+              and not page.locator("#filter-row-prio").is_visible()
               and not page.locator("#prio-filter").is_visible()
-              and page.locator("#board .prio-badge").first.is_visible()
+              and page.locator("#board .prio-badge").count() == prios_before
               and bool(page.evaluate("localStorage.getItem('lodestar:hidePrios')")))
         toggled_off = menu_toggle("toggle-prios")
+        open_filters(page)
         check("show: toggling Priorities again brings the filter back",
               toggled_off and not body_has("hide-prios")
+              and page.locator("#filter-row-prio").is_visible()
               and page.locator("#prio-filter").is_visible())
         toggled = menu_toggle("toggle-types")
+        open_filters(page)
         check("show: the Types toggle hides the type filter, stamps stay",
               toggled and body_has("hide-types")
+              and not page.locator("#filter-row-type").is_visible()
               and not page.locator("#type-filter").is_visible()
               and page.locator("#board .card .badge").first.is_visible()
               and bool(page.evaluate("localStorage.getItem('lodestar:hideTypes')")))
         toggled_off = menu_toggle("toggle-types")
+        open_filters(page)
         check("show: toggling Types again brings the filter back",
               toggled_off and not body_has("hide-types")
+              and page.locator("#filter-row-type").is_visible()
               and page.locator("#type-filter").is_visible())
 
         # The Done column, same contract: hide, persist the key, bring it back.
@@ -1337,25 +1398,77 @@ try:
         check("footer: the drag hint is one thin line (a third of what it was)",
               footer is not None and footer["height"] <= 16)
 
-        # ---- Filters live on the category rail --------------------------------
-        # This is an end-to-end test. The two filters left the top toolbar for
-        # the tab row, so every way of narrowing the board by a *property* sits
-        # in one place: the category tabs, then type and priority right after
-        # the last tab. Search is no longer among them — it moved down to the
-        # head of the Inbox, beside the control that makes a card, and the row
-        # must not keep a second copy of it.
+        # ---- Every filter but the life areas is behind one button -------------
+        # This is an end-to-end test. The header used to stand seven dropdowns,
+        # two date boxes, a read-back and a bar of every tag on the board before
+        # a single card was drawn — and five of those dropdowns were switched
+        # off, because a control at rest that says "All types" is a control
+        # whose whole visible state is a synonym for its own absence. Since
+        # 2026-09-13 the row carries the life areas and one `+ Filter`, and
+        # everything else is inside it. Nothing moved and nothing was renamed:
+        # the panel is *where* those controls are, not *what* they are, which is
+        # why every id this suite drives is still the id it was.
         rail_line = page.locator(".rail-row")
-        check("rail: categories and the property filters share one row",
+        # The seven that must be behind the button. The two date boxes and the
+        # read-back are deliberately not here: those are hidden by the range
+        # filter's own state as well, so they would prove nothing about this.
+        behind = ("#type-filter", "#prio-filter", "#tag-filter", "#column-filter",
+                  "#nesting-filter", "#range-field", "#range-preset")
+        check("rail: the category tabs and one `+ Filter` are the whole row",
               rail_line.count() == 1
               and rail_line.locator("#cat-rail").count() == 1
-              and rail_line.locator("#type-filter").count() == 1
-              and rail_line.locator("#prio-filter").count() == 1
-              and rail_line.locator("#tag-filter").count() == 1
+              and rail_line.locator("#filter-btn").count() == 1
+              and rail_line.locator("#filter-panel").count() == 1
               and rail_line.locator("#search").count() == 0
               and page.locator(".toolbar #search").count() == 0
               and page.locator(".toolbar #type-filter").count() == 0
               and page.locator(".toolbar #prio-filter").count() == 0
               and page.locator("#menu-panel #theme-select").count() == 1)
+        check("rail: at rest the panel is shut and not one filter is on screen",
+              page.locator("#filter-panel").is_hidden()
+              and page.get_attribute("#filter-btn", "aria-expanded") == "false"
+              and not any(page.locator(s).is_visible() for s in behind))
+
+        page.click("#filter-btn")
+        page.wait_for_selector("#filter-panel:not([hidden])")
+        check("rail: pressing it hands over every way of narrowing the board",
+              page.get_attribute("#filter-btn", "aria-expanded") == "true"
+              # #column-filter is the one absence, and the button is not what is
+              # hiding it: the Board IS the three columns, so that row is
+              # unpainted here whatever the panel says.
+              and all(page.locator(s).is_visible()
+                      for s in behind if s != "#column-filter")
+              and not page.locator("#column-filter").is_visible())
+
+        # Escape puts it away and hands the focus back, because a panel
+        # dismissed from the keyboard must not strand the caret on a control
+        # that is no longer on the screen.
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(100)
+        check("rail: Escape shuts the panel and returns the focus to the button",
+              page.locator("#filter-panel").is_hidden()
+              and page.evaluate("() => document.activeElement.id") == "filter-btn")
+
+        # A click inside the panel is USE — changing three filters must not mean
+        # three trips to the button — and a click anywhere else is a dismissal.
+        page.click("#filter-btn")
+        page.wait_for_selector("#filter-panel:not([hidden])")
+        page.select_option("#type-filter", "")
+        # And a real pointer press inside it, because select_option reaches the
+        # DOM without ever dispatching the click the dismissal listens for — a
+        # panel that only survives a scripted selection proves nothing about the
+        # hand that is actually in it. The panel's own 12px padding, so the
+        # press lands on the panel rather than on a control that would open a
+        # native dropdown over everything after this.
+        page.locator("#filter-panel").click(position={"x": 3, "y": 3})
+        page.wait_for_timeout(100)
+        survived_use = page.locator("#filter-panel").is_visible()
+        # The board's own top-left corner, which is 14x28px of its padding: a
+        # click there is a click on nothing, which is the point.
+        page.locator("#board").click(position={"x": 2, "y": 2})
+        page.wait_for_timeout(150)
+        check("rail: using a control keeps the panel, a click on the board shuts it",
+              survived_use and page.locator("#filter-panel").is_hidden())
         # The view switch is the page's centre of gravity, and the Menu shrank
         # to the same quiet ⚙ the Assistant's settings use — one look, two
         # contents, each on its own page.
@@ -1370,31 +1483,75 @@ try:
               and "assistant-extras-btn" in (page.get_attribute("#menu-btn", "class") or ""))
 
         last_tab_bb = page.locator("#cat-rail .cat-tab").last.bounding_box()
-        type_bb = page.locator("#type-filter").bounding_box()
-        prio_bb = page.locator("#prio-filter").bounding_box()
-        tag_bb = page.locator("#tag-filter").bounding_box()
-        row_bb = rail_line.bounding_box()
-        check("rail: type, priority and tags follow the last tab, on its line",
-              all(b is not None for b in (last_tab_bb, type_bb, prio_bb, tag_bb, row_bb))
-              and type_bb["x"] >= last_tab_bb["x"] + last_tab_bb["width"]
-              and prio_bb["x"] >= type_bb["x"] + type_bb["width"]
-              and tag_bb["x"] >= prio_bb["x"] + prio_bb["width"]
-              and abs(tag_bb["y"] - last_tab_bb["y"]) <= 24)
+        filter_bb = page.locator("#filter-btn").bounding_box()
+        check("rail: the button follows the last tab, on its line",
+              all(b is not None for b in (last_tab_bb, filter_bb))
+              and filter_bb["x"] >= last_tab_bb["x"] + last_tab_bb["width"]
+              and abs(filter_bb["y"] - last_tab_bb["y"]) <= 24)
 
-        # Everything on the rail shares the tabs' upper and lower edge — a
-        # control floating above or below the line reads as broken.
+        # Everything left on the rail shares the tabs' upper and lower edge — a
+        # control floating above or below the line reads as broken. Three
+        # things stand there now instead of five, and the panel is not one of
+        # them: it hangs below the rule rather than standing on it.
         def edges(sel):
             b = page.locator(sel).bounding_box()
             return (b["y"], b["y"] + b["height"]) if b else None
 
         tab_edges = edges("#cat-rail .cat-tab >> nth=1")  # a quiet, unpressed tab
-        offenders = [s for s in ("#edit-cats-btn", "#type-filter", "#prio-filter",
-                                 "#tag-filter")
+        offenders = [s for s in ("#edit-cats-btn", "#filter-btn")
                      if edges(s) is None or tab_edges is None
                      or abs(edges(s)[0] - tab_edges[0]) > 2
                      or abs(edges(s)[1] - tab_edges[1]) > 2]
         check(f"rail: every control shares the tabs' edges (off: {offenders})",
               tab_edges is not None and not offenders)
+
+        # ---- The row says what is in force, and otherwise says nothing --------
+        # This is an end-to-end test. A chip per filter actually narrowing the
+        # board, in the words of the option that set it — so a chip cannot drift
+        # from the menu row it came from — with an × that lifts it. The × is the
+        # one thing the control itself cannot offer: a dropdown put back to its
+        # default is a different gesture from a filter being taken off.
+        cards_unfiltered = page.locator("#board .card").count()
+        check("chips: a board nobody is narrowing wears no chip at all",
+              page.locator("#filter-chips .filter-chip").count() == 0
+              and page.locator("#clear-filters").count() == 0)
+
+        open_filters(page)
+        page.select_option("#type-filter", "problem")
+        page.wait_for_timeout(200)
+        problem_word = page.locator("#type-filter option[value='problem']").text_content().strip()
+        one_chip = page.locator("#filter-chips .filter-chip")
+        check("chips: one filter, one chip, in the option's own words",
+              one_chip.count() == 1
+              and one_chip.first.get_attribute("data-filter") == "type"
+              and problem_word in one_chip.first.inner_text()
+              # A `Clear` under a single chip is a second control for what the ×
+              # beside it already does, in a row whose whole point is emptiness.
+              and page.locator("#clear-filters").count() == 0)
+        one_chip.first.locator(".filter-chip-x").click()
+        page.wait_for_timeout(250)
+        check("chips: the × lifts the filter and puts its control back to default",
+              page.locator("#filter-chips .filter-chip").count() == 0
+              and page.input_value("#type-filter") == ""
+              and page.locator("#board .card").count() == cards_unfiltered)
+
+        open_filters(page)
+        page.select_option("#type-filter", "problem")
+        page.select_option("#nesting-filter", "all")
+        page.wait_for_timeout(250)
+        chip_keys = sorted(page.locator("#filter-chips .filter-chip")
+                           .evaluate_all("els => els.map(e => e.dataset.filter)"))
+        check("chips: two filters put up two chips and earn a Clear",
+              chip_keys == ["nesting", "type"]
+              and page.locator("#clear-filters").count() == 1)
+        page.click("#clear-filters")
+        page.wait_for_timeout(300)
+        check("chips: Clear takes both off and leaves the row empty again",
+              page.locator("#filter-chips .filter-chip").count() == 0
+              and page.locator("#clear-filters").count() == 0
+              and page.input_value("#type-filter") == ""
+              and page.input_value("#nesting-filter") == ""
+              and page.locator("#board .card").count() == cards_unfiltered)
 
         # ---- Capture and search are one row ---------------------------------
         # This is an end-to-end test. The control that makes a card and the box
@@ -1452,6 +1609,7 @@ try:
         # cards, and the empty option lets the whole board back.
         board_tags = sorted({t for c in api_state()["cards"]
                              for t in (c.get("tags") or [])})
+        open_filters(page)
         opt_text = " ".join(page.locator("#tag-filter option").all_text_contents())
         pick = board_tags[0] if board_tags else None
         if pick:
@@ -1466,6 +1624,8 @@ try:
         if pick:
             page.select_option("#tag-filter", "")
             page.wait_for_timeout(200)
+        page.keyboard.press("Escape")  # the panel hangs over the board below it
+        page.wait_for_timeout(100)
 
         # ---- Export ---------------------------------------------------------
         menu_click("#export-btn")
@@ -2047,19 +2207,28 @@ try:
         # card is a record rather than work — it is on the Board, in its own
         # column, and the column filter is how it is asked for back.
         n_open = page.locator('.column:not([data-col="answered"]) .card').count()
-        # A tag that is still on an open card, read off the board while the
-        # columns are on screen — the overview has none. The tag used below was
-        # hard-coded as "planning" and the drag-and-drop block earlier in this
-        # run files that very card in Done, so the map correctly showed nothing
-        # and a correct view failed its own test.
-        open_tag = page.evaluate("""() => {
-          for (const c of document.querySelectorAll(
-                 '.column:not([data-col=\"answered\"]) .card')) {
-            const chip = c.querySelector('.card-tag');
-            if (chip) return chip.textContent;
-          }
-          return null;
-        }""")
+        # A tag that is still on an open card. It was read off a chip on the
+        # card face until 2026-09-13, when the face stopped painting tags — a
+        # tag is how you find a card, not what you need once you have found it.
+        # So the tag bar is asked instead, by using it: the chip that leaves at
+        # least one open card standing is one an open card carries. (It was
+        # hard-coded as "planning" before that, and the drag-and-drop block
+        # earlier in this run files that very card in Done — a correct view
+        # failing its own test.)
+        open_tag = None
+        open_filters(page)
+        chips_here = page.locator("#tag-bar .tag-chip")
+        for i in range(chips_here.count()):
+            chip_i = chips_here.nth(i)
+            name_i = chip_i.inner_text().strip()
+            chip_i.click()
+            page.wait_for_timeout(90)
+            left = page.locator('.column:not([data-col="answered"]) .card').count()
+            chip_i.click()
+            page.wait_for_timeout(60)
+            if 0 < left < n_open:
+                open_tag = name_i
+                break
         page.locator('.view-switch button[data-view="overview"]').click()
         page.wait_for_selector("#board.overview .plot-dot")
         check("overview: one dot per open card, the finished ones left off",
@@ -2075,6 +2244,7 @@ try:
               page.locator(".plot-tip").is_visible()
               and page.locator(".plot-tip .plot-tip-title").inner_text() != "")
 
+        open_filters(page)
         tag_chip = next((c for c in page.locator(".tag-chip").all()
                          if c.inner_text().strip() == open_tag), None)
         tag_chip.click()
@@ -2086,6 +2256,7 @@ try:
         page.wait_for_selector("#board.board")
         check("overview: its tag filter matches the board's own filtering",
               page.locator('.column:not([data-col="answered"]) .card').count() == k)
+        open_filters(page)
         next(c for c in page.locator(".tag-chip").all()
              if c.inner_text().strip() == open_tag).click()  # clear the filter
         page.wait_for_timeout(60)
@@ -2141,20 +2312,24 @@ try:
         page.wait_for_selector("#board.board")
 
         # ---- Automatic priority label ---------------------------------------
-        # Priority is derived, never stored: 1 = urgent+important (red),
-        # 2 = urgent+unimportant (orange), 3 = not-urgent+important (green),
-        # 4 = neither (gray). Cards missing either judgement wear no label.
+        # Priority is derived, never stored: 1 = urgent+important, 2 =
+        # urgent+unimportant, 3 = not-urgent+important, 4 = neither, and a card
+        # missing either judgement is unjudged. Since 2026-09-13 the board card
+        # paints only P1, as a single `!`: the commonest thing printed at the
+        # top of a card was a coloured pill saying the card could wait, and
+        # P2–P4 are what the Matrix view — which is *about* that comparison —
+        # is for. The four `data-prio` inks and `priorityOf` are unchanged.
         # The matrix step above set "speculative decoding" to important + not
-        # urgent, so it must already wear the P3 badge.
+        # urgent, so it is a P3 and must wear nothing.
         spec_card = page.locator('.card', has_text="speculative decoding").first
-        check("priority: important + not urgent card wears the P3 badge",
-              spec_card.locator('.prio-badge[data-prio="3"]').count() == 1)
+        check("priority: important + not urgent card wears no mark on the board",
+              spec_card.locator('.prio-badge').count() == 0)
 
-        # Exactly the cards with both judgements set wear a badge — no more.
-        both_set = sum(1 for c in api_state()["cards"]
-                       if c.get("importance") and c.get("urgency"))
-        check("priority: badge appears exactly on cards with importance & urgency",
-              page.locator(".card .prio-badge").count() == both_set)
+        # Exactly the urgent-and-important cards wear the mark — no more.
+        p1_cards = sum(1 for c in api_state()["cards"]
+                       if c.get("importance") == "high" and c.get("urgency") == "high")
+        check("priority: the mark appears exactly on urgent + important cards",
+              page.locator(".card .prio-badge").count() == p1_cards)
 
         def set_judgements(title, importance, urgency, deadline=None):
             page.locator('.card', has_text=title).first.click()
@@ -2171,19 +2346,26 @@ try:
 
         # P1: flip the spec card to urgent + important.
         set_judgements("speculative decoding", "high", "high")
-        check("priority: urgent + important card wears the P1 badge",
-              page.locator('.card', has_text="speculative decoding")
-                  .first.locator('.prio-badge[data-prio="1"]').count() == 1)
+        p1_mark = page.locator('.card', has_text="speculative decoding") \
+                      .first.locator('.prio-badge[data-prio="1"]')
+        check("priority: urgent + important card wears the P1 mark",
+              p1_mark.count() == 1 and p1_mark.inner_text().strip() == "P1")
 
-        # P2: urgent but unimportant; P4: neither urgent nor important.
+        # P2: urgent but unimportant; P4: neither urgent nor important. Neither
+        # is a mark on the board — the judgements are still stored and still
+        # read by the Matrix, which is asserted above.
         set_judgements(probe_a, "low", "high", deadline="2026-12-31")
-        set_judgements(probe_b, "low", "low", deadline="2026-08-15")
-        check("priority: urgent + unimportant card wears the P2 badge",
+        # Deliberately the oldest deadline on the board: the summary-line block
+        # below reads the first item the overdue rule produces, and the rule
+        # sorts by how long a card has been late. Any date this run cannot beat
+        # would do; this one says what it is for.
+        set_judgements(probe_b, "low", "low", deadline="2015-01-15")
+        check("priority: urgent + unimportant card wears no mark on the board",
               page.locator('.card', has_text=probe_a)
-                  .first.locator('.prio-badge[data-prio="2"]').count() == 1)
-        check("priority: unimportant + not urgent card wears the P4 badge",
+                  .first.locator('.prio-badge').count() == 0)
+        check("priority: unimportant + not urgent card wears no mark on the board",
               page.locator('.card', has_text=probe_b)
-                  .first.locator('.prio-badge[data-prio="4"]').count() == 1)
+                  .first.locator('.prio-badge').count() == 0)
 
         # ---- Deadline field --------------------------------------------------
         page.locator('.card', has_text=probe_a).first.click()
@@ -2233,11 +2415,16 @@ try:
               ranks == sorted(ranks) and len(ranks) == len(inbox_titles))
 
         # ---- Priority filter --------------------------------------------------
-        # Lives in the toolbar right beside the type filter; narrows every view.
-        check("filter: priority select sits beside the type filter",
-              page.evaluate("document.querySelector('#prio-filter')"
-                            "?.previousElementSibling?.id === 'type-filter'"))
+        # Inside `+ Filter`, and the first two rows of it: Type then Priority,
+        # the two that read the card's own stamp, together at the top. They were
+        # siblings on one line until 2026-09-13; each is a labelled row of its
+        # own now, so the neighbourhood is asked of the rows and not of the
+        # selects — which are no longer siblings of anything but their label.
+        check("filter: the Priority row follows the Type row in the panel",
+              page.evaluate("document.querySelector('#filter-row-prio')"
+                            "?.previousElementSibling?.id === 'filter-row-type'"))
         p2_expected = sum(1 for c in all_cards if prio_rank(c) == 2)
+        open_filters(page)
         page.select_option("#prio-filter", "2")
         page.wait_for_timeout(100)
         check("filter: P2 narrows the board to urgent+unimportant cards",
@@ -2247,6 +2434,65 @@ try:
         page.wait_for_timeout(100)
         check("filter: clearing the priority filter restores the board",
               page.locator(".card").count() == len(all_cards))
+
+        # ---- The board's summary line ---------------------------------------
+        # js/core/direction.js has ranked the board by five rules in a fixed
+        # order since 2026-09-10 — overdue, a habit behind its cadence, due
+        # soon, a hand-set plan naming now, a neglected life area — and it ran
+        # in exactly one place: inside the Assistant widget, behind a pill in
+        # the corner. Since 2026-09-13 its reading is at the head of the Board,
+        # which is what pays for the card having stopped shouting: the filters
+        # existed so the board could be hunted through for what needs doing.
+        page.locator('.view-switch button[data-view="board"]').click()
+        page.wait_for_selector("#board.board")
+        page.wait_for_timeout(120)
+
+        line = page.locator("#direction-slot .board-direction")
+        first_item = line.locator(".board-direction-item").first
+        probe_b_num = page.locator('.card', has_text=probe_b).first \
+                          .locator(".card-num").inner_text().strip()
+        check("direction: the board says what it is asking for, above the columns",
+              line.count() == 1 and line.is_visible()
+              and line.bounding_box()["y"] < page.locator("#board").bounding_box()["y"])
+        check("direction: the first item names the board's oldest overdue card",
+              first_item.get_attribute("data-rule") == "overdue"
+              and first_item.locator(".board-direction-num").inner_text().strip() == probe_b_num
+              and first_item.locator(".board-direction-reason")
+                            .inner_text().strip().startswith("overdue by "))
+        # A reason nobody can act on from where they are reading it is a notice
+        # rather than direction, so each item opens the card it names.
+        first_item.click()
+        page.wait_for_selector("#card-dialog[open]")
+        check("direction: pressing an item opens the card it names",
+              page.input_value("#card-title") == probe_b)
+        page.click("#cancel-dialog")
+        page.wait_for_timeout(100)
+
+        # ---- The card face: four things -------------------------------------
+        # The words, the coloured spine, one quiet line of marks, and the +.
+        # Ten painted elements went to four: the type's word to a tooltip, P2-P4
+        # to the Matrix, the category's name to the spine already drawing it,
+        # every tag to the dialog and the tag filters, and the raw deadline to
+        # the reading of it.
+        face = page.locator('.card', has_text=probe_b).first
+        shape = face.evaluate("""el => ({
+          children: [...el.children].map(c => c.className.split(' ')[0]),
+          lines: el.querySelectorAll('.card-line').length,
+          marks: [...el.querySelectorAll('.card-line > *')]
+                   .map(c => c.className.split(' ')[0]),
+          gone: ['.card-top', '.card-tags', '.card-cat', '.card-tag']
+                  .filter(sel => el.querySelector(sel)),
+        })""")
+        check("card: the words come first and everything else is one line",
+              shape["children"][0] == "card-title" and shape["lines"] == 1)
+        allowed = {"badge", "prio-badge", "card-deadline", "card-plan",
+                   "notes-dot", "card-num", "card-menu"}
+        check("card: the face carries the stamp, the reading, the number and the +",
+              shape["marks"][0] == "badge" and shape["marks"][-1] == "card-menu"
+              and "card-deadline" in shape["marks"] and "card-num" in shape["marks"]
+              and set(shape["marks"]) <= allowed)
+        check("card: nothing is left of the header row, the chips or the tags",
+              shape["gone"] == [])
 
         # ---- Import: schema dialog -----------------------------------------
         menu_click("#import-btn")
@@ -2611,7 +2857,8 @@ try:
         check("new card: one added inside an open drawer stays visible",
               page.locator(".card").count() == love_before + 1 and marker.count() == 1)
         check("new card: it inherits the drawer's category",
-              marker.first.locator(".card-cat").inner_text() == "Love")
+              "Love" in marker.first.get_attribute("aria-label")
+              and marker.first.evaluate("el => el.classList.contains('categorized')"))
         page.locator(".cat-tab-all").click()
         page.wait_for_timeout(100)
 
@@ -3744,22 +3991,23 @@ try:
         page.keyboard.press("Escape")
 
         # This is an end-to-end test.
-        # The board's search, filters, category tabs, tag bar and ⚙ Menu filter
-        # and act on cards, and the footer explains dragging cards and the keys
-        # that move them. None of it reaches the Assistant, so around a
-        # conversation they are furniture that does nothing — the Menu (and the
-        # theme select inside it) belongs to the board and leaves with it.
+        # The board's search, filters, category tabs and ⚙ Menu filter and act
+        # on cards, and the footer explains dragging cards and the keys that
+        # move them. None of it reaches the Assistant, so around a conversation
+        # they are furniture that does nothing — the Menu (and the theme select
+        # inside it) belongs to the board and leaves with it. Since 2026-09-13
+        # the whole rail row goes at once, `+ Filter` included, which is why the
+        # button is what is asked for: a hidden panel would answer "not visible"
+        # on the Board too, and prove nothing about the view.
         hidden_here = (not page.locator("#search").is_visible()
-                       and not page.locator("#type-filter").is_visible()
-                       and not page.locator("#prio-filter").is_visible()
+                       and not page.locator("#filter-btn").is_visible()
                        and not page.locator("#menu-btn").is_visible()
                        and not page.locator("#cat-rail").is_visible()
-                       and not page.locator("#tag-bar").is_visible()
                        and not page.locator(".app-footer").is_visible())
         page.locator('.view-switch button[data-view="board"]').click()
         page.wait_for_selector(".board .column")
         back_on_board = (page.locator("#search").is_visible()
-                         and page.locator("#type-filter").is_visible()
+                         and page.locator("#filter-btn").is_visible()
                          and page.locator("#menu-btn").is_visible()
                          and page.locator("#cat-rail").is_visible()
                          and page.locator(".app-footer").is_visible())
@@ -5582,11 +5830,13 @@ try:
         # That is the accepted cost of the rail being the habit's one home, and
         # it is why the rail keeps the retired ones rather than leaving a card
         # reachable only from here.
+        open_filters(page)
         page.select_option("#type-filter", "habit")
         page.wait_for_timeout(200)
         board_cards = page.locator(".card").count()
         page.locator('.view-switch button[data-view="backlog"]').click()
         page.wait_for_selector("#board")
+        open_filters(page)
         page.select_option("#column-filter", "all")
         page.wait_for_timeout(200)
         rows = page.locator(".backlog-row")
@@ -6170,12 +6420,13 @@ try:
                            has_text="DONE-probe finished").count() == 1)
 
         col_filter = page.locator("#column-filter")
-        check("columns: the filter joins the other three on the rail row",
+        check("columns: the filter is a labelled row of the filter panel",
               col_filter.count() == 1
-              and page.locator(".rail-filters #column-filter").count() == 1
+              and page.locator("#filter-row-column #column-filter").count() == 1
               and [o.strip() for o in col_filter.locator("option").all_inner_texts()]
               == ["Open cards", "Inbox", "In Progress", "Done", "All columns"]
-              # Inert on the Board, and therefore not painted there either.
+              # Inert on the Board, and therefore not painted there either —
+              # which is why opening the panel here would not reveal it.
               and not col_filter.is_visible())
 
         page.locator('.view-switch button[data-view="overview"]').click()
@@ -6183,6 +6434,7 @@ try:
         page.wait_for_timeout(300)
         dot_titles = """() => [...document.querySelectorAll('.plot-dot')]
             .map(d => d.getAttribute('aria-label'))"""
+        open_filters(page)
         check("columns: a Done card is off the map, and the filter is offered here",
               not any("DONE-probe finished" in t for t in page.evaluate(dot_titles))
               and col_filter.is_visible())
@@ -6225,21 +6477,24 @@ try:
         # nobody can explain.
         page.locator('.view-switch button[data-view="overview"]').click()
         page.wait_for_selector("#board.overview .plot-dot")
+        open_filters(page)
         page.select_option("#column-filter", "answered")
         page.wait_for_timeout(250)
-        page.click("#menu-btn")
-        page.hover("#menu-show")
-        page.wait_for_selector("#toggle-columns")
-        page.click("#toggle-columns")
+        # Through the Menu, which dismisses the filter panel on its way past —
+        # so the verdict has to open it again, or "not visible" would be true of
+        # every row in a panel nobody has opened and would prove nothing.
+        menu_toggle("toggle-columns")
         page.wait_for_timeout(250)
-        hidden_filter = (not col_filter.is_visible()
+        open_filters(page)
+        hidden_filter = (not page.locator("#filter-row-column").is_visible()
+                         and not col_filter.is_visible()
                          and page.get_attribute("#toggle-columns", "aria-pressed") == "true")
         showing_all = page.evaluate(dot_titles)
-        page.click("#toggle-columns")
+        menu_toggle("toggle-columns")
         page.wait_for_timeout(250)
-        page.keyboard.press("Escape")
         check("columns: the Menu hides the filter, and hiding it stops it filtering",
               hidden_filter and any("DONE-probe finished" in t for t in showing_all))
+        open_filters(page)
         page.select_option("#column-filter", "")
         page.wait_for_timeout(200)
         page.locator('.view-switch button[data-view="board"]').click()
@@ -6256,6 +6511,7 @@ try:
         titles_on = lambda sel: sorted(
             t.strip() for t in page.locator(sel).all_inner_texts())
 
+        open_filters(page)
         page.select_option("#range-preset", "week")
         page.wait_for_timeout(250)
         # Against the Inbox column on both sides, which is the register the
@@ -6276,6 +6532,7 @@ try:
         check("range: the Board and the Backlog narrow to the same cards",
               board_inbox and backlog_now
               and backlog_now - rail_habits == board_inbox - rail_habits)
+        open_filters(page)
         check("range: the read-back states the span in words",
               page.locator("#range-readback").is_visible()
               and page.locator("#range-readback").inner_text().strip()
@@ -6306,6 +6563,7 @@ try:
         page.reload()
         page.wait_for_selector("#board.backlog")
         page.wait_for_timeout(300)
+        open_filters(page)
         check("range: a span survives a reload, in the controls and in force",
               page.input_value("#range-field") == "done"
               and page.input_value("#range-preset") == "week"
@@ -6343,6 +6601,7 @@ try:
         page.wait_for_timeout(150)
         done_col = page.locator('.column[data-col="answered"]')
         hidden_before = not done_col.is_visible()
+        open_filters(page)
         page.select_option("#range-field", "done")
         page.select_option("#range-preset", "week")
         page.wait_for_timeout(300)
@@ -6602,10 +6861,13 @@ try:
         # This is an end-to-end test. The default is parents only, on every view
         # including the Board — a child listed beside its parent is one piece of
         # work counted twice, and it is already shown inside its parent.
+        open_filters(page)
         check("nest: parents only is the default, and a child has no row of its own",
               titled("NEST-probe book the hut").count() == 0
               and page.locator("#nesting-filter").input_value() == ""
               and page.locator("#nesting-filter").is_visible())
+        page.keyboard.press("Escape")  # the panel hangs over the cards below it
+        page.wait_for_timeout(100)
 
         open_kids()
         rows = lambda: fold().locator(".child-row")
@@ -6663,6 +6925,7 @@ try:
 
         # This is an end-to-end test. The scope control is one choice, and it
         # reaches the plotted views as well as the Board.
+        open_filters(page)
         page.select_option("#nesting-filter", "all")
         page.wait_for_timeout(200)
         check("nest: parents and children shows the child a row of its own",
@@ -6671,6 +6934,7 @@ try:
         page.wait_for_selector("#board.matrix .matrix-grid")
         page.wait_for_timeout(200)
         both = page.locator(".plot-dot").count()
+        open_filters(page)
         page.select_option("#nesting-filter", "")
         page.wait_for_timeout(250)
         parents_only = page.locator(".plot-dot").count()
@@ -6695,8 +6959,11 @@ try:
 
         # This is an end-to-end test. Detaching is part of the save, so one
         # Cancel undoes it and one Save records it as this card's edit.
+        open_filters(page)
         page.select_option("#nesting-filter", "all")
         page.wait_for_timeout(200)
+        page.keyboard.press("Escape")  # the panel hangs over the cards below it
+        page.wait_for_timeout(100)
         titled("NEST-probe book the hut").first.click()
         page.wait_for_selector("#card-dialog[open]")
         page.click("#card-parent-detach")
@@ -6721,8 +6988,11 @@ try:
               and detach[0].startswith("Edited")
               and "NEST-probe book the hut" in detach[0]
               and "NEST-probe book the hut" not in detach[1])
+        open_filters(page)
         page.select_option("#nesting-filter", "")
         page.wait_for_timeout(200)
+        page.keyboard.press("Escape")  # the panel hangs over the cards below it
+        page.wait_for_timeout(100)
 
         # This is an end-to-end test. No cascade: a child has its own ledger
         # number and its own history, and burying it inside another card's Trash
@@ -7678,6 +7948,128 @@ try:
         # this count is unchanged by the turns as well as by the reads.)
         check("trace: reading traces changed no card",
               len(api_state()["cards"]) == cards_before_trace)
+
+        # ---- The board on a phone ---------------------------------------------
+        # This is an end-to-end test. The board is reached from a phone as well
+        # as from a laptop, and a 390 x 844 window is the size that decides
+        # whether it is usable there at all. Its own context: a viewport this
+        # narrow, with touch, must not leak into the run that follows.
+        #
+        # Four properties, each one a way the phone was unusable before. The
+        # page must not scroll sideways — a page that does drags the header,
+        # the rail and the columns out from under the thumb at once. Every view
+        # must be reachable, which the seven tabs on one unwrapped line were
+        # not: Review and Assistant simply ran off the right of the window. The
+        # cards have to start inside the first screenful, where ~1150px of
+        # brand, tabs, category rail and filters used to stand in front of them
+        # on an 844px screen. And a text control under 16px makes iOS Safari
+        # zoom the page on focus and never zoom back, which is invisible in
+        # Chromium and has to be asserted as the number it is.
+        phone = browser.new_context(viewport={"width": 390, "height": 844},
+                                    device_scale_factor=3, has_touch=True)
+        authenticate(phone)
+        phone.add_init_script("window.QBOARD_DISABLE_SEMANTIC = true;")
+        ph = phone.new_page()
+        ph.goto(URL)
+        ph.wait_for_selector(".card")
+
+        PHONE_VIEWS = ["board", "backlog", "overview", "matrix",
+                       "areas", "review", "assistant"]
+        reached, sideways = {}, {}
+        for v in PHONE_VIEWS:
+            tab = ph.locator(f'.view-switch button[data-view="{v}"]')
+            try:
+                # A real tap, with its own short deadline: a tab that cannot be
+                # brought under a thumb must fail this check rather than abort
+                # the suite on a 30s timeout.
+                tab.click(timeout=3000)
+                ph.wait_for_timeout(250)
+                reached[v] = tab.get_attribute("aria-pressed") == "true"
+            except Exception:
+                reached[v] = False
+            sideways[v] = ph.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth")
+        check(f"phone: every view is reachable from the switch "
+              f"({[v for v, ok in reached.items() if not ok]} were not)",
+              all(reached.values()))
+        check(f"phone: no view scrolls the page sideways "
+              f"({ {v: px for v, px in sideways.items() if px > 1} })",
+              all(px <= 1 for px in sideways.values()))
+
+        ph.locator('.view-switch button[data-view="board"]').click(timeout=3000)
+        ph.wait_for_timeout(250)
+        ph.screenshot(path=shot("board-phone.png"))
+        board_top = ph.evaluate(
+            "() => Math.round(document.getElementById('board').getBoundingClientRect().top)")
+        check(f"phone: the cards start inside the first screenful "
+              f"(board top {board_top} of 844)", board_top <= 360)
+
+        # Only the controls a person types or picks into: a radio or a checkbox
+        # inherits a font size and triggers no zoom.
+        smallest = ph.evaluate("""() => {
+          const sel = 'input:not([type=radio]):not([type=checkbox]):not([type=range])'
+                    + ':not([type=color]):not([type=hidden]), select, textarea';
+          let min = 99, who = '';
+          for (const el of document.querySelectorAll(sel)) {
+            const r = el.getBoundingClientRect();
+            if (!r.width || !r.height) continue;
+            const fs = parseFloat(getComputedStyle(el).fontSize);
+            if (fs < min) { min = fs; who = el.id || el.className || el.tagName; }
+          }
+          return { min, who };
+        }""")
+        check(f"phone: a form control is never under 16px, so iOS cannot zoom "
+              f"the page on focus (smallest {smallest['min']}px, {smallest['who']})",
+              smallest["min"] >= 16)
+
+        # 40px, not the 24-27px these stood at: the ledger's controls were sized
+        # for a pointer. Every one of them is on the way to a card.
+        cramped = ph.evaluate("""() => {
+          const sel = '.view-switch button, .cat-tab, .filter-btn,'
+                    + ' #menu-btn, #board-select, #new-card-btn, .card-menu-btn';
+          const out = [];
+          for (const el of document.querySelectorAll(sel)) {
+            const r = el.getBoundingClientRect();
+            if (!r.width || !r.height) continue;
+            if (r.height < 40 || r.width < 40)
+              out.push((el.id || el.className) + ' '
+                       + Math.round(r.width) + 'x' + Math.round(r.height));
+          }
+          return out;
+        }""")
+        check(f"phone: the controls on the way to a card clear 40px ({cramped})",
+              not cramped)
+
+        # Added to the home screen it runs in its own window, which is the one
+        # thing that gets the browser's address bar off a board already short of
+        # height. Everything it needs is behind the session like the rest of the
+        # static app — installing is done from the board, which only a logged-in
+        # browser ever sees — so the icons are fetched through the page rather
+        # than by urllib, and a 401 or a 404 here is an icon that silently
+        # becomes a screenshot of the page on the home screen.
+        install = ph.evaluate("""() => {
+          const link = document.querySelector('link[rel=manifest]');
+          const apple = document.querySelector('link[rel="apple-touch-icon"]');
+          if (!link || !apple) return { ok: false, why: 'no link tag' };
+          return fetch(link.href, { credentials: 'include' })
+            .then((r) => r.ok ? r.json() : Promise.reject(`manifest ${r.status}`))
+            .then(async (m) => {
+              const wanted = [apple.getAttribute('href'),
+                              ...m.icons.map((i) => i.src)];
+              const codes = await Promise.all(wanted.map((u) =>
+                fetch(u, { credentials: 'include' }).then((r) => `${u} ${r.status}`)));
+              return { ok: true, display: m.display, name: m.name,
+                       icons: m.icons.length, codes };
+            })
+            .catch((why) => ({ ok: false, why: String(why) }));
+        }""")
+        check(f"phone: it installs to the home screen as Lodestar, with the nova "
+              f"({install})",
+              install.get("ok") and install.get("display") == "standalone"
+              and install.get("name") == "Lodestar"
+              and install.get("icons") >= 2
+              and all(c.endswith(" 200") for c in install.get("codes", [])))
+        phone.close()
 
         # ---- The reminder fires from the background ---------------------------
         # This is an end-to-end test. A habit slot arriving while the page
