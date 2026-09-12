@@ -546,6 +546,31 @@ test('the composed board binds every interface inside its own namespace', () => 
   assert.match(block, /AGENT_URL: http:\/\/brain:9000/);
 });
 
+// The one name a device that is not this machine may use. It is a name and a
+// port rather than an address because `tailscale serve` terminates HTTPS on
+// the tailnet and then dials the loopback port this stack already publishes:
+// the board gains no listener of its own, no published mapping and no
+// plaintext hop, and the boundary stays where the rest of this file puts it.
+// The Host header survives that proxy intact — name AND port — and the
+// allowlist is exact-match, so without this whole string a request from the
+// phone is a 403 before a row is read.
+const TAILNET_HOST = 'mohas-macbook-pro.tailf01a94.ts.net:8443';
+
+// This is a configuration invariant. The home-network exception above is
+// documented as leaving the day Tailscale reaches everybody who needs the
+// board (docs/security.md, "Where this ends"), and that edit rewrites this very
+// line — so the entry the phone depends on is pinned here rather than trusted
+// to survive an edit aimed at its neighbours.
+test('the composed board admits the tailnet name it is served under', () => {
+  const block = serviceBlock('lodestar');
+  const hosts = block.match(/LODESTAR_ALLOWED_HOSTS: (.+)/);
+  assert.ok(hosts, 'the composed board must set a Host allowlist');
+  const named = hosts[1].split(',').map((h) => h.trim());
+  assert.ok(named.includes(TAILNET_HOST),
+    `"${TAILNET_HOST}" is what a browser on the tailnet sends as Host, and the `
+      + `allowlist is exact-match — found [${named.join(', ')}]`);
+});
+
 // This is a configuration invariant.
 test('the composed stack supplies no password of its own, in either form', () => {
   const block = serviceBlock('lodestar');
