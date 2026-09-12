@@ -192,11 +192,14 @@ Four things this costs, all of them chosen rather than discovered:
   home, nobody else can reach the board at all — not an outage, just what a
   service hosted on somebody's laptop is.
 
-**Where this ends.** The private network below gives a stable name, a real
-certificate and end-to-end encryption, and it terminates at the same loopback
-service, so the boundary shrinks back to loopback plus one name. When that path
-is confirmed working for everybody who needs the board, the named mapping, its
-two allowlist entries and the guard's exception are all removed together.
+**Where this ends, and how far it has got.** The private network below gives a
+stable name, a real certificate and end-to-end encryption, and it terminates at
+the same loopback service, so the boundary shrinks back to loopback plus one
+name. It is **live since 2026-09-12** and is how the owner's own phone reaches
+the board. The mapping above nevertheless stays, because the second person's
+device is not on the tailnet and this section is about her: the day it is, the
+named mapping, its two allowlist entries and the guard's exception are removed
+together, and the plain-HTTP hop described here goes with them.
 
 ## Reaching your board from another device
 
@@ -205,19 +208,52 @@ device part of this machine's loopback, and log in as usual.** Two ways — and
 the first of them is where the arrangement above is heading, not an alternative
 to it.
 
-### A private network (Tailscale, WireGuard)
+### A private network (Tailscale) — in use since 2026-09-12
 
-Install [Tailscale](https://tailscale.com/) (or plain WireGuard) on the laptop
-and on the phone or second computer. Then forward the loopback port over it —
-with Tailscale, one command on the laptop:
+Install [Tailscale](https://tailscale.com/) on the laptop and on the phone, and
+sign both into the same tailnet. Then, on the laptop:
 
 ```sh
-tailscale serve --bg 3000
+tailscale serve --bg --https=8443 http://127.0.0.1:3000
 ```
 
-The board is then reachable at the machine's name on your tailnet, from your
-devices only, and Tailscale terminates the connection locally and dials
-`127.0.0.1:3000` itself. Lodestar still asks for the password.
+Tailscale now answers for `https://<machine>.<tailnet>.ts.net:8443`, from your
+own devices only. It terminates TLS on this machine with a real certificate and
+dials `127.0.0.1:3000` itself, so **no port is published to any network**,
+`LODESTAR_BIND` is untouched, and as far as the board is concerned the request
+arrived on its own loopback. Lodestar still asks for the password.
+
+**The step that command does not do, and the board answers 403 without it.** The
+`Host` header survives the proxy intact — the tailnet name *and* the port — and
+the allowlist above is exact-match by design. So the name has to be added to
+`LODESTAR_ALLOWED_HOSTS` in `docker-compose.yml`, and the board restarted:
+
+```yaml
+LODESTAR_ALLOWED_HOSTS: lodestar:3000,…,mohas-macbook-pro.tailf01a94.ts.net:8443
+```
+
+```sh
+docker compose up -d lodestar
+```
+
+Until that entry exists every request from the phone is refused before a row is
+read, and the refusal reads like the board being down rather than like a rule
+being obeyed. `tests/compose.test.js` pins the entry, so an edit aimed at the
+allowlist's other names cannot take it along.
+
+**Why port 8443.** Port 443 on this tailnet already belongs to another service on
+this machine. Any free port works and the certificate is the same one.
+
+**Two things it is worth beyond reach.** The certificate makes the page a *secure
+context*, which is the only condition under which a browser hands a site the
+microphone — so voice input works on the phone, and over the plain-HTTP home
+route it cannot. And the encryption is the tunnel's own, so unlike WPA2 Personal
+it does not rest on a key every device in the building already holds.
+
+**What it does not change.** One password is still one whole board: whoever logs
+in sees every board and every card, and may edit or delete any of it. The laptop
+must be awake and the phone's Tailscale switch on — that is what a service
+hosted on somebody's laptop is, not an outage.
 
 ### An SSH tunnel
 
