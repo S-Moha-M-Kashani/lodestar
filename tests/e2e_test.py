@@ -684,20 +684,30 @@ try:
               len(api_state().get("cards", [])) == 6)
 
         # ---- Actions menu ----------------------------------------------------
-        # This is an end-to-end test. One Menu ▾ holds everything that is not
-        # a filter: the board's own actions (the ⋯ that hung beside the board
-        # name is gone), History, Export/Import, a hover-out Show submenu for
-        # what is painted on the cards, the habit sound and the theme. Undo
-        # left the menu — History is the way back.
+        # This is an end-to-end test. One Menu ▾ holds eight one-shot rows
+        # now: the board's own actions (the ⋯ that hung beside the board name
+        # is gone), History, Export/Import, Remove duplicates, and a
+        # Settings… row. Every standing preference — theme, Plan layout, habit
+        # chime, which filter controls show — moved into its own dialog on
+        # 2026-09-13 (checked below, beside `menu_toggle`), so there is no
+        # hover flyout left in the board's menu at all. Undo left the menu
+        # earlier — History is the way back.
         check("menu: panel starts closed", page.locator("#menu-panel").is_hidden())
         page.click("#menu-btn")
-        check("menu: one panel holds board actions, history, data and display",
+        check("menu: eight one-shot rows, grouped by separators, no flyout left",
               page.locator("#menu-panel").is_visible()
+              and page.locator("#menu-panel > .menu-item").count() == 8
+              and page.locator("#menu-panel > .menu-sep").count() == 2
               and all(page.locator(f"#menu-panel #{i}").count() == 1
                       for i in ("board-new", "board-rename", "board-delete",
                                 "history-btn", "export-btn", "import-btn",
-                                "menu-show", "habit-mute", "menu-sound",
-                                "theme-select")))
+                                "dedupe-btn", "settings-btn"))
+              and all(page.locator(f"#{i}").count() == 0
+                      for i in ("menu-show", "show-panel", "menu-sound",
+                                "sound-panel", "menu-plan", "plan-panel"))
+              and page.evaluate(
+                  "() => { const items = [...document.querySelectorAll('#menu-panel .menu-item')];"
+                  " return items[items.length - 1].id === 'settings-btn'; }"))
         check("menu: Undo left the menu — History is the way back",
               page.locator("#menu-panel #undo-btn").count() == 0)
         check("menu: the ⋯ beside the board name is gone, the picker stays",
@@ -1113,99 +1123,68 @@ try:
         def body_has(cls):
             return page.evaluate("c => document.body.classList.contains(c)", cls)
 
+        check("menu: card numbers have no Menu item",
+              page.locator("#menu-panel #toggle-card-nums").count() == 0)
+
+        # ---- Settings dialog --------------------------------------------------
+        # Every preference that used to live behind a hover flyout in the Menu
+        # — theme, Plan layout, habit chime, which filter controls show —
+        # moved into its own `#settings-dialog` on 2026-09-13. Every moved
+        # control kept its id, its classes and its listener: the dialog is
+        # where these controls are, not what they are. The failure mode this
+        # move could actually have is a control duplicated rather than moved,
+        # so the loop below checks the 13 ids appear exactly once in the whole
+        # document and every one of them inside the dialog, rather than one
+        # assertion per control.
+        MOVED_TO_SETTINGS = ("theme-select", "plan-stacked", "plan-dropdown",
+                              "habit-mute", "sound-marimba", "sound-bell",
+                              "sound-droplet", "sound-kalimba", "toggle-tags",
+                              "toggle-prios", "toggle-types", "toggle-columns",
+                              "toggle-done-col")
+
+        def open_settings():
+            """Reach the Settings dialog through the Menu's own row — a no-op
+            when it is already open, the `open_filters` lesson."""
+            if page.locator("#settings-dialog").get_attribute("open") is None:
+                if page.locator("#menu-panel").is_hidden():
+                    page.click("#menu-btn")
+                page.click("#settings-btn")
+                page.wait_for_selector("#settings-dialog[open]")
+
+        def close_settings():
+            if page.locator("#settings-dialog").get_attribute("open") is not None:
+                page.click("#close-settings")
+                page.wait_for_selector("#settings-dialog[open]", state="hidden")
+
+        check("settings: every moved id lives inside the dialog, exactly once",
+              all(page.locator(f"#{i}").count() == 1
+                  and page.locator(f"#settings-dialog #{i}").count() == 1
+                  for i in MOVED_TO_SETTINGS))
+        check("settings: closed at rest",
+              page.locator("#settings-dialog").get_attribute("open") is None)
+        open_settings()
+        check("settings: the Settings… row opens the dialog",
+              page.locator("#settings-dialog").get_attribute("open") is not None)
+        close_settings()
+        check("settings: Done closes it",
+              page.locator("#settings-dialog").get_attribute("open") is None)
+        open_settings()
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(50)
+        check("settings: Escape closes it too",
+              page.locator("#settings-dialog").get_attribute("open") is None)
+        close_settings()  # a no-op if Escape already closed it
+
         def menu_toggle(btn_id):
-            """Reach a Show toggle through the hover submenu; report presence."""
-            page.keyboard.press("Escape")  # the panel must start closed
-            page.wait_for_timeout(50)
-            page.click("#menu-btn")
-            page.hover("#menu-show")
-            page.wait_for_timeout(150)
-            btn = page.locator(f"#show-panel #{btn_id}")
+            """Reach a Show toggle through the Settings dialog; report presence."""
+            open_settings()
+            btn = page.locator(f"#settings-dialog #{btn_id}")
             present = btn.count() == 1 and btn.is_visible()
             if present:
                 btn.click()
                 page.wait_for_timeout(100)
-            page.keyboard.press("Escape")  # a toggle may leave the panel open
-            page.wait_for_timeout(50)
+            close_settings()
             return present
-
-        # The four card-paint toggles live behind one hover-out "Show"
-        # submenu (the standard name for appear/disappear controls): Tags,
-        # Priorities, Types, Done column. They appear on hover and are not in
-        # the way otherwise.
-        page.click("#menu-btn")
-        check("menu: card numbers left the Menu; Show holds the paint toggles",
-              page.locator("#menu-panel #toggle-card-nums").count() == 0
-              and page.locator("#menu-panel #menu-show").count() == 1
-              and page.locator("#show-panel").is_hidden())
-        page.hover("#menu-show")
-        page.wait_for_timeout(150)
-        check("menu: hovering Show unfolds the Filters group and Done column",
-              page.locator("#show-panel").is_visible()
-              and all(page.locator(f"#show-panel #{i}").count() == 1
-                      for i in ("toggle-tags", "toggle-prios",
-                                "toggle-types", "toggle-done-col"))
-              # text_content, not inner_text: the label renders uppercase via
-              # CSS text-transform, and inner_text reports the rendered text.
-              and page.locator("#show-panel .menu-label").first.text_content().strip()
-                  == "Filters"
-              and page.get_attribute("#toggle-tags", "aria-pressed") == "false"
-              and page.get_attribute("#toggle-done-col", "aria-pressed") == "false")
-        # The Menu reads as groups — board, act/data, display — split by
-        # visible separators rather than one undifferentiated list, with the
-        # display controls last.
-        check("menu: the panel is grouped by separators, display controls last",
-              page.locator("#menu-panel .menu-sep").count() >= 2
-              and page.evaluate(
-                  "() => { const items = [...document.querySelectorAll('#menu-panel .menu-item')];"
-                  " return items.indexOf(document.querySelector('#menu-show'))"
-                  " > items.indexOf(document.querySelector('#export-btn')); }"))
-        page.keyboard.press("Escape")
-        page.wait_for_timeout(50)
-
-        # This is an end-to-end test.
-        # A hand reaches a flyout by DRAGGING the pointer across the space
-        # between the button and the panel; page.hover() teleports onto the
-        # target and so never touches that space, which is why every check
-        # above passes while the feature is unusable with a mouse. The panel
-        # sits 8px to the LEFT of its button, and those 8px belong to neither
-        # the button nor the panel: crossing them fires mouseleave on the
-        # wrapper, the panel is hidden, and the pointer arrives where it used
-        # to be. So the walk is asserted, not the destination — halfway across
-        # the gap and then on the panel itself.
-        def hover_travel(btn_sel, panel_sel):
-            """Walk the pointer from a flyout's button onto its panel.
-
-            Returns (open in the gap, open on the panel). Reported rather than
-            raised: a flyout that has vanished must be one red line, not a
-            TimeoutError that abandons every check after it."""
-            page.keyboard.press("Escape")
-            page.wait_for_timeout(50)
-            page.click("#menu-btn")
-            btn = page.locator(btn_sel).bounding_box()
-            page.mouse.move(btn["x"] + btn["width"] - 4, btn["y"] + btn["height"] / 2)
-            page.wait_for_timeout(150)
-            panel = page.locator(panel_sel)
-            box = panel.bounding_box() if panel.is_visible() else None
-            if box is None:
-                return (False, False)
-            lane = btn["y"] + btn["height"] / 2
-            # steps=, so the browser gets the intermediate mousemoves a hand
-            # would produce — one jump would skip the gap entirely.
-            page.mouse.move((box["x"] + box["width"] + btn["x"]) / 2, lane, steps=8)
-            page.wait_for_timeout(150)
-            in_gap = panel.is_visible()
-            page.mouse.move(box["x"] + box["width"] / 2, lane, steps=8)
-            page.wait_for_timeout(150)
-            on_panel = panel.is_visible()
-            page.keyboard.press("Escape")
-            page.wait_for_timeout(50)
-            return (in_gap, on_panel)
-
-        show_gap, show_panel = hover_travel("#menu-show", "#show-panel")
-        sound_gap, sound_panel = hover_travel("#menu-sound", "#sound-panel")
-        check("menu: a flyout survives the pointer travelling to it, both of them",
-              show_gap and show_panel and sound_gap and sound_panel)
 
 
         # The ledger number is the card's permanent identity (C-001, cardLabel),
@@ -1423,7 +1402,7 @@ try:
               and page.locator(".toolbar #search").count() == 0
               and page.locator(".toolbar #type-filter").count() == 0
               and page.locator(".toolbar #prio-filter").count() == 0
-              and page.locator("#menu-panel #theme-select").count() == 1)
+              and page.locator("#settings-dialog #theme-select").count() == 1)
         check("rail: at rest the panel is shut and not one filter is on screen",
               page.locator("#filter-panel").is_hidden()
               and page.get_attribute("#filter-btn", "aria-expanded") == "false"
@@ -1624,6 +1603,61 @@ try:
         if pick:
             page.select_option("#tag-filter", "")
             page.wait_for_timeout(200)
+
+        # ---- Tag search --------------------------------------------------
+        # #tag-search (renderTagBar(), js/ui/board.js) narrows which tags are
+        # LISTED — the bar and the dropdown both — and never which cards are
+        # on the board. Read board_tags live rather than hard-coding a name:
+        # a check naming a tag another block moves or deletes is a correct
+        # view failing its own test (the raglab lesson).
+        if len(board_tags) >= 2:
+            query_tag, other_tag = board_tags[0], board_tags[1]
+            query = query_tag[:3]
+            matching = [t for t in board_tags if query.lower() in t.lower()]
+            cards_before_search = page.locator("#board .card").count()
+            page.fill("#tag-search", query)
+            page.wait_for_timeout(150)
+            opts_narrowed = page.locator("#tag-filter option").all_text_contents()
+            chips_narrowed = page.locator("#tag-bar .tag-chip").all_inner_texts()
+            page.fill("#tag-search", "")
+            page.wait_for_timeout(150)
+            opts_cleared = page.locator("#tag-filter option").all_text_contents()
+            check("tags: a query narrows the chips and dropdown, never the "
+                  "board, and clearing it restores every tag",
+                  page.locator("#board .card").count() == cards_before_search
+                  and set(chips_narrowed) == set(matching)
+                  and all(any(t in o for o in opts_narrowed) for t in matching)
+                  and all(not any(t in o for o in opts_narrowed)
+                          for t in board_tags if t not in matching)
+                  and len(opts_cleared) == len(board_tags) + 1)
+
+            page.select_option("#tag-filter", other_tag)
+            page.wait_for_timeout(150)
+            page.fill("#tag-search", "zzzq-no-match")
+            page.wait_for_timeout(150)
+            survives = (page.locator("#tag-bar .tag-chip", has_text=other_tag).count() == 1
+                        and page.locator("#tag-filter option", has_text=other_tag).count() == 1
+                        and page.locator("#tag-bar .tag-bar-note").count() == 0)
+            page.select_option("#tag-filter", "")
+            page.wait_for_timeout(100)
+            page.fill("#tag-search", "zzzq-no-match")
+            page.wait_for_timeout(150)
+            tag_note = page.locator("#tag-bar .tag-bar-note")
+            no_match_note = (tag_note.count() == 1
+                              and "zzzq-no-match" in tag_note.inner_text())
+            page.fill("#tag-search", "")
+            page.wait_for_timeout(150)
+            check("tags: a selected tag survives a query that does not match "
+                  "it, and an unmatched query prints one note instead of "
+                  "painting empty",
+                  survives and no_match_note)
+        else:
+            check("tags: a query narrows the chips and dropdown, never the "
+                  "board, and clearing it restores every tag", False)
+            check("tags: a selected tag survives a query that does not match "
+                  "it, and an unmatched query prints one note instead of "
+                  "painting empty", False)
+
         page.keyboard.press("Escape")  # the panel hangs over the board below it
         page.wait_for_timeout(100)
 
@@ -1659,9 +1693,9 @@ try:
         # select_option('star') and hid the ~180 assertions after it. So a gap in
         # the feature has to come back as False, never as an exception.
         def select_theme(theme):
-            # The picker lives in the ⚙ Menu, so it has to be dropped open
+            # The picker lives in Settings now, so it has to be dropped open
             # first (a hidden <select> fails Playwright's actionability
-            # checks) — and the Menu belongs to the board, so from the
+            # checks) — and Settings belongs to the board's Menu, so from the
             # Assistant this takes the same detour a person would: over to the
             # board, switch, and back. The theme sticks across views.
             try:
@@ -1669,11 +1703,9 @@ try:
                 if not page.locator("#menu-btn").is_visible():
                     page.click('.view-switch button[data-view="board"]')
                     page.wait_for_timeout(150)
-                if page.locator("#menu-panel").is_hidden():
-                    page.click("#menu-btn")
-                page.select_option("#menu-panel #theme-select", theme, timeout=1500)
-                page.keyboard.press("Escape")
-                page.wait_for_timeout(50)
+                open_settings()
+                page.select_option("#settings-dialog #theme-select", theme, timeout=1500)
+                close_settings()
                 if came_from and came_from != page.evaluate("document.body.dataset.view"):
                     page.click(f'.view-switch button[data-view="{came_from}"]')
                     page.wait_for_timeout(150)
@@ -1682,8 +1714,8 @@ try:
                 page.keyboard.press("Escape")
                 return False
 
-        check("theme: the picker lives in the Menu now",
-              page.locator("#menu-panel #theme-select").count() == 1)
+        check("theme: the picker lives in Settings now",
+              page.locator("#settings-dialog #theme-select").count() == 1)
 
         def css(sel, prop):
             return page.evaluate(
@@ -5690,7 +5722,7 @@ try:
 
         page.evaluate("window.addEventListener('lodestar:chime',"
                       " () => localStorage.setItem('e2e:chime', '1'))")
-        page.click("#menu-btn")
+        open_settings()
         has_state = page.locator("#habit-mute .habit-sound-state").count() == 1
         check("habit: the sound row says 'on' in green while it is on",
               has_state and sound_word() == "on"
@@ -5711,28 +5743,18 @@ try:
             check("habit: switched off it says 'off' in red, silently", False)
             check("habit: switching the sound on plays the chime and says 'on'", False)
         page.evaluate("() => localStorage.removeItem('e2e:chime')")
-        page.keyboard.press("Escape")
-        page.wait_for_timeout(50)
+        close_settings()
 
-        # Under the on/off row sits Sound — hover it and the four chimes
-        # unfold (Marimba, Bell, Droplet, Kalimba). Picking one previews it,
+        # Under the on/off row sits Chime — four options (Marimba, Bell,
+        # Droplet, Kalimba), a `role="radio"` group inside Settings since
+        # 2026-09-13, not a hover submenu any more. Picking one previews it,
         # marks it chosen, persists across a reload, and is what every chime
         # from then on plays.
-        page.click("#menu-btn")
-        check("sound: a hover Sound submenu sits under the on/off row",
-              page.locator("#menu-panel #menu-sound").count() == 1
-              and page.locator("#sound-panel").is_hidden()
-              and page.evaluate(
-                  "() => { const items = [...document.querySelectorAll('#menu-panel .menu-item')];"
-                  " return items.indexOf(document.querySelector('#menu-sound'))"
-                  " > items.indexOf(document.querySelector('#habit-mute')); }"))
-        page.hover("#menu-sound")
-        page.wait_for_timeout(150)
+        open_settings()
         chime_options = ("sound-marimba", "sound-bell", "sound-droplet", "sound-kalimba")
-        check("sound: hovering unfolds the four chimes, exactly one chosen",
-              page.locator("#sound-panel").is_visible()
-              and all(page.locator(f"#sound-panel #{o}").count() == 1
-                      for o in chime_options)
+        check("sound: the Chime row holds four options, exactly one chosen",
+              all(page.locator(f"#settings-dialog #{o}").count() == 1
+                  for o in chime_options)
               and sum(page.get_attribute(f"#{o}", "aria-checked") == "true"
                       for o in chime_options) == 1)
         page.evaluate("window.addEventListener('lodestar:chime',"
@@ -5743,19 +5765,17 @@ try:
               page.evaluate("localStorage.getItem('e2e:chime-name')") == "bell"
               and page.evaluate("localStorage.getItem('lodestar:habitChime')") == "bell"
               and page.get_attribute("#sound-bell", "aria-checked") == "true")
+        close_settings()
         page.reload()
         page.wait_for_selector("#new-card-btn")
-        page.click("#menu-btn")
-        page.hover("#menu-sound")
-        page.wait_for_timeout(150)
+        open_settings()
         check("sound: the choice survives a reload",
               page.get_attribute("#sound-bell", "aria-checked") == "true")
         page.evaluate("""() => {
           localStorage.removeItem('e2e:chime-name');
           localStorage.removeItem('lodestar:habitChime');
         }""")
-        page.keyboard.press("Escape")
-        page.wait_for_timeout(50)
+        close_settings()
         page.locator(".habit-banner .habit-banner-hide").click()
         page.wait_for_timeout(100)
         check("habit: the banner can be dismissed",
@@ -5877,10 +5897,14 @@ try:
         # The gutter names the property and the value cell holds the control, so
         # each row reads left to right with nothing between the two. The label is
         # what a legend was, which is why it is asked of the row rather than of
-        # the stylesheet.
+        # the stylesheet. Scoped to #card-dialog: Settings reuses the identical
+        # .prop-table/.prop-row ledger since 2026-09-13, and an unscoped query
+        # picks up its five rows too — present in the document (just behind a
+        # closed <dialog>, not the `hidden` attribute this loop filters on) —
+        # which would count 13 rows for a dialog that only ever draws 8.
         rows = page.evaluate("""() => {
           const out = [];
-          for (const row of document.querySelectorAll('.prop-table .prop-row')) {
+          for (const row of document.querySelectorAll('#card-dialog .prop-table .prop-row')) {
             if (row.hidden) continue;
             const label = row.querySelector('.prop-label');
             const value = row.querySelector('.prop-value');
@@ -6208,16 +6232,13 @@ try:
         page.locator(".card-menu-panel:not([hidden]) .menu-item", has_text="task").click()
         page.wait_for_timeout(150)
 
-        # One horizon at a time is the other layout, chosen in the ⚙ menu.
+        # One horizon at a time is the other layout, chosen in Settings now —
+        # a `role="radio"` pair, not a hover submenu.
         def pick_plan_layout(which):
-            if page.locator("#menu-panel").is_hidden():
-                page.click("#menu-btn")
-            page.locator("#menu-plan").hover()
-            page.wait_for_timeout(100)
+            open_settings()
             page.click(f"#plan-{which}")
             page.wait_for_timeout(150)
-            page.keyboard.press("Escape")  # the submenu keeps the menu open
-            page.wait_for_timeout(50)
+            close_settings()
 
         pick_plan_layout("dropdown")
         check("plan: the menu switches the block to one horizon at a time",
@@ -7439,14 +7460,12 @@ try:
         # would break every selector this suite already depends on.
         def set_theme(theme):
             """Pick a theme the way a person does. The picker is inside the
-            board's ⚙ Menu — a hidden <select> fails Playwright's actionability
-            checks — and the Menu is the board's, so this drops it open, picks,
-            and shuts it again."""
-            if page.locator("#menu-panel").is_hidden():
-                page.click("#menu-btn")
-            page.select_option("#menu-panel #theme-select", theme, timeout=2000)
-            page.keyboard.press("Escape")
-            page.wait_for_timeout(50)
+            board's Settings dialog — a hidden <select> fails Playwright's
+            actionability checks — and Settings is the board's, so this drops
+            it open, picks, and shuts it again."""
+            open_settings()
+            page.select_option("#settings-dialog #theme-select", theme, timeout=2000)
+            close_settings()
 
         WIDGET_KEY = "lodestar:widget"
         page.evaluate("key => localStorage.removeItem(key)", WIDGET_KEY)

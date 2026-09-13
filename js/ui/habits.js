@@ -277,7 +277,7 @@ function retiredFold(retired) {
 export const HABIT_MUTE_KEY = KEY_PREFIX + 'habit-mute';
 export let habitMuted = localStorage.getItem(HABIT_MUTE_KEY) === '1';
 
-/** Toggled from the actions menu, which main.js wires — see the note on the
+/** Toggled from the Settings dialog, which main.js wires — see the note on the
  *  setters in core/state.js. Persisting is the caller's business, as it was. */
 export function setHabitMuted(muted) {
   habitMuted = muted;
@@ -416,16 +416,19 @@ export function syncHabitMute() {
   const state = document.createElement('span');
   state.className = `habit-sound-state ${habitMuted ? 'off' : 'on'}`;
   state.textContent = habitMuted ? 'off' : 'on';
-  btn.replaceChildren(
-    document.createTextNode(habitMuted ? '🔇 ' : '🔊 '),
-    state,
-    document.createTextNode(' Habit sound'),
-  );
+  // The words "Habit sound" are the gutter's now (2026-09-13): this control sat
+  // in a menu that named nothing, and it sits in a ledger row whose left column
+  // names it — so printing the name again on the button beside it is one fact
+  // told twice, the rule the rail's punch strip and its written tally follow.
+  // It stays the button's accessible name, because a control reading "🔊 on" to
+  // a screen reader is a state with nothing to be the state of.
+  btn.replaceChildren(document.createTextNode(habitMuted ? '🔇 ' : '🔊 '), state);
+  btn.setAttribute('aria-label', 'Habit sound');
   btn.setAttribute('aria-pressed', String(!habitMuted));
   btn.title = habitMuted ? 'Habit reminders are silent' : 'Sound the reminder when a habit is due';
 }
 
-/** Mark the chosen chime in the Sound submenu. */
+/** Mark the chosen chime in the Settings dialog. */
 export function syncChimePicker() {
   for (const name of CHIME_NAMES) {
     $(`#sound-${name}`)?.setAttribute('aria-checked', String(name === habitChime));

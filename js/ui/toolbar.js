@@ -8,11 +8,13 @@ import { commit } from '../core/history.js';
 import { KEY_PREFIX } from '../core/keys.js';
 import { filters, setCards, state } from '../core/state.js';
 import { RANGE_FIELDS, RANGE_PRESETS, rangeText, rangeVal, spanOf } from '../core/timespan.js';
+import { renderTagBar, setTagQuery } from './board.js';
 import { ask } from './dialogs.js';
 import { $, announce } from './dom.js';
 import { render } from './render.js';
 
-// Toolbar: the type and priority filters, the actions menu, the Assistant's
+// Toolbar: the type and priority filters, the actions menu and its Settings
+// dialog, the Assistant's
 // header controls, and the keyboard shortcuts that reach them.
 //
 // The text search is not wired here. It is painted into the board beside
@@ -131,46 +133,31 @@ $('#tag-filter').addEventListener('change', (e) => {
   render();
 });
 
-// One Menu button holds the board actions, History / Export / Import, the
-// Show and Sound hover submenus, the habit sound and the theme. The panel
-// closes on outside click, Escape, or after any one-shot action inside it is
-// chosen; the submenus and the toggles they hold keep it open, because
-// flipping three toggles should not mean opening the menu three times.
+// The tag search narrows which tags are LISTED here, never which cards the
+// board shows — so this repaints only the bar and the dropdown (renderTagBar,
+// which already owns both), never the whole board via render(). A `search`
+// input's native × fires `input` too, so one listener covers typing and
+// clearing alike.
+$('#tag-search').addEventListener('input', (e) => {
+  setTagQuery(e.target.value);
+  renderTagBar();
+});
+
+// One Menu button holds the board actions plus History / Export / Import —
+// eight rows now that every standing preference (theme, Plan layout, habit
+// chime, which filter controls show) moved into its own Settings dialog. That
+// leaves every row a one-shot action, so the panel dismisses after any of
+// them rather than staying open for a toggle to be watched flipping.
 const menuBtn = $('#menu-btn');
 const menuPanel = $('#menu-panel');
-
-// A hover submenu: unfolds while the pointer is over its wrapper, and the
-// button itself toggles it for keyboard and touch, where there is no hover.
-function wireFlyout(btnSel, panelSel) {
-  const btn = $(btnSel);
-  const panel = $(panelSel);
-  const wrap = btn.parentElement;
-  const setOpen = (open) => {
-    panel.hidden = !open;
-    btn.setAttribute('aria-expanded', String(open));
-  };
-  wrap.addEventListener('mouseenter', () => setOpen(true));
-  wrap.addEventListener('mouseleave', () => setOpen(false));
-  btn.addEventListener('click', () => setOpen(panel.hidden));
-  return setOpen;
-}
-const setShowOpen = wireFlyout('#menu-show', '#show-panel');
-const setSoundOpen = wireFlyout('#menu-sound', '#sound-panel');
-const setPlanOpen = wireFlyout('#menu-plan', '#plan-panel');
 
 function setMenuOpen(open) {
   menuPanel.hidden = !open;
   menuBtn.setAttribute('aria-expanded', String(open));
-  if (!open) { setShowOpen(false); setSoundOpen(false); setPlanOpen(false); }
 }
 
 menuBtn.addEventListener('click', () => setMenuOpen(menuPanel.hidden));
 menuPanel.addEventListener('click', (e) => {
-  // Submenus, their toggles, the sound on/off and the theme row are "stay
-  // open" surfaces — flipping a switch and watching it flip is the point.
-  // Only a one-shot action (history, export, a board action…) dismisses.
-  if (e.target.closest('.menu-flyout') || e.target.closest('.menu-theme-row')
-      || e.target.closest('#habit-mute')) return;
   if (e.target.closest('button')) setMenuOpen(false);
 });
 document.addEventListener('click', (e) => {
@@ -182,6 +169,13 @@ document.addEventListener('keydown', (e) => {
     menuBtn.focus();
   }
 });
+
+// Settings…, opened from the Menu: the theme, the rail's Plan layout, the
+// habit chime and which filter controls show, in their own dialog now that
+// none of them is a one-shot action. A <dialog> handles Escape itself, so
+// there is nothing else to wire beyond opening it and the Done button.
+$('#settings-btn').addEventListener('click', () => $('#settings-dialog').showModal());
+$('#close-settings').addEventListener('click', () => $('#settings-dialog').close());
 
 // Remove duplicates — the Menu's one card action.
 //
@@ -230,10 +224,10 @@ $('#dedupe-btn').addEventListener('click', async () => {
   announce(`Removed ${label} — in the Trash, and one undo brings them back`);
 });
 
-// The Show submenu's switches. Same idiom as #habit-mute: hidden stores '1',
+// The Settings dialog's Show switches. Same idiom as #habit-mute: hidden stores '1',
 // shown removes the key outright, and boot applies whatever is stored so a
 // reload keeps the choice.
-/** One switch in the Show submenu: a body class the CSS reads, a remembered
+/** One switch in the Show row: a body class the CSS reads, a remembered
  *  flag, and an `aria-pressed` that announces the state ("true" = hidden).
  *
  *  `onSet` is for a switch that changes *which cards are shown* rather than how

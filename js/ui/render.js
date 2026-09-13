@@ -52,7 +52,7 @@ export function render() {
   // whether they are furniture that does nothing. Text search is not among
   // them: it is painted into the board itself, beside `+ New card`.
   document.body.dataset.view = view;
-  // The Menu's `Done column` switch stands down while the range is asking
+  // The `Done column` switch stands down while the range is asking
   // about finished cards — the same rule `matchesColumn` already applies to
   // the hide-Done *default*, one layer out. Without it the two halves of one
   // decision disagree: the filter correctly keeps the finished cards and the
