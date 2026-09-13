@@ -5409,8 +5409,14 @@ button.chat-source-card {
      keep their whole selves. */
   .assistant-head { flex-wrap: wrap; gap: 8px; }
   .assistant-head > h2 { flex: 1 0 100%; }
+  /* `1 1 0` and not `1 1 auto`: wrapping is decided on an item's BASE width,
+     before any shrink is applied, so a base of "whatever the four controls
+     measure" put the row at 355px on a 358px line and bumped the collapse onto
+     a line of its own — 45px of an 844px screen spent on one button. At a base
+     of 0 the row always shares the line and then grows into what is left,
+     which is what the fold's ellipsis was already written for. */
   .assistant-head .assistant-tools {
-    flex: 1 1 auto;
+    flex: 1 1 0;
     min-width: 0;
     margin-left: 0;
     justify-content: flex-start;
@@ -5540,6 +5546,67 @@ button.chat-source-card {
   /* The rail's own section heading is a button — it applies that horizon as a
      filter — and at 16px tall it was the smallest target on the board. */
   .plan-rail-title { min-height: 40px; }
+  /* The Menu's eight actions, at 30px and 2px apart. Three of them name a
+     board — New, Rename, Delete — so a thumb that lands one row low is a
+     board gone, which is the one mis-tap on this screen that costs something.
+     A button centres its own text, so the height is the whole rule. */
+  .menu-panel .menu-item { min-height: 40px; }
+  /* Settings' pickers are the same .menu-item as a chip in a row rather than
+     a row in a list, so they need the width too: a 53px "Bell" beside a 75px
+     "Droplet" is two thumb-widths of difference between one chime and another. */
+  #settings-dialog .prop-value .menu-item { min-height: 40px; min-width: 56px; }
+  /* The filter panel's controls came out of .rail-filters on 2026-09-13 and
+     left --rail-h behind with it, so the seven selects that had been 40px in
+     the strip were 26px in the panel. This is that number, put back where the
+     controls now live. */
+  .filter-row select,
+  .filter-row input[type="date"],
+  #tag-search { min-height: 40px; }
+  /* The composer, and the widget's own head. Send and the mic sit against the
+     home bar, and the three head buttons — trace, expand, close — were 21px:
+     the control that closes the sheet covering the whole board must be one a
+     thumb can find. */
+  .chat-mic,
+  .chat-send { min-height: 40px; min-width: 40px; }
+  .widget-btn { min-height: 40px; min-width: 40px; }
+  .assistant-tools button,
+  .assistant-tools .chat-recall-name,
+  .composer-model { min-height: 40px; }
+  /* New chat and the collapse are a single glyph each, so the height alone
+     left them 30px and 33px wide. */
+  #chat-new,
+  .assistant-collapse { min-width: 40px; }
+  /* The ledger's own controls, which is the card dialog and the Settings
+     dialog at once — one rule, because .prop-value is what they share. The
+     ghost border they wear at rest is unchanged; only the box it hangs on
+     grows. */
+  .prop-value select,
+  .prop-value input[type="text"],
+  .prop-value input[type="date"],
+  .prop-value input[type="number"],
+  .prop-value input[type="time"] { min-height: 40px; }
+  #card-add-child { min-height: 40px; }
+  /* Every dialog's own footer, and the Review's three buttons a week. */
+  .btn { min-height: 40px; }
+  /* The Overview's projection picker and the Matrix's lens picker: the one
+     control each of those two views has, at 22px. The dots they plot are left
+     alone deliberately — a dot's size is the map's data, not its chrome. */
+  .plot-proj-toggle button,
+  .matrix-switch button { min-height: 40px; }
+
+  /* ---- The Matrix, made to fit the window ------------------------------
+     A grid track's automatic minimum is its item's min-content, and a
+     quadrant's head is a nowrap flex row — "SCHEDULE  important · not urgent
+     (1)" on one line. So the two columns could not shrink and the grid stood
+     98px wider than the plate, with nothing in the chain scrolling: the right
+     half of every lens was simply cut off, headers mid-word. The fix is on the
+     ITEM and not the track, because `grid-template-columns` is written inline
+     per lens (js/views/matrix.js) and an inline style outranks a stylesheet.
+     A matrix is read by comparing its quadrants at a glance, so it is made to
+     fit rather than given a sideways scroll of its own. */
+  .matrix-quad { min-width: 0; }
+  .matrix-quad-head { flex-wrap: wrap; row-gap: 2px; }
+  .matrix-quad-count { margin-left: auto; }
 
   /* ---- No control under 16px --------------------------------------------
      Below 16px iOS Safari zooms the page the moment a field takes focus, and
@@ -5566,11 +5633,23 @@ button.chat-source-card {
   .card-words #card-title,
   .card-words #card-notes,
   .prop-value input,
+  /* The ledger sizes its own inputs by type — .prop-value input[type="date"]
+     outranks .prop-value input — so the bare selector above reached neither
+     the card's deadline nor its tags, and both stood at 13px. Every type the
+     ledger names is named back here, at the same specificity and later. */
+  .prop-value input[type="text"],
+  .prop-value input[type="date"],
+  .prop-value input[type="number"],
   .prop-value input[type="time"],
   .prop-value select,
   .slot-field input,
   .slot-field select,
   .chat-composer textarea,
+  /* The two the Assistant sizes by class, which a bare `select` cannot reach:
+     the composer's model list at 0.72rem, and the recall box, whose
+     `font: inherit` resolves to the sheet's 14px. */
+  .composer-model,
+  .chat-recall-form input,
   .chat-settings select,
   .chat-key-row input,
   .cat-add-form input[type="text"] { font-size: 16px; }
