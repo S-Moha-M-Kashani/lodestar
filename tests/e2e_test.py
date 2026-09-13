@@ -8023,9 +8023,28 @@ try:
         check(f"phone: the cards start inside the first screenful "
               f"(board top {board_top} of 844)", board_top <= 360)
 
+        # Both measurements below used to read the Board and nothing else, and
+        # every control on it passed while four of the five surfaces a person
+        # actually opens did not: the card dialog's deadline and tags stood at
+        # 13px, the composer's model list at 11.5px, the Menu's eight rows at
+        # 30px, Settings' pickers at 24px and the filter panel's selects at
+        # 26px — those last because they came out of .rail-filters on
+        # 2026-09-13 and left --rail-h behind with it. So each is taken with
+        # every panel and dialog open, and reports which surface it was in.
+        SURFACES = [
+            ("board", None, None),
+            ("the Menu", "#menu-btn", "Escape"),
+            ("Settings", "#menu-btn,#settings-btn", "Escape"),
+            ("the filter panel", ".filter-btn", "Escape"),
+            ("the card dialog", ".card", "Escape"),
+            # Not a panel but a view, and the only one holding a composer: the
+            # model list beside Send was 11.5px and the mic and Send 33px.
+            ("the Assistant", '.view-switch button[data-view="assistant"]', None),
+        ]
+
         # Only the controls a person types or picks into: a radio or a checkbox
         # inherits a font size and triggers no zoom.
-        smallest = ph.evaluate("""() => {
+        FONTS = """() => {
           const sel = 'input:not([type=radio]):not([type=checkbox]):not([type=range])'
                     + ':not([type=color]):not([type=hidden]), select, textarea';
           let min = 99, who = '';
@@ -8036,16 +8055,21 @@ try:
             if (fs < min) { min = fs; who = el.id || el.className || el.tagName; }
           }
           return { min, who };
-        }""")
-        check(f"phone: a form control is never under 16px, so iOS cannot zoom "
-              f"the page on focus (smallest {smallest['min']}px, {smallest['who']})",
-              smallest["min"] >= 16)
-
-        # 40px, not the 24-27px these stood at: the ledger's controls were sized
-        # for a pointer. Every one of them is on the way to a card.
-        cramped = ph.evaluate("""() => {
+        }"""
+        # 40px, not the 22-31px these stood at: the ledger's controls were sized
+        # for a pointer. Every one of them is on the way to a card, to the one
+        # action that can lose a board, or to the setting that quiets a chime.
+        # The plot dots are left out on purpose — a dot's size is the map's own
+        # data — and .tag-chip keeps the 34px its own rule gives it.
+        TARGETS = """() => {
           const sel = '.view-switch button, .cat-tab, .filter-btn,'
-                    + ' #menu-btn, #board-select, #new-card-btn, .card-menu-btn';
+                    + ' #menu-btn, #board-select, #new-card-btn, .card-menu-btn,'
+                    + ' .menu-panel .menu-item, .prop-value select,'
+                    + ' .prop-value input[type=text], .prop-value input[type=date],'
+                    + ' .filter-row select, #tag-search, .btn,'
+                    + ' .plot-proj-toggle button, .matrix-switch button,'
+                    + ' .assistant-tools button, .composer-model,'
+                    + ' .chat-mic, .chat-send, .widget-btn';
           const out = [];
           for (const el of document.querySelectorAll(sel)) {
             const r = el.getBoundingClientRect();
@@ -8055,9 +8079,42 @@ try:
                        + Math.round(r.width) + 'x' + Math.round(r.height));
           }
           return out;
-        }""")
+        }"""
+
+        tiny_font, cramped = [], []
+        for name, opener, closer in SURFACES:
+            if opener:
+                for step in opener.split(","):
+                    ph.locator(step).first.click(timeout=3000)
+                    ph.wait_for_timeout(300)
+            got = ph.evaluate(FONTS)
+            if got["min"] < 16:
+                tiny_font.append(f"{name}: {got['who']} {got['min']}px")
+            cramped += [f"{name}: {w}" for w in ph.evaluate(TARGETS)]
+            if closer:
+                ph.keyboard.press(closer)
+                ph.wait_for_timeout(250)
+        check(f"phone: a form control is never under 16px, so iOS cannot zoom "
+              f"the page on focus ({tiny_font})", not tiny_font)
         check(f"phone: the controls on the way to a card clear 40px ({cramped})",
               not cramped)
+
+        # A grid track's automatic minimum is its item's min-content, and a
+        # quadrant's head was a nowrap flex row — so the two columns could not
+        # shrink, the grid stood 98px wider than its plate, and nothing in the
+        # chain scrolled: the right half of every lens was cut off with its
+        # headers ending mid-word. A matrix is read by comparing its quadrants
+        # at a glance, so the assertion is that it FITS, not that it scrolls.
+        ph.locator('.view-switch button[data-view="matrix"]').click(timeout=3000)
+        ph.wait_for_timeout(500)
+        spill = ph.evaluate("""() => {
+          const g = document.querySelector('.matrix-grid');
+          return g ? g.scrollWidth - g.clientWidth : -1;
+        }""")
+        check(f"phone: the whole matrix fits the window ({spill}px over)",
+              0 <= spill <= 4)
+        ph.locator('.view-switch button[data-view="board"]').click(timeout=3000)
+        ph.wait_for_timeout(250)
 
         # Added to the home screen it runs in its own window, which is the one
         # thing that gets the browser's address bar off a board already short of
