@@ -409,53 +409,11 @@ input, select, textarea { font: inherit; color: inherit; }
 
 .menu-item:hover { background: var(--paper); }
 /* The rule lines that split the Menu into its groups: the board itself,
-   history and data, display and sound. */
+   then history and data, then Settings…. */
 .menu-sep {
   margin: 4px 10px;
   border: none;
   border-top: 1px dashed var(--line);
-}
-
-/* A group's name inside a panel — a heading, not a row you can press. */
-.menu-label {
-  font-family: var(--mono);
-  font-size: 9.5px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--ink-soft);
-  padding: 4px 12px 2px;
-}
-
-/* Hover submenus (Show, Sound): the trigger is an ordinary row, the panel
-   unfolds beside the menu — leftwards, because the menu hangs off the
-   window's right edge. */
-.menu-flyout { position: relative; display: flex; flex-direction: column;
-  --flyout-gap: 8px; }
-.menu-flyout > .menu-item { width: 100%; }
-.flyout-panel {
-  top: -7px;
-  right: calc(100% + var(--flyout-gap));
-  left: auto;
-}
-
-/* The gap between the row and its panel was 8px belonging to neither, and a
-   pointer dragged across it left the wrapper: mouseleave fired, the panel was
-   hidden, and the hand arrived where it had just been — only a keyboard could
-   reach these lists. So the panel claims the gap with a transparent bridge.
-   A pseudo-element hit-tests as part of its element, hence as part of the
-   wrapper, so the walk from the row to the list never leaves the hover area
-   while the gap still looks like a gap. It is the panel's own, so it is gone
-   whenever the panel is (`[hidden] { display: none }`), and it spans the full
-   height rather than the row's, so approaching diagonally works too.
-   page.hover() teleports onto its target and never crossed the gap, which is
-   why no test saw this. */
-.flyout-panel::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  right: calc(-1 * var(--flyout-gap));
-  width: var(--flyout-gap);
 }
 
 /* The habit sound's state, in a word beside the sign. The one place green
@@ -464,11 +422,15 @@ input, select, textarea { font: inherit; color: inherit; }
 .habit-sound-state.on { color: var(--ok); }
 .habit-sound-state.off { color: var(--danger); }
 
-/* The theme row: a labelled select that keeps the menu open while used. */
-.menu-theme-row { display: flex; align-items: center; gap: 10px; }
-.menu-theme-row select { flex: 1; }
 .menu-item:disabled { opacity: 0.45; cursor: default; }
 .menu-item:disabled:hover { background: transparent; }
+
+/* What went on 2026-09-13, when Settings… became its own dialog: the Show and
+   Sound hover submenus (.menu-flyout, .flyout-panel and the bridge that kept
+   a diagonal pointer inside one while crossing the gap to its panel), the
+   theme row that used to keep the menu open while it was used
+   (.menu-theme-row), and .menu-label, the "Filters" heading inside the Show
+   submenu — the dialog's own <h2> and prop-label rows say that now. */
 
 /* Category rail — coloured index tabs sitting on a rule, one per life area.
    The rule (and the row) belongs to .rail-row now: type and priority follow
@@ -758,6 +720,23 @@ input, select, textarea { font: inherit; color: inherit; }
 }
 .cat-hue input:focus-visible + .cat-hue-dot { outline: 2px solid var(--rule-red); outline-offset: 1px; }
 
+/* The tag search: static markup, never rebuilt, so it needs no rescue code for
+   its own caret the way #search (painted inside #board) does. It sets no
+   `display` of its own, so the plain `[hidden]` UA rule already hides it —
+   no override needed, unlike the five surfaces elsewhere in this file where a
+   same-specificity `display` rule wins over `[hidden]`. */
+#tag-search {
+  box-sizing: border-box;
+  width: 100%;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 4px 9px;
+  font-size: 11.5px;
+  color: var(--ink);
+}
+#tag-search::placeholder { color: var(--ink-soft); }
+
 /* Tag filter bar — inside the filter panel since 2026-09-13, under the
    dropdown that is its other handle. `[hidden]` needs its own rule: `display:
    flex` outranks the UA's, the trap five other surfaces in this file document. */
@@ -796,6 +775,15 @@ input, select, textarea { font: inherit; color: inherit; }
   background: var(--ink-blue);
   border-color: var(--ink-blue);
   color: var(--paper);
+}
+
+/* What the search says when it narrows the list to nothing — the same idiom
+   as .empty-hint, in words small enough for one filter row rather than a
+   whole empty column. */
+.tag-bar-note {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-soft);
 }
 
 /* View switch — index tabs into the ledger */
@@ -2842,6 +2830,27 @@ dialog::backdrop {
 .picker-options input:focus-visible + .cat-swatch {
   outline: 2px solid var(--ink-blue);
   outline-offset: 2px;
+}
+
+/* --- The Settings dialog's pickers (2026-09-13) -------------------------
+   The Plan-section and Chime radiogroups, and the Show row's switches, are
+   the same .menu-item buttons the Menu's hover submenus used to hold — only
+   their container changed, from a vertical .menu-panel to a row inside a
+   .prop-table ledger. .menu-item's own styling (padding, hover) still fits;
+   what it never needed before is a border, since a vertical list of rows
+   doesn't need one row told apart from its neighbour the way a row of chips
+   sitting side by side does. The checked/pressed state reuses .col-chip's
+   ink-on-ink rather than inventing a colour. */
+#settings-dialog .prop-value .menu-item {
+  border: 1.5px solid var(--card-line);
+  border-radius: 3px;
+  padding: 4px 11px;
+}
+#settings-dialog .prop-value .menu-item[aria-checked="true"],
+#settings-dialog .prop-value .menu-item[aria-pressed="true"] {
+  color: var(--ink);
+  border-color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
 }
 
 .card-meta-line {
@@ -5546,6 +5555,7 @@ button.chat-source-card {
   #theme-select,
   .filter-row select,
   .filter-row input[type="date"],
+  #tag-search,
   .sort-select,
   .board-switch #board-select,
   .board-search,

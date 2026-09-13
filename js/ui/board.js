@@ -378,11 +378,33 @@ export function renderCatRail() {
   rail.append(edit);
 }
 
+// The tag search box (#tag-search) is static markup in index.html, so this is
+// the one place that may write it — an imported binding is read-only
+// everywhere else. It narrows which tags are *listed*, in the bar and the
+// dropdown both; it never touches `filters` and so never narrows the board,
+// which is why its handler in js/ui/toolbar.js calls renderTagBar() and not
+// render(). Module-level rather than on `filters`, for that same reason: it
+// is not a board filter, it is display state for this one control.
+let tagQuery = '';
+
+export function setTagQuery(q) {
+  tagQuery = q;
+}
+
 export function renderTagBar() {
   const bar = $('#tag-bar');
+  const search = $('#tag-search');
   const allTags = [...new Set(state.cards.flatMap((c) => c.tags))].sort();
   // Drop filters for tags that no longer exist
   for (const t of [...filters.tags]) if (!allTags.includes(t)) filters.tags.delete(t);
+
+  // Plain substring, case-insensitive, on the trimmed query — no fuzzy match,
+  // no regex. A tag already selected is kept whatever the query says: it is
+  // the only in-place way to un-select itself, and a search that hid it would
+  // take away the reader's way back (the same rule CLAUDE.md states for the
+  // scope filter outranking a running text search).
+  const q = tagQuery.trim().toLowerCase();
+  const shown = allTags.filter((t) => !q || t.toLowerCase().includes(q) || filters.tags.has(t));
 
   // The dropdown twin: same tags as the bar, one pick at a time. Repainted
   // here because this is the one place that already knows every tag; its
@@ -392,21 +414,34 @@ export function renderTagBar() {
   if (dropdown) {
     dropdown.replaceChildren(
       new Option('All tags', ''),
-      ...allTags.map((t) => new Option('#' + t, t)),
+      ...shown.map((t) => new Option('#' + t, t)),
     );
     dropdown.value = filters.tags.size === 1 ? [...filters.tags][0] : '';
   }
 
+  // Shown whenever there is a tag to search for, board-wide — not past some
+  // count, which would be a control the reader can't rely on finding twice in
+  // a row. A board with none at all shows neither this nor the bar it narrows.
+  if (search) search.hidden = allTags.length === 0;
+
   bar.hidden = allTags.length === 0;
   bar.innerHTML = '';
   if (!allTags.length) return;
+
+  if (q && !shown.length) {
+    const note = document.createElement('span');
+    note.className = 'tag-bar-note';
+    note.textContent = `No tags match "${tagQuery.trim()}".`;
+    bar.append(note);
+    return;
+  }
 
   const label = document.createElement('span');
   label.className = 'label';
   label.textContent = 'Tags:';
   bar.append(label);
 
-  for (const tag of allTags) {
+  for (const tag of shown) {
     const chip = document.createElement('button');
     chip.className = 'tag-chip';
     chip.textContent = tag;

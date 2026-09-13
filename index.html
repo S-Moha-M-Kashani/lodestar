@@ -255,11 +255,14 @@
         <div class="toolbar-menu">
           <!-- The board's menu behind the same quiet gear the Assistant's
                settings use — one look, two contents, each on its own page. -->
-          <button id="menu-btn" class="assistant-extras-btn" aria-label="Menu" aria-haspopup="true" aria-expanded="false" title="Boards, history, export, import, display and sound">⚙</button>
-          <!-- One menu, four groups split by rule lines: the board itself,
-               history and data, what is painted on the cards (a hover Show
-               submenu), and the app's sound and theme. Undo left — History
-               is the way back. -->
+          <button id="menu-btn" class="assistant-extras-btn" aria-label="Menu" aria-haspopup="true" aria-expanded="false" title="Boards, history, export, import, and Settings">⚙</button>
+          <!-- Eight rows, all one-shot actions, in two groups split by rule
+               lines: the board itself, then history and data. Everything set
+               once and rarely touched again — the theme, the rail's Plan
+               layout, the habit chime, which filter controls show — moved
+               into its own Settings… dialog on 2026-09-13, the same move the
+               filter controls made out of the header: the menu is where a
+               one-shot action is, not where a standing preference sits. -->
           <div id="menu-panel" class="menu-panel" hidden>
             <button id="board-new" class="menu-item" title="Start a board with its own cards and its own chats">＋ New board</button>
             <button id="board-rename" class="menu-item" title="Rename the board you are on">Rename board</button>
@@ -270,47 +273,7 @@
             <button id="import-btn" class="menu-item" title="Restore the board from a JSON file">Import JSON</button>
             <button id="dedupe-btn" class="menu-item" title="Find cards holding the same words twice and retire the copies to the Trash">Remove duplicates</button>
             <hr class="menu-sep">
-            <div class="menu-flyout">
-              <button id="menu-show" class="menu-item" aria-haspopup="true" aria-expanded="false" title="What is painted on the cards">Show ◂</button>
-              <div id="show-panel" class="menu-panel flyout-panel" hidden>
-                <!-- These act on the FILTER CONTROLS, never on what is
-                     painted on the cards — chips and stamps are the cards'
-                     own; a filter you don't use is the thing worth hiding. -->
-                <span class="menu-label">Filters</span>
-                <button id="toggle-tags" class="menu-item" aria-pressed="false" title="Hide the tag filters — the # bar and the tags dropdown"># Tags</button>
-                <button id="toggle-prios" class="menu-item" aria-pressed="false" title="Hide the priority filter dropdown">Priorities</button>
-                <button id="toggle-types" class="menu-item" aria-pressed="false" title="Hide the type filter dropdown">Types</button>
-                <button id="toggle-columns" class="menu-item" aria-pressed="false" title="Hide the column filter — and with it the rule that keeps Done cards off every view but the Board">Columns</button>
-                <hr class="menu-sep">
-                <button id="toggle-done-col" class="menu-item" aria-pressed="false" title="Hide the Done column on the Board view">Done column</button>
-              </div>
-            </div>
-            <div class="menu-flyout">
-              <button id="menu-plan" class="menu-item" aria-haspopup="true" aria-expanded="false" title="How the rail's Plan section is laid out">Plan ◂</button>
-              <div id="plan-panel" class="menu-panel flyout-panel" hidden>
-                <button id="plan-stacked" class="menu-item" role="menuitemradio" aria-checked="false" title="Day, week, month, year and dreams all at once">Stacked</button>
-                <button id="plan-dropdown" class="menu-item" role="menuitemradio" aria-checked="false" title="One horizon at a time, picked from a list">Dropdown</button>
-              </div>
-            </div>
-            <button id="habit-mute" class="menu-item" aria-pressed="false" title="Sound the reminder when a habit is due">🔊 Habit sound</button>
-            <div class="menu-flyout">
-              <button id="menu-sound" class="menu-item" aria-haspopup="true" aria-expanded="false" title="Which chime the reminder plays">Sound ◂</button>
-              <div id="sound-panel" class="menu-panel flyout-panel" hidden>
-                <button id="sound-marimba" class="menu-item" role="menuitemradio" aria-checked="false" title="Two warm wooden notes">Marimba</button>
-                <button id="sound-bell" class="menu-item" role="menuitemradio" aria-checked="false" title="One soft bell with a shimmer">Bell</button>
-                <button id="sound-droplet" class="menu-item" role="menuitemradio" aria-checked="false" title="A watery upward blip">Droplet</button>
-                <button id="sound-kalimba" class="menu-item" role="menuitemradio" aria-checked="false" title="A muted thumb-piano pluck">Kalimba</button>
-              </div>
-            </div>
-            <label class="menu-item menu-theme-row">Theme
-              <select id="theme-select" aria-label="Theme">
-                <option value="light">Morning</option>
-                <option value="white">Day</option>
-                <option value="sepia">Dusk</option>
-                <option value="dark">Night</option>
-                <option value="star">Star</option>
-              </select>
-            </label>
+            <button id="settings-btn" class="menu-item" title="Theme, the rail's Plan layout, the habit chime, and which filter controls show">Settings…</button>
           </div>
         </div>
         <input id="import-input" type="file" accept="application/json,.json" hidden>
@@ -385,6 +348,7 @@
             <select id="tag-filter">
               <option value="">All tags</option>
             </select>
+            <input type="search" id="tag-search" placeholder="Find a tag…" aria-label="Search tags" hidden>
             <div id="tag-bar" class="tag-bar" hidden></div>
           </div>
           <!-- What a span of time held. Two selects in the order the sentence
@@ -775,6 +739,86 @@
         <span class="spacer"></span>
         <button type="button" id="history-clear" class="btn danger" title="Reduce this board's history to the state it is in now — no card is touched">Empty history</button>
         <button type="button" id="close-history" class="btn ghost">Close</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Everything that is set once and rarely touched again, out of the Menu
+       and into its own ledger — the same `.prop-table` the card dialog reads
+       as a list of properties, one per row, because that pattern already
+       says "a value beside its name" without new CSS. Nothing here is
+       renamed and nothing is re-wired: every id below is the one it has
+       always had, wired once at boot by js/ui/toolbar.js, js/main.js,
+       js/ui/theme.js or js/ui/habits.js — the dialog is where these controls
+       are, not what they are, the same rule the filter panel followed on
+       2026-09-13. -->
+  <dialog id="settings-dialog">
+    <div class="dialog-body">
+      <h2>Settings</h2>
+      <p class="import-copy">How the board looks and sounds — set once, and rarely touched again.</p>
+      <div class="prop-table">
+        <label class="prop-row">
+          <span class="prop-label">Theme</span>
+          <span class="prop-value">
+            <select id="theme-select" aria-label="Theme">
+              <option value="light">Morning</option>
+              <option value="white">Day</option>
+              <option value="sepia">Dusk</option>
+              <option value="dark">Night</option>
+              <option value="star">Star</option>
+            </select>
+          </span>
+        </label>
+
+        <div class="prop-row" role="radiogroup" aria-labelledby="prop-plan-label">
+          <span class="prop-label" id="prop-plan-label">Plan section</span>
+          <div class="picker-options prop-value">
+            <button type="button" id="plan-stacked" class="menu-item" role="radio" aria-checked="false" title="Day, week, month, year and dreams all at once">Stacked</button>
+            <button type="button" id="plan-dropdown" class="menu-item" role="radio" aria-checked="false" title="One horizon at a time, picked from a list">Dropdown</button>
+          </div>
+        </div>
+
+        <!-- Not a <label>: a button is not a labelable element, so a label
+             wrapping one speaks for nothing. The gutter names the row for the
+             eye and the button carries its own aria-label for a reader, which
+             is why syncHabitMute() no longer prints the words on it. -->
+        <div class="prop-row">
+          <span class="prop-label">Habit sound</span>
+          <span class="prop-value">
+            <button type="button" id="habit-mute" class="menu-item" aria-label="Habit sound" aria-pressed="false" title="Sound the reminder when a habit is due">🔊 Habit sound</button>
+          </span>
+        </div>
+
+        <div class="prop-row" role="radiogroup" aria-labelledby="prop-chime-label">
+          <span class="prop-label" id="prop-chime-label">Chime</span>
+          <div class="picker-options prop-value">
+            <button type="button" id="sound-marimba" class="menu-item" role="radio" aria-checked="false" title="Two warm wooden notes">Marimba</button>
+            <button type="button" id="sound-bell" class="menu-item" role="radio" aria-checked="false" title="One soft bell with a shimmer">Bell</button>
+            <button type="button" id="sound-droplet" class="menu-item" role="radio" aria-checked="false" title="A watery upward blip">Droplet</button>
+            <button type="button" id="sound-kalimba" class="menu-item" role="radio" aria-checked="false" title="A muted thumb-piano pluck">Kalimba</button>
+          </div>
+        </div>
+
+        <div class="prop-row" role="group" aria-labelledby="prop-show-label">
+          <span class="prop-label" id="prop-show-label">Show</span>
+          <div class="prop-value">
+            <!-- These act on the FILTER CONTROLS, never on what is painted on
+                 the cards — chips and stamps are the cards' own; a filter you
+                 don't use is the thing worth hiding. -->
+            <div class="picker-options">
+              <button type="button" id="toggle-tags" class="menu-item" aria-pressed="false" title="Hide the tag filters — the # bar and the tags dropdown"># Tags</button>
+              <button type="button" id="toggle-prios" class="menu-item" aria-pressed="false" title="Hide the priority filter dropdown">Priorities</button>
+              <button type="button" id="toggle-types" class="menu-item" aria-pressed="false" title="Hide the type filter dropdown">Types</button>
+              <button type="button" id="toggle-columns" class="menu-item" aria-pressed="false" title="Hide the column filter — and with it the rule that keeps Done cards off every view but the Board">Columns</button>
+            </div>
+            <hr class="menu-sep">
+            <button type="button" id="toggle-done-col" class="menu-item" aria-pressed="false" title="Hide the Done column on the Board view">Done column</button>
+          </div>
+        </div>
+      </div>
+      <div class="dialog-actions">
+        <span class="spacer"></span>
+        <button type="button" id="close-settings" class="btn ghost">Done</button>
       </div>
     </div>
   </dialog>

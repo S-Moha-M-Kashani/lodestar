@@ -54,7 +54,7 @@ export function setPlanLayout(next) {
   remember(LAYOUT_KEY, planLayout);
 }
 
-/** Mark the chosen layout in the ⚙ menu's Plan submenu. */
+/** Mark the chosen layout in the Settings dialog's Plan row. */
 export function syncPlanLayoutPicker() {
   for (const name of ['stacked', 'dropdown']) {
     $(`#plan-${name}`)?.setAttribute('aria-checked', String(name === planLayout));
