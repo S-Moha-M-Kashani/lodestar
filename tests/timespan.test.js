@@ -28,7 +28,7 @@
 // moment it reaches ui/dom.js this file stops loading under node.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { rangeText, rangeVal, spanOf } from '../js/core/timespan.js';
+import { dayStart, rangeText, rangeVal, spanOf } from '../js/core/timespan.js';
 
 // The Monday every span below is measured from, and the two neighbours the
 // boundaries are checked against.
@@ -133,4 +133,73 @@ test('the read-back says what the filter is doing, at the precision given', () =
   // An opened-but-unsaid custom range reads as the nothing it is, so the
   // sentence never claims a span the filter is not applying.
   assert.equal(rangeText(range({ preset: 'custom' })), 'Any time');
+});
+
+// --------------------------------------------------------------------------
+// The deadline the lens row asks about (2026-09-17)
+//
+// The range filter could measure two dates, `createdAt` and `doneAt`, and
+// neither is what "what is due" means. The `due` field is the third, and it is
+// the one difference between the two lenses a person presses most — Today and
+// This week — and a filter that cannot express them at all.
+//
+// Two things here can go quietly wrong. A deadline is an ISO *day*
+// ('2026-09-07') where the other two fields are timestamps, so comparing it
+// raw against a span in milliseconds silently answers "no card is due, ever".
+// And `through-today` has an open start on purpose: a card due last Tuesday is
+// today's work, and a span that began this morning would drop every overdue
+// card out of the one lens that exists to show them.
+
+// This is a unit test.
+test('a deadline is read as its own local day, or as nothing at all', () => {
+  // Local midnight, matching every other boundary in this file — a deadline
+  // parsed as UTC shifts a whole day for readers east or west of Greenwich,
+  // which is the bug that makes "due today" answer with tomorrow's card.
+  assert.equal(dayStart('2026-09-07'), at('2026-09-07T00:00'));
+  // No deadline is not a deadline of zero: `null` is what lets the predicate
+  // leave an undated card out of every due span rather than sweeping it into
+  // the ones that begin at the epoch.
+  assert.equal(dayStart(''), null);
+  assert.equal(dayStart(undefined), null);
+  // The same round-trip the rest of this module uses: a shape-valid
+  // impossibility is no date.
+  assert.equal(dayStart('2026-02-30'), null);
+  assert.equal(dayStart('07/09/2026'), null);
+});
+
+// This is a unit test.
+test('the due spans: through today includes what is already late', () => {
+  const through = spanOf(range({ field: 'due', preset: 'through-today' }), NOW);
+  // Open at the start, and ending at the end of today — the two halves of
+  // "what should I be doing now".
+  assert.equal(through.from, -Infinity);
+  assert.equal(through.to, at('2026-09-07T23:59:59.999'));
+  assert.ok(dayStart('2026-08-30') <= through.to); // overdue: in
+  assert.ok(dayStart('2026-09-07') <= through.to); // due today: in
+  assert.ok(dayStart('2026-09-08') > through.to);  // due tomorrow: out
+
+  // The named spans mean the same thing for this field as for the other two —
+  // the preset decides the span and the field decides which date is measured,
+  // which is what keeps this one new field from needing new span maths.
+  const week = spanOf(range({ field: 'due', preset: 'week' }), NOW);
+  assert.equal(week.from, at('2026-09-07T00:00'));
+  assert.equal(week.to, at('2026-09-13T23:59:59.999'));
+
+  // And the field survives a round trip, so a lens written into localStorage
+  // comes back as the lens it was; an unknown field still blanks to `created`.
+  assert.equal(rangeVal({ field: 'due', preset: 'week' }).field, 'due');
+  assert.equal(rangeVal({ field: 'plan', preset: 'week' }).field, 'created');
+  assert.equal(rangeVal({ field: 'due', preset: 'sometime' }).preset, '');
+});
+
+// This is a unit test.
+test('the read-back words the due spans too', () => {
+  // Three controls showing a field, a preset and two dates never look wrong
+  // even when they say something else — so the new field has to reach the
+  // sentence, or a board narrowed to what is due reads back as "Captured".
+  assert.equal(rangeText(range({ field: 'due', preset: 'through-today' })), 'Due up to today');
+  assert.equal(rangeText(range({ field: 'due', preset: 'week' })), 'Due this week');
+  assert.equal(rangeText(range({ field: 'due', preset: 'month' })), 'Due this month');
+  // The off position is still the off position, whichever field is named.
+  assert.equal(rangeText(range({ field: 'due', preset: '' })), 'Any time');
 });

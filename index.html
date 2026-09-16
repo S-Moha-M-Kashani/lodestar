@@ -309,6 +309,15 @@
          Inbox, which js/ui/board.js builds. The controls are static markup
          beside the rail, never inside it — renderCatRail() wipes the rail's
          children on every repaint. -->
+    <!-- The five named questions, above the row that narrows the board by
+         parts. Nobody composes six predicates in their head: they arrive
+         wanting one of these, so the composing is done in js/core/lenses.js and
+         a press writes the same `filters` object the panel writes. Which one is
+         pressed is derived from those values and never stored, so moving one
+         control by hand un-presses the row rather than leaving a lit button
+         over a board it no longer describes. Filled once at boot from the table
+         itself — two hand-kept lists of one thing is how the labels drift. -->
+    <div id="lens-row" class="lens-row" role="group" aria-label="Named views"></div>
     <div class="rail-row">
       <div id="cat-rail" class="cat-rail" role="group" aria-label="Filter by category" hidden></div>
       <div class="filter-menu">

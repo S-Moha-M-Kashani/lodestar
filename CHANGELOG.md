@@ -12,6 +12,24 @@ minor for a capability, a patch for a fix.
 
 ## [Unreleased]
 
+**The board can be asked a question instead of built out of parts.** Five named
+views stand above the filters — Today, This week, Everything open, Waiting on
+me, Finished — and pressing one sets the filters the app already applies, so
+nothing new decides which cards you see. Which one is pressed is worked out from
+the filters themselves rather than remembered, so moving any control by hand
+quietly un-presses the row instead of leaving a button lit over a board it no
+longer describes, and a board nobody has narrowed reads as "Everything open",
+because that is what it is. A pressed view leaves one chip that says its name
+and hands the board back when you close it.
+
+One new thing came with it and is worth naming on its own: the board can now be
+filtered by **when something is due**. It could only ever be asked when a card
+was written down or when it was finished, so "what is due this week" — the
+question the two commonest views are made of — had no control at all. It is in
+the filter panel too, as a Due option with an "Up to today" span that includes
+what is already late.
+
+
 **Two changes: the board is reachable from a phone anywhere in the world, and
 it is finally laid out for one.**
 

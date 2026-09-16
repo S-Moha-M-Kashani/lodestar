@@ -95,7 +95,10 @@ function syncRangeControls() {
 }
 
 /** One writer for all four controls, so the stored value, the read-back and the
- *  repaint cannot be updated by one handler and forgotten by another. */
+ *  repaint cannot be updated by one handler and forgotten by another. The lens
+ *  row reaches it the way every other filter does, by dispatching `change` on
+ *  the control — see the note over `applyLens` for why it may not import this
+ *  module. */
 function setRange(next) {
   filters.range = rangeVal(next);
   try {

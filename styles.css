@@ -461,6 +461,48 @@ input, select, textarea { font: inherit; color: inherit; }
 /* The open drawer still pulls up — taller, growing upward off the shared
    bottom edge, instead of the padding trick a fixed height would swallow. */
 .rail-row .cat-tab[aria-pressed="true"] { height: calc(var(--rail-h) + 3px); }
+/* The five named questions, on their own line above the row that narrows the
+   board by parts. A lens writes the same filters the panel writes, so nothing
+   here is a second way of narrowing anything — what the row adds is one press
+   where six controls used to be composed by hand.
+
+   No new colour and no new token: a lens at rest is soft ink on paper, and the
+   pressed one is inked and underlined in the red rule the ledger already draws
+   its lines with. The pressed state is derived from the filters on every
+   repaint (renderLensRow), so a control moved by hand takes the press with it
+   — which is why this is a plain `aria-pressed` and not a class the JS has to
+   remember to remove. */
+.lens-row {
+  --rail-h: 25px; /* the rail's own height; the phone block raises both */
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 10px;
+}
+.lens-btn {
+  box-sizing: border-box;
+  height: var(--rail-h);
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  color: var(--ink-soft);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+.lens-btn:hover { color: var(--ink); }
+.lens-btn[aria-pressed="true"] {
+  color: var(--ink);
+  border-color: var(--line);
+  background: var(--card);
+  box-shadow: inset 0 -2px 0 var(--rule-red);
+}
+
 /* One button where seven dropdowns, two date boxes, a read-back and a bar of
    every tag used to stand, and one chip for each filter actually in force.
    Dashed, like `+ New card`: this is a control that adds something rather than
@@ -3688,6 +3730,7 @@ body[data-view="assistant"] .app-header { flex: none; }
    Assistant it is a row of controls that do nothing to what is on screen. The
    theme picker is the app's, not the board's, so it stays. */
 body[data-view="assistant"] .rail-row,
+body[data-view="assistant"] #lens-row,
 body[data-view="assistant"] .toolbar-menu,
 body[data-view="assistant"] #tag-bar,
 /* The footer explains dragging cards and the keys that move them. */
@@ -5484,6 +5527,18 @@ button.chat-source-card {
     row-gap: 6px;
     border-bottom: none;
   }
+  /* The lenses are a third swiped line, and the one a thumb reaches for first.
+     They must not wrap: five names on two lines cost the height the phone
+     layout spent 1,150px of header getting back. */
+  .lens-row {
+    --rail-h: 40px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    margin-top: 6px;
+  }
+  .lens-row::-webkit-scrollbar { display: none; }
+  .lens-btn { flex: 0 0 auto; font-size: 12px; }
   /* One swiped strip now rather than two: the areas keep their line, and what
      was the second strip — seven selects nobody could see the end of — is one
      button and the chips it leaves behind, on the line under them. */

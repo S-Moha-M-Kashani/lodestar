@@ -3,7 +3,7 @@ import { COLUMNS, TYPES, priorityOf } from './constants.js';
 import { habitCountVal, habitFreqVal, habitHistoryVal, habitTimesVal, isHabit } from './habits.js';
 import { parentIdVal, resolveLineage } from './nesting.js';
 import { planSrcVal, planVal, resolvePlan } from './plan.js';
-import { spanOf } from './timespan.js';
+import { dayStart, spanOf } from './timespan.js';
 import { commit } from './history.js';
 import { filters, state, view } from './state.js';
 import { columnTitle, getCard } from '../ui/dom.js';
@@ -226,7 +226,13 @@ export const askingAboutFinished = () =>
 export function matchesRange(card) {
   const span = spanOf(filters.range);
   if (!span) return true;
-  const when = filters.range.field === 'done' ? card.doneAt : card.createdAt;
+  // Three dates a card can be measured against, and the deadline is the one
+  // that is a *day* rather than a moment — `dayStart` is where that difference
+  // is answered, once, so nothing downstream has to know about it.
+  const { field } = filters.range;
+  const when = field === 'done' ? card.doneAt
+    : field === 'due' ? dayStart(card.deadline)
+      : card.createdAt;
   if (!when) return false;
   return when >= span.from && when <= span.to;
 }

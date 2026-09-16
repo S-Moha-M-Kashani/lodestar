@@ -1,5 +1,6 @@
 import { catById } from '../core/categories.js';
 import { PRIO_TITLE } from '../core/constants.js';
+import { LENSES, lensFilters, lensOf } from '../core/lenses.js';
 import { filters } from '../core/state.js';
 import { rangeText, rangeVal, spanOf } from '../core/timespan.js';
 import { $ } from './dom.js';
@@ -54,6 +55,88 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+// --------------------------------------------------------------------------
+// The lens row
+//
+// A lens writes the same filters the panel writes — nothing here narrows the
+// board by a rule of its own — so the whole of it is: set six values, put the
+// six controls where those values say, repaint. What is *not* here is a stored
+// pressed state: `lensOf` reads it back off the filters every time, which is
+// what makes a control moved by hand un-press the row.
+
+const lensRow = $('#lens-row');
+
+/** Press a lens: the six values, then the six controls that set them.
+ *
+ *  The controls are written too, and that is not bookkeeping — the chips are
+ *  read off `filters` and the controls are read off nothing at all, so a select
+ *  left holding its old value would put the old chip back on the next repaint.
+ *
+ *  The span and the scope are handed to their own handlers by dispatching
+ *  `change` rather than assigned, exactly as `clearFilter` below does: both are
+ *  remembered between visits, and toolbar.js owns writing them down. That is
+ *  also why this module does not *import* toolbar.js — js/core/history.js's
+ *  graph reaches this file, so a static import would pull a module that builds
+ *  `<option>`s at evaluation into a plain-node test with no DOM
+ *  (tests/history.test.js, which is what caught it). The dispatch is also what
+ *  repaints, so nothing here calls render() itself. */
+export function applyLens(id) {
+  const next = lensFilters(id);
+  if (!next) return;
+  filters.type = next.type;
+  filters.prio = next.prio;
+  filters.column = next.column;
+  filters.nesting = next.nesting;
+  filters.tags.clear();
+  for (const tag of next.tags) filters.tags.add(tag);
+  $('#type-filter').value = next.type;
+  $('#prio-filter').value = next.prio;
+  $('#tag-filter').value = '';
+  $('#column-filter').value = next.column;
+  // The scope filter is remembered between visits, so it is written through
+  // its own handler rather than by hand — the same reason `clearFilter` below
+  // dispatches instead of assigning.
+  const nesting = $('#nesting-filter');
+  if (nesting.value !== next.nesting) {
+    nesting.value = next.nesting;
+    nesting.dispatchEvent(new Event('change'));
+  }
+  filters.range = rangeVal(next.range);
+  $('#range-field').value = next.range.field;
+  $('#range-from').value = next.range.from;
+  $('#range-to').value = next.range.to;
+  // Last, and the one that lands: toolbar.js's handler re-reads the whole
+  // range off `filters`, so this single dispatch carries the field and the two
+  // dates set above with it — and brings the remembered span, the read-back
+  // sentence and the repaint that the lens itself must not own.
+  $('#range-preset').value = next.range.preset;
+  $('#range-preset').dispatchEvent(new Event('change'));
+}
+
+if (lensRow) {
+  for (const lens of LENSES) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'lens-btn';
+    btn.dataset.lens = lens.id;
+    btn.textContent = lens.label;
+    btn.title = lens.hint;
+    btn.setAttribute('aria-pressed', 'false');
+    btn.addEventListener('click', () => applyLens(lens.id));
+    lensRow.append(btn);
+  }
+}
+
+/** Which lens the board is showing, repainted with it. Derived, so a filter
+ *  moved by hand takes the press with it. */
+export function renderLensRow() {
+  if (!lensRow) return;
+  const pressed = lensOf(filters);
+  for (const btn of lensRow.querySelectorAll('.lens-btn')) {
+    btn.setAttribute('aria-pressed', String(btn.dataset.lens === pressed));
+  }
+}
+
 /** What is in force, in words, and how to lift each one.
  *
  *  The wording is read off the control that set it wherever there is one — the
@@ -64,6 +147,15 @@ document.addEventListener('keydown', (e) => {
  *  what `rangeText` exists for). */
 function activeFilters() {
   const out = [];
+  // A pressed lens is one chip saying the lens, not one chip per value it
+  // wrote: five chips spelling out a single press is the wall of controls the
+  // `+ Filter` button was collapsed to end. 'Everything open' narrows nothing,
+  // so it reaches here with no filters in force and says nothing at all.
+  const lens = lensOf(filters);
+  if (lens) {
+    const found = LENSES.find((l) => l.id === lens);
+    return found.id === 'open' ? [] : [{ key: 'lens', text: found.label, title: found.hint }];
+  }
   const optionText = (sel) => {
     const el = $(sel);
     return el?.selectedOptions?.[0]?.textContent?.trim() || '';
@@ -91,6 +183,10 @@ function activeFilters() {
  *  or the chip would come back on the next repaint, since the chips are read
  *  off `filters` and the controls are read off nothing at all. */
 function clearFilter(key) {
+  // Lifting a lens is pressing the one that narrows nothing — which puts every
+  // control back where that lens says, through the single writer above, rather
+  // than clearing six filters one at a time and hoping the list stays in step.
+  if (key === 'lens') { applyLens('open'); return; }
   if (key.startsWith('tag:')) {
     filters.tags.delete(key.slice(4));
     const dropdown = $('#tag-filter');

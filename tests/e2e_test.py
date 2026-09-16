@@ -7968,6 +7968,140 @@ try:
         check("trace: reading traces changed no card",
               len(api_state()["cards"]) == cards_before_trace)
 
+        # ---- The lens row ------------------------------------------------------
+        # This is an end-to-end test. Nobody composes six predicates in their
+        # head; they arrive wanting one of five things. A lens is that
+        # composing done for them — a named question that writes the filters
+        # the app already applies — so `matchesFilters` is untouched and the
+        # only new claim on screen is which lens is pressed.
+        #
+        # Five properties, each one a way a row of named questions goes wrong.
+        # A lens must replace the last one completely, or the board answers a
+        # question nobody asked under a button claiming otherwise. Its pressed
+        # state must be read back off the filters, so moving one control by
+        # hand un-presses the row rather than leaving a lit button over a board
+        # it no longer describes. It must leave one chip that says itself in
+        # words and hands the board back. A lens naming the Done column has to
+        # bring the hide-Done suspension with it, or "Finished" answers with
+        # nothing on every view but the Board. And the row belongs wherever the
+        # filters are — which is every view but the Assistant, where the whole
+        # rail is hidden.
+        today_iso = datetime.now().strftime("%Y-%m-%d")
+        late_iso = (datetime.now() - timedelta(days=6)).strftime("%Y-%m-%d")
+        later_iso = (datetime.now() + timedelta(days=21)).strftime("%Y-%m-%d")
+        planted = api_state()["cards"] + [
+            {"id": "lens-late", "title": "LENS-LATE", "columnId": "inbox",
+             "deadline": late_iso},
+            {"id": "lens-today", "title": "LENS-TODAY", "columnId": "inbox",
+             "deadline": today_iso},
+            {"id": "lens-later", "title": "LENS-LATER", "columnId": "inbox",
+             "deadline": later_iso},
+            {"id": "lens-undated", "title": "LENS-UNDATED", "columnId": "inbox"},
+            # A card already in Done. The server resolves a missing `doneAt` to
+            # the card's own `updatedAt`, so this one is finished today — which
+            # is what the Finished lens asks about.
+            {"id": "lens-finished", "title": "LENS-FINISHED", "columnId": "answered"},
+        ]
+        api_put(planted)
+        page.reload()
+        page.wait_for_selector("#new-card-btn")
+
+        lens_ids = page.locator("#lens-row .lens-btn").evaluate_all(
+            "els => els.map(e => e.dataset.lens)")
+        lens_words = page.locator("#lens-row .lens-btn").all_inner_texts()
+        pressed = lambda: page.locator(
+            '#lens-row .lens-btn[aria-pressed="true"]').evaluate_all(
+                "els => els.map(e => e.dataset.lens)")
+        check(f"lens: five named questions stand above the filter row ({lens_words})",
+              lens_ids == ["today", "week", "open", "waiting", "done"]
+              and [w.strip() for w in lens_words] == ["Today", "This week",
+                                                      "Everything open",
+                                                      "Waiting on me", "Finished"])
+        # A board nobody has narrowed *is* everything open, so that lens reads
+        # as pressed on arrival rather than the row starting with nothing lit.
+        check(f"lens: an unnarrowed board reads as Everything open ({pressed()})",
+              pressed() == ["open"])
+
+        page.click('#lens-row .lens-btn[data-lens="today"]')
+        page.wait_for_timeout(200)
+        on_board = lambda title: page.locator(".card", has_text=title).count()
+        check("lens: Today keeps what is late and what is due today, "
+              f"and drops the rest (late {on_board('LENS-LATE')}, "
+              f"today {on_board('LENS-TODAY')}, later {on_board('LENS-LATER')}, "
+              f"undated {on_board('LENS-UNDATED')})",
+              pressed() == ["today"] and on_board("LENS-LATE") == 1
+              and on_board("LENS-TODAY") == 1 and on_board("LENS-LATER") == 0
+              and on_board("LENS-UNDATED") == 0)
+
+        # One chip, not one per filter: while a lens is pressed the row says the
+        # lens, because five chips spelling out one press is the wall of
+        # controls the filter button was collapsed to end.
+        chips = page.locator("#filter-chips .filter-chip")
+        chip_words = chips.all_inner_texts()
+        check(f"lens: the chip row says the lens, in its own words ({chip_words})",
+              chips.count() == 1 and "Today" in " ".join(chip_words))
+        chips.first.locator("button").click()
+        page.wait_for_timeout(200)
+        check("lens: the chip hands the board back (every card returns, "
+              f"Everything open pressed: {pressed()})",
+              pressed() == ["open"] and on_board("LENS-UNDATED") == 1
+              and on_board("LENS-LATER") == 1)
+
+        # Moving one control by hand keeps the values and drops the claim.
+        page.click('#lens-row .lens-btn[data-lens="week"]')
+        page.wait_for_timeout(200)
+        open_filters(page)
+        page.select_option("#type-filter", "task")
+        page.wait_for_timeout(200)
+        check(f"lens: a filter moved by hand un-presses the row ({pressed()}, "
+              f"{page.locator('#filter-chips .filter-chip').count()} chips)",
+              pressed() == []
+              and page.locator("#filter-chips .filter-chip").count() >= 2)
+        page.select_option("#type-filter", "")
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(150)
+
+        # Finished on a view that is not the Board: the hide-Done default is
+        # what would otherwise answer this lens with an empty screen, and the
+        # suspension it stands down by is the one `askingAboutFinished` already
+        # writes — nothing here is a rule written for lenses.
+        page.click('.view-switch button[data-view="backlog"]')
+        page.wait_for_selector(".backlog-sheet")
+        page.click('#lens-row .lens-btn[data-lens="done"]')
+        page.wait_for_timeout(250)
+        check("lens: Finished lists what was finished, on a view that hides "
+              "Done by default",
+              pressed() == ["done"]
+              and page.locator(".backlog-row", has_text="LENS-FINISHED").count() == 1
+              and page.locator(".backlog-row", has_text="LENS-UNDATED").count() == 0)
+        page.click('#lens-row .lens-btn[data-lens="open"]')
+        page.wait_for_timeout(200)
+
+        row_seen = {}
+        for v in ["board", "backlog", "overview", "matrix", "areas", "review",
+                  "assistant"]:
+            page.click(f'.view-switch button[data-view="{v}"]')
+            page.wait_for_timeout(250)
+            row_seen[v] = page.locator("#lens-row").is_visible()
+        check(f"lens: the row is wherever the filters are, and nowhere else "
+              f"({row_seen})",
+              all(row_seen[v] for v in ["board", "backlog", "overview",
+                                        "matrix", "areas", "review"])
+              and not row_seen["assistant"])
+        page.click('.view-switch button[data-view="board"]')
+        page.wait_for_selector("#new-card-btn")
+        # And the block takes its own cards away again. One of them is overdue,
+        # which is real work for the summary line at the head of the board —
+        # so left behind it grows that line by three rows and the phone block
+        # below, which measures where the cards start, would be reading this
+        # block's fixture rather than the app's chrome. Omitting them from a
+        # whole-board save is the ordinary sweep, and it lands them in the
+        # Trash, whose own checks are ~5,000 lines above this one.
+        api_put([c for c in api_state()["cards"]
+                 if not c["id"].startswith("lens-")])
+        page.reload()
+        page.wait_for_selector("#new-card-btn")
+
         # ---- The board on a phone ---------------------------------------------
         # This is an end-to-end test. The board is reached from a phone as well
         # as from a laptop, and a 390 x 844 window is the size that decides
