@@ -11,7 +11,7 @@ import { dealCards, focusCardId, setCurrentView, setDealCards, setFocusCard, vie
 import { renderCatRail, renderColumn, renderTagBar } from './board.js';
 import { renderDirectionLine } from './direction.js';
 import { $, announce } from './dom.js';
-import { renderFilterChips } from './filter-menu.js';
+import { renderFilterChips, renderLensRow } from './filter-menu.js';
 import { renderHabitBanner, renderHabitRail } from './habits.js';
 import { renderPlanRail } from './plan.js';
 import { refreshEdits, refreshProposals } from './proposals.js';
@@ -87,6 +87,9 @@ export function render() {
   }
   renderCatRail();
   renderTagBar();
+  // Which named question the board is answering, if any. Read back off the
+  // filters rather than remembered, so a control moved by hand un-presses it.
+  renderLensRow();
   // What is narrowing the board right now, in words, beside the `+ Filter`
   // button the controls themselves live behind. Empty when nothing is.
   renderFilterChips();
