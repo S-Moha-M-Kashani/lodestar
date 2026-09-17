@@ -4583,6 +4583,96 @@ try:
         check("assistant: the brain says which CLI subscriptions it can serve",
               served.get("cli") == {"claude-cli": True, "codex-cli": False})
 
+        # This is an end-to-end test.
+        # ---- Signing a subscription in from the board itself (2026-09-17).
+        # The brain that answers a composed board runs in a container with no
+        # terminal, no browser and nobody's login in it, so the CLI backends
+        # were unreachable there however they were configured. `codex login
+        # --device-auth` prints a URL and a one-time code and waits, which is a
+        # flow a web page can carry: the drawer shows the code, the owner
+        # approves it on any device they already have a browser on, and the
+        # container ends up logged in with no port published and no credential
+        # passing through this repo.
+        #
+        # The brain's answer is stubbed here rather than driven off this
+        # machine's real binaries, for the reason the picker block above needs
+        # the opposite of what this block needs: that one proves a MISSING codex
+        # is not offered, and this one is about the control you get when it is
+        # present and signed out. Both facts cannot be true of one process, and
+        # what is under test here is the browser's half.
+        cli_auth_state = {"codex-cli": {"backend": "codex-cli", "installed": True,
+                                        "signed_in": False,
+                                        "detail": "not signed in yet"},
+                          "claude-cli": {"backend": "claude-cli", "installed": True,
+                                         "signed_in": None,
+                                         "detail": "cannot be checked from here"}}
+        cli_auth_pending = {"value": None}
+
+        def cli_auth_status(route):
+            route.fulfill(status=200, content_type="application/json",
+                          body=json.dumps({"backends": cli_auth_state,
+                                           "pending": cli_auth_pending["value"]}))
+
+        def cli_auth_start(route):
+            cli_auth_pending["value"] = {"backend": "codex-cli",
+                                         "url": "https://auth.openai.com/codex/device",
+                                         "code": "I2VL-BGRK4"}
+            route.fulfill(status=200, content_type="application/json",
+                          body=json.dumps(cli_auth_pending["value"]))
+
+        page.route("**/api/agent/cli-auth", cli_auth_status)
+        page.route("**/api/agent/cli-auth/start", cli_auth_start)
+        open_models(page)
+        # Folded and unfolded again, which is what asks the brain: the status
+        # costs it a subprocess, so it is fetched when this panel is opened
+        # rather than on every repaint of a streaming transcript. By this point
+        # in the run the panel has been open for several blocks and is holding
+        # the answer it was given before these routes were stubbed.
+        page.locator(".chat-settings-name").click()
+        page.locator(".chat-settings-name").click()
+        page.wait_for_selector(".chat-subs")
+        check("cli login: the drawer names both subscriptions",
+              page.locator('.chat-sub[data-backend="codex-cli"]').count() == 1
+              and page.locator('.chat-sub[data-backend="claude-cli"]').count() == 1)
+        # A subscription that cannot be checked says so rather than claiming
+        # either answer: on a Mac the Claude login is in the system keychain,
+        # which nothing here can read, and "signed out" would send the owner to
+        # log in again for no reason.
+        check("cli login: an unknowable state is reported as unknown, not as no",
+              "cannot be checked"
+              in page.locator('.chat-sub[data-backend="claude-cli"]').inner_text())
+        check("cli login: a signed-out codex offers the button that signs it in",
+              page.locator("#codex-signin").count() == 1)
+        page.click("#codex-signin")
+        page.wait_for_selector("#codex-code")
+        check("cli login: the one-time code is shown where it can be read",
+              page.locator("#codex-code").inner_text().strip() == "I2VL-BGRK4")
+        # A link and not a printed URL: the whole point is that the owner opens
+        # it on a device that has a browser, and a URL you have to retype is a
+        # login nobody finishes.
+        check("cli login: the page to open is a link, pointing where the CLI said",
+              page.get_attribute("#codex-link", "href")
+              == "https://auth.openai.com/codex/device")
+        # The code is not a credential — it is useless without the account it is
+        # approved from — but it is also the one thing on this screen that must
+        # not be remembered anywhere: a stale code shown after the login is an
+        # instruction to do something that cannot work.
+        cli_auth_state["codex-cli"] = {"backend": "codex-cli", "installed": True,
+                                       "signed_in": True,
+                                       "detail": "signed in"}
+        cli_auth_pending["value"] = None
+        gone = wait_until(lambda: page.locator("#codex-code").count() == 0)
+        check("cli login: the used code leaves the screen with it", gone)
+        # Read as a whole sentence rather than as a substring: the signed-OUT
+        # wording is "not signed in yet", so `"signed in" in text` is true in
+        # both states and a check written that way passes against a row that
+        # never moved.
+        said = page.locator('.chat-sub[data-backend="codex-cli"]').inner_text()
+        check("cli login: the row follows the brain to signed in on its own",
+              "signed in" in said and "not signed in" not in said)
+        page.unroute("**/api/agent/cli-auth")
+        page.unroute("**/api/agent/cli-auth/start")
+
         # ---- A CLI subscription is a backend like any other: it rides along on
         # the request, and it cannot overrule the brain's own configuration.
         page.select_option("#model-provider", "claude-cli")

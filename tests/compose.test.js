@@ -600,3 +600,82 @@ test('the composed stack supplies no password of its own, in either form', () =>
   assert.match(serviceBlock("brain"), /BOARD_API_TOKEN: \$\{LODESTAR_SERVICE_TOKEN:-\}/,
     'the brain and the board must share one service token');
 });
+
+// ---------------------------------------------------------------------------
+// The CLI subscriptions, under Docker (2026-09-17)
+// ---------------------------------------------------------------------------
+//
+// `docs/cli-backends.md` said for months that neither subscription works under
+// Docker, and it was right about the reason: the brain image had no `claude`
+// and no `codex` in it, and `cli_backends()` reports a backend by asking
+// `shutil.which`. So the composed brain offered the picker two options it could
+// never serve — or rather, correctly offered neither, which is a feature the
+// board gained precisely so a missing binary could not fail every turn.
+//
+// Making `codex-cli` the composed default turns that honesty into a boot
+// requirement: a default the image cannot run is a stack whose every chat turn
+// fails with nothing on screen able to fix it. These three assertions are the
+// same shape as the embedder pin above — the compose file may only name what
+// the Dockerfile installs, and the login the container earns has to survive the
+// next `docker compose up`.
+
+// Which binary each CLI backend runs, and how the Dockerfile is searched for
+// proof that it installs one. A name rather than a pattern: an image that
+// merely mentions the word "codex" in a comment installs nothing.
+const CLI_BINARY = { 'codex-cli': 'codex', 'claude-cli': 'claude' };
+const brainInstalls = (binary) =>
+  new RegExp(`/usr/local/bin/${binary}\\b`).test(read('brain/Dockerfile'));
+
+// This is a configuration invariant.
+test('compose pins a chat backend the brain image can actually run', () => {
+  const pinned = (brainEnvPin('BRAIN_LLM') || '').match(/:-([\w-]+)}/)?.[1]
+    || brainEnvPin('BRAIN_LLM');
+  const binary = CLI_BINARY[pinned];
+  if (!binary) return;                     // an API backend needs no binary
+  assert.ok(
+    brainInstalls(binary),
+    `compose defaults the composed brain to BRAIN_LLM=${pinned}, which answers ` +
+      `by running "${binary}" — and brain/Dockerfile installs no such binary. ` +
+      `The container would start, answer /health, offer the backend in the ` +
+      `picker and fail every single chat turn.`,
+  );
+});
+
+// This is a configuration invariant.
+test('the subscription login survives a recreate, in a volume of its own', () => {
+  // CODEX_HOME defaults to $HOME/.codex, and the brain image runs as root.
+  const home = '/root/.codex';
+  const mount = mountsOf(serviceBlock('brain')).find(
+    (m) => m.split(':')[1] === home,
+  );
+  assert.ok(
+    mount,
+    `nothing is mounted at ${home}, so the login the owner just completed in ` +
+      `the browser lives in the container's writable layer and the next ` +
+      `\`docker compose up --build\` throws it away. Every recreate would ask ` +
+      `for the device code again.`,
+  );
+  const source = mount.split(':')[0];
+  assert.ok(
+    !source.startsWith('.') && !source.startsWith('/') && !source.includes('$'),
+    `${home} is mounted from "${source}" — a path on the host. A live ` +
+      `subscription token must not land in the working tree: databases/ is ` +
+      `what \`npm run backup\` copies to Google Drive, and the tree itself is ` +
+      `what git publishes. A named volume keeps the credential in Docker's own ` +
+      `storage, where neither reaches it.`,
+  );
+});
+
+// This is a configuration invariant.
+test('no subscription credential is written into the compose file itself', () => {
+  // The same rule the password already lives under, extended to the second
+  // credential compose now carries: a token may be *passed through* from the
+  // environment, never spelled out in a tracked file.
+  const line = brainEnvPin('CLAUDE_CODE_OAUTH_TOKEN');
+  assert.ok(
+    line === undefined || /^\$\{CLAUDE_CODE_OAUTH_TOKEN:-\}$/.test(line),
+    `docker-compose.yml sets CLAUDE_CODE_OAUTH_TOKEN to "${line}" rather than ` +
+      `passing it through from the environment. A subscription token in a ` +
+      `tracked file is the state this whole boundary exists to end.`,
+  );
+});

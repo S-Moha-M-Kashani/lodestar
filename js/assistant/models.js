@@ -1,3 +1,4 @@
+import { renderSubscriptions, refreshSubs } from './cli-auth.js';
 import { widgetShowing } from './shell.js';
 import { boardSuffix } from '../core/boards.js';
 import { KEY_PREFIX } from '../core/keys.js';
@@ -395,7 +396,11 @@ export function renderChatSettings() {
   };
   sayStatus();
   if (settingsOpen && keyKnown === '') refreshKeyStatus();
-  panel.addEventListener('toggle', () => { if (panel.open) refreshKeyStatus(); });
+  panel.addEventListener('toggle', () => {
+    if (!panel.open) return;
+    refreshKeyStatus();
+    refreshSubs();
+  });
   // The key sent, and the field emptied once it is saved, both go through the
   // draft and through whichever input is live — never through this handler's
   // own closed-over node, which a repaint between the click and the answer
@@ -420,6 +425,12 @@ export function renderChatSettings() {
   keyRow.append(keyInput, keySave, keyStatus);
   keyLabel.appendChild(keyRow);
   fields.appendChild(keyLabel);
+  // The two CLI subscriptions, under the key they sit beside because all three
+  // answer one question: what is this brain allowed to think with. Whether one
+  // is signed in costs the brain a subprocess to find out, so it is asked when
+  // this panel is opened and never on the render path — the same deliberate
+  // moments the key status is fetched at.
+  fields.appendChild(renderSubscriptions());
   // Where the chat model runs, when the brain told us. Worth saying out loud:
   // a local backend is free and private but answers in tens of seconds, and
   // the list above is then the daemon's, not ours.

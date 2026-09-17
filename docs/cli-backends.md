@@ -1,63 +1,54 @@
 # Using your Claude or Codex subscription as Lodestar's Assistant
 
-*Last updated 2026-09-08*
+*Last updated 2026-09-17*
 
-Lodestar's Assistant can answer through the `claude` or `codex` command-line tool
-that is **already installed and already logged in on your computer**. No API key,
-no billing setup, no extra account: the subscription you already pay for
-monthly is the credential, and Lodestar never sees it.
+Lodestar's Assistant can answer through the `claude` or `codex` command-line
+tool, signed in **on your own computer** or **in the container** the brain runs
+in. No API key, no billing setup, no extra account: the subscription you already
+pay for monthly is the credential, and Lodestar never sees it.
 
 Each board picks its own backend, so two people sharing one Lodestar can each
 answer through their own subscription.
 
 ## Before you start: where does Lodestar run?
 
-This is the one thing worth checking first, because it decides whether the option
-appears at all.
+This is the one thing worth checking first, because it decides *how* you sign in,
+not whether you can.
 
 Lodestar has two parts: the **board** (what you see) and the **brain** (what
-answers). The brain is what runs the CLI, so **the CLI has to be installed and
-logged in on the machine the brain runs on.**
+answers). The brain is what runs the CLI, so **the subscription has to be signed
+in on the machine the brain runs on.**
 
-| How you run Lodestar | Does this work? |
+| How you run Lodestar | What to do |
 | --- | --- |
-| `npm start` + the brain, both on your own laptop | **Yes.** This is the case this feature is for. |
-| Docker on this same laptop | **No** — the brain is inside a container that has no `claude`/`codex` and no login of yours. |
-| Docker on a home server, opened from another laptop | **No** — same reason, and the subscription would be the server's, not yours. |
+| `npm start` + the brain, both on your own laptop | Nothing. You are already logged in — skip to Step 4. |
+| Docker on this same laptop | **Codex:** press *Sign in* in the Assistant's settings and approve the code. **Claude:** paste a token (Step 3). |
+| Docker on a home server, opened from another laptop | The same, and the subscription is the one you sign the *container* in with. |
 
-If you are on Docker, your options today are Ollama (local, free, private) or
-OpenRouter (an API key).
+Since 2026-09-17 the brain's image carries both programs, and the composed brain
+answers through **Codex by default**. What changed and what did not:
 
-### Under Docker, neither subscription works — and here is why, one at a time
+- **Codex signs itself in, from the board.** `codex login --device-auth` prints a
+  link and a one-time code and waits. So the container needs no browser of its
+  own and no port opened to it: you read the code on the board, approve it in a
+  browser you already have open, and the container ends up logged in. The login
+  lives in a Docker volume of its own — never in `databases/`, which is what the
+  backup copies to Google Drive, and never in the working tree, which is what git
+  publishes.
+- **Claude cannot do that, and it is the platform's doing.** Claude Code's login
+  is a terminal program, and on a Mac what it writes is a **Keychain** entry —
+  your operating system's own password store, which no Linux container can read
+  and no mount can share. The one form of that credential a container can be
+  *given* is a long-lived token from `claude setup-token`, which is Step 3.
+- **The container gets its own login, not yours.** Nothing mounts `~/.codex` or
+  `~/.claude` from your machine. That is deliberate: sharing the host login would
+  hand a container that runs whatever a model writes the same token your own
+  terminal uses, and it would be revocable only by revoking yours.
 
-Checked on 2026-09-08 by asking the running container itself: it reports both
-subscriptions unavailable, and neither `claude` nor `codex` is inside it — nor
-Node, which both of them need to run.
-
-- **Claude: not possible, not merely not done.** Your Claude login is not a
-  file. Claude Code keeps it in the **macOS Keychain** — your operating system's
-  own password store — and a Linux container cannot read a Keychain at all.
-  There is no path to share and nothing to mount, so no amount of Docker
-  configuration reaches it.
-- **Codex: possible, deliberately not built.** Your Codex login *is* a file
-  (`~/.codex/auth.json`), so a container could in principle be given it. Three
-  costs stopped it, and none of them buys you anything you cannot already have:
-  the brain's image would need a Node runtime and the `codex` program added on
-  top of the 18 GB it already weighs; a live paid-subscription token would be
-  handed to a container that runs whatever the model writes; and sharing it
-  read-only would likely break Codex's own renewal of that token. If you want
-  this anyway, say so — it is a decision, not an oversight.
-
-**So the way to use either subscription is to run the brain on your own
-machine** — Step 3 below. Everything else can still be in Docker: `docker
-compose up chroma` gives you chat memory, and the board and the brain run from
-your own user account, which is where your logins already live.
-
-The older sketch of a container reaching the CLI on the host is in
-`docs/decisions/2026-08-20-cli-assistant-backends-design.md`. It was weighed
-again on 2026-09-08 and turned down: it would hand a container the ability to
-run a coding assistant on your laptop, which is a much bigger permission than
-answering a chat message.
+A first turn on a freshly built stack will fail until that login is done once.
+What you see is Codex's own message with the cure added to it: *401
+Unauthorized: Missing bearer … — the Codex subscription is not signed in where
+the brain runs.*
 
 ## Step 1 — install the CLI on your own computer
 
@@ -73,7 +64,7 @@ Codex:
 npm install -g @openai/codex        # or: brew install codex
 ```
 
-## Step 2 — log in, once
+## Step 2 — log in, once, on your own computer
 
 ```sh
 claude          # then type /login and follow the browser prompt
@@ -92,7 +83,41 @@ codex exec 'reply with the word ready'
 
 If those answer, Lodestar will too.
 
-## Step 3 — start Lodestar the ordinary way
+**Skip this step if you run Lodestar in Docker** — the container is a different
+machine and your own login is not in it. Step 3 is the Docker way in.
+
+## Step 3 — in Docker: sign the container in
+
+Open the board → **Assistant** → the **⚙** beside the theme picker → unfold
+**Models** → **Your subscriptions**. One row per subscription, each saying what
+the brain found.
+
+**Codex — press Sign in.** The row turns into a link and a one-time code:
+
+1. open the link (any device, any browser — it does not have to be this one);
+2. type the code;
+3. the row says so by itself. Nothing to press afterwards, and nothing to copy
+   back.
+
+The code expires in about fifteen minutes. If you miss it, press *Sign in* again
+for a fresh one.
+
+**Claude — paste a token.** On the machine where you are already logged in:
+
+```sh
+claude setup-token        # prints sk-ant-oat01-…
+```
+
+Paste it into the **Claude** row and press *Save*. It is stored the way the
+OpenRouter key is — the brain keeps it, the field empties itself, and no page
+ever reads it back. To make it survive a restart, put it in `.env` as
+`CLAUDE_CODE_OAUTH_TOKEN=…` instead; `docker compose` passes it through.
+
+A row that says *cannot be checked from here* is not a problem: on a Mac the
+Claude login is in the keychain, so there is nothing for the brain to look at.
+It is saying it does not know, rather than guessing.
+
+## Step 4 — start Lodestar the ordinary way
 
 ```sh
 npm start                                                   # the board, on :3000
@@ -103,7 +128,7 @@ BRAIN_EMBEDDER=fake uv run --project brain \
 Nothing about the brain's configuration needs to change. `BRAIN_LLM` can stay
 whatever it is — the picker chooses per board, per request.
 
-## Step 4 — choose it on your board
+## Step 5 — choose it on your board
 
 Open the board → **Assistant** → the **⚙** beside the theme picker → unfold
 **Models** → **Text provider**:
@@ -119,7 +144,7 @@ wrong.
 For Claude you also get a model choice: **sonnet**, **opus** or **haiku**. Codex
 has none, deliberately — it runs on whatever model Codex itself defaults to.
 
-## Step 5 — per board
+## Step 6 — per board
 
 The choice is remembered **per board**. Your board can answer through Claude
 while another board on the same Lodestar answers through Codex; neither knows
@@ -166,7 +191,10 @@ are in `brain/src/lodestar_brain/llm_cli.py`.
 
 | What you see | What it means |
 | --- | --- |
-| The CLI option is missing from the picker | The brain can't find the binary. Check `which claude` / `which codex` **in the same shell you start the brain from**, and restart the brain. |
+| The CLI option is missing from the picker | The brain can't find the binary. Check `which claude` / `which codex` **in the same shell you start the brain from**, and restart the brain. In Docker it is in the image, so a missing option there means the image predates 2026-09-17 — rebuild it. |
+| The option is there, and every turn fails saying you are not logged in | The binary is installed and the subscription is not signed in. The **Your subscriptions** rows in the ⚙ drawer say which, and hold the way to fix it. The picker offers a backend the brain *can run*; being signed in is a separate question, asked where it can be answered. |
+| *Sign in* says codex is not installed where the brain runs | The brain is running somewhere without it — a native brain on a machine with no `codex`, most likely. Docker images built since 2026-09-17 carry both. |
+| The code expired | Press *Sign in* again. Nothing is kept from the old one. |
 | The option was there, then vanished and switched back to Ollama | The brain looked again and the binary was gone (uninstalled, or a `PATH` that differs between shells). |
 | A reply that mentions logging in | The subscription's login expired. Run `claude` → `/login`, or `codex login`, then try again. |
 | The turn takes a long time | Expected. These are agents that boot a session before answering; Lodestar waits up to 5 minutes. |

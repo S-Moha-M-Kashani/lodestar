@@ -112,7 +112,16 @@ def _cli_model(settings: Settings, backend: str,
             binary=_cli_binary(backend),
             # PROVIDER_MODELS rather than a literal, so the picker's default and
             # `/agent/models`' answer cannot disagree about what will serve.
-            model=model or configured or PROVIDER_MODELS['claude-cli'])
+            model=model or configured or PROVIDER_MODELS['claude-cli'],
+            # Empty on the machine the owner logged in on, where `claude` finds
+            # its own credential; set only where it cannot — a container, which
+            # can read neither a keychain nor a login that was never made in it.
+            # Passed whatever the *configured* backend is, because the picker
+            # chooses per request and a token that only applied to a brain
+            # booted as claude-cli would be a subscription the UI could select
+            # and not reach.
+            env=({'CLAUDE_CODE_OAUTH_TOKEN': settings.claude_oauth_token}
+                 if settings.claude_oauth_token else {}))
     # Deliberately no model, even when one is named: `codex exec` is never
     # passed -m here — the choice made was codex's own default — so carrying a
     # slug on the wrapper would describe a model that did not answer.

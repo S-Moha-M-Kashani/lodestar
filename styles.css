@@ -4068,6 +4068,56 @@ body[data-view="assistant"] .app-footer { display: none; }
 }
 .chat-key-row button:hover { border-color: var(--ink-soft); }
 .chat-key-status { white-space: nowrap; color: var(--ink-soft); }
+/* The subscriptions block: one row per CLI backend, each saying what the brain
+   said about it and carrying the one control that can change the answer — a
+   Sign in button, a one-time code, or a token field. The ledger idiom again,
+   and no new colour: a subscription that is signed in, signed out or unknowable
+   is ink weight, exactly as a card's state is. */
+.chat-subs { display: flex; flex-direction: column; gap: 6px; }
+.chat-subs-label { color: var(--ink-soft); }
+.chat-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.chat-sub-name { font-family: var(--mono); font-size: 11px; color: var(--ink); }
+.chat-sub-status { color: var(--ink-soft); flex: 1; min-width: 0; }
+.chat-sub-btn {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.chat-sub-btn:hover { border-color: var(--ink-soft); }
+/* The code and its link take the whole line under the row that summoned them:
+   the code is the thing being read off the screen and typed into a phone, so it
+   is the one piece of text here that must not be clipped to fit beside a
+   status. */
+.chat-sub-device {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  flex: 1 0 100%;
+}
+.chat-sub-hint { color: var(--ink-soft); }
+.chat-sub-code {
+  font-family: var(--mono);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 2px 6px;
+  user-select: all;
+}
+.chat-sub-token { flex: 1 0 100%; }
 /* The embedder is a fact, not a pick — the brain runs exactly one, locally.
    Set as a filled-in ledger cell where the dropdown stood: the selects'
    footprint, no affordance, closed with a small neutral rubber stamp (the
@@ -5627,6 +5677,10 @@ button.chat-source-card {
   .assistant-tools button,
   .assistant-tools .chat-recall-name,
   .composer-model { min-height: 40px; }
+  /* Sign in and Save inside the settings drawer: the drawer is where a phone
+     signs a subscription in, and both stood at 25px. */
+  .chat-sub-btn,
+  .chat-key-row button { min-height: 40px; }
   /* New chat and the collapse are a single glyph each, so the height alone
      left them 30px and 33px wide. */
   #chat-new,
