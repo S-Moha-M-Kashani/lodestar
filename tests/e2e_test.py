@@ -3264,9 +3264,16 @@ try:
         if expandable:
             step.locator("summary").click()
         opened = step.inner_text().lower() if expandable else ""
+        # "pending" was the wire's own flag, and the step has not printed it
+        # since widget 2 became the default agent (2026-09-10): its create_card
+        # answers in a sentence, so the assertion named a word the fold no
+        # longer carries and this line was red for a working feature. What the
+        # reader must see is unchanged — the call, what it was asked, and that
+        # the card is a proposal rather than a card on the board.
         check("assistant: expanding a step shows its arguments and its result",
               "arguments" in opened and "result" in opened
-              and "leiden clustering" in opened and "pending" in opened)
+              and "leiden clustering" in opened
+              and "nothing is on the board yet" in opened)
 
         # ---- Sources: three tools, three result shapes, one list -------------
         # Stubbed rather than provoked through the fake model: web_search needs
