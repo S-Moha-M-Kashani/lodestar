@@ -12,6 +12,30 @@ minor for a capability, a patch for a fix.
 
 ## [Unreleased]
 
+**The board is reachable from the editor, over MCP.** An assistant that lives
+where you work — Claude Code in a terminal, Claude Desktop — can now read, filter,
+write, change and delete cards without a browser tab. Eight tools: the board's
+own vocabulary of life areas and tags, a search with every filter the board can
+express (keyword, column, type, area, importance, urgency, effort, control,
+tags, lineage, and date spans over when a card was captured, finished, updated,
+due or planned), one card in full, and the four that change something.
+
+It is a client of the board's own web interface and never of the database, so
+the running board stays the one thing that writes, and every save is the whole
+board the way a browser saves it — one edit can never archive the cards it did
+not mention. **It cannot destroy a card**: deleting moves it to the Trash, which
+the same tools can list and undo, and "Delete permanently" stays on the board
+itself. Unlike the Assistant's own agent, these tools write straight to the
+board, because you are driving them and your client shows you each call before
+it runs.
+
+Two failures were found by running it against a real board rather than by
+asking a test for them, and both are fixed here. A new card was taking a ledger
+number that a card in the Trash still held, so restoring that card would have
+left two cards reading `C-395`; the number now counts the Trash. And a save that
+arrived while another tab was saving was retried in a way that wrote the new
+card twice — the retry now produces the same board however often it runs.
+
 **The board can be asked a question instead of built out of parts.** Five named
 views stand above the filters — Today, This week, Everything open, Waiting on
 me, Finished — and pressing one sets the filters the app already applies, so

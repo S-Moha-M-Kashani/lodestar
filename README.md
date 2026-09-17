@@ -135,6 +135,71 @@ why it had to be a live model rather than the test suite's fake one, is in
 
 Privacy is a design rule, not a setting: conversations are never sent to any tracing or analytics service, web snippets and recalled text are fenced as data rather than instructions before the model reads them, and every link a web search returns is safety-checked before the model may cite it.
 
+## The board from your editor (MCP)
+
+Lodestar speaks [MCP](https://modelcontextprotocol.io), so an assistant that
+lives where you work — Claude Code in a terminal, Claude Desktop — can read and
+run the board without a browser tab. `mcp/server.mjs` is a small stdio server
+with no dependencies; it is a **client of the board's HTTP API**, so the running
+board stays the one thing that touches the database.
+
+Start the board first, then point a client at the server:
+
+```sh
+npm start                                # the board on :3000 — the MCP server talks to this
+npm run mcp                              # the MCP server, on stdin/stdout
+```
+
+In Claude Code the wiring is already in the repo: open this project and approve
+the `lodestar` server when prompted (`.mcp.json`). `claude mcp list` shows it
+connected. For Claude Desktop, add the same three lines to
+`claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "lodestar": {
+      "command": "node",
+      "args": ["/absolute/path/to/lodestar/mcp/server.mjs"],
+      "env": { "LODESTAR_BOARD_URL": "http://127.0.0.1:3000" }
+    }
+  }
+}
+```
+
+It authenticates with `LODESTAR_SERVICE_TOKEN` — the same non-browser
+credential the brain uses, read straight out of `.env`, so there is nothing to
+export and no password held by a second process. Set `LODESTAR_BOARD_URL` to
+reach a board on another port; `npm run mcp-test` points it at the `:3001`
+sandbox.
+
+**Eight tools.** `describe_board` (the life-area ids and tags, which are this
+board's own and cannot be guessed), `list_cards` (every filter the board can
+express — keyword, column, type, life area, importance, urgency, effort,
+control, tags, lineage, and date spans over captured/finished/updated/due/plan
+— combined with AND), `get_card`, `create_card`, `update_card`, `delete_card`,
+`list_trash`, `restore_card`.
+
+```
+▸ list_cards({"keyword":"mountain"})
+C-004 · task · In Progress · Travel · #autumn — Plan a long weekend in the mountains  [46a3ffe8…]
+
+▸ create_card({"title":"try the MCP server","category":"work","deadline":"2026-09-30"})
+Written down:
+C-397 · task · Inbox · Work · due 2026-09-30 · #mcp — try the MCP server  [id-lxspvu10…]
+```
+
+Two things it deliberately cannot do. **It cannot destroy a card**: `delete_card`
+moves it to the Trash, where `list_trash` and `restore_card` reach it, and
+"Delete permanently" stays on the board itself where you can see what you are
+emptying. And **it never sends a partial board** — every write reads the whole
+board, changes it and puts all of it back, which is what keeps one edit from
+archiving everything it did not mention.
+
+Unlike the Assistant's own agent, these tools write straight to the board: you
+are driving them yourself and your client shows you each call before it runs.
+One undo in the app puts back anything a call got wrong.
+
 ## Why I built this
 
 I have more ambitions and ideas than I will ever get through — a running
