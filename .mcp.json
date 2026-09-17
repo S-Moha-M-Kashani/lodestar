@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "lodestar": {
+      "command": "node",
+      "args": ["mcp/server.mjs"],
+      "env": {
+        "LODESTAR_BOARD_URL": "http://127.0.0.1:3000"
+      }
+    }
+  }
+}

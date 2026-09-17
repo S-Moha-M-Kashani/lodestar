@@ -38,7 +38,9 @@
     "hooks": "node scripts/install-hooks.mjs",
     "hygiene": "node scripts/release-hygiene.mjs master $(git tag --list 'v*' --merged master)",
     "release": "node scripts/release-to-master.mjs",
-    "auth:setup": "node scripts/set-password.mjs"
+    "auth:setup": "node scripts/set-password.mjs",
+    "mcp": "node mcp/server.mjs",
+    "mcp-test": "LODESTAR_BOARD_URL=http://127.0.0.1:3001 node mcp/server.mjs"
   },
   "engines": {
     "node": ">=23.4.0"
