@@ -130,7 +130,15 @@ export async function startServer({ env = {}, login = true } = {}) {
     // explicitly via `env`, pointing at a temp directory.
     env: { ...process.env, PORT: '0', BOARD_DB: dbPath,
            ASSISTANT_DB: assistantDbPath, NODE_NO_WARNINGS: '1',
-           LODESTAR_BACKUP_ON_WRITE: '0', ...authEnv(), ...env },
+           LODESTAR_BACKUP_ON_WRITE: '0',
+           // server.js reads .env from its own real location, not from cwd, so
+           // without this a spawned test server picks up whatever the
+           // developer's real .env happens to hold — LODESTAR_DEV_KEY was seen
+           // leaking through this way and failing the test that asserts the
+           // trace surface is absent without one. Pointed at a path that does
+           // not exist, which applyEnvFile treats as no file at all.
+           LODESTAR_ENV_FILE: join(dir, '.env.unused'),
+           ...authEnv(), ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   proc.stderr.on('data', () => {}); // drain
