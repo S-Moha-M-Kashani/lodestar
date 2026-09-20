@@ -9,6 +9,7 @@ import { KEY_PREFIX } from '../core/keys.js';
 import { filters, setCards, state } from '../core/state.js';
 import { RANGE_FIELDS, RANGE_PRESETS, rangeText, rangeVal, spanOf } from '../core/timespan.js';
 import { renderTagBar, setTagQuery } from './board.js';
+import { renderDateRange } from './date-range.js';
 import { ask } from './dialogs.js';
 import { $, announce } from './dom.js';
 import { render } from './render.js';
@@ -80,14 +81,19 @@ for (const { id, label } of RANGE_PRESETS) {
   $('#range-preset').append(new Option(label, id));
 }
 
-/** The two date inputs are shown only for `Between…`, and the read-back only
- *  while the filter is actually narrowing something — "Any time" is already
- *  what the preset select says, so printing it twice would be the one thing a
- *  read-back must not do. */
+/** The calendar is shown only for `Between…`, and the read-back only while the
+ *  filter is actually narrowing something — "Any time" is already what the
+ *  preset select says, so printing it twice would be the one thing a read-back
+ *  must not do.
+ *
+ *  `#range-from` and `#range-to` are hidden inputs now: the calendar
+ *  (js/ui/date-range.js) is what a reader presses, and those two are still the
+ *  values it writes and everything else reads. */
 function syncRangeControls() {
   const custom = filters.range.preset === 'custom';
-  $('#range-from').hidden = !custom;
-  $('#range-to').hidden = !custom;
+  const calendar = $('#range-calendar');
+  calendar.hidden = !custom;
+  renderDateRange();
   const active = spanOf(filters.range) !== null;
   const back = $('#range-readback');
   back.hidden = !active;
@@ -170,6 +176,50 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !menuPanel.hidden) {
     setMenuOpen(false);
     menuBtn.focus();
+  }
+});
+
+// The view row's own dropdown, beside the ⚙ menu and on the same one rule:
+// a click outside dismisses, a click inside is use, Escape closes and hands the
+// focus back, one `aria-expanded` on the button. Three dropdowns, one rule —
+// the 2026-09-03 lesson, applied a fourth time rather than reimplemented.
+//
+// The three views inside it are static markup with listeners of their own
+// (js/ui/render.js), so nothing here switches a view: this owns whether the
+// panel is open and where it hangs, and nothing else.
+const lensesBtn = $('#lenses-btn');
+const lensesPanel = $('#lenses-panel');
+
+/** Open or shut, and — when opening — place the panel under the button.
+ *
+ *  The panel is `position: fixed`, so its coordinates have to be given to it:
+ *  .view-switch clips its own overflow in order to scroll sideways on a phone,
+ *  and an absolutely positioned child of a clipping box is a menu nobody can
+ *  see. Measured on open rather than tracked, because the header does not move
+ *  while a dropdown is down. */
+function setLensesOpen(open) {
+  lensesPanel.hidden = !open;
+  lensesBtn.setAttribute('aria-expanded', String(open));
+  if (!open) return;
+  const at = lensesBtn.getBoundingClientRect();
+  lensesPanel.style.top = `${Math.round(at.bottom + 6)}px`;
+  lensesPanel.style.left = `${Math.round(at.left)}px`;
+  lensesPanel.style.minWidth = `${Math.round(at.width)}px`;
+}
+
+lensesBtn.addEventListener('click', () => setLensesOpen(lensesPanel.hidden));
+// Choosing a view is a move to it, so the panel goes with the press — the ⚙
+// menu's rule, for the same reason: every row in here is a one-shot action.
+lensesPanel.addEventListener('click', (e) => {
+  if (e.target.closest('button')) setLensesOpen(false);
+});
+document.addEventListener('click', (e) => {
+  if (!lensesPanel.hidden && !e.target.closest('.view-lenses')) setLensesOpen(false);
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !lensesPanel.hidden) {
+    setLensesOpen(false);
+    lensesBtn.focus();
   }
 });
 

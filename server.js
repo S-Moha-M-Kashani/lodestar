@@ -44,7 +44,16 @@ const ROOT = dirname(fileURLToPath(import.meta.url));
 // fills in the board's own settings and never overrides one that is really
 // set, so a container and a one-off `VAR=… npm start` both still win; see
 // scripts/env-file.mjs for why Node's own --env-file is not what does this.
-applyEnvFile({ root: ROOT });
+//
+// The file itself is always `.env` at the real ROOT — never the spawning
+// process's cwd, since ROOT is derived from this file's own location. A
+// spawned test server therefore reads the operator's real .env regardless of
+// what the harness passes it, which let a developer's own LODESTAR_DEV_KEY
+// (set there for their own manual poking at /dev/trace) leak into a test
+// asserting that surface is absent without one. `LODESTAR_ENV_FILE` is the
+// escape hatch: the harness points it at a file that does not exist, and a
+// missing file is not an error (see applyEnvFile) — it fills in nothing.
+applyEnvFile({ root: ROOT, file: process.env.LODESTAR_ENV_FILE || '.env' });
 
 // Which store this process opens. Asked here, at boot, because a seam nothing
 // calls is not a seam: until this line existed, LODESTAR_DB_BACKEND=postgres

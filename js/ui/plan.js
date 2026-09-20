@@ -1,4 +1,4 @@
-import { cardLabel, matchesFilters, moveCard } from '../core/cards.js';
+import { cardLabel, filtersActive, matchesFilters, moveCard } from '../core/cards.js';
 import { catColor } from '../core/categories.js';
 import { KEY_PREFIX } from '../core/keys.js';
 import {
@@ -19,30 +19,33 @@ import { render } from './render.js';
 // leaves the list.
 //
 // Two layouts, because the same list answers two different questions. Stacked
-// shows day, week, month, year, next year and dreams at once — the whole
-// horizon. Dropdown shows one at a time, and the near ones accumulate: "this
-// week" includes today. Next year does not, because a frame that repeated this
-// year's rows was a second entry answering the first one's question. Which
-// layout you get is a setting in the ⚙ menu, not a guess.
+// shows the whole horizon — day, week, month, year, next year and dreams, in
+// that order, as ONE list. Dropdown shows one horizon at a time, and the near
+// ones accumulate: "this week" includes today. Next year does not, because a
+// frame that repeated this year's rows was a second entry answering the first
+// one's question. Which layout you get is a setting in Settings, not a guess.
 //
-// Dreams is a kind of card rather than a distance, so a dream planned for this
-// month appears twice: in the month, because that is when it happens, and among
-// the dreams, because that is what it is.
+// The stacked layout was six named sections, each behind a rotated spine in its
+// own ink, in the one panel whose whole job is to be the board's narrow margin.
+// It is one list now, in the same order the sections were read in, so the rows
+// a reader saw at the top are still at the top. One consequence is worth
+// stating: a dream with a date used to be listed twice, once for when it
+// happens and once for what it is. In one list that is one card printed twice,
+// so `planList` keeps the first sighting and drops the second.
 //
-// And the block is outside the board's filters by default. The point of a plan
-// is to see the day whole; a category tab left on an hour ago would quietly
-// hide half of it. The PLAN heading is the switch that opts in — hovering it
-// says what a click will do, and while the filters are applied the heading
-// says so, because a filtered plan must never look like the whole plan.
+// **And the list follows the board's filters.** It was outside them, behind an
+// opt-in switch on the PLAN heading — so a board narrowed to one question
+// carried a margin answering a different one, and the switch was a control for
+// a state nobody chose. The habits deliberately do NOT follow them: a habit
+// hidden from the rail is a repetition nobody records, and the rail is the only
+// place a habit can be punched.
 
 const LAYOUT_KEY = KEY_PREFIX + 'plan-layout';
 const HORIZON_KEY = KEY_PREFIX + 'plan-horizon';
-const FILTERS_KEY = KEY_PREFIX + 'plan-filters';
 
 const layoutVal = (v) => (v === 'dropdown' ? 'dropdown' : 'stacked');
 export let planLayout = layoutVal(localStorage.getItem(LAYOUT_KEY));
 let horizon = planHorizonVal(localStorage.getItem(HORIZON_KEY));
-let useFilters = localStorage.getItem(FILTERS_KEY) === '1';
 
 const remember = (key, value) => {
   try { localStorage.setItem(key, value); } catch (_) { /* private mode */ }
@@ -68,13 +71,6 @@ function setHorizon(next) {
   announce(`Plan: ${planHorizonLabel(horizon)}`);
 }
 
-function setUseFilters(on) {
-  useFilters = on;
-  remember(FILTERS_KEY, on ? '1' : '0');
-  render();
-  announce(on ? 'Plan follows the board filters' : 'Plan shows everything planned');
-}
-
 // --- the pieces -------------------------------------------------------------
 
 function horizonPicker() {
@@ -93,36 +89,14 @@ function horizonPicker() {
   return pick;
 }
 
-/** The heading, which is also the filter switch. No standing button: the plan
- *  is a list to read, and a control parked above it earned its space only when
- *  someone reaches for it. */
-function filterHeading() {
+/** The heading. It was a button that opted the plan into the board's filters;
+ *  the plan follows them now whatever it says, so what is left is the word.
+ *  `plan-rail-title` stays on it — the class is what the e2e reads to find the
+ *  name of a rail list, and the rule there is add, never rename. */
+function planHeading() {
   const heading = document.createElement('h2');
-  heading.className = 'plan-rail-heading';
-
-  const btn = document.createElement('button');
-  btn.type = 'button';
-  btn.className = 'plan-rail-title' + (useFilters ? ' filtered' : '');
-  btn.setAttribute('aria-pressed', String(useFilters));
-  btn.setAttribute('aria-label', useFilters
-    ? 'Board filters are applied to the plan — show the whole plan again'
-    : 'Apply the board’s filters to the plan');
-
-  const word = document.createElement('span');
-  word.className = 'plan-title-word';
-  word.textContent = 'Plan';
-  // Shown only while filtered, so a short list is never a mystery.
-  const mark = document.createElement('span');
-  mark.className = 'plan-title-mark';
-  mark.textContent = useFilters ? 'filtered' : '';
-  // The pop-up: what the click does, on hover and on keyboard focus.
-  const tip = document.createElement('span');
-  tip.className = 'plan-title-tip';
-  tip.textContent = useFilters ? 'remove board filters' : 'apply board filters';
-
-  btn.append(word, mark, tip);
-  btn.addEventListener('click', () => setUseFilters(!useFilters));
-  heading.append(btn);
+  heading.className = 'plan-rail-heading plan-rail-title';
+  heading.textContent = 'Plan';
   return heading;
 }
 
@@ -166,7 +140,12 @@ function planRow(card, today) {
   name.type = 'button';
   name.className = 'plan-rail-open';
   name.textContent = card.title;
-  name.title = 'Open this card';
+  // The row is one line and the name is clipped to fit it, so the full title
+  // has to be reachable another way — by hover and by screen reader alike. It
+  // read "Open this card", which is what every one of these does and therefore
+  // the one thing the tooltip need not say.
+  name.title = card.title;
+  name.setAttribute('aria-label', `Open ${cardLabel(card)} ${card.title}`);
   name.addEventListener('click', () => openDialog(card.id));
 
   row.append(box, name);
@@ -175,93 +154,82 @@ function planRow(card, today) {
   return row;
 }
 
+/** The one-horizon layout's own heading, naming the horizon and counting it.
+ *  Its classes lost the word `group` with the groups themselves: there is one
+ *  section here and it is the whole list. */
 function sectionHead(label, n) {
   const head = document.createElement('div');
-  head.className = 'plan-group-head';
+  head.className = 'plan-rail-section-head';
   const title = document.createElement('h3');
-  title.className = 'plan-group-title';
+  title.className = 'plan-rail-section-title';
   title.textContent = label;
   const count = document.createElement('span');
-  count.className = 'plan-group-count';
+  count.className = 'plan-rail-section-count';
   count.textContent = String(n);
   head.append(title, count);
   return head;
 }
 
-/** One section's cards, behind a spine down its left edge — the habit rail's
- *  idiom (2026-09-07), applied to the other list in the same margin.
+/** The whole plan as one list, in the sections' own order — shortest horizon
+ *  first, and `byWhen` inside each, which is exactly the order the six stacked
+ *  sections were read in.
  *
- *  The stacked layout named six sections with six horizontal headings, which
- *  is six lines of the one panel whose whole job is to be narrow: on a board
- *  with one card planned for each, the headings took as much height as the
- *  cards. The spine is the group's **label**, so the group carries
- *  `role="group"` and an accessible name — rotated glyphs are not an accessible
- *  name — and the count travels on the spine rather than being dropped, because
- *  unlike a habit's punch strip a list of rows does not print its own total.
- *
- *  Only the stacked layout uses this. The dropdown layout shows one section at
- *  a time and the picker above it already says which; a spine there would be
- *  the same word a third time. */
-function planSectionGroup(id, label, cards, today) {
-  const group = document.createElement('div');
-  group.className = 'plan-group';
-  group.dataset.section = id;
-  group.setAttribute('role', 'group');
-  group.setAttribute('aria-label', `${label} — ${cards.length} planned`);
-
-  const spine = document.createElement('span');
-  spine.className = 'plan-spine';
-  spine.textContent = `${label} · ${cards.length}`;
-  // Clipped to the group's own height, like the habit rail's: the rail's height
-  // belongs to the rows. The tooltip is what a sighted reader gets back.
-  spine.title = `${label} — ${cards.length} planned`;
-  spine.setAttribute('aria-hidden', 'true');
-  group.append(spine);
-
-  for (const card of cards) group.append(planRow(card, today));
-  return group;
+ *  De-duplicated by card id, which is the one thing flattening has to decide: a
+ *  dream with a date belongs to two sections, and two sections could print it
+ *  twice legibly where one list would print the same row twice for no reason a
+ *  reader could see. The first sighting wins, so a dated dream keeps the place
+ *  its date gives it. */
+function planList(cards, at, pass) {
+  const out = [];
+  const seen = new Set();
+  for (const group of planGroups(cards, at, pass)) {
+    for (const card of group.cards) {
+      if (seen.has(card.id)) continue;
+      seen.add(card.id);
+      out.push(card);
+    }
+  }
+  return out;
 }
 
 /** The plan, beside the board. Always present, even empty: unlike the habit
  *  rail it is where a card is *put*, so it has to be somewhere to aim at. */
 export function renderPlanRail() {
   const today = planDay();
-  const pass = useFilters ? matchesFilters : () => true;
-
   const section = document.createElement('section');
   section.className = 'plan-rail';
   section.setAttribute('aria-label', 'Plan');
 
   const head = document.createElement('div');
   head.className = 'plan-rail-head';
-  head.append(filterHeading());
+  head.append(planHeading());
   if (planLayout === 'dropdown') head.append(horizonPicker());
   section.append(head);
 
   const body = document.createElement('div');
   body.className = 'plan-rail-body';
 
-  let shown = 0;
-  if (planLayout === 'stacked') {
-    // A section with nothing in it paints nothing at all — no heading, no zero,
-    // no placeholder line. Same rule as the habit rail's absent cadence.
-    for (const group of planGroups(state.cards, new Date(), pass)) {
-      if (!group.cards.length) continue;
-      shown += group.cards.length;
-      body.append(planSectionGroup(group.id, group.label, group.cards, today));
-    }
-  } else {
-    const cards = planCardsIn(state.cards, horizon, new Date(), pass);
-    shown = cards.length;
-    if (cards.length) body.append(sectionHead(planHorizonLabel(horizon), cards.length));
-    for (const card of cards) body.append(planRow(card, today));
+  // `matchesFilters` and not a rule of its own: it is the predicate the Board,
+  // the Backlog, the map and the Matrix already read the same cards through, so
+  // the margin and the columns beside it cannot disagree about what the board
+  // is being asked. The rail already lists open cards only and `matchesColumn`
+  // is inert on the Board, so the hide-Done default cannot surprise it.
+  const cards = planLayout === 'stacked'
+    ? planList(state.cards, new Date(), matchesFilters)
+    : planCardsIn(state.cards, horizon, new Date(), matchesFilters);
+  if (planLayout === 'dropdown' && cards.length) {
+    body.append(sectionHead(planHorizonLabel(horizon), cards.length));
   }
+  for (const card of cards) body.append(planRow(card, today));
 
-  if (!shown) {
+  if (!cards.length) {
+    // One line rather than an empty list, the `renderDirectionLine` note idiom:
+    // a panel that simply goes blank reads as a bug, and a plan narrowed by the
+    // filters must say so rather than imply the board holds no plan at all.
     const empty = document.createElement('p');
     empty.className = 'plan-rail-empty';
-    empty.textContent = useFilters
-      ? 'Nothing planned matches the board filters.'
+    empty.textContent = filtersActive()
+      ? 'No planned card matches the filters in force.'
       : planLayout !== 'dropdown'
         ? 'Nothing planned yet. Give a card a plan from its ＋ menu.'
         : horizon === 'dream'
