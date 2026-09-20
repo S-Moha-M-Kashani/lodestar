@@ -10,6 +10,30 @@ Dates are the day the release point was built. Versions follow
 [semantic versioning](https://semver.org/) — a major number for a break, a
 minor for a capability, a patch for a fix.
 
+## [2.1.0] — 2026-09-20
+
+**Priority, effort and control are one row on the card, called Compass, and the
+plan date can be pressed on a calendar.**
+
+Three rows on the card ledger used to ask one question in three places — where
+does this card stand — so weighing a card meant reading down the list to
+collect the answer. They are one row now, **Compass**, laid out two by two: the
+pair that places the card on the Matrix, then the pair that says what reaching
+it would cost. Nothing underneath changed — the same four selects, the same
+ids, the same values — only where they stand and how their options read.
+
+The plan — a partial date, a year, a month, or a day you mean to get to
+something — could only be set from three dropdowns. It can now be pressed on a
+calendar instead: a grid gives the day, and pressing **Clear the day** or
+**Clear the month** hands back precision rather than losing the date outright.
+The three dropdowns are still there and still the only thing that writes the
+plan; the calendar is a second way to press them; a picker, not a fold, shut on
+every visit.
+
+The ledger's own rows were redrawn alongside this: a hairline instead of a
+dotted rule between them, a wider label gutter, and Where/Type drawn as the
+same small stamped mark rather than one tilted badge and one plain box.
+
 ## [2.0.0] — 2026-09-20
 
 **The header collapses to three destinations and a dropdown, every filter lives
@@ -554,6 +578,7 @@ back through, and the board travels as a JSON file.
 **The board exists.** Three columns you drag cards between, saved in the
 browser.
 
+[v2.1.0]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v2.0.0...v2.1.0
 [v2.0.0]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.9.0...v2.0.0
 [v1.9.0]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.8.0...v1.9.0
 [v1.8.0]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.7.7...v1.8.0
