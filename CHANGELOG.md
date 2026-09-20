@@ -12,6 +12,34 @@ minor for a capability, a patch for a fix.
 
 ## [Unreleased]
 
+**Your Codex or Claude subscription can answer the Assistant in Docker, and you
+sign it in by pressing a button.** Both were already offered when Lodestar runs
+from your own account; in a container neither worked, because the brain's image
+carried neither program and had nobody's login in it. The image carries both
+now, the composed brain answers through **Codex** by default, and the
+Assistant's ⚙ settings grew a **Your subscriptions** block.
+
+Codex signs itself in from there: press *Sign in*, and the row turns into a link
+and a one-time code. Open the link on any device — your phone will do — type the
+code, and the row says so by itself. The container needs no browser of its own,
+no port opened to it, and no credential carried in from your machine: the login
+it earns is its own, kept in Docker's own storage where neither the Google Drive
+backup nor git can reach it, and it survives a rebuild.
+
+Claude cannot work that way and the reason is not Lodestar's: its login is a
+terminal program, and on a Mac what it writes is a Keychain entry no container
+can read. So that row takes a token instead (`claude setup-token`), stored the
+way the OpenRouter key already is — the brain keeps it, the field empties
+itself, and no page ever reads it back. A subscription Lodestar cannot check on
+says *cannot be checked from here* rather than guessing that you are signed out.
+
+One cost, stated rather than left to be discovered: a freshly built stack cannot
+answer a single turn until that login is done once. Running it in the container
+is what showed how that failure actually looks — Codex reports `401 Unauthorized:
+Missing bearer`, which is true and leaves you nowhere, and it **exits as though
+the turn had succeeded**, so the reply arrived blank. A failed turn is now an
+error, and the error names the cure: sign the subscription in from the gear.
+
 **The board is reachable from the editor, over MCP.** An assistant that lives
 where you work — Claude Code in a terminal, Claude Desktop — can now read, filter,
 write, change and delete cards without a browser tab. Eight tools: the board's

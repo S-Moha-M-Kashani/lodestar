@@ -100,7 +100,18 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
       BRAIN_MODEL: ${BRAIN_MODEL:-4skl/gemma4-e2b-mtp}
-      BRAIN_LLM: ${BRAIN_LLM:-ollama}
+      # The composed brain answers through the Codex subscription by default
+      # (2026-09-17). It is the only backend here that needs neither an API key
+      # nor a model pulled onto the host: `codex login --device-auth` runs
+      # inside this container from the Assistant's settings drawer, and the
+      # login it earns lands in the volume below. Ollama is still one variable
+      # away (`BRAIN_LLM=ollama`) and still reaches the daemon on the host.
+      #
+      # The cost, named: a stack built today cannot answer a single turn until
+      # that login is done once. The failure is legible — codex says so and the
+      # Assistant shows what it said — and the drawer is where it is fixed.
+      # tests/compose.test.js refuses any CLI default the image cannot run.
+      BRAIN_LLM: ${BRAIN_LLM:-codex-cli}
       BRAIN_OLLAMA_BASE_URL: ${BRAIN_OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
       # Both backends are named outright because there is no 'auto' mode to fall
       # back on any more. The embedder is the architecture: this one measured
@@ -166,6 +177,16 @@ services:
       # BRAIN_TRACING=langsmith with LANGSMITH_API_KEY to turn it on.
       BRAIN_TRACING: ${BRAIN_TRACING:-off}
       LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+      # The Claude subscription, for the half of this pair that has no device
+      # login. Claude Code's login is a terminal program, and on a Mac what it
+      # writes is a keychain entry no container can read — so the one form of
+      # that credential a container can be handed is a long-lived token from
+      # `claude setup-token`, run on the machine that has the keychain. Passed
+      # through from the environment and never written here: a subscription
+      # token in a tracked file is the state this boundary exists to end
+      # (tests/compose.test.js). Empty is the ordinary state — Codex needs none
+      # of this.
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -208,6 +229,23 @@ services:
       # /app/.venv and this mapping touches only /root/.cache.
       # tests/compose.test.js fails if it goes missing.
       - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+      # Where the device login lands. CODEX_HOME defaults to $HOME/.codex and
+      # this container runs as root, so this is the file `codex login` writes
+      # and the file `codex exec` reads on every turn.
+      #
+      # A named volume and deliberately not a bind mount, which is the whole of
+      # the security argument here. A path under this tree would put a live
+      # subscription token where `npm run backup` copies files to Google Drive
+      # and where git publishes them; `${HOME}/.codex` would hand the container
+      # the owner's OWN login — their host config, their history, and a token
+      # this container's model-driven subprocess could spend — where what is
+      # wanted is a login OF ITS OWN, made from the browser and revocable on its
+      # own. Docker's storage is also why it survives `up --build`: the code
+      # is entered once per machine, not once per container.
+      # There is deliberately no twin of this for Claude. Its credential
+      # arrives as CLAUDE_CODE_OAUTH_TOKEN above and is never written here, so a
+      # volume would be one declared for a path nothing in this design fills.
+      - codex-home:/root/.codex
     restart: unless-stopped
 
   # Chat memory — the project's own Chroma, persisting to
@@ -262,3 +300,10 @@ services:
       IS_PERSISTENT: "TRUE"
       ANONYMIZED_TELEMETRY: "FALSE"
     restart: unless-stopped
+
+# Docker's own storage, for the two credentials the brain earns rather than is
+# given. Declared here and mounted above; nothing else in this stack uses a
+# named volume, because everything else is data the owner must be able to find
+# in `databases/` — and a credential is the one thing that must NOT be there.
+volumes:
+  codex-home:

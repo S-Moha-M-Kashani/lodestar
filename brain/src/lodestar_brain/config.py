@@ -71,6 +71,16 @@ class Settings:
     # pointing this at any other local OpenAI-compatible server (llama.cpp, vLLM)
     # then needs no code change at all.
     ollama_base_url: str = 'http://localhost:11434/v1'
+    # The Claude subscription, in the one form a container can be handed one.
+    # Natively this is empty and stays empty: `claude` finds its own login, in
+    # the keychain on a Mac or in its config directory on Linux. A brain running
+    # in Docker can reach neither, so `claude setup-token` (run where the login
+    # already is) produces a long-lived token that travels here instead — set in
+    # the environment, or typed into the Assistant's settings drawer, which is
+    # the same route the OpenRouter key takes and under the same write-only
+    # contract. It reaches the binary in its environment and never in an argv:
+    # an argument is world-readable to every other process on the machine.
+    claude_oauth_token: str = ''
     # 'sentence-transformers' | 'fastembed' | 'fake'. No 'auto': probing for an
     # optional wheel and silently taking the hash embedder when it was missing
     # meant a machine without the extra ran token-overlap hashing while
@@ -254,6 +264,11 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         llm_provider=provider,
         ollama_base_url=env.get('BRAIN_OLLAMA_BASE_URL',
                                 'http://localhost:11434/v1'),
+        # Claude Code's own variable name rather than a BRAIN_ one, because the
+        # binary reads it too: one name means a token exported for a terminal
+        # session is the same token the brain picks up, and no shim has to copy
+        # one into the other.
+        claude_oauth_token=env.get('CLAUDE_CODE_OAUTH_TOKEN', ''),
         embedder=env.get('BRAIN_EMBEDDER', 'sentence-transformers'),
         embed_model=env.get('BRAIN_EMBED_MODEL', ''),
         # Real in code as well as from the environment, unlike url_safety or

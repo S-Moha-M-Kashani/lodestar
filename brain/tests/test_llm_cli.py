@@ -353,3 +353,64 @@ def test_a_failing_cli_says_why_instead_of_naming_an_exit_code(tmp_path, monkeyp
     with pytest.raises(Exception, match='usage limit'):
         make_chat_model(Settings(llm_provider='codex-cli')).invoke(
             [HumanMessage(content='ping')])
+
+    # And the failure this backend has that the exit code cannot see. Captured
+    # 2026-09-17 inside the brain's own container from a codex that had never
+    # been signed in: `turn.failed` with a 401, and **exit status 0**. The
+    # wrapper used to read that as a turn with an empty answer, so a composed
+    # stack's first chat rendered a blank assistant message. The reply must be
+    # an error, and it must name the cure — the CLI's own words stop at
+    # "Missing bearer", which is true and leaves the reader nowhere.
+    monkeypatch.setenv('BRAIN_CODEX_CLI_BIN', _stub(
+        tmp_path, 'codex-401',
+        "echo '{\"type\":\"thread.started\",\"thread_id\":\"01a0\"}'\n"
+        "echo '{\"type\":\"error\",\"message\":\"unexpected status 401"
+        " Unauthorized: Missing bearer or basic authentication in header\"}'\n"
+        "echo '{\"type\":\"turn.failed\",\"error\":{\"message\":\"unexpected"
+        " status 401 Unauthorized\"}}'\n"
+        'exit 0'))
+    with pytest.raises(Exception, match='not signed in'):
+        make_chat_model(Settings(llm_provider='codex-cli')).invoke(
+            [HumanMessage(content='ping')])
+
+
+# This is a unit test, and it belongs beside the hardening one above: both are
+# about what the subprocess is handed rather than about what it replies.
+def test_the_claude_subscription_token_reaches_the_subprocess_by_env_alone(
+        tmp_path, monkeypatch):
+    """A brain in a container cannot read the keychain a Mac keeps Claude Code's
+    login in, so the subscription reaches it as `CLAUDE_CODE_OAUTH_TOKEN` — the
+    one form of that credential a container can be given.
+
+    Two claims, and the second is the reason this test exists at all:
+
+    1. the token is in the subprocess's environment, or the CLI falls back to
+       asking for a login nobody can answer and every turn fails;
+    2. the token is in **no** argv element. An argument is world-readable on the
+       machine the brain runs on — `ps` prints it for any other process — which
+       is the same class of leak invariant 5 is about, one process along. The
+       env is not a secret store either, but it is not published to every other
+       user of the box.
+
+    Asserted against the argv and the environment the stub was really invoked
+    with, the same rule the hardening test follows: a value that lives only in
+    the code is one refactor away from being somewhere else.
+    """
+    stub = tmp_path / 'claude'
+    fixture = tmp_path / 'claude.out'
+    fixture.write_text(FIXTURE_CLAUDE)
+    stub.write_text('#!/bin/sh\n'
+                    'cat > /dev/null\n'
+                    f'printf \'%s\\n\' "$@" > "{stub}.argv"\n'
+                    f'printenv CLAUDE_CODE_OAUTH_TOKEN > "{stub}.token"\n'
+                    f'cat "{fixture}"\n')
+    stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv('BRAIN_CLAUDE_CLI_BIN', str(stub))
+
+    token = 'sk-ant-oat01-not-a-real-token'
+    make_chat_model(Settings(llm_provider='claude-cli',
+                             claude_oauth_token=token)).invoke(
+        [HumanMessage(content='ping')])
+
+    assert (tmp_path / 'claude.token').read_text().strip() == token
+    assert not any(token in arg for arg in _argv(tmp_path, 'claude'))
