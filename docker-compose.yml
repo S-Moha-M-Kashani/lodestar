@@ -41,7 +41,17 @@ services:
       # row is read. The .local name is Bonjour's and survives the address
       # changing; the literal address is the fallback for a device whose
       # browser will not resolve it.
-      LODESTAR_ALLOWED_HOSTS: lodestar:3000,192.168.0.194:3000,mohas-macbook-pro.local:3000
+      #
+      # The fourth is the tailnet name (2026-09-12), and it is the cheapest of
+      # them: `tailscale serve --bg --https=8443 http://127.0.0.1:3000` takes
+      # the call on the private network, terminates TLS with a real
+      # certificate and dials the loopback mapping above, so no port is
+      # published on it and nothing about the boundary moves. The Host header
+      # survives that proxy intact — name AND port, 8443 because 443 on this
+      # tailnet belongs to another service here — and the allowlist is
+      # exact-match, so this one line is the whole difference between the
+      # phone reaching the board and being answered 403 before a row is read.
+      LODESTAR_ALLOWED_HOSTS: lodestar:3000,192.168.0.194:3000,mohas-macbook-pro.local:3000,mohas-macbook-pro.tailf01a94.ts.net:8443
       # Both forms of the one credential are passed through, because either is
       # a complete answer: the hash `npm run auth:setup` prints, or the
       # password itself on a line in .env. `:?` used to sit on the hash so
@@ -90,22 +100,56 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
       BRAIN_MODEL: ${BRAIN_MODEL:-4skl/gemma4-e2b-mtp}
-      BRAIN_LLM: ${BRAIN_LLM:-ollama}
+      # The composed brain answers through the Codex subscription by default
+      # (2026-09-17). It is the only backend here that needs neither an API key
+      # nor a model pulled onto the host: `codex login --device-auth` runs
+      # inside this container from the Assistant's settings drawer, and the
+      # login it earns lands in the volume below. Ollama is still one variable
+      # away (`BRAIN_LLM=ollama`) and still reaches the daemon on the host.
+      #
+      # The cost, named: a stack built today cannot answer a single turn until
+      # that login is done once. The failure is legible — codex says so and the
+      # Assistant shows what it said — and the drawer is where it is fixed.
+      # tests/compose.test.js refuses any CLI default the image cannot run.
+      BRAIN_LLM: ${BRAIN_LLM:-codex-cli}
       BRAIN_OLLAMA_BASE_URL: ${BRAIN_OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
       # Both backends are named outright because there is no 'auto' mode to fall
       # back on any more. The embedder is the architecture: this one measured
       # 0.617 recall on the Farsi corpus against ~0.01 for the Latin-only
       # alternative, a ~60x gap where every other retrieval knob was worth under
       # 2%. BRAIN_EMBED_MODEL is deliberately left unset — '' already resolves to
-      # heydariAI/persian-embeddings. It costs a ~2.2 GB download, paid on the
-      # first retrieval rather than at boot: the weights load lazily so /health
-      # answers while the container is still cold, which is what keeps a fresh
-      # `docker compose up` from looking hung. The image can never install the
-      # 'voice' extra, since parakeet-mlx is Apple-Silicon only — hence
-      # OpenRouter for dictation. The chat model is the opposite way round:
+      # heydariAI/persian-embeddings. It costs a ~2.2 GB download, and with chat
+      # memory configured — which is the default below — it is paid at BOOT and
+      # not on the first retrieval. `_PrefixedEmbeddings.model` really is a lazy
+      # property, but `ChatStore.__init__` asks the embedder for its identity and
+      # reads that very property (retrieval/chat.py, `_embedder_identity`), so
+      # the deferral is undone one line into the store's constructor — which runs
+      # inside `create_app`, at import, before uvicorn has a server process to
+      # answer /health with. retrieval/cards.py avoids the same trap on purpose
+      # and says so above `embedder_identity`.
+      #
+      # Measured on this machine 2026-09-08, one image, runs differing only in
+      # BRAIN_CHROMA_URL: with chat memory off, /health answered 200 in 6 s and
+      # nothing was downloaded at all; with it on, /health refused connections
+      # for the whole 120 s the run was watched while the weights were still
+      # arriving. So a cold container does not answer /health until the model is
+      # present, and the cache mount under `volumes` is what makes that a
+      # one-time cost per machine rather than one per container.
+      #
+      # The image can never install the 'voice' extra, since parakeet-mlx is
+      # Apple-Silicon only — hence OpenRouter for dictation. The chat model is
+      # the opposite way round:
       # BRAIN_LLM=ollama reaches the daemon on the host, so the composed brain is
       # local-first like the native one.
       # tests/compose.test.js fails if either pin goes missing.
+      # Which agent answers a turn. Widget 2 is the default here as it is in
+      # the code — the same flip, so a composed stack and a native one cannot
+      # disagree about who answers — and `BRAIN_AGENT=widget1` in .env or the
+      # shell puts the incumbent back. An unknown name refuses to boot rather
+      # than falling back. It has to be passed through explicitly or the seam
+      # is unreachable in the one deployment that is actually used, which is a
+      # switch that exists only for people running the service by hand.
+      BRAIN_AGENT: ${BRAIN_AGENT:-widget2}
       BRAIN_EMBEDDER: ${BRAIN_EMBEDDER:-sentence-transformers}
       BRAIN_TRANSCRIBER: ${BRAIN_TRANSCRIBER:-openrouter}
       BOARD_API_URL: http://lodestar:3000
@@ -133,6 +177,16 @@ services:
       # BRAIN_TRACING=langsmith with LANGSMITH_API_KEY to turn it on.
       BRAIN_TRACING: ${BRAIN_TRACING:-off}
       LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+      # The Claude subscription, for the half of this pair that has no device
+      # login. Claude Code's login is a terminal program, and on a Mac what it
+      # writes is a keychain entry no container can read — so the one form of
+      # that credential a container can be handed is a long-lived token from
+      # `claude setup-token`, run on the machine that has the keychain. Passed
+      # through from the environment and never written here: a subscription
+      # token in a tracked file is the state this boundary exists to end
+      # (tests/compose.test.js). Empty is the ordinary state — Codex needs none
+      # of this.
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -147,6 +201,51 @@ services:
       # editable, so lodestar_brain resolves to this mount. Python has no reload
       # here, so a change needs `docker compose restart brain`, not a rebuild.
       - ./brain/src:/app/src:ro
+      # The embedding model's cache, kept on the host. Without it the ~2.2 GB of
+      # heydariAI/persian-embeddings lands in the container's own writable layer
+      # and a recreate throws it away, so the boot download above is paid again
+      # for nothing. Measured 2026-09-08: with this mount over a host cache that
+      # already held the model, /health answered 200 in 18 s.
+      #
+      # Read-write, and that is the point rather than an oversight. `:ro` was
+      # verified to work when the model is ALREADY cached — but on a machine
+      # with no cache a read-only mount cannot persist the download, so every
+      # start would re-fetch, which is the exact cost this mapping exists to pay
+      # once. HF_HUB_OFFLINE is deliberately not set either: it saved 2 s of
+      # those 18 and would turn a model nobody has downloaded yet into a hard
+      # failure instead of a slow first run.
+      #
+      # It is the same directory the native brain fills (`uv run --project brain
+      # --extra local-embeddings …`), which is why on a machine that has ever run
+      # the brain natively the composed brain pays nothing at all — one download
+      # per machine, not one per way of starting it. The container runs as root
+      # and this is the user's own cache: on macOS Docker Desktop a bind mount
+      # maps ownership to the host user, so container-root writes leave no
+      # root-owned files behind. That is the reason sharing the cache is
+      # acceptable here, and it is a property of this platform rather than
+      # something measured on Linux.
+      #
+      # It shadows nothing the service imports: the image's virtualenv is at
+      # /app/.venv and this mapping touches only /root/.cache.
+      # tests/compose.test.js fails if it goes missing.
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+      # Where the device login lands. CODEX_HOME defaults to $HOME/.codex and
+      # this container runs as root, so this is the file `codex login` writes
+      # and the file `codex exec` reads on every turn.
+      #
+      # A named volume and deliberately not a bind mount, which is the whole of
+      # the security argument here. A path under this tree would put a live
+      # subscription token where `npm run backup` copies files to Google Drive
+      # and where git publishes them; `${HOME}/.codex` would hand the container
+      # the owner's OWN login — their host config, their history, and a token
+      # this container's model-driven subprocess could spend — where what is
+      # wanted is a login OF ITS OWN, made from the browser and revocable on its
+      # own. Docker's storage is also why it survives `up --build`: the code
+      # is entered once per machine, not once per container.
+      # There is deliberately no twin of this for Claude. Its credential
+      # arrives as CLAUDE_CODE_OAUTH_TOKEN above and is never written here, so a
+      # volume would be one declared for a path nothing in this design fills.
+      - codex-home:/root/.codex
     restart: unless-stopped
 
   # Chat memory — the project's own Chroma, persisting to
@@ -201,3 +300,10 @@ services:
       IS_PERSISTENT: "TRUE"
       ANONYMIZED_TELEMETRY: "FALSE"
     restart: unless-stopped
+
+# Docker's own storage, for the two credentials the brain earns rather than is
+# given. Declared here and mounted above; nothing else in this stack uses a
+# named volume, because everything else is data the owner must be able to find
+# in `databases/` — and a credential is the one thing that must NOT be there.
+volumes:
+  codex-home:

@@ -56,7 +56,7 @@ document.addEventListener('keydown', (event) => {
   }
 });
 
-// The habit sound lives in the actions menu but is owned by the habit rail, so
+// The habit sound lives in the Settings dialog but is owned by the habit rail, so
 // the toggle is wired where the two meet rather than inside either. Switching
 // it ON is greeted by the chosen chime — the one moment a demo is exactly the
 // confirmation wanted; going silent is confirmed silently, on principle.
@@ -69,7 +69,7 @@ document.querySelector('#habit-mute').addEventListener('click', () => {
 });
 syncHabitMute();
 
-// The Sound submenu: four chimes, radio semantics, and picking one previews
+// The chime, in Settings: four of them, radio semantics, and picking one previews
 // it — choosing a sound you cannot hear is not choosing.
 for (const name of CHIME_NAMES) {
   document.querySelector(`#sound-${name}`)?.addEventListener('click', () => {
@@ -80,8 +80,8 @@ for (const name of CHIME_NAMES) {
 }
 syncChimePicker();
 
-// The Plan submenu: whether the rail shows every horizon at once or one at a
-// time. It lives in the menu but belongs to the rail, so it is wired here
+// The Plan layout, in Settings: whether the rail shows every horizon at once or
+// one at a time. It lives in Settings but belongs to the rail, so it is wired here
 // where the two meet — the same arrangement as the habit sound above.
 for (const name of ['stacked', 'dropdown']) {
   document.querySelector(`#plan-${name}`)?.addEventListener('click', () => {

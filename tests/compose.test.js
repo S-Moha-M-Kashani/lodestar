@@ -284,6 +284,62 @@ test('no brain mount shadows the container virtualenv', () => {
   }
 });
 
+// --- One model download per machine (2026-09-08) ----------------------------
+// The brain image is Python and packages; the ~2.2 GB of
+// heydariAI/persian-embeddings is fetched at run time into the container's own
+// writable layer, which a recreate throws away. So without a host mount the
+// download is a per-container cost, and it is not a background one: measured on
+// this machine 2026-09-08, one image, runs differing only in BRAIN_CHROMA_URL,
+// a cold container with chat memory on refused connections on /health for the
+// whole 120 s the run was watched while the weights were still arriving, where
+// the same image with chat memory off answered in 6 s having downloaded
+// nothing. `ChatStore.__init__` asks the embedder for its identity and that
+// getattr is the lazy `.model` property, so the deferral the embeddings class
+// implements is undone before uvicorn has a process to answer with.
+//
+// This is therefore the mapping that decides whether `docker compose up` is a
+// 20-second start or a three-hour one, and nothing else in the file says so.
+//
+// The container path is a literal, like HOME_LAN below and for the same reason:
+// it is one exact location — the cache directory huggingface_hub picks from the
+// container's own HOME, which is root's — and a pattern here would match more
+// than it means.
+const MODEL_CACHE = '/root/.cache/huggingface';
+
+// This is a configuration invariant.
+test('the composed brain mounts the model cache from the host', () => {
+  const mounts = mountsOf(serviceBlock('brain'));
+  const mount = mounts.find((m) => m.split(':')[1] === MODEL_CACHE);
+  assert.ok(
+    mount,
+    `the brain service does not mount ${MODEL_CACHE}, so the ~2.2 GB embedding ` +
+      `model lands in the container's writable layer and every recreate ` +
+      `re-downloads it — with /health refusing connections until it finishes. ` +
+      `Expected a volume "\${HOME}/.cache/huggingface:${MODEL_CACHE}", got ` +
+      `[${mounts.join(', ')}]`,
+  );
+  // The host side has to be the host's own cache, which is what makes the
+  // download shared with a native `uv run --project brain --extra
+  // local-embeddings` run rather than merely persisted for the container.
+  assert.match(
+    mount.split(':')[0],
+    /\$\{?HOME\}?\/\.cache\/huggingface$/,
+    `the model cache is mounted from "${mount.split(':')[0]}" — it must be the ` +
+      `host user's own cache, or the composed brain downloads its own copy ` +
+      `beside the native brain's`,
+  );
+  // Writable, and deliberately so: :ro was verified to work when the model is
+  // already cached, but on a machine with no cache a read-only mount cannot
+  // persist the download at all, so every start would re-fetch. That is the
+  // one cost this mapping exists to pay once.
+  assert.ok(
+    !mount.endsWith(':ro'),
+    `the model cache is mounted read-only ("${mount}") — a machine with no ` +
+      `cached weights could then never persist the download, which is the ` +
+      `whole point of the mapping`,
+  );
+});
+
 // --- The project's own Chroma (Session 7, stage 3) --------------------------
 // Chat-memory chunks and their vectors are derived data (rebuilt from
 // assistant.db) and live beside the other databases, in databases/real/.
@@ -490,6 +546,31 @@ test('the composed board binds every interface inside its own namespace', () => 
   assert.match(block, /AGENT_URL: http:\/\/brain:9000/);
 });
 
+// The one name a device that is not this machine may use. It is a name and a
+// port rather than an address because `tailscale serve` terminates HTTPS on
+// the tailnet and then dials the loopback port this stack already publishes:
+// the board gains no listener of its own, no published mapping and no
+// plaintext hop, and the boundary stays where the rest of this file puts it.
+// The Host header survives that proxy intact — name AND port — and the
+// allowlist is exact-match, so without this whole string a request from the
+// phone is a 403 before a row is read.
+const TAILNET_HOST = 'mohas-macbook-pro.tailf01a94.ts.net:8443';
+
+// This is a configuration invariant. The home-network exception above is
+// documented as leaving the day Tailscale reaches everybody who needs the
+// board (docs/security.md, "Where this ends"), and that edit rewrites this very
+// line — so the entry the phone depends on is pinned here rather than trusted
+// to survive an edit aimed at its neighbours.
+test('the composed board admits the tailnet name it is served under', () => {
+  const block = serviceBlock('lodestar');
+  const hosts = block.match(/LODESTAR_ALLOWED_HOSTS: (.+)/);
+  assert.ok(hosts, 'the composed board must set a Host allowlist');
+  const named = hosts[1].split(',').map((h) => h.trim());
+  assert.ok(named.includes(TAILNET_HOST),
+    `"${TAILNET_HOST}" is what a browser on the tailnet sends as Host, and the `
+      + `allowlist is exact-match — found [${named.join(', ')}]`);
+});
+
 // This is a configuration invariant.
 test('the composed stack supplies no password of its own, in either form', () => {
   const block = serviceBlock('lodestar');
@@ -518,4 +599,83 @@ test('the composed stack supplies no password of its own, in either form', () =>
   assert.match(block, /LODESTAR_SERVICE_TOKEN: \$\{LODESTAR_SERVICE_TOKEN:-\}/);
   assert.match(serviceBlock("brain"), /BOARD_API_TOKEN: \$\{LODESTAR_SERVICE_TOKEN:-\}/,
     'the brain and the board must share one service token');
+});
+
+// ---------------------------------------------------------------------------
+// The CLI subscriptions, under Docker (2026-09-17)
+// ---------------------------------------------------------------------------
+//
+// `docs/cli-backends.md` said for months that neither subscription works under
+// Docker, and it was right about the reason: the brain image had no `claude`
+// and no `codex` in it, and `cli_backends()` reports a backend by asking
+// `shutil.which`. So the composed brain offered the picker two options it could
+// never serve — or rather, correctly offered neither, which is a feature the
+// board gained precisely so a missing binary could not fail every turn.
+//
+// Making `codex-cli` the composed default turns that honesty into a boot
+// requirement: a default the image cannot run is a stack whose every chat turn
+// fails with nothing on screen able to fix it. These three assertions are the
+// same shape as the embedder pin above — the compose file may only name what
+// the Dockerfile installs, and the login the container earns has to survive the
+// next `docker compose up`.
+
+// Which binary each CLI backend runs, and how the Dockerfile is searched for
+// proof that it installs one. A name rather than a pattern: an image that
+// merely mentions the word "codex" in a comment installs nothing.
+const CLI_BINARY = { 'codex-cli': 'codex', 'claude-cli': 'claude' };
+const brainInstalls = (binary) =>
+  new RegExp(`/usr/local/bin/${binary}\\b`).test(read('brain/Dockerfile'));
+
+// This is a configuration invariant.
+test('compose pins a chat backend the brain image can actually run', () => {
+  const pinned = (brainEnvPin('BRAIN_LLM') || '').match(/:-([\w-]+)}/)?.[1]
+    || brainEnvPin('BRAIN_LLM');
+  const binary = CLI_BINARY[pinned];
+  if (!binary) return;                     // an API backend needs no binary
+  assert.ok(
+    brainInstalls(binary),
+    `compose defaults the composed brain to BRAIN_LLM=${pinned}, which answers ` +
+      `by running "${binary}" — and brain/Dockerfile installs no such binary. ` +
+      `The container would start, answer /health, offer the backend in the ` +
+      `picker and fail every single chat turn.`,
+  );
+});
+
+// This is a configuration invariant.
+test('the subscription login survives a recreate, in a volume of its own', () => {
+  // CODEX_HOME defaults to $HOME/.codex, and the brain image runs as root.
+  const home = '/root/.codex';
+  const mount = mountsOf(serviceBlock('brain')).find(
+    (m) => m.split(':')[1] === home,
+  );
+  assert.ok(
+    mount,
+    `nothing is mounted at ${home}, so the login the owner just completed in ` +
+      `the browser lives in the container's writable layer and the next ` +
+      `\`docker compose up --build\` throws it away. Every recreate would ask ` +
+      `for the device code again.`,
+  );
+  const source = mount.split(':')[0];
+  assert.ok(
+    !source.startsWith('.') && !source.startsWith('/') && !source.includes('$'),
+    `${home} is mounted from "${source}" — a path on the host. A live ` +
+      `subscription token must not land in the working tree: databases/ is ` +
+      `what \`npm run backup\` copies to Google Drive, and the tree itself is ` +
+      `what git publishes. A named volume keeps the credential in Docker's own ` +
+      `storage, where neither reaches it.`,
+  );
+});
+
+// This is a configuration invariant.
+test('no subscription credential is written into the compose file itself', () => {
+  // The same rule the password already lives under, extended to the second
+  // credential compose now carries: a token may be *passed through* from the
+  // environment, never spelled out in a tracked file.
+  const line = brainEnvPin('CLAUDE_CODE_OAUTH_TOKEN');
+  assert.ok(
+    line === undefined || /^\$\{CLAUDE_CODE_OAUTH_TOKEN:-\}$/.test(line),
+    `docker-compose.yml sets CLAUDE_CODE_OAUTH_TOKEN to "${line}" rather than ` +
+      `passing it through from the environment. A subscription token in a ` +
+      `tracked file is the state this whole boundary exists to end.`,
+  );
 });

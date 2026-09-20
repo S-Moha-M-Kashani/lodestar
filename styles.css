@@ -195,11 +195,26 @@
 
 html, body { margin: 0; }
 
+/* A phone browser in landscape inflates the text of anything it decides is a
+   desktop page, which reflows a layout that had already answered the width
+   question itself. */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+
 body {
   font-family: var(--body);
   font-size: 14px;
   color: var(--ink);
+  /* 100dvh is the *visible* window: on a phone 100vh is the window with the
+     address bar pretended away, so every "one window tall" rule in this file
+     measured a box taller than the screen and pushed the footer, the composer
+     and the last row of every column under the browser's own chrome. The vh
+     line stays as the fallback for anything that has not heard of dvh. */
   min-height: 100vh;
+  min-height: 100dvh;
+  /* The grey flash a phone paints over anything tappable, which on a board of
+     cards is most of the page. Focus is still drawn — :focus-visible above
+     owns that, and it is the one that keyboards depend on. */
+  -webkit-tap-highlight-color: transparent;
   display: flex;
   flex-direction: column;
   background-color: var(--paper);
@@ -394,53 +409,11 @@ input, select, textarea { font: inherit; color: inherit; }
 
 .menu-item:hover { background: var(--paper); }
 /* The rule lines that split the Menu into its groups: the board itself,
-   history and data, display and sound. */
+   then history and data, then Settings…. */
 .menu-sep {
   margin: 4px 10px;
   border: none;
   border-top: 1px dashed var(--line);
-}
-
-/* A group's name inside a panel — a heading, not a row you can press. */
-.menu-label {
-  font-family: var(--mono);
-  font-size: 9.5px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--ink-soft);
-  padding: 4px 12px 2px;
-}
-
-/* Hover submenus (Show, Sound): the trigger is an ordinary row, the panel
-   unfolds beside the menu — leftwards, because the menu hangs off the
-   window's right edge. */
-.menu-flyout { position: relative; display: flex; flex-direction: column;
-  --flyout-gap: 8px; }
-.menu-flyout > .menu-item { width: 100%; }
-.flyout-panel {
-  top: -7px;
-  right: calc(100% + var(--flyout-gap));
-  left: auto;
-}
-
-/* The gap between the row and its panel was 8px belonging to neither, and a
-   pointer dragged across it left the wrapper: mouseleave fired, the panel was
-   hidden, and the hand arrived where it had just been — only a keyboard could
-   reach these lists. So the panel claims the gap with a transparent bridge.
-   A pseudo-element hit-tests as part of its element, hence as part of the
-   wrapper, so the walk from the row to the list never leaves the hover area
-   while the gap still looks like a gap. It is the panel's own, so it is gone
-   whenever the panel is (`[hidden] { display: none }`), and it spans the full
-   height rather than the row's, so approaching diagonally works too.
-   page.hover() teleports onto its target and never crossed the gap, which is
-   why no test saw this. */
-.flyout-panel::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  right: calc(-1 * var(--flyout-gap));
-  width: var(--flyout-gap);
 }
 
 /* The habit sound's state, in a word beside the sign. The one place green
@@ -449,11 +422,15 @@ input, select, textarea { font: inherit; color: inherit; }
 .habit-sound-state.on { color: var(--ok); }
 .habit-sound-state.off { color: var(--danger); }
 
-/* The theme row: a labelled select that keeps the menu open while used. */
-.menu-theme-row { display: flex; align-items: center; gap: 10px; }
-.menu-theme-row select { flex: 1; }
 .menu-item:disabled { opacity: 0.45; cursor: default; }
 .menu-item:disabled:hover { background: transparent; }
+
+/* What went on 2026-09-13, when Settings… became its own dialog: the Show and
+   Sound hover submenus (.menu-flyout, .flyout-panel and the bridge that kept
+   a diagonal pointer inside one while crossing the gap to its panel), the
+   theme row that used to keep the menu open while it was used
+   (.menu-theme-row), and .menu-label, the "Filters" heading inside the Show
+   submenu — the dialog's own <h2> and prop-label rows say that now. */
 
 /* Category rail — coloured index tabs sitting on a rule, one per life area.
    The rule (and the row) belongs to .rail-row now: type and priority follow
@@ -484,21 +461,355 @@ input, select, textarea { font: inherit; color: inherit; }
 /* The open drawer still pulls up — taller, growing upward off the shared
    bottom edge, instead of the padding trick a fixed height would swallow. */
 .rail-row .cat-tab[aria-pressed="true"] { height: calc(var(--rail-h) + 3px); }
-.rail-filters {
+/* The five named questions, on their own line above the row that narrows the
+   board by parts. A lens writes the same filters the panel writes, so nothing
+   here is a second way of narrowing anything — what the row adds is one press
+   where six controls used to be composed by hand.
+
+   No new colour and no new token: a lens at rest is soft ink on paper, and the
+   pressed one is inked and underlined in the red rule the ledger already draws
+   its lines with. The pressed state is derived from the filters on every
+   repaint (renderLensRow), so a control moved by hand takes the press with it
+   — which is why this is a plain `aria-pressed` and not a class the JS has to
+   remember to remove. */
+.lens-row {
+  --rail-h: 25px; /* the rail's own height; the phone block raises both */
   display: flex;
-  flex: 1;
-  align-items: flex-end;
-  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 10px;
 }
-.rail-filters select,
-.rail-filters input[type="date"] {
+.lens-btn {
   box-sizing: border-box;
   height: var(--rail-h);
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--mono);
   font-size: 11px;
-  padding-block: 0;
+  letter-spacing: 0.03em;
+  color: var(--ink-soft);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+.lens-btn:hover { color: var(--ink); }
+.lens-btn[aria-pressed="true"] {
+  color: var(--ink);
+  border-color: var(--line);
+  background: var(--card);
+  box-shadow: inset 0 -2px 0 var(--rule-red);
+}
+
+/* One button where seven dropdowns, two date boxes, a read-back and a bar of
+   every tag used to stand, and one chip for each filter actually in force.
+   Dashed, like `+ New card`: this is a control that adds something rather than
+   one that is holding a value. */
+.filter-menu { position: relative; flex: none; }
+
+.filter-btn {
+  box-sizing: border-box;
+  height: var(--rail-h);
   position: relative;
   top: 1px; /* seated on the rule, exactly like the tabs */
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-soft);
+  background: transparent;
+  border: 1px dashed var(--line);
+  border-radius: 3px;
+  padding: 0 10px;
+  white-space: nowrap;
 }
+.filter-btn:hover,
+.filter-btn[aria-expanded="true"] { color: var(--ink); border-color: var(--ink-soft); }
+
+/* The panel drops from the button, over the board. `[hidden]` needs its own
+   rule here for the reason five other surfaces in this file already document:
+   `display: grid` outranks the UA's `[hidden]`. */
+.filter-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  display: grid;
+  gap: 10px;
+  min-width: 320px;
+  padding: 12px 14px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lift);
+}
+.filter-panel[hidden] { display: none; }
+
+/* Where the real controls stand when nobody is reading them. A facet's page
+   borrows the row it needs and hands it back; the rows are never copied, so a
+   Show switch keying off the row's own id keeps working wherever it stands. */
+.filter-rows { display: none; }
+
+/* The list of facets. One row each — what it narrows, and what it is set to —
+   and a chevron saying there is a page behind it. */
+.filter-root { display: grid; gap: 2px; }
+/* `display: grid` outranks the UA's `[hidden]` rule. This file has documented
+   that trap nine times and it caught the tenth here, in the same change that
+   introduced the eleventh below: a list that would not go away left the facets
+   stacked above the page they opened. */
+.filter-root[hidden] { display: none; }
+.filter-facet {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 8px 8px 6px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  text-align: left;
+  color: var(--ink);
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.filter-facet::after { content: "›"; margin-left: auto; color: var(--ink-soft); }
+.filter-facet:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); }
+.filter-facet:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: -2px; }
+/* What the facet is set to, beside its name. Empty when it is set to nothing,
+   which is the whole of what a quiet panel says. */
+.filter-facet-value {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 55%;
+}
+.filter-facet-value:empty { display: none; }
+
+/* One facet's page: the way back, then either its options as a named list or
+   the row that already holds its own controls. */
+.filter-page { display: grid; gap: 8px; }
+.filter-page[hidden] { display: none; }
+.filter-back {
+  justify-self: start;
+  padding: 4px 6px 4px 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+.filter-back:hover { color: var(--ink); }
+.filter-back:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 2px; }
+
+.filter-options { display: grid; gap: 2px; }
+.filter-option {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  text-align: left;
+  color: var(--ink);
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.filter-option:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); }
+.filter-option:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: -2px; }
+.filter-option[aria-checked="true"] { background: var(--ink-blue); color: var(--paper); }
+
+/* The one sentence a facet may need. The tags' is what says that two chosen
+   tags mean BOTH — the list is the operator, so there is no control to read it
+   off and it has to be said. */
+.filter-note {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+}
+
+/* Inside a facet's page the row has no neighbours to line up with, so the
+   gutter that made six rows read as one table is width spent on one label. */
+.filter-page .filter-row { grid-template-columns: minmax(0, 1fr); }
+.filter-page .filter-row > label { grid-column: 1; }
+.filter-page .filter-row-wide > :not(label),
+.filter-page .filter-row-wide .range-readback { grid-column: 1; }
+
+/* A row is its name in a left gutter and its control beside it — the card
+   dialog's own `.prop-row`, which is what a reader of this app already knows
+   a setting to look like. A row holding several controls names the group. */
+.filter-row {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+.filter-row[hidden] { display: none; }
+.filter-row > label {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-soft);
+}
+.filter-row select {
+  box-sizing: border-box;
+  font-size: 11.5px;
+  min-width: 0;
+}
+/* The tags row and the time row each hold several controls, so their values
+   wrap under the gutter rather than being squeezed onto one line. */
+.filter-row-wide {
+  grid-template-columns: 96px minmax(0, 1fr);
+  align-items: start;
+}
+.filter-row-wide > :not(label) { grid-column: 2; }
+.filter-row-wide .range-readback { grid-column: 2; }
+
+/* ---- `Between…`, on one calendar ----------------------------------------
+   One month, pressed twice. It replaced two `<input type="date">`s, which
+   asked the reader to know a date rather than to find a day. The grid is whole
+   weeks with the neighbouring days shown rather than blanked, because a reader
+   choosing the 1st often means the 31st before it and an empty cell is a
+   calendar that refuses the press. */
+.range-calendar {
+  display: grid;
+  gap: 6px;
+  margin-top: 2px;
+}
+.range-calendar[hidden] { display: none; }
+
+.range-cal-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.range-cal-month {
+  flex: 1;
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--ink);
+}
+.range-cal-step {
+  width: 24px;
+  height: 24px;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--ink-soft);
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.range-cal-step:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 8%, transparent); }
+.range-cal-step:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: -2px; }
+
+.range-cal-week,
+.range-cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 2px;
+}
+.range-cal-week span {
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--ink-soft);
+}
+
+.range-day {
+  aspect-ratio: 1;
+  min-height: 26px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink);
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+}
+/* The days either side of the month are pressable and quiet, not blanked. */
+.range-day.outside { color: var(--ink-soft); opacity: 0.55; }
+.range-day:hover { background: color-mix(in srgb, var(--ink) 10%, transparent); }
+.range-day:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: -2px; }
+/* The span a press would give, shown before it is given. No new colour: the
+   run is the blue the board already uses for a chosen thing, at reading
+   weight in the middle and at full weight on the two ends. */
+.range-day.within { background: color-mix(in srgb, var(--ink-blue) 18%, transparent); }
+.range-day.start,
+.range-day.end { background: var(--ink-blue); color: var(--paper); }
+
+.range-cal-open { display: flex; gap: 6px; }
+.range-cal-openend {
+  flex: 1;
+  padding: 5px 6px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-soft);
+  background: transparent;
+  border: 1px dashed var(--line);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.range-cal-openend:hover:not(:disabled) { color: var(--ink); border-color: var(--ink-soft); }
+.range-cal-openend:disabled { opacity: 0.45; cursor: default; }
+.range-cal-openend:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 1px; }
+
+/* The chips: what is in force, out on the rule where the controls used to be.
+   An × on each, and a `Clear` only from two up. */
+.filter-chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  position: relative;
+  top: 1px;
+}
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  box-sizing: border-box;
+  height: var(--rail-h);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-blue);
+  background: color-mix(in srgb, var(--ink-blue) 8%, transparent);
+  border: 1px solid var(--ink-blue);
+  border-radius: 999px;
+  padding: 0 4px 0 10px;
+  white-space: nowrap;
+}
+.filter-chip-x {
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1;
+  color: inherit;
+  opacity: 0.65;
+  padding: 0 4px;
+}
+.filter-chip-x:hover { opacity: 1; }
+.clear-filters {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-soft);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  white-space: nowrap;
+}
+.clear-filters:hover { color: var(--ink); }
 
 /* The range filter's read-back: the span in words, beside the controls that
    set it. Printed only while the filter is narrowing something (js/ui/toolbar.js
@@ -640,14 +951,35 @@ input, select, textarea { font: inherit; color: inherit; }
 }
 .cat-hue input:focus-visible + .cat-hue-dot { outline: 2px solid var(--rule-red); outline-offset: 1px; }
 
-/* Tag filter bar */
+/* The tag search: static markup, never rebuilt, so it needs no rescue code for
+   its own caret the way #search (painted inside #board) does. It sets no
+   `display` of its own, so the plain `[hidden]` UA rule already hides it —
+   no override needed, unlike the five surfaces elsewhere in this file where a
+   same-specificity `display` rule wins over `[hidden]`. */
+#tag-search {
+  box-sizing: border-box;
+  width: 100%;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 4px 9px;
+  font-size: 11.5px;
+  color: var(--ink);
+}
+#tag-search::placeholder { color: var(--ink-soft); }
+
+/* Tag filter bar — inside the filter panel since 2026-09-13, under the
+   dropdown that is its other handle. `[hidden]` needs its own rule: `display:
+   flex` outranks the UA's, the trap five other surfaces in this file document. */
 .tag-bar {
   display: flex;
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
-  margin-top: 8px;
+  max-height: 132px;
+  overflow-y: auto;
 }
+.tag-bar[hidden] { display: none; }
 
 .tag-bar .label {
   font-family: var(--mono);
@@ -676,15 +1008,34 @@ input, select, textarea { font: inherit; color: inherit; }
   color: var(--paper);
 }
 
-/* View switch — index tabs into the ledger */
+/* What the search says when it narrows the list to nothing — the same idiom
+   as .empty-hint, in words small enough for one filter row rather than a
+   whole empty column. */
+.tag-bar-note {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-soft);
+}
+
+/* View switch — index tabs into the ledger.
+
+   Three destinations and one dropdown since the prototype was adopted. It
+   scrolls sideways rather than wrapping at every width: a control dropped onto
+   a second line is how Review and the Assistant ended up under the header
+   instead of off its right edge, and a row of destinations that is two rows
+   tall is not a row. `overflow-x: auto` also keeps the clip that rounds the
+   ends, which is what `overflow: hidden` was here for. */
 .view-switch {
   display: inline-flex;
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   box-shadow: var(--shadow-card);
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
 }
+.view-switch::-webkit-scrollbar { display: none; }
 
 .view-switch button {
   font-family: var(--mono);
@@ -706,6 +1057,37 @@ input, select, textarea { font: inherit; color: inherit; }
   background: var(--ink-blue);
   color: var(--paper);
 }
+
+/* The dropdown. The wrapper is a flex item of the row and takes the rule the
+   `button + button` selector cannot give it, since its neighbour is a div. */
+.view-lenses { position: relative; display: flex; border-left: 1px solid var(--line); }
+
+/* Fixed, not absolute, and placed by js/ui/toolbar.js from the button's own
+   rectangle — the same answer js/ui/card-menu.js gives for a panel hanging off
+   a row. .view-switch has to clip its own overflow to scroll sideways, and an
+   absolutely positioned panel inside a clipping box is a menu that is not
+   there. */
+.lenses-panel {
+  position: fixed;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  min-width: 140px;
+  padding: 4px;
+  background: var(--card);
+  border: 1px solid var(--card-line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lift);
+}
+/* `display: flex` outranks the UA's `[hidden]` rule — the ninth instance of
+   the trap this file documents, after .assistant-tools, .board-switch,
+   #assistant-widget, #assistant-launcher, .card-parent-line, #review-actions,
+   .filter-panel and .tag-bar. */
+.lenses-panel[hidden] { display: none; }
+.lenses-panel button { text-align: left; border-radius: 4px; }
+/* The row's divider rule reaches in here, where these are stacked rather than
+   abutting and the line would be drawn down the wrong edge. */
+.lenses-panel button + button { border-left: none; }
 
 /* ---------------------------------------------------------------------------
    Board & columns — open desk, dashed dividers instead of panels
@@ -737,10 +1119,12 @@ body[data-view="board"] {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh; /* the visible window on a phone — see body above */
   overflow: hidden;
 }
 body[data-view="board"] .app-header,
 body[data-view="board"] #habit-banner-slot,
+body[data-view="board"] #direction-slot,
 body[data-view="board"] .app-footer { flex: none; }
 /* align-items:start sizes each column to its own content, which is what a
    percentage max-height had nothing to resolve against - so the column grew to
@@ -898,6 +1282,71 @@ body[data-view="board"] .cards { min-height: 0; }
 }
 
 /* ---------------------------------------------------------------------------
+   The board's summary line — what the board is asking for, above the columns
+
+   One line in the ledger's own hand, ruled off on the left in red pencil like
+   a note written in the margin of the day. It is the move that pays for the
+   others: six filters existed so the reader could hunt for what needed
+   attention, and a board that says it in a sentence has ended the hunt.
+--------------------------------------------------------------------------- */
+/* The slot carries the board's own side padding, so the red rule stands on the
+   line the columns stand on and the words start where the card titles do.
+   Empty on every view but the Board, and an empty slot is no slot. */
+#direction-slot { padding: 0 28px; }
+#direction-slot:empty { display: none; }
+
+.board-direction {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 18px;
+  padding: 9px 14px 9px 14px;
+  border-left: 3px solid var(--rule-red);
+  font-family: var(--display);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+/* Each item opens the card it names — a reason nobody can act on from where
+   they are reading it is a notice, not direction. Underlined on hover only:
+   a line of four permanently underlined phrases reads as a navigation bar. */
+.board-direction-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+  border: none;
+  background: none;
+  padding: 2px 0;
+  font: inherit;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+.board-direction-item:hover .board-direction-reason,
+.board-direction-item:focus-visible .board-direction-reason {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.board-direction-num {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--ink-soft);
+}
+
+/* The two rules that name a commitment already past speak in the red pencil
+   the rest of the board marks a passed deadline in; everything else is ink. */
+.board-direction-item[data-rule="overdue"] .board-direction-reason,
+.board-direction-item[data-rule="habit-behind"] .board-direction-reason { color: var(--rule-red); }
+.board-direction-item[data-rule="neglected-area"] .board-direction-reason { color: var(--ink-soft); }
+
+.board-direction-note {
+  margin: 0;
+  color: var(--ink-soft);
+}
+
+/* ---------------------------------------------------------------------------
    Cards — ruled index cards
 --------------------------------------------------------------------------- */
 .card {
@@ -934,15 +1383,24 @@ body[data-view="board"] .cards { min-height: 0; }
   to   { opacity: 1; transform: none; }
 }
 
-/* The index card's red top rule sits under the header row */
-.card-top {
+/* The card's one quiet line, under its words: the type's glyph, the `!` a P1
+   earns, the deadline read as a phrase, the plan when it says more, the notes
+   mark, the ledger number and the actions `+`. One line and one ink, so the
+   eye lands on the card's sentence and finds the marks only when it looks for
+   them. The red top rule went with the header row it underlined — a card whose
+   words come first has nothing above them to rule off. */
+.card-line {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding-bottom: 6px;
-  margin-bottom: 8px;
-  border-bottom: 1px solid color-mix(in srgb, var(--rule-red) 55%, transparent);
+  gap: 9px;
+  margin-top: 7px;
+  min-height: 24px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-soft);
 }
+/* The actions take the right edge, whatever else the line is carrying. */
+.card-line .card-menu { margin-left: auto; }
 
 .card-num {
   font-family: var(--mono);
@@ -951,15 +1409,16 @@ body[data-view="board"] .cards { min-height: 0; }
   color: var(--ink-soft);
 }
 
+/* The notes mark. It took the right edge of the old header row with a
+   `margin-left: auto`; on the card's one line the right edge belongs to the
+   actions, and the auto margin left a hole in the middle of every card
+   carrying notes and no deadline. */
 .notes-dot {
-  margin-left: auto;
   font-family: var(--display);
   font-size: 12px;
   color: var(--ink-soft);
 }
 
-/* When there are no notes, the badge takes the right edge itself */
-.card-num + .badge { margin-left: auto; }
 
 /* The ledger numbers are always painted, and there is deliberately no rule
    here that hides them: a card's number is its identity, not a display
@@ -971,16 +1430,18 @@ body[data-view="board"] .cards { min-height: 0; }
    changes. The Done column is hidden here; nothing else on a card is. */
 /* Show's Filters toggles hide the FILTER CONTROLS — never what is painted on
    the cards. Chips and stamps are the cards' own. */
-.hide-tags #tag-bar,
-.hide-tags #tag-filter { display: none; }
-.hide-prios #prio-filter { display: none; }
-.hide-types #type-filter { display: none; }
+/* Each names the panel ROW, not the control: a row whose select is hidden is a
+   label in a menu naming nothing. The ids are unchanged — the controls moved
+   behind `+ Filter` on 2026-09-13 and were not renamed. */
+.hide-tags #filter-row-tags { display: none; }
+.hide-prios #filter-row-prio { display: none; }
+.hide-types #filter-row-type { display: none; }
 /* Two ways this control is absent, and they mean different things. Switched off
    in the Menu it is gone everywhere, and js/core/cards.js stops applying it.
    On the Board it is merely not painted: the Board is the three columns, so the
    filter has nothing to say there and every card is shown regardless. */
-.hide-columns #column-filter { display: none; }
-body[data-view="board"] #column-filter { display: none; }
+.hide-columns #filter-row-column { display: none; }
+body[data-view="board"] #filter-row-column { display: none; }
 /* #nesting-filter has no rule here on purpose: the scope filter is live on
    every view, the Board included. Hiding a child on the Board hides it from
    one place while still showing it in another — its parent's fold — where the
@@ -1008,6 +1469,20 @@ body[data-view="board"] #column-filter { display: none; }
   white-space: nowrap;
 }
 
+/* The same stamp on a board card, reduced to the glyph: the frame, the rotation
+   and the tracking were all there to make a word read as a rubber stamp, and
+   there is no word left to stamp. It is still `.badge.type-<type>`, so the
+   Backlog's rows and the map's tooltip are untouched. */
+.badge.glyph-only {
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+  opacity: 1;
+}
+
 /* Automatic priority stamp (P1–P4), derived from importance × urgency.
    The one deliberate exception to "colour means category": these four inks
    are fixed signals — red, orange, green, gray — and theme-adapt via tokens. */
@@ -1027,6 +1502,21 @@ body[data-view="board"] #column-filter { display: none; }
 .prio-badge[data-prio="2"] { color: var(--ink-amber); }
 .prio-badge[data-prio="3"] { color: var(--ink-green); }
 .prio-badge[data-prio="4"] { color: var(--ink-soft); }
+
+/* On the card it is `P1` in red and nothing else: no pill, no rotation. It was
+   drawn as a single `!` until the two marks were seen together — `!` is the
+   *problem* type's own glyph, so a problem that was also urgent and important
+   wore `! !`, two identical marks meaning two different things. `P1` is the
+   word the priority filter and the Matrix already use. The ink is unchanged —
+   the one deliberate exception to "colour means category". */
+.card-line .prio-badge {
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  transform: none;
+  font-size: 10.5px;
+  opacity: 1;
+}
 
 /* The card's actions menu — a + at the end of the header row, dropping the
    same panel the toolbar menus use.
@@ -1126,11 +1616,17 @@ body[data-view="board"] #column-filter { display: none; }
 /* A card tilts under the pointer; the menu hanging off it must not tilt too */
 .card.menu-open { transform: none; }
 
+/* The card's own words, and now the first thing on it. This is the one thing
+   on a card that was *written*, so it leads and it carries the ledger's own
+   display face — everything under it is a mark, in mono and in soft ink. */
 .card-title {
   margin: 0;
-  font-size: 13.5px;
-  font-weight: 500;
-  line-height: 1.5;
+  font-family: var(--display);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -0.005em;
+  color: var(--ink);
   overflow-wrap: anywhere;
 }
 
@@ -1154,6 +1650,10 @@ body[data-view="board"] #column-filter { display: none; }
   font-size: 10.5px;
   color: var(--ink-soft);
 }
+/* No flag glyph on the board card: the chip reads `overdue by 2 days` now,
+   which says it in words. The Backlog's rows and the map's tooltip still print
+   the stored date, and there the flag is what marks it as one. */
+.card-line .card-deadline::before { content: none; }
 .card-deadline::before { content: "⚑ "; opacity: 0.7; }
 .card-deadline[data-overdue="true"] { color: var(--rule-red); font-weight: 600; }
 
@@ -1186,19 +1686,19 @@ body[data-view="board"] #column-filter { display: none; }
 /* An empty box is a ruled square waiting on the quad paper; the next one to
    fill is dashed, so the strip says where to click without a legend. */
 .punch-box {
-  width: 17px;
-  height: 17px;
+  width: 16px;
+  height: 16px;
   padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 10px;
   line-height: 1;
   color: transparent;
   background: transparent;
-  border: 1px solid var(--card-line);
-  border-radius: 2px;
+  border: 1.5px solid var(--ink-soft);
+  border-radius: 4px;
   cursor: pointer;
   transition: border-color 0.14s ease, background 0.14s ease;
 }
@@ -1207,18 +1707,10 @@ body[data-view="board"] #column-filter { display: none; }
 .punch-box.done {
   color: var(--paper);
   background: var(--cat, var(--ink-soft));
-  border-color: transparent;
-  /* Landed askew, like a rubber stamp rather than a printed tick. */
-  transform: rotate(-4deg);
-  animation: stamp-down 0.16s ease-out;
+  border-color: var(--cat, var(--ink-soft));
 }
 .punch-box.done:disabled { cursor: default; opacity: 0.85; }
 .punch-box:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 2px; }
-
-@keyframes stamp-down {
-  from { transform: rotate(-14deg) scale(1.4); opacity: 0.3; }
-  to   { transform: rotate(-4deg) scale(1); opacity: 1; }
-}
 
 .punch-more {
   font-family: var(--mono);
@@ -1334,9 +1826,16 @@ body[data-view="board"] #column-filter { display: none; }
   top: 8px;
   /* Symmetric, and not decoration: this box scrolls itself, and a scrollbar is
      painted inside the padding — with none on the right it sits hard against
-     the letters of every habit and plan row. */
+     the letters of every habit and plan row. It is also the rhythm every
+     .column keeps, which is what puts the rail's rows on the same line the
+     cards start on now that no rule marks the join.
+
+     No border-left. The rail is the board's margin rather than a second panel,
+     and a dashed rule down its edge was the loudest thing in the narrowest
+     part of the screen. The edge is still draggable: .rail-grip straddles it
+     and paints itself under the pointer and under keyboard focus, which is
+     what keeps an edge with no line findable. */
   padding: 0 14px;
-  border-left: 1px dashed var(--line);
 }
 
 /* The rail scrolls itself, exactly as .cards does for a column. On the board
@@ -1364,10 +1863,12 @@ body[data-view="board"] .board-rail {
 }
 .habit-rail-title {
   margin: 0;
-  font-family: var(--display);
-  font-size: 13px;
-  letter-spacing: 0.06em;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
+  color: var(--ink-soft);
 }
 .habit-rail-sub {
   margin: 0 0 0 auto;
@@ -1377,107 +1878,20 @@ body[data-view="board"] .board-rail {
   white-space: nowrap;
 }
 
-/* --- The rail, grouped by cadence (2026-09-07) ----------------------------
-
-   Four lists on one strip, daily at the top, each named by a narrow spine down
-   its left edge. The spine is the group's LABEL and not decoration: four
-   horizontal headings, in the one panel whose whole job is to be the board's
-   narrow margin, is the height the one-line-per-habit redraw removed.
-
-   The four inks are the ones styles.css already defines in every theme and
-   already uses for exactly this job — `--col-accent` on the three board
-   columns. A cadence group is the same kind of thing as a column, a container
-   the cards sit in. NO new colour and NO new token: the assignment below is
-   shortest period to longest, and it is on the group's edge rather than on a
-   row precisely because colour on this board means category and `--cat` is
-   already on that line. */
-/* The spine idiom, shared by the two lists in the board's margin: the habits
-   grouped by cadence and the plan grouped by section. One rule set with two
-   selectors rather than two copies — the geometry is one decision — while the
-   class names stay separate, because CSS class names are test-stable API and
-   the rule there is add, never rename. Each rail assigns its own inks below. */
-.habit-group,
-.plan-group {
-  /* A fixed narrow inset for the spine and everything else for the rows, so
-     the punch strip keeps its full size and the name keeps a usable width at
-     the narrowest rail the resizer allows.
-
-     The spine is positioned OUT of flow inside it, which is the load-bearing
-     half: laid out as a grid track its rotated text sets the row height, so a
-     one-row weekly group stood twice as tall as its own row and the rail spent
-     height on the word naming a list rather than on the list. It costs width
-     and never height — and is therefore clipped to the group it labels, which
-     is exactly what the design's sketch draws: a tall group reads "Daily", a
-     one-row group reads "W". The cadence is still fully available three ways —
-     the group's accessible name, the spine's own tooltip, and its ink. */
-  position: relative;
-  padding-left: 20px;
-  margin-bottom: 6px;
-}
-.habit-group + .habit-group,
-.plan-group + .plan-group { margin-top: 2px; }
-/* `--col-accent` and not a name of its own: it is the property the three board
-   columns already carry, and it means "the accent ink of the container the
-   cards sit in", which is exactly what this is. A synonym would be a second
-   name for one idea, and the argument for reusing the hues in the first place
-   is that a cadence group is the same kind of thing as a column. */
-.habit-group[data-cadence="daily"]   { --col-accent: var(--ink-blue); }
-.habit-group[data-cadence="weekly"]  { --col-accent: var(--ink-violet); }
-.habit-group[data-cadence="monthly"] { --col-accent: var(--ink-amber); }
-.habit-group[data-cadence="yearly"]  { --col-accent: var(--ink-green); }
-
-/* The plan's sections take the SAME four inks for the same four spans, so
-   "this week" is the same violet in both lists — the consistency is the point,
-   and it is what stops the margin reading as two unrelated colour systems.
-
-   The last two are not periods, so they take no hue: `next` is one step softer
-   than the year it comes after and `dreams` is full ink weight, which is the
-   strongest mark on the board and the right one for the thing that has no date
-   at all. Ink WEIGHT rather than a fifth and sixth colour, because there is no
-   fifth and sixth span for a colour to mean. */
-.plan-group[data-section="day"]    { --col-accent: var(--ink-blue); }
-.plan-group[data-section="week"]   { --col-accent: var(--ink-violet); }
-.plan-group[data-section="month"]  { --col-accent: var(--ink-amber); }
-.plan-group[data-section="year"]   { --col-accent: var(--ink-green); }
-.plan-group[data-section="next"]   { --col-accent: var(--ink-soft); }
-.plan-group[data-section="dreams"] { --col-accent: var(--ink); }
-
-.habit-spine,
-.plan-spine {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 14px;
-  writing-mode: vertical-rl;
-  font-family: var(--mono);
-  font-size: 9px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--col-accent);
-  border-left: 2px solid var(--col-accent);
-  padding: 2px 0 2px 3px;
-  /* Clipped rather than wrapped, for the reason above: the rail's height
-     belongs to the rows. */
-  overflow: hidden;
-  white-space: nowrap;
-  box-sizing: border-box;
-}
-
 /* A habit is one line: its punch boxes, then its name. The boxes lead because
    punching is what the rail is for; the name is what you read to know which
-   habit you are punching. */
+   habit you are punching. No rule between rows — the rail is the board's
+   margin, not a ruled ledger of its own. */
 .habit-rail-row {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 5px 0;
-  border-bottom: 1px dotted var(--card-line);
+  gap: 8px;
+  padding: 4px 0;
 }
-.habit-rail-row:last-child { border-bottom: 0; }
-/* Finished habits stay listed, dimmed — the rail is a day's ledger, not a
-   nag list that empties itself. */
-.habit-rail-row.done { opacity: 0.45; }
+/* Finished habits stay listed — the rail is a day's ledger, not a nag list
+   that empties itself — with only the name dimmed, so the row's own boxes
+   still read at full ink. */
+.habit-rail-row.done .habit-rail-open { color: var(--ink-soft); }
 /* The strip keeps its own width and never wraps here: a wrapped strip is a
    two-line row, which is the thing this redraw removed. */
 .habit-rail-row .habit-punch {
@@ -1538,21 +1952,18 @@ body[data-view="board"] .board-rail {
 
 /* --- The plan: the day's shortlist, under the habits ---------------------- */
 
-/* Ruled off from the habits above, because the box means something else here:
-   a tick finishes the card instead of counting a repetition. The rule belongs
-   to the join, not to the section: with no habits the plan is the top of the
-   rail and a line above it would fence off nothing. */
-.habit-rail + .plan-rail {
-  margin-top: 16px;
-  padding-top: 12px;
-  border-top: 1px dashed var(--line);
-}
+/* Set off from the habits above by space and by its own heading, and by
+   nothing drawn. It was a dashed rule, which said "second panel" in the one
+   part of the screen that is the board's margin; the box below it already
+   means something else than a habit's, and the heading already says so. */
+.habit-rail + .plan-rail { margin-top: 20px; }
 
 .plan-rail-head { margin-bottom: 8px; }
-/* The heading is the filter switch: nothing stands above the list until the
-   pointer arrives, and then a pop-up says what a click will do. */
+/* A heading, not a control. It was a button that opted the plan into the
+   board's filters, with a pop-up saying what a click would do and a mark
+   saying whether it had been clicked; the plan follows the filters always
+   now, so all three went with the switch. */
 .plan-rail-heading {
-  position: relative;
   margin: 0;
   font-weight: inherit;
 }
@@ -1560,59 +1971,13 @@ body[data-view="board"] .board-rail {
   display: inline-flex;
   align-items: baseline;
   gap: 6px;
-  padding: 0;
-  font-family: var(--display);
-  font-size: 13px;
-  letter-spacing: 0.06em;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--ink);
-  background: transparent;
-  border: 0;
-  cursor: pointer;
+  color: var(--ink-soft);
 }
-.plan-rail-title::before { content: "→ "; color: var(--ink-soft); }
-.plan-rail-title:hover .plan-title-word,
-.plan-rail-title:focus-visible .plan-title-word { text-decoration: underline dotted; }
-.plan-rail-title:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 2px; }
-
-/* While the filters are on, the heading says so — a short plan must never
-   look like the whole plan. */
-.plan-title-mark {
-  font-family: var(--mono);
-  font-size: 8.5px;
-  letter-spacing: 0.06em;
-  text-transform: lowercase;
-  color: var(--paper);
-  background: var(--ink-soft);
-  border-radius: 2px;
-  padding: 1px 4px;
-}
-.plan-title-mark:empty { display: none; }
-
-/* The pop-up. Absent from the layout entirely, so the list starts where the
-   heading ends whether or not anyone is hovering. */
-.plan-title-tip {
-  position: absolute;
-  top: calc(100% + 3px);
-  left: 0;
-  z-index: 3;
-  padding: 3px 6px;
-  font-family: var(--mono);
-  font-size: 9.5px;
-  letter-spacing: 0.02em;
-  text-transform: none;
-  white-space: nowrap;
-  color: var(--ink);
-  background: var(--card);
-  border: 1px solid var(--card-line);
-  border-radius: 2px;
-  box-shadow: var(--shadow-card);
-  opacity: 0;
-  visibility: hidden;
-  transition: opacity 0.12s ease;
-}
-.plan-rail-title:hover .plan-title-tip,
-.plan-rail-title:focus-visible .plan-title-tip { opacity: 1; visibility: visible; }
 
 .plan-rail-pick {
   margin-top: 5px;
@@ -1628,18 +1993,17 @@ body[data-view="board"] .board-rail {
 }
 .plan-rail-pick:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 1px; }
 
-/* A group inside the plan: Day, Week, Month, Year, Dreams. Ruled like a
-   ledger's sub-total line, so the eye can skip a whole horizon. */
-.plan-group-head {
+/* The one-horizon layout's heading: which horizon is on show, and how many
+   rows it holds. Set off by space alone — nothing in the rail is ruled now,
+   here least of all, since the picker above already names this list. */
+.plan-rail-section-head {
   display: flex;
   align-items: baseline;
   gap: 6px;
   margin: 10px 0 2px;
-  padding-bottom: 2px;
-  border-bottom: 1px solid var(--card-line);
 }
-.plan-group-head:first-child { margin-top: 6px; }
-.plan-group-title {
+.plan-rail-section-head:first-child { margin-top: 6px; }
+.plan-rail-section-title {
   margin: 0;
   font-family: var(--mono);
   font-size: 9.5px;
@@ -1647,7 +2011,7 @@ body[data-view="board"] .board-rail {
   text-transform: uppercase;
   color: var(--ink-soft);
 }
-.plan-group-count {
+.plan-rail-section-count {
   margin-left: auto;
   font-family: var(--mono);
   font-size: 9.5px;
@@ -1656,19 +2020,32 @@ body[data-view="board"] .board-rail {
 
 .plan-rail-row {
   display: flex;
-  align-items: flex-start;
+  align-items: baseline;
   gap: 7px;
   padding: 7px 0;
-  border-bottom: 1px dotted var(--card-line);
 }
-.plan-rail-row:last-child { border-bottom: 0; }
 
 /* Empty until hovered, like a habit's box — but the tick shows through on the
    way in, because here it is a promise about what the click will do. */
 .plan-box { flex: 0 0 auto; }
 .plan-box:hover { color: var(--ink-soft); }
 
+/* One line, clipped — the habit row's rule, applied to the other list in the
+   same margin. It wrapped, and `overflow-wrap: anywhere` wrapped it mid-word:
+   one card whose title ran long took ten lines of the panel whose whole job is
+   to be the board's narrow margin, which is the height the rail's redraw was
+   about. The full title is on the button's own tooltip and is its accessible
+   name, exactly as a clipped habit name's is. `min-width: 0` is the
+   load-bearing half: a flex item's automatic minimum is its content, so
+   without it the button refuses to shrink and the clip never happens. */
 .plan-rail-open {
+  /* Visually last: the box, then the date, then the words — the date reads
+     first because it is the reason the row is in this list at all, exactly as
+     the habit row's boxes lead its name. Ordered rather than reordered in the
+     DOM, so nothing here touches which element a class or a test finds. */
+  order: 1;
+  flex: 1;
+  min-width: 0;
   font-family: var(--body);
   font-size: 12px;
   line-height: 1.35;
@@ -1678,7 +2055,9 @@ body[data-view="board"] .board-rail {
   border: 0;
   padding: 0;
   cursor: pointer;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .plan-rail-open:hover { text-decoration: underline; }
 .plan-rail-row.categorized .plan-rail-open::before {
@@ -1687,9 +2066,9 @@ body[data-view="board"] .board-rail {
 }
 
 .plan-rail-when {
-  margin-left: auto;
+  flex: 0 0 auto;
   font-family: var(--mono);
-  font-size: 9.5px;
+  font-size: 10.5px;
   color: var(--ink-soft);
   white-space: nowrap;
 }
@@ -2604,6 +2983,27 @@ dialog::backdrop {
   outline-offset: 2px;
 }
 
+/* --- The Settings dialog's pickers (2026-09-13) -------------------------
+   The Plan-section and Chime radiogroups, and the Show row's switches, are
+   the same .menu-item buttons the Menu's hover submenus used to hold — only
+   their container changed, from a vertical .menu-panel to a row inside a
+   .prop-table ledger. .menu-item's own styling (padding, hover) still fits;
+   what it never needed before is a border, since a vertical list of rows
+   doesn't need one row told apart from its neighbour the way a row of chips
+   sitting side by side does. The checked/pressed state reuses .col-chip's
+   ink-on-ink rather than inventing a colour. */
+#settings-dialog .prop-value .menu-item {
+  border: 1.5px solid var(--card-line);
+  border-radius: 3px;
+  padding: 4px 11px;
+}
+#settings-dialog .prop-value .menu-item[aria-checked="true"],
+#settings-dialog .prop-value .menu-item[aria-pressed="true"] {
+  color: var(--ink);
+  border-color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+}
+
 .card-meta-line {
   margin: 0 0 0 auto;
   font-family: var(--mono);
@@ -3429,6 +3829,7 @@ body[data-view="assistant"] {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh; /* the visible window on a phone — see body above */
   overflow: hidden;
 }
 body[data-view="assistant"] .app-header { flex: none; }
@@ -3438,6 +3839,7 @@ body[data-view="assistant"] .app-header { flex: none; }
    Assistant it is a row of controls that do nothing to what is on screen. The
    theme picker is the app's, not the board's, so it stays. */
 body[data-view="assistant"] .rail-row,
+body[data-view="assistant"] #lens-row,
 body[data-view="assistant"] .toolbar-menu,
 body[data-view="assistant"] #tag-bar,
 /* The footer explains dragging cards and the keys that move them. */
@@ -3579,7 +3981,6 @@ body[data-view="assistant"] .app-footer { display: none; }
   align-items: flex-start;
   gap: 8px;
 }
-.assistant-toolbar .chat-recall { flex: 1 1 auto; min-width: 0; }
 
 /* What the conversation has cost, beside the search fold rather than under the
    transcript: a running total that scrolls out of view is not a running total.
@@ -3776,6 +4177,56 @@ body[data-view="assistant"] .app-footer { display: none; }
 }
 .chat-key-row button:hover { border-color: var(--ink-soft); }
 .chat-key-status { white-space: nowrap; color: var(--ink-soft); }
+/* The subscriptions block: one row per CLI backend, each saying what the brain
+   said about it and carrying the one control that can change the answer — a
+   Sign in button, a one-time code, or a token field. The ledger idiom again,
+   and no new colour: a subscription that is signed in, signed out or unknowable
+   is ink weight, exactly as a card's state is. */
+.chat-subs { display: flex; flex-direction: column; gap: 6px; }
+.chat-subs-label { color: var(--ink-soft); }
+.chat-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.chat-sub-name { font-family: var(--mono); font-size: 11px; color: var(--ink); }
+.chat-sub-status { color: var(--ink-soft); flex: 1; min-width: 0; }
+.chat-sub-btn {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.chat-sub-btn:hover { border-color: var(--ink-soft); }
+/* The code and its link take the whole line under the row that summoned them:
+   the code is the thing being read off the screen and typed into a phone, so it
+   is the one piece of text here that must not be clipped to fit beside a
+   status. */
+.chat-sub-device {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  flex: 1 0 100%;
+}
+.chat-sub-hint { color: var(--ink-soft); }
+.chat-sub-code {
+  font-family: var(--mono);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 2px 6px;
+  user-select: all;
+}
+.chat-sub-token { flex: 1 0 100%; }
 /* The embedder is a fact, not a pick — the brain runs exactly one, locally.
    Set as a filled-in ledger cell where the dropdown stood: the selects'
    footprint, no affordance, closed with a small neutral rubber stamp (the
@@ -3935,33 +4386,69 @@ body[data-view="assistant"] .app-footer { display: none; }
   padding: 4px 2px;
 }
 
-/* Openers on an empty chat. Built on .tag-chip's idiom — mono, hairline, hover
-   to full ink — but left-aligned prose rather than a keyword, so each one wraps
-   inside its own chip instead of the row scrolling sideways. Neutral ink and no
-   category hue: colour means life area everywhere else on the board, and a
-   suggestion belongs to no area. Sits above the transcript's first message and
-   inherits the log's 14px gap from it. */
-.chat-suggestions {
+/* What the board says to do next, on a chat with nothing in it. Drawn as the
+   children block's ledger lines rather than as chips — number in mono, a
+   category tick in the card's own hue, the title in body text, the reason
+   underneath in soft ink — because a direction item is the same kind of thing
+   as a child row: a card named in a list. The eight suggestion chips that
+   stood here measured 361 px inside a 343 px .chat-log; five of these plus the
+   record's own line fit without scrolling.
+
+   The reason takes a line of its own (flex-basis 100% against the row's wrap)
+   and is never clipped: citing the rule that surfaced a card is the whole
+   requirement, and an ellipsis through it would be a citation nobody can read.
+   No new colour and no new token — the tick is --cat, everything else is ink
+   weight. */
+.chat-direction-head {
+  margin: 0 0 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+}
+.chat-direction-item {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  align-items: flex-start;
+  align-items: baseline;
+  gap: 2px 7px;
+  padding: 4px 2px;
+  border-top: 1px dotted var(--card-line);
 }
-.chat-suggest {
+.chat-direction-num {
+  flex: 0 0 auto;
   font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-soft);
+}
+.chat-direction-item.categorized .chat-direction-num::after {
+  content: " ▪";
+  color: var(--cat);
+}
+.chat-direction-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--body);
+  font-size: 12px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-direction-reason {
+  flex: 1 0 100%;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  line-height: 1.45;
+  color: var(--ink-soft);
+}
+.chat-direction-note,
+.chat-direction-praise {
+  margin: 6px 0 0;
   font-size: 11px;
   line-height: 1.45;
-  text-align: left;
   color: var(--ink-soft);
-  background: transparent;
-  border: 1px solid var(--line);
-  border-radius: 3px;
-  padding: 5px 9px;
-  max-width: 100%;
-  white-space: normal;
-  transition: color 0.15s ease, border-color 0.15s ease;
 }
-.chat-suggest:hover { color: var(--ink); border-color: var(--ink-soft); }
+.chat-direction-praise { border-top: 1px dotted var(--card-line); padding-top: 6px; }
 
 .chat-msg {
   position: relative;
@@ -4165,9 +4652,7 @@ body[data-view="assistant"] .app-footer { display: none; }
    after the pointer has moved on is not a hint. Same surface as every other
    floating thing; `aria-label` remains the accessible name, so this is
    decoration a screen reader never has to read. */
-.chat-switcher [data-hint],
 .assistant-tools [data-hint] { position: relative; }
-.chat-switcher [data-hint]::after,
 .assistant-tools [data-hint]::after {
   content: attr(data-hint);
   position: absolute;
@@ -4191,12 +4676,9 @@ body[data-view="assistant"] .app-footer { display: none; }
   opacity: 0;
   transition: opacity 90ms ease 120ms;
 }
-.chat-switcher [data-hint]:hover::after,
-.chat-switcher [data-hint]:focus-visible::after,
 .assistant-tools [data-hint]:hover::after,
 .assistant-tools [data-hint]:focus-visible::after { opacity: 1; }
 @media (prefers-reduced-motion: reduce) {
-  .chat-switcher [data-hint]::after,
   .assistant-tools [data-hint]::after { transition: none; }
 }
 
@@ -5020,4 +5502,424 @@ button.chat-source-card {
   }
   .widget-resize { display: none; }
   .widget-head { padding-inline-start: 0; }
+}
+
+/* ---------------------------------------------------------------------------
+   The phone (2026-09-12)
+
+   The board is opened from a phone now, over the owner's own private network,
+   and until this section it had never been laid out for one. Measured at
+   390 x 844 before: the page was 800px wide inside a 390px window, so the whole
+   app slid sideways under the thumb; the seven view tabs stood on one unwrapped
+   493px line, which put Review and Assistant off the right edge where nothing
+   could reach them; the filter row refused to shrink and squeezed the category
+   tabs into a ladder one tab per line; ~1,150px of that chrome stood in front
+   of the first card on an 844px screen; every control was 25-27px against a
+   ~44px fingertip; and every text field was under 16px, which makes iOS Safari
+   zoom the page on focus and never zoom back.
+
+   What it is NOT: a second layout. Every rule here narrows one that already
+   exists, and the desktop board is untouched — which is why the breakpoint is
+   the 640px this file already uses, rather than a pointer query. A phone held
+   in landscape and a small laptop window get the same answer, and that is the
+   right answer for both.
+
+   The pattern used twice is the swipeable strip: the view switch and the
+   category rail each keep their own line and scroll inside it, rather than
+   wrapping into two or three lines of the one panel this board can least
+   afford to make taller. js/ui/render.js scrolls the pressed view tab into
+   view, so the strip never opens showing a tab nobody is on.
+--------------------------------------------------------------------------- */
+@media (max-width: 640px) {
+  /* ---- The window's own edges -------------------------------------------
+     viewport-fit=cover (index.html) lets the page paint under the notch and
+     the home bar, and these buy the room back where it is actually needed.
+     env() is 0 on every other device, so these are the same numbers as before
+     everywhere but a phone. */
+  .app-header {
+    padding: 8px 14px 4px;
+    padding-top: calc(8px + env(safe-area-inset-top));
+    padding-inline: calc(14px + env(safe-area-inset-left))
+                    calc(14px + env(safe-area-inset-right));
+  }
+  .board,
+  #board.assistant,
+  .backlog,
+  .overview,
+  .matrix,
+  .areas,
+  .review {
+    padding-inline: calc(12px + env(safe-area-inset-left))
+                    calc(12px + env(safe-area-inset-right));
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  }
+
+  /* ---- The summary line, stacked ----------------------------------------
+     Four reasons on one wrapped line is four half-sentences on a 390px screen.
+     One item per line reads, and this is the one strip on a phone worth the
+     height: it is what the reader came to find out. The red rule keeps the
+     left edge the board's cards stand on. */
+  #direction-slot {
+    padding-inline: calc(12px + env(safe-area-inset-left))
+                    calc(12px + env(safe-area-inset-right));
+  }
+  .board-direction {
+    flex-direction: column;
+    gap: 2px;
+    font-size: 12.5px;
+    padding: 8px 0 8px 10px;
+  }
+
+  /* ---- The header, in two lines instead of five -------------------------
+     The mark at 42px rather than 79, the tagline gone, and the board picker
+     beside the name instead of under it. What is left is what a person needs
+     to know at a glance: which app, which board, which view. */
+  .header-row { gap: 6px 8px; align-items: center; }
+  .brand { flex: 1 1 auto; min-width: 0; gap: 8px; }
+  .brand-mark { width: 42px; height: 42px; }
+  .brand h1 { font-size: 17px; }
+  .tagline { display: none; }
+  /* The name and the picker share a line. Not `.board-switch` itself: that
+     carries [hidden] until the server has listed the boards, and a display
+     here would outrank the UA's rule — the trap .assistant-tools documents. */
+  .brand > div {
+    display: flex;
+    align-items: center;
+    flex-wrap: nowrap;
+    gap: 8px;
+    min-width: 0;
+  }
+  .brand h1 { white-space: nowrap; }
+  .board-switch { min-width: 0; }
+  /* Shrinkable, not fixed, and its own base width decides where it goes: a
+     flex item wraps when its BASE width will not fit beside its neighbour. On
+     the Board this holds one 40px gear and stays beside the name; on the
+     Assistant it holds the whole tools row, which at 286px cannot, and takes a
+     line of its own rather than pushing 95px of itself off the window. */
+  .header-row .toolbar {
+    flex: 0 1 auto;
+    min-width: 0;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  /* In the sheet this row hangs off the right of the ASSISTANT title, which at
+     this width leaves it a third of a line. The title takes the whole of the
+     first line and the five controls share the second — wrapping them instead
+     spent three lines of a sheet on furniture. The one that gives way is the
+     search fold, because it is the only one whose label is a sentence: it
+     shrinks and ellipses, while History, New chat, the gear and the collapse
+     keep their whole selves. */
+  .assistant-head { flex-wrap: wrap; gap: 8px; }
+  .assistant-head > h2 { flex: 1 0 100%; }
+  /* `1 1 0` and not `1 1 auto`: wrapping is decided on an item's BASE width,
+     before any shrink is applied, so a base of "whatever the four controls
+     measure" put the row at 355px on a 358px line and bumped the collapse onto
+     a line of its own — 45px of an 844px screen spent on one button. At a base
+     of 0 the row always shares the line and then grows into what is left,
+     which is what the fold's ellipsis was already written for. */
+  .assistant-head .assistant-tools {
+    flex: 1 1 0;
+    min-width: 0;
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+  .assistant-head .assistant-collapse { flex: 0 0 auto; margin-inline-start: auto; }
+  .assistant-tools { flex-wrap: nowrap; min-width: 0; }
+  /* The flex child is the slot the tools row is built out of, not the fold
+     inside it: a shrink rule on .chat-recall alone left the slot at its
+     content width and pushed the gear 17px off the window. */
+  .assistant-tools #chat-recall-slot {
+    flex: 0 1 auto;
+    min-width: 0;
+    display: flex;
+  }
+  .assistant-tools .chat-recall { flex: 0 1 auto; min-width: 0; }
+  .assistant-tools .chat-recall-name {
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* The recall panel hangs off its fold by absolute position, and an
+     absolutely positioned box still widens the page: at 92vw it opened
+     rightwards past the window and put its own results off the screen. It
+     keeps opening rightwards — that is the right way round for a control at
+     the left of the group — and is simply narrowed to what is left of the line
+     from there. (The chats panel beside it ends where the tools do and needs
+     nothing.) */
+  .assistant-tools .chat-recall-drop { width: min(440px, calc(100vw - 56px)); }
+
+  /* ---- The view switch: one line, swiped ---------------------------------
+     `1 0 100%` is what puts it on a line of its own, and order 3 what keeps
+     that line under the name rather than between it and the gear. */
+  .header-row .view-switch {
+    flex: 1 0 100%;
+    order: 3;
+    min-width: 0;
+    display: flex;
+    scroll-snap-type: x proximity;
+  }
+  .view-switch button,
+  .view-switch .view-lenses {
+    flex: 0 0 auto;
+    scroll-snap-align: start;
+  }
+  .view-switch button {
+    min-height: 44px;
+    padding: 12px 15px;
+  }
+
+  /* ---- The category rail and the filters: two swiped lines ---------------
+     Each keeps its own line and scrolls inside it, rather than wrapping into
+     the three or four lines a 390px window would need. Two lines and not one:
+     a single strip held both, which is exactly what the wide window shows, but
+     it put every filter 700px to the right of eleven category tabs — a control
+     nobody would find by swiping past the tabs to look for it.
+
+     The rule the tabs stand on moves to the strip that holds them, and they
+     stand ON it rather than 1px over it: a strip has to clip its own overflow
+     to scroll, and that 1px is what the clip would have taken. */
+  .rail-row {
+    --rail-h: 40px;
+    flex-wrap: wrap;
+    row-gap: 6px;
+    border-bottom: none;
+  }
+  /* The lenses are a third swiped line, and the one a thumb reaches for first.
+     They must not wrap: five names on two lines cost the height the phone
+     layout spent 1,150px of header getting back. */
+  .lens-row {
+    --rail-h: 40px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    margin-top: 6px;
+  }
+  .lens-row::-webkit-scrollbar { display: none; }
+  .lens-btn { flex: 0 0 auto; font-size: 12px; }
+  /* One swiped strip now rather than two: the areas keep their line, and what
+     was the second strip — seven selects nobody could see the end of — is one
+     button and the chips it leaves behind, on the line under them. */
+  .cat-rail {
+    flex: 1 0 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    border-bottom: 1px solid var(--line);
+  }
+  .cat-rail::-webkit-scrollbar { display: none; }
+  .cat-tab { flex: 0 0 auto; padding-inline: 14px; }
+  .rail-row .cat-tab { top: 0; }
+  .filter-btn,
+  .filter-chip { top: 0; }
+  .filter-chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .filter-chips::-webkit-scrollbar { display: none; }
+  .filter-chip { flex: 0 0 auto; }
+  /* The panel is a dropdown on a laptop and a sheet against both edges here —
+     a 320px menu hanging off a button on a 390px screen is a menu with its own
+     horizontal scrollbar. */
+  /* A sheet against both edges, not a menu hanging off a button: a 320px panel
+     dropped from a control on a 390px screen is a menu with a sideways scroll
+     of its own. Square against the window's sides for the same reason — the
+     8px it used to keep on each side was 16px of a narrow screen spent on
+     saying this is a dropdown, which at this width it is not. */
+  .filter-panel {
+    position: fixed;
+    left: 0;
+    right: 0;
+    top: auto;
+    min-width: 0;
+    max-height: 70dvh;
+    overflow-y: auto;
+    border-left: none;
+    border-right: none;
+    border-radius: var(--radius) var(--radius) 0 0;
+  }
+  .filter-row { grid-template-columns: 1fr; gap: 4px; }
+  .filter-row-wide > :not(label),
+  .filter-row-wide .range-readback { grid-column: 1; }
+  /* A facet is a row of a menu here and the thumb is the pointer. The
+     calendar's days are a grid of seven across a 390px window, so 40px each
+     would be 280px of a 358px panel: they take the width the grid gives them
+     and 40px of height, which is the dimension a thumb misses in. */
+  .filter-facet,
+  .filter-option,
+  .filter-back,
+  .range-cal-openend { min-height: 40px; }
+  .range-day { min-height: 40px; aspect-ratio: auto; }
+  .range-cal-step { min-width: 40px; min-height: 40px; }
+
+  /* The tag filter, the same way, for the same reason: five tags and a label
+     wrapped to two lines and spent 110px of an 844px screen on a filter that
+     is reached for once a session. */
+  .tag-bar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+  .tag-bar::-webkit-scrollbar { display: none; }
+  .tag-bar .label,
+  .tag-chip { flex: 0 0 auto; }
+
+  /* ---- Everything a thumb has to land on --------------------------------
+     40px, against the 24-31px these were drawn at for a pointer. The rail's
+     own tabs and selects are already one height (--rail-h above), so they are
+     raised by that one variable rather than by a rule each. */
+  .assistant-extras-btn { width: 40px; height: 40px; }
+  .board-switch #board-select { min-height: 40px; padding-block: 6px; }
+  .card-menu-btn { min-width: 40px; min-height: 40px; }
+  .new-card-btn { min-height: 40px; }
+  .sort-select { min-height: 40px; }
+  .tag-chip { min-height: 34px; padding: 7px 10px; }
+  .chat-row-menu-btn { min-width: 40px; min-height: 40px; }
+  /* The Menu's eight actions, at 30px and 2px apart. Three of them name a
+     board — New, Rename, Delete — so a thumb that lands one row low is a
+     board gone, which is the one mis-tap on this screen that costs something.
+     A button centres its own text, so the height is the whole rule. */
+  .menu-panel .menu-item { min-height: 40px; }
+  /* Settings' pickers are the same .menu-item as a chip in a row rather than
+     a row in a list, so they need the width too: a 53px "Bell" beside a 75px
+     "Droplet" is two thumb-widths of difference between one chime and another. */
+  #settings-dialog .prop-value .menu-item { min-height: 40px; min-width: 56px; }
+  /* The filter panel's controls came out of .rail-filters on 2026-09-13 and
+     left --rail-h behind with it, so the seven selects that had been 40px in
+     the strip were 26px in the panel. This is that number, put back where the
+     controls now live. */
+  .filter-row select,
+  #tag-search { min-height: 40px; }
+  /* The composer, and the widget's own head. Send and the mic sit against the
+     home bar, and the three head buttons — trace, expand, close — were 21px:
+     the control that closes the sheet covering the whole board must be one a
+     thumb can find. */
+  .chat-mic,
+  .chat-send { min-height: 40px; min-width: 40px; }
+  .widget-btn { min-height: 40px; min-width: 40px; }
+  .assistant-tools button,
+  .assistant-tools .chat-recall-name,
+  .composer-model { min-height: 40px; }
+  /* Sign in and Save inside the settings drawer: the drawer is where a phone
+     signs a subscription in, and both stood at 25px. */
+  .chat-sub-btn,
+  .chat-key-row button { min-height: 40px; }
+  /* New chat and the collapse are a single glyph each, so the height alone
+     left them 30px and 33px wide. */
+  #chat-new,
+  .assistant-collapse { min-width: 40px; }
+  /* The ledger's own controls, which is the card dialog and the Settings
+     dialog at once — one rule, because .prop-value is what they share. The
+     ghost border they wear at rest is unchanged; only the box it hangs on
+     grows. */
+  .prop-value select,
+  .prop-value input[type="text"],
+  .prop-value input[type="date"],
+  .prop-value input[type="number"],
+  .prop-value input[type="time"] { min-height: 40px; }
+  #card-add-child { min-height: 40px; }
+  /* Every dialog's own footer, and the Review's three buttons a week. */
+  .btn { min-height: 40px; }
+  /* The Overview's projection picker and the Matrix's lens picker: the one
+     control each of those two views has, at 22px. The dots they plot are left
+     alone deliberately — a dot's size is the map's data, not its chrome. */
+  .plot-proj-toggle button,
+  .matrix-switch button { min-height: 40px; }
+
+  /* ---- The Matrix, made to fit the window ------------------------------
+     A grid track's automatic minimum is its item's min-content, and a
+     quadrant's head is a nowrap flex row — "SCHEDULE  important · not urgent
+     (1)" on one line. So the two columns could not shrink and the grid stood
+     98px wider than the plate, with nothing in the chain scrolling: the right
+     half of every lens was simply cut off, headers mid-word. The fix is on the
+     ITEM and not the track, because `grid-template-columns` is written inline
+     per lens (js/views/matrix.js) and an inline style outranks a stylesheet.
+     A matrix is read by comparing its quadrants at a glance, so it is made to
+     fit rather than given a sideways scroll of its own. */
+  .matrix-quad { min-width: 0; }
+  .matrix-quad-head { flex-wrap: wrap; row-gap: 2px; }
+  .matrix-quad-count { margin-left: auto; }
+
+  /* ---- No control under 16px --------------------------------------------
+     Below 16px iOS Safari zooms the page the moment a field takes focus, and
+     does not zoom back — the board ends up half off the screen with no way
+     back but a pinch. Every selector here is one this file sizes smaller
+     somewhere above, repeated at its own specificity so that this block, being
+     last, wins. A new rule that sets a smaller size on a typeable control has
+     to be added here too; tests/e2e_test.py measures the smallest one on the
+     page and fails under 16. */
+  input, select, textarea,
+  .toolbar input[type="search"],
+  .toolbar select,
+  #theme-select,
+  .filter-row select,
+  #tag-search,
+  .sort-select,
+  .board-switch #board-select,
+  .board-search,
+  .field textarea,
+  .field input,
+  .field select,
+  .card-words textarea,
+  .card-words #card-title,
+  .card-words #card-notes,
+  .prop-value input,
+  /* The ledger sizes its own inputs by type — .prop-value input[type="date"]
+     outranks .prop-value input — so the bare selector above reached neither
+     the card's deadline nor its tags, and both stood at 13px. Every type the
+     ledger names is named back here, at the same specificity and later. */
+  .prop-value input[type="text"],
+  .prop-value input[type="date"],
+  .prop-value input[type="number"],
+  .prop-value input[type="time"],
+  .prop-value select,
+  .slot-field input,
+  .slot-field select,
+  .chat-composer textarea,
+  /* The two the Assistant sizes by class, which a bare `select` cannot reach:
+     the composer's model list at 0.72rem, and the recall box, whose
+     `font: inherit` resolves to the sheet's 14px. */
+  .composer-model,
+  .chat-recall-form input,
+  .chat-settings select,
+  .chat-key-row input,
+  .cat-add-form input[type="text"] { font-size: 16px; }
+
+  /* ---- The board ---------------------------------------------------------
+     A column that nearly fills the screen, with the edge of the next one
+     showing: the peek is the only thing that says there are three. */
+  .column { flex: 0 0 86vw; padding: 0 10px; }
+  .board-rail { flex: 0 0 80vw; }
+  /* A column, the rail and the transcript each scroll themselves; without this
+     the end of one hands the gesture to the page behind it, which on a phone
+     is a pull-to-refresh that throws the board away mid-read. */
+  .cards,
+  .board-rail,
+  .chat-log { overscroll-behavior: contain; }
+
+  /* The dialog is measured against the window it is actually in, like every
+     other full-height box here. */
+  #card-form { max-height: 86dvh; }
+
+  /* The Ask pill sits in the corner the home indicator crosses. */
+  #assistant-launcher {
+    inset-block-end: calc(16px + env(safe-area-inset-bottom));
+    inset-inline-end: calc(16px + env(safe-area-inset-right));
+  }
+
+  /* ---- What a phone cannot use ------------------------------------------
+     The footer explains dragging a card and the keys that move one. There is
+     no drag and no keyboard here, so it is a line of paper spent on two things
+     that are not true. */
+  .app-footer { display: none; }
+}
+
+/* The widget's own threshold, where it stops being a card and becomes a sheet
+   (NARROW_PX in js/assistant/widget.js). The sheet sits exactly where the home
+   indicator does, and a control under that bar is a control the phone
+   swallows. */
+@media (max-width: 639px) {
+  #assistant-widget {
+    inset: calc(8px + env(safe-area-inset-top)) calc(8px + env(safe-area-inset-right))
+           calc(8px + env(safe-area-inset-bottom)) calc(8px + env(safe-area-inset-left));
+  }
 }

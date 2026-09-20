@@ -2,8 +2,33 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- viewport-fit=cover lets the page paint under the notch and the home bar;
+       styles.css then buys the room back with env(safe-area-inset-*) on the
+       header, the footer and the two docked corners. Without the pair, a phone
+       either wastes two black letterboxes or puts the Ask pill under the home
+       indicator. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Lodestar</title>
+
+  <!-- Added to the home screen, the board runs in its own window with no
+       address bar — which is worth more here than on most sites, because the
+       bar and its toolbar were eating ~120px of a board that is already one
+       window tall. js/ui/theme.js rewrites the colour below on every theme
+       change, so the phone's status bar is the paper the board is drawn on
+       rather than a white band above a dark one. -->
+  <meta name="theme-color" content="#f5f7f2">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Lodestar">
+  <!-- The nova, rasterised: iOS ignores an SVG here, and the manifest's icons
+       are Android's. Both are rendered from the sprite below by
+       scripts/make-icons.py, so the tile on the home screen is the mark in the
+       header rather than a second drawing that can drift from it. -->
+  <link rel="apple-touch-icon" href="/icons/lodestar-180.png">
+  <!-- use-credentials, because the manifest is behind the same session as the
+       rest of the board: a plain manifest fetch omits cookies and would 401. -->
+  <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
   <!-- The tab icon draws at 16px, so the glyph fills the canvas nearly edge to
      edge — the header mark can afford margins; a favicon cannot. Every point
      stays within radius 29 of the centre, so the -14° rotation never clips.
@@ -217,24 +242,56 @@
           </div>
         </div>
       </div>
+      <!-- Three destinations and one dropdown. Seven buttons stood here on one
+           unwrapped line — a wall of every screen that exists rather than a row
+           of places to go — and on a 390px window that put Review and the
+           Assistant off the right edge where no tap could reach them. Board,
+           Backlog and Review are where you go; Overview, Matrix and Areas read
+           the same cards another way, so they are one press further off behind
+           `Lenses ▾`.
+
+           The dropdown's three buttons are STATIC MARKUP INSIDE .view-switch,
+           and that is load-bearing: js/ui/render.js captures its view buttons
+           once, at module evaluation, so a button built by render() would never
+           be synced and never carry a listener.
+
+           The Assistant has no button at all. It is reached from the corner
+           `Ask` pill and the widget's own expand control, and while it is on
+           screen nothing in this row reads as pressed — the row does not offer
+           that screen, and inventing a pressed button for it would be a claim
+           about the header that is not true. -->
       <div class="view-switch" role="group" aria-label="Switch view">
         <button type="button" data-view="board" aria-pressed="true">Board</button>
         <button type="button" data-view="backlog" aria-pressed="false">Backlog</button>
-        <button type="button" data-view="overview" aria-pressed="false">Overview</button>
-        <button type="button" data-view="matrix" aria-pressed="false">Matrix</button>
-        <button type="button" data-view="areas" aria-pressed="false">Areas</button>
         <button type="button" data-view="review" aria-pressed="false">Review</button>
-        <button type="button" data-view="assistant" aria-pressed="false">Assistant</button>
+        <div class="view-lenses">
+          <button type="button" id="lenses-btn" class="view-lenses-btn"
+                  aria-haspopup="true" aria-expanded="false" aria-pressed="false"
+                  aria-controls="lenses-panel"
+                  title="The same cards read another way — the map, the matrix, the life areas">Lenses ▾</button>
+          <!-- Fixed rather than absolute, for the reason the card's actions
+               panel is: .view-switch clips its own overflow (it has to, to
+               scroll sideways on a phone), and a panel clipped by the row it
+               drops from is a menu that is not there. -->
+          <div id="lenses-panel" class="lenses-panel" role="group" aria-label="Other ways to read the board" hidden>
+            <button type="button" data-view="overview" aria-pressed="false">Overview</button>
+            <button type="button" data-view="matrix" aria-pressed="false">Matrix</button>
+            <button type="button" data-view="areas" aria-pressed="false">Areas</button>
+          </div>
+        </div>
       </div>
       <div class="toolbar">
         <div class="toolbar-menu">
           <!-- The board's menu behind the same quiet gear the Assistant's
                settings use — one look, two contents, each on its own page. -->
-          <button id="menu-btn" class="assistant-extras-btn" aria-label="Menu" aria-haspopup="true" aria-expanded="false" title="Boards, history, export, import, display and sound">⚙</button>
-          <!-- One menu, four groups split by rule lines: the board itself,
-               history and data, what is painted on the cards (a hover Show
-               submenu), and the app's sound and theme. Undo left — History
-               is the way back. -->
+          <button id="menu-btn" class="assistant-extras-btn" aria-label="Menu" aria-haspopup="true" aria-expanded="false" title="Boards, history, export, import, and Settings">⚙</button>
+          <!-- Eight rows, all one-shot actions, in two groups split by rule
+               lines: the board itself, then history and data. Everything set
+               once and rarely touched again — the theme, the rail's Plan
+               layout, the habit chime, which filter controls show — moved
+               into its own Settings… dialog on 2026-09-13, the same move the
+               filter controls made out of the header: the menu is where a
+               one-shot action is, not where a standing preference sits. -->
           <div id="menu-panel" class="menu-panel" hidden>
             <button id="board-new" class="menu-item" title="Start a board with its own cards and its own chats">＋ New board</button>
             <button id="board-rename" class="menu-item" title="Rename the board you are on">Rename board</button>
@@ -243,48 +300,9 @@
             <button id="history-btn" class="menu-item" title="Board history — every change, deleted cards and deleted boards">History</button>
             <button id="export-btn" class="menu-item" title="Download the board as a JSON file">Export JSON</button>
             <button id="import-btn" class="menu-item" title="Restore the board from a JSON file">Import JSON</button>
+            <button id="dedupe-btn" class="menu-item" title="Find cards holding the same words twice and retire the copies to the Trash">Remove duplicates</button>
             <hr class="menu-sep">
-            <div class="menu-flyout">
-              <button id="menu-show" class="menu-item" aria-haspopup="true" aria-expanded="false" title="What is painted on the cards">Show ◂</button>
-              <div id="show-panel" class="menu-panel flyout-panel" hidden>
-                <!-- These act on the FILTER CONTROLS, never on what is
-                     painted on the cards — chips and stamps are the cards'
-                     own; a filter you don't use is the thing worth hiding. -->
-                <span class="menu-label">Filters</span>
-                <button id="toggle-tags" class="menu-item" aria-pressed="false" title="Hide the tag filters — the # bar and the tags dropdown"># Tags</button>
-                <button id="toggle-prios" class="menu-item" aria-pressed="false" title="Hide the priority filter dropdown">Priorities</button>
-                <button id="toggle-types" class="menu-item" aria-pressed="false" title="Hide the type filter dropdown">Types</button>
-                <button id="toggle-columns" class="menu-item" aria-pressed="false" title="Hide the column filter — and with it the rule that keeps Done cards off every view but the Board">Columns</button>
-                <hr class="menu-sep">
-                <button id="toggle-done-col" class="menu-item" aria-pressed="false" title="Hide the Done column on the Board view">Done column</button>
-              </div>
-            </div>
-            <div class="menu-flyout">
-              <button id="menu-plan" class="menu-item" aria-haspopup="true" aria-expanded="false" title="How the rail's Plan section is laid out">Plan ◂</button>
-              <div id="plan-panel" class="menu-panel flyout-panel" hidden>
-                <button id="plan-stacked" class="menu-item" role="menuitemradio" aria-checked="false" title="Day, week, month, year and dreams all at once">Stacked</button>
-                <button id="plan-dropdown" class="menu-item" role="menuitemradio" aria-checked="false" title="One horizon at a time, picked from a list">Dropdown</button>
-              </div>
-            </div>
-            <button id="habit-mute" class="menu-item" aria-pressed="false" title="Sound the reminder when a habit is due">🔊 Habit sound</button>
-            <div class="menu-flyout">
-              <button id="menu-sound" class="menu-item" aria-haspopup="true" aria-expanded="false" title="Which chime the reminder plays">Sound ◂</button>
-              <div id="sound-panel" class="menu-panel flyout-panel" hidden>
-                <button id="sound-marimba" class="menu-item" role="menuitemradio" aria-checked="false" title="Two warm wooden notes">Marimba</button>
-                <button id="sound-bell" class="menu-item" role="menuitemradio" aria-checked="false" title="One soft bell with a shimmer">Bell</button>
-                <button id="sound-droplet" class="menu-item" role="menuitemradio" aria-checked="false" title="A watery upward blip">Droplet</button>
-                <button id="sound-kalimba" class="menu-item" role="menuitemradio" aria-checked="false" title="A muted thumb-piano pluck">Kalimba</button>
-              </div>
-            </div>
-            <label class="menu-item menu-theme-row">Theme
-              <select id="theme-select" aria-label="Theme">
-                <option value="light">Morning</option>
-                <option value="white">Day</option>
-                <option value="sepia">Dusk</option>
-                <option value="dark">Night</option>
-                <option value="star">Star</option>
-              </select>
-            </label>
+            <button id="settings-btn" class="menu-item" title="Theme, the rail's Plan layout, the habit chime, and which filter controls show">Settings…</button>
           </div>
         </div>
         <input id="import-input" type="file" accept="application/json,.json" hidden>
@@ -305,81 +323,166 @@
       </div>
     </div>
     <div id="habit-banner-slot" role="status" aria-live="polite"></div>
-    <!-- Every way of narrowing the board by a property on one line: the
-         category tabs, then type, priority and tags right after the last tab.
-         Text search is not here — it sits beside `+ New card` at the head of
-         the Inbox, which js/ui/board.js builds. These filters are static markup
+    <!-- The life areas keep their tabs — one press each, and the board's own
+         signature — and every other way of narrowing the board is behind one
+         `+ Filter` button, with a chip out here for each one that is in force.
+         There were seven dropdowns, two date boxes, a read-back and a bar of
+         every tag standing here permanently, five of which are switched off by
+         default and read as a synonym for themselves ("All types", "All
+         priorities", "Any time"): a control at rest showing nothing is furniture.
+         Nothing moved and nothing was renamed — every id below is the one it
+         has always had, wired once at boot by js/ui/toolbar.js, so the panel
+         is where they are rather than what they are.
+
+         Text search is not here: it sits beside `+ New card` at the head of the
+         Inbox, which js/ui/board.js builds. The controls are static markup
          beside the rail, never inside it — renderCatRail() wipes the rail's
          children on every repaint. -->
+    <!-- The five named questions, above the row that narrows the board by
+         parts. Nobody composes six predicates in their head: they arrive
+         wanting one of these, so the composing is done in js/core/lenses.js and
+         a press writes the same `filters` object the panel writes. Which one is
+         pressed is derived from those values and never stored, so moving one
+         control by hand un-presses the row rather than leaving a lit button
+         over a board it no longer describes. Filled once at boot from the table
+         itself — two hand-kept lists of one thing is how the labels drift. -->
+    <div id="lens-row" class="lens-row" role="group" aria-label="What the board is being asked"></div>
     <div class="rail-row">
       <div id="cat-rail" class="cat-rail" role="group" aria-label="Filter by category" hidden></div>
-      <div class="rail-filters">
-        <!-- Where the card is filed. Inert on the Board — the Board IS the
-             columns, and a control that would empty two of them is a way to
-             lose your own cards — so it is painted on every other view only.
-             "Open cards" is the default everywhere else: a finished card is a
-             record rather than work, and the map, the matrix and the register
-             all read as busier than the week was with them in. -->
-        <select id="column-filter" aria-label="Filter by column">
-          <option value="">Open cards</option>
-          <option value="inbox">Inbox</option>
-          <option value="in-progress">In Progress</option>
-          <option value="answered">Done</option>
-          <option value="all">All columns</option>
-        </select>
-        <!-- How deep to read. A child is shown inside its parent whatever this
-             says, so "Parents only" is the default: a child listed beside its
-             parent is one piece of work counted twice. Unlike the column filter
-             this one IS live on the Board — hiding a child there hides it from
-             one place while still showing it in another, where the column
-             filter would have emptied two of the three columns in front of
-             you. A running text search outranks it, or a search could not find
-             a card the board is holding. -->
-        <select id="nesting-filter" aria-label="Show child cards">
-          <option value="">Parents only</option>
-          <option value="all">Parents and children</option>
-        </select>
-        <select id="type-filter" aria-label="Filter by type">
-          <option value="">All types</option>
-          <option value="question">? Questions</option>
-          <option value="problem">! Problems</option>
-          <option value="task">✓ Tasks</option>
-          <option value="idea">✦ Ideas</option>
-          <option value="dream">☾ Dreams</option>
-          <option value="habit">↻ Habits</option>
-        </select>
-        <select id="prio-filter" aria-label="Filter by priority">
-          <option value="">All priorities</option>
-          <option value="1">P1 · urgent &amp; important</option>
-          <option value="2">P2 · urgent</option>
-          <option value="3">P3 · important</option>
-          <option value="4">P4 · neither</option>
-          <option value="none">No label</option>
-        </select>
-        <!-- The third filter: pick one tag from a list instead of hunting it
-             in the # bar below. Options are painted by renderTagBar(), which
-             already knows every tag on the board. -->
-        <select id="tag-filter" aria-label="Filter by tag">
-          <option value="">All tags</option>
-        </select>
-        <!-- What a span of time held. Two selects in the order the sentence
-             reads — which date, then which span — and `Between…` reveals two
-             date inputs, either of which may be left empty so that "since the
-             first of March" and "up to the first of March" are both sayable.
-             Remembered between visits, like the scope filter: a filter you set
-             is a filter you meant. What pays for that is the read-back below,
-             which states the span in words — three controls showing a field, a
-             preset and two dates never LOOK wrong even when they say something
-             other than what the filter is applying. -->
-        <select id="range-field" aria-label="Measure the span against"></select>
-        <select id="range-preset" aria-label="Filter by time span"></select>
-        <input type="date" id="range-from" aria-label="Span starts" hidden>
-        <input type="date" id="range-to" aria-label="Span ends" hidden>
-        <span id="range-readback" class="range-readback" hidden></span>
+      <div class="filter-menu">
+        <button type="button" id="filter-btn" class="filter-btn"
+                aria-haspopup="true" aria-expanded="false"
+                aria-label="Narrow the board by type, priority, tags, time, column or depth">+ Filter</button>
+        <div id="filter-panel" class="filter-panel" hidden>
+          <!-- Two faces, built by js/ui/filter-menu.js: a list of the facets
+               the board offers, and — once one is pressed — that facet's own
+               page. A flat stack of six labelled dropdowns is the header this
+               button was collapsed to end, one level in. -->
+          <div id="filter-root" class="filter-root"></div>
+          <div id="filter-page" class="filter-page" hidden></div>
+          <!-- Where the real controls live when nobody is reading them. Every
+               id below is the one it has always had, wired once at boot by
+               js/ui/toolbar.js: a facet's page either lists that control's own
+               `<option>`s as buttons, or borrows the whole row. So the option
+               list stays the one definition of a facet's choices AND of its
+               wording, every existing listener fires unchanged, `clearFilter`
+               still returns a control to its default, and the chips keep
+               reading their text off the option they came from.
+
+               The rows are parked rather than duplicated, which is what lets
+               the Show switches keep hiding a facet by its own id
+               (`.hide-tags #filter-row-tags`, styles.css) wherever the row
+               happens to be standing. -->
+          <div id="filter-rows" class="filter-rows">
+            <div class="filter-row" id="filter-row-type">
+              <label for="type-filter">Type</label>
+              <select id="type-filter">
+                <option value="">All types</option>
+                <option value="question">? Questions</option>
+                <option value="problem">! Problems</option>
+                <option value="task">✓ Tasks</option>
+                <option value="idea">✦ Ideas</option>
+                <option value="dream">☾ Dreams</option>
+                <option value="habit">↻ Habits</option>
+              </select>
+            </div>
+            <div class="filter-row" id="filter-row-prio">
+              <label for="prio-filter">Priority</label>
+              <select id="prio-filter">
+                <option value="">All priorities</option>
+                <option value="1">P1 · urgent &amp; important</option>
+                <option value="2">P2 · urgent</option>
+                <option value="3">P3 · important</option>
+                <option value="4">P4 · neither</option>
+                <option value="none">No label</option>
+              </select>
+            </div>
+            <!-- Tags: the dropdown picks one, the bar under it builds a
+                 combination the dropdown has no word for. Both write the same
+                 Set, so they are one filter with two handles; the bar's options
+                 are painted by renderTagBar(), which already knows every tag. -->
+            <div class="filter-row filter-row-wide" id="filter-row-tags" role="group" aria-label="Filter by tag">
+              <label for="tag-filter">Tags</label>
+              <select id="tag-filter">
+                <option value="">All tags</option>
+              </select>
+              <input type="search" id="tag-search" placeholder="Find a tag…" aria-label="Search tags" hidden>
+              <div id="tag-bar" class="tag-bar" hidden></div>
+            </div>
+            <!-- What a span of time held. Two selects in the order the sentence
+                 reads — which date, then which span — and `Between…` opens ONE
+                 calendar, pressed twice: the first day starts the span and the
+                 second ends it, the way a flight search asks. It replaced two
+                 date inputs, which asked the reader to know a date rather than to
+                 find a day and which could hold a contradiction — a start after
+                 its end — that the filter could only answer as the empty span it
+                 is. Either end may still be left open, so "since the first of
+                 March" and "up to the first of March" are both sayable.
+
+                 `#range-from` and `#range-to` are the same two inputs, and still
+                 the values the whole app reads and writes; they carry no calendar
+                 of their own any more, so they are hidden ones. Remembered between
+                 visits, like the scope filter: a filter you set is a filter you
+                 meant. What pays for that is the read-back, which states the span
+                 in words — a field, a preset and two dates never LOOK wrong even
+                 when they say something other than what the filter is applying. -->
+            <div class="filter-row filter-row-wide" id="filter-row-range" role="group" aria-label="Filter by time span">
+              <label for="range-field">Time</label>
+              <select id="range-field" aria-label="Measure the span against"></select>
+              <select id="range-preset" aria-label="Filter by time span"></select>
+              <input type="hidden" id="range-from">
+              <input type="hidden" id="range-to">
+              <div id="range-calendar" class="range-calendar" hidden></div>
+              <span id="range-readback" class="range-readback" hidden></span>
+            </div>
+            <!-- Where the card is filed. Inert on the Board — the Board IS the
+                 columns, and a control that would empty two of them is a way to
+                 lose your own cards — so the row is painted on every other view
+                 only. "Open cards" is the default everywhere else: a finished card
+                 is a record rather than work, and the map, the matrix and the
+                 register all read as busier than the week was with them in. -->
+            <div class="filter-row" id="filter-row-column">
+              <label for="column-filter">Where it is filed</label>
+              <select id="column-filter">
+                <option value="">Open cards</option>
+                <option value="inbox">Inbox</option>
+                <option value="in-progress">In Progress</option>
+                <option value="answered">Done</option>
+                <option value="all">All columns</option>
+              </select>
+            </div>
+            <!-- How deep to read. A child is shown inside its parent whatever
+                 this says, so "Parents only" is the default: a child listed
+                 beside its parent is one piece of work counted twice. Unlike the
+                 column filter this one IS live on the Board — hiding a child
+                 there hides it from one place while still showing it in another,
+                 where the column filter would have emptied two of the three
+                 columns in front of you. A running text search outranks it, or a
+                 search could not find a card the board is holding. -->
+            <div class="filter-row" id="filter-row-nesting">
+              <label for="nesting-filter">Child cards</label>
+              <select id="nesting-filter">
+                <option value="">Parents only</option>
+                <option value="all">Parents and children</option>
+              </select>
+            </div>
+          </div>
+        </div>
       </div>
+      <!-- One chip per filter in force, painted by js/ui/filter-menu.js. This
+           is the whole of what the row says at rest: a board being narrowed
+           says so, and a board that is not says nothing at all. -->
+      <div id="filter-chips" class="filter-chips"></div>
     </div>
-    <div id="tag-bar" class="tag-bar" role="group" aria-label="Filter by tag" hidden></div>
   </header>
+
+  <!-- The board's summary line: what the five rules in js/core/direction.js
+       found, painted by js/ui/direction.js on the Board and empty everywhere
+       else. Its own slot rather than a child of #board, which is a grid of
+       three card columns plus the rail — a full-width line inside it would need
+       a row of its own in a template four rules already tune. Here it is one
+       more flex child of the board-view body, exactly like the habit banner. -->
+  <div id="direction-slot"></div>
 
   <main id="board" class="board" aria-label="Lodestar board"></main>
 
@@ -702,7 +805,88 @@
 
       <div class="dialog-actions">
         <span class="spacer"></span>
+        <button type="button" id="history-clear" class="btn danger" title="Reduce this board's history to the state it is in now — no card is touched">Empty history</button>
         <button type="button" id="close-history" class="btn ghost">Close</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Everything that is set once and rarely touched again, out of the Menu
+       and into its own ledger — the same `.prop-table` the card dialog reads
+       as a list of properties, one per row, because that pattern already
+       says "a value beside its name" without new CSS. Nothing here is
+       renamed and nothing is re-wired: every id below is the one it has
+       always had, wired once at boot by js/ui/toolbar.js, js/main.js,
+       js/ui/theme.js or js/ui/habits.js — the dialog is where these controls
+       are, not what they are, the same rule the filter panel followed on
+       2026-09-13. -->
+  <dialog id="settings-dialog">
+    <div class="dialog-body">
+      <h2>Settings</h2>
+      <p class="import-copy">How the board looks and sounds — set once, and rarely touched again.</p>
+      <div class="prop-table">
+        <label class="prop-row">
+          <span class="prop-label">Theme</span>
+          <span class="prop-value">
+            <select id="theme-select" aria-label="Theme">
+              <option value="light">Morning</option>
+              <option value="white">Day</option>
+              <option value="sepia">Dusk</option>
+              <option value="dark">Night</option>
+              <option value="star">Star</option>
+            </select>
+          </span>
+        </label>
+
+        <div class="prop-row" role="radiogroup" aria-labelledby="prop-plan-label">
+          <span class="prop-label" id="prop-plan-label">Plan section</span>
+          <div class="picker-options prop-value">
+            <button type="button" id="plan-stacked" class="menu-item" role="radio" aria-checked="false" title="Day, week, month, year and dreams all at once">Stacked</button>
+            <button type="button" id="plan-dropdown" class="menu-item" role="radio" aria-checked="false" title="One horizon at a time, picked from a list">Dropdown</button>
+          </div>
+        </div>
+
+        <!-- Not a <label>: a button is not a labelable element, so a label
+             wrapping one speaks for nothing. The gutter names the row for the
+             eye and the button carries its own aria-label for a reader, which
+             is why syncHabitMute() no longer prints the words on it. -->
+        <div class="prop-row">
+          <span class="prop-label">Habit sound</span>
+          <span class="prop-value">
+            <button type="button" id="habit-mute" class="menu-item" aria-label="Habit sound" aria-pressed="false" title="Sound the reminder when a habit is due">🔊 Habit sound</button>
+          </span>
+        </div>
+
+        <div class="prop-row" role="radiogroup" aria-labelledby="prop-chime-label">
+          <span class="prop-label" id="prop-chime-label">Chime</span>
+          <div class="picker-options prop-value">
+            <button type="button" id="sound-marimba" class="menu-item" role="radio" aria-checked="false" title="Two warm wooden notes">Marimba</button>
+            <button type="button" id="sound-bell" class="menu-item" role="radio" aria-checked="false" title="One soft bell with a shimmer">Bell</button>
+            <button type="button" id="sound-droplet" class="menu-item" role="radio" aria-checked="false" title="A watery upward blip">Droplet</button>
+            <button type="button" id="sound-kalimba" class="menu-item" role="radio" aria-checked="false" title="A muted thumb-piano pluck">Kalimba</button>
+          </div>
+        </div>
+
+        <div class="prop-row" role="group" aria-labelledby="prop-show-label">
+          <span class="prop-label" id="prop-show-label">Show</span>
+          <div class="prop-value">
+            <!-- These act on the FILTER CONTROLS, never on what is painted on
+                 the cards — chips and stamps are the cards' own; a filter you
+                 don't use is the thing worth hiding. -->
+            <div class="picker-options">
+              <button type="button" id="toggle-tags" class="menu-item" aria-pressed="false" title="Hide the tag filters — the # bar and the tags dropdown"># Tags</button>
+              <button type="button" id="toggle-prios" class="menu-item" aria-pressed="false" title="Hide the priority filter dropdown">Priorities</button>
+              <button type="button" id="toggle-types" class="menu-item" aria-pressed="false" title="Hide the type filter dropdown">Types</button>
+              <button type="button" id="toggle-columns" class="menu-item" aria-pressed="false" title="Hide the column filter — and with it the rule that keeps Done cards off every view but the Board">Columns</button>
+            </div>
+            <hr class="menu-sep">
+            <button type="button" id="toggle-done-col" class="menu-item" aria-pressed="false" title="Hide the Done column on the Board view">Done column</button>
+          </div>
+        </div>
+      </div>
+      <div class="dialog-actions">
+        <span class="spacer"></span>
+        <button type="button" id="close-settings" class="btn ghost">Done</button>
       </div>
     </div>
   </dialog>

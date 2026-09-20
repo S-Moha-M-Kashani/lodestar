@@ -71,6 +71,16 @@ class Settings:
     # pointing this at any other local OpenAI-compatible server (llama.cpp, vLLM)
     # then needs no code change at all.
     ollama_base_url: str = 'http://localhost:11434/v1'
+    # The Claude subscription, in the one form a container can be handed one.
+    # Natively this is empty and stays empty: `claude` finds its own login, in
+    # the keychain on a Mac or in its config directory on Linux. A brain running
+    # in Docker can reach neither, so `claude setup-token` (run where the login
+    # already is) produces a long-lived token that travels here instead — set in
+    # the environment, or typed into the Assistant's settings drawer, which is
+    # the same route the OpenRouter key takes and under the same write-only
+    # contract. It reaches the binary in its environment and never in an argv:
+    # an argument is world-readable to every other process on the machine.
+    claude_oauth_token: str = ''
     # 'sentence-transformers' | 'fastembed' | 'fake'. No 'auto': probing for an
     # optional wheel and silently taking the hash embedder when it was missing
     # meant a machine without the extra ran token-overlap hashing while
@@ -165,6 +175,26 @@ class Settings:
     # the board — capture and viewing are two switches because they are two
     # risks, each in the service that owns it.
     trace: str = 'off'
+    # 'widget1' | 'widget2' — which agent implementation answers a turn
+    # (`server.py`'s `build_agent`). Real in code as well as from the
+    # environment, unlike url_safety or tracing: which agent answered is the
+    # thing under comparison during the migration, so a test or an eval must be
+    # able to name one and get it.
+    #
+    # An operator switch and never a UI control: the picker chooses an *engine*,
+    # which is a per-turn question the user owns, whereas which implementation
+    # is in service is an operator question for the length of a migration. An
+    # unrecognised name raises at boot, and there is no `auto`.
+    #
+    # **`widget2` is the default since 2026-09-10, and that is the reversible
+    # step of the migration** — the one change with a before and after anybody
+    # can see, landed on its own so that undoing it undoes nothing else.
+    # `BRAIN_AGENT=widget1` puts the incumbent back with a restart, and it is
+    # still built, still tested and still holds five tools Widget 2 has not
+    # (parity.md, stage 4). Flipped rather than merely offered because a
+    # migration whose replacement nobody is actually served is a migration that
+    # never finds out what is missing.
+    agent: str = 'widget2'
     # The agent's own working memory: LangGraph's checkpointer (one thread per
     # chat, so reopening a conversation resumes it) and its long-term store,
     # sharing one sqlite file. Never board.db and never assistant.db — those are
@@ -234,6 +264,11 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         llm_provider=provider,
         ollama_base_url=env.get('BRAIN_OLLAMA_BASE_URL',
                                 'http://localhost:11434/v1'),
+        # Claude Code's own variable name rather than a BRAIN_ one, because the
+        # binary reads it too: one name means a token exported for a terminal
+        # session is the same token the brain picks up, and no shim has to copy
+        # one into the other.
+        claude_oauth_token=env.get('CLAUDE_CODE_OAUTH_TOKEN', ''),
         embedder=env.get('BRAIN_EMBEDDER', 'sentence-transformers'),
         embed_model=env.get('BRAIN_EMBED_MODEL', ''),
         # Real in code as well as from the environment, unlike url_safety or
@@ -262,6 +297,9 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         # metadata to a third party.
         tracing=env.get('BRAIN_TRACING', 'off'),
         trace=trace,
+        # Same default as the field, and it has to be said twice because
+        # `load_settings` builds every field from the environment explicitly.
+        agent=env.get('BRAIN_AGENT', 'widget2'),
         langsmith_api_key=env.get('LANGSMITH_API_KEY', ''),
         # Beside the other real databases, and covered by no backup: it is
         # derived working memory, not a record.

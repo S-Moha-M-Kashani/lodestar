@@ -19,6 +19,11 @@
 export const RANGE_FIELDS = [
   { id: 'created', label: 'Captured' },
   { id: 'done', label: 'Finished' },
+  // The deadline, read as the local day it names (`dayStart` below). The third
+  // date a card carries, and the only one the filter could not measure until
+  // the lens row needed it: "what is due" is the question every other one of
+  // these is a way of not asking.
+  { id: 'due', label: 'Due' },
 ];
 
 /** The spans on offer. `''` is the off position — a real value, not an absent
@@ -26,6 +31,10 @@ export const RANGE_FIELDS = [
  *  only entry that reads the two dates. */
 export const RANGE_PRESETS = [
   { id: '', label: 'Any time' },
+  // Open at the start on purpose: a card due last Tuesday is today's work, and
+  // a span beginning this morning would drop every late card out of the one
+  // question that exists to show them.
+  { id: 'through-today', label: 'Up to today' },
   { id: 'week', label: 'This week' },
   { id: 'month', label: 'This month' },
   { id: 'days30', label: 'Last 30 days' },
@@ -84,6 +93,8 @@ const dayFrom = (iso) => { const [y, m, d] = iso.split('-').map(Number); return 
 export function spanOf(range, now = new Date()) {
   const { preset, from, to } = rangeVal(range);
   switch (preset) {
+    case 'through-today':
+      return { from: -Infinity, to: endOfDay(now) };
     case 'week': {
       // The local Monday, matching the ISO week habitPeriod already counts in.
       // getDay() is 0 for Sunday, so Sunday is six days into the week, not
@@ -130,6 +141,19 @@ const dayWords = (iso) => {
   return `${d} ${MONTHS_SHORT[m - 1]} ${y}`;
 };
 
+/** A deadline as a moment: the start of the local day it names, or `null`.
+ *
+ *  A deadline is an ISO *day* where `createdAt` and `doneAt` are timestamps, so
+ *  the predicate needs one place that turns the first into the second — local,
+ *  like every other boundary here, or "due today" answers with tomorrow's card
+ *  for a reader east of Greenwich. `null` and not 0 for an absent or malformed
+ *  date: an undated card is outside every due span, where a zero would sweep it
+ *  into all of them from the epoch. */
+export const dayStart = (iso) => {
+  const day = dayVal(typeof iso === 'string' ? iso : '');
+  return day ? startOfDay(dayFrom(day)) : null;
+};
+
 /** The span in words, at the precision it was given.
  *
  *  The `planWords` lesson: a field, a preset and two date inputs never *look*
@@ -147,6 +171,6 @@ export function rangeText(range) {
     return r.from ? `${who} since ${dayWords(r.from)}` : `${who} up to ${dayWords(r.to)}`;
   }
   const when = { week: 'this week', month: 'this month', year: 'this year',
-    days30: 'in the last 30 days' }[r.preset];
+    days30: 'in the last 30 days', 'through-today': 'up to today' }[r.preset];
   return `${who} ${when}`;
 }

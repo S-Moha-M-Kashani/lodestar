@@ -14,7 +14,7 @@ from typing import Any
 from uuid import uuid4
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import AgentMiddleware, ToolCallLimitMiddleware
+from langchain.agents.middleware import ToolCallLimitMiddleware
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import (AIMessage, BaseMessage, HumanMessage,
                                      RemoveMessage)
@@ -24,6 +24,7 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
 from ..config import Settings
 from ..llm import make_chat_model
+from ..middleware import count_hooks as _hooks
 from ..middleware.cache import ToolResultCache
 from ..middleware.errors import ToolErrorMiddleware, _tool_error
 from ..middleware.memory import LongTermMemory
@@ -88,20 +89,6 @@ def _said(message: Any) -> tuple[str, str]:
         return said[0] if said else ('', '')
     return (str(message.get('role', '')),
             str(message.get('content', '')).strip())
-
-
-def _hooks(middleware: list, hook: str) -> int:
-    """How many of these middlewares become a graph node at `hook`.
-
-    The test `create_agent` itself applies, restated: a hook counts when the
-    class overrides either the sync or the async form. Asking the instances
-    rather than hard-coding a number means a middleware added later is counted
-    without anyone remembering to.
-    """
-    return sum(1 for m in middleware
-               if getattr(m.__class__, hook) is not getattr(AgentMiddleware, hook)
-               or getattr(m.__class__, f'a{hook}')
-               is not getattr(AgentMiddleware, f'a{hook}'))
 
 
 def _window(said: list[tuple[str, str]], incoming: list) -> int | None:

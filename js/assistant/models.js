@@ -1,3 +1,4 @@
+import { renderSubscriptions, refreshSubs } from './cli-auth.js';
 import { widgetShowing } from './shell.js';
 import { boardSuffix } from '../core/boards.js';
 import { KEY_PREFIX } from '../core/keys.js';
@@ -95,7 +96,27 @@ function providerOptions() {
     ? offered : [...offered, assistantModels.provider];
 }
 
-export async function probeBrainModels() {
+/** One probe at a time.
+ *
+ *  Both shells ask for the model list with `if (!brainModels.provider)`, and
+ *  that guard only closes once the fetch has *resolved* — so every repaint the
+ *  open causes asked again. Measured 2026-09-10: opening the widget fired six
+ *  requests before a character was typed, two of them this one, and four of
+ *  them this one against the offline test brain, whose answers come back fast
+ *  enough for three repaints to overtake the first fetch. One now.
+ *
+ *  The flag closes the door synchronously and is cleared when the probe
+ *  settles, so a brain that was down when the widget opened is still found on
+ *  the next paint without a reload — which is what the retry on every entry
+ *  exists for. */
+let probing = null;
+export function probeBrainModels() {
+  if (probing) return probing;
+  probing = runProbe().finally(() => { probing = null; });
+  return probing;
+}
+
+async function runProbe() {
   let answered = false;
   try {
     const res = await fetch('/api/agent/models');
@@ -375,7 +396,11 @@ export function renderChatSettings() {
   };
   sayStatus();
   if (settingsOpen && keyKnown === '') refreshKeyStatus();
-  panel.addEventListener('toggle', () => { if (panel.open) refreshKeyStatus(); });
+  panel.addEventListener('toggle', () => {
+    if (!panel.open) return;
+    refreshKeyStatus();
+    refreshSubs();
+  });
   // The key sent, and the field emptied once it is saved, both go through the
   // draft and through whichever input is live — never through this handler's
   // own closed-over node, which a repaint between the click and the answer
@@ -400,6 +425,12 @@ export function renderChatSettings() {
   keyRow.append(keyInput, keySave, keyStatus);
   keyLabel.appendChild(keyRow);
   fields.appendChild(keyLabel);
+  // The two CLI subscriptions, under the key they sit beside because all three
+  // answer one question: what is this brain allowed to think with. Whether one
+  // is signed in costs the brain a subprocess to find out, so it is asked when
+  // this panel is opened and never on the render path — the same deliberate
+  // moments the key status is fetched at.
+  fields.appendChild(renderSubscriptions());
   // Where the chat model runs, when the brain told us. Worth saying out loud:
   // a local backend is free and private but answers in tens of seconds, and
   // the list above is then the daemon's, not ours.

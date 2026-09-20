@@ -486,7 +486,27 @@ export function openDialog(cardId, suggested = null) {
   // a new child's, without the dialog ever shutting. See `showModal` below.
   draft = null;
   sourceId = null;
-  const shown = suggested ? { ...card, ...suggested } : card;
+  // A suggestion naming a plan is marked as chosen, or it cannot survive being
+  // approved: `planSrc` would stay whatever the card had — 'auto' on most cards
+  // — and `readForm` resolves an 'auto' plan straight back to the deadline, so
+  // the plan was painted, approved and thrown away.
+  //
+  // `'user'` is a choice among two workable values, not the only one. `'ai'` is
+  // a first-class provenance on both sides (`planSrcVal`, and `resolvePlan`
+  // keeps the plan for anything that is not 'auto'), and a *proposed* card
+  // really does arrive carrying it — which is right, because no person has
+  // looked at that card yet.
+  //
+  // A suggestion is the other case, and no agent may claim provenance on one:
+  // `planSrc` is not in the server's allowlist, so a suggestion naming it has
+  // that field dropped (Widget 1's `update_card` sends it and always has;
+  // Widget 2's deliberately does not). It is therefore written here, on the
+  // reviewer's side of that gate, and 'user' is the honest value: a person who
+  // read this plan and pressed Save chose it, and a card whose provenance said
+  // 'ai' would be one the owner could not tell from a plan nobody ever saw.
+  const shown = suggested
+    ? { ...card, ...suggested, ...(Object.hasOwn(suggested, 'plan') ? { planSrc: 'user' } : {}) }
+    : card;
   paintMode(false);
   paintForm(shown);
   $('#card-meta').textContent =

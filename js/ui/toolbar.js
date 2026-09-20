@@ -3,13 +3,19 @@ import { assistantState, refreshChatSessions, refreshChatTrash, startNewChat } f
 import { armHistoryIdle, cancelHistoryIdle, closeChatHistory, closeChatRowMenus, extrasOpen, fromChatRowMenu, renderAssistantTools, setChatMenuOpen, setExtrasOpen } from '../assistant/tools.js';
 import { widgetShowing } from '../assistant/shell.js';
 import { closeWidget, toggleWidget } from '../assistant/widget.js';
+import { planDedupe } from '../core/duplicates.js';
+import { commit } from '../core/history.js';
 import { KEY_PREFIX } from '../core/keys.js';
-import { filters } from '../core/state.js';
+import { filters, setCards, state } from '../core/state.js';
 import { RANGE_FIELDS, RANGE_PRESETS, rangeText, rangeVal, spanOf } from '../core/timespan.js';
+import { renderTagBar, setTagQuery } from './board.js';
+import { renderDateRange } from './date-range.js';
+import { ask } from './dialogs.js';
 import { $, announce } from './dom.js';
 import { render } from './render.js';
 
-// Toolbar: the type and priority filters, the actions menu, the Assistant's
+// Toolbar: the type and priority filters, the actions menu and its Settings
+// dialog, the Assistant's
 // header controls, and the keyboard shortcuts that reach them.
 //
 // The text search is not wired here. It is painted into the board beside
@@ -75,14 +81,19 @@ for (const { id, label } of RANGE_PRESETS) {
   $('#range-preset').append(new Option(label, id));
 }
 
-/** The two date inputs are shown only for `Between…`, and the read-back only
- *  while the filter is actually narrowing something — "Any time" is already
- *  what the preset select says, so printing it twice would be the one thing a
- *  read-back must not do. */
+/** The calendar is shown only for `Between…`, and the read-back only while the
+ *  filter is actually narrowing something — "Any time" is already what the
+ *  preset select says, so printing it twice would be the one thing a read-back
+ *  must not do.
+ *
+ *  `#range-from` and `#range-to` are hidden inputs now: the calendar
+ *  (js/ui/date-range.js) is what a reader presses, and those two are still the
+ *  values it writes and everything else reads. */
 function syncRangeControls() {
   const custom = filters.range.preset === 'custom';
-  $('#range-from').hidden = !custom;
-  $('#range-to').hidden = !custom;
+  const calendar = $('#range-calendar');
+  calendar.hidden = !custom;
+  renderDateRange();
   const active = spanOf(filters.range) !== null;
   const back = $('#range-readback');
   back.hidden = !active;
@@ -90,7 +101,10 @@ function syncRangeControls() {
 }
 
 /** One writer for all four controls, so the stored value, the read-back and the
- *  repaint cannot be updated by one handler and forgotten by another. */
+ *  repaint cannot be updated by one handler and forgotten by another. The lens
+ *  row reaches it the way every other filter does, by dispatching `change` on
+ *  the control — see the note over `applyLens` for why it may not import this
+ *  module. */
 function setRange(next) {
   filters.range = rangeVal(next);
   try {
@@ -128,46 +142,31 @@ $('#tag-filter').addEventListener('change', (e) => {
   render();
 });
 
-// One Menu button holds the board actions, History / Export / Import, the
-// Show and Sound hover submenus, the habit sound and the theme. The panel
-// closes on outside click, Escape, or after any one-shot action inside it is
-// chosen; the submenus and the toggles they hold keep it open, because
-// flipping three toggles should not mean opening the menu three times.
+// The tag search narrows which tags are LISTED here, never which cards the
+// board shows — so this repaints only the bar and the dropdown (renderTagBar,
+// which already owns both), never the whole board via render(). A `search`
+// input's native × fires `input` too, so one listener covers typing and
+// clearing alike.
+$('#tag-search').addEventListener('input', (e) => {
+  setTagQuery(e.target.value);
+  renderTagBar();
+});
+
+// One Menu button holds the board actions plus History / Export / Import —
+// eight rows now that every standing preference (theme, Plan layout, habit
+// chime, which filter controls show) moved into its own Settings dialog. That
+// leaves every row a one-shot action, so the panel dismisses after any of
+// them rather than staying open for a toggle to be watched flipping.
 const menuBtn = $('#menu-btn');
 const menuPanel = $('#menu-panel');
-
-// A hover submenu: unfolds while the pointer is over its wrapper, and the
-// button itself toggles it for keyboard and touch, where there is no hover.
-function wireFlyout(btnSel, panelSel) {
-  const btn = $(btnSel);
-  const panel = $(panelSel);
-  const wrap = btn.parentElement;
-  const setOpen = (open) => {
-    panel.hidden = !open;
-    btn.setAttribute('aria-expanded', String(open));
-  };
-  wrap.addEventListener('mouseenter', () => setOpen(true));
-  wrap.addEventListener('mouseleave', () => setOpen(false));
-  btn.addEventListener('click', () => setOpen(panel.hidden));
-  return setOpen;
-}
-const setShowOpen = wireFlyout('#menu-show', '#show-panel');
-const setSoundOpen = wireFlyout('#menu-sound', '#sound-panel');
-const setPlanOpen = wireFlyout('#menu-plan', '#plan-panel');
 
 function setMenuOpen(open) {
   menuPanel.hidden = !open;
   menuBtn.setAttribute('aria-expanded', String(open));
-  if (!open) { setShowOpen(false); setSoundOpen(false); setPlanOpen(false); }
 }
 
 menuBtn.addEventListener('click', () => setMenuOpen(menuPanel.hidden));
 menuPanel.addEventListener('click', (e) => {
-  // Submenus, their toggles, the sound on/off and the theme row are "stay
-  // open" surfaces — flipping a switch and watching it flip is the point.
-  // Only a one-shot action (history, export, a board action…) dismisses.
-  if (e.target.closest('.menu-flyout') || e.target.closest('.menu-theme-row')
-      || e.target.closest('#habit-mute')) return;
   if (e.target.closest('button')) setMenuOpen(false);
 });
 document.addEventListener('click', (e) => {
@@ -180,10 +179,108 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// The Show submenu's switches. Same idiom as #habit-mute: hidden stores '1',
+// The view row's own dropdown, beside the ⚙ menu and on the same one rule:
+// a click outside dismisses, a click inside is use, Escape closes and hands the
+// focus back, one `aria-expanded` on the button. Three dropdowns, one rule —
+// the 2026-09-03 lesson, applied a fourth time rather than reimplemented.
+//
+// The three views inside it are static markup with listeners of their own
+// (js/ui/render.js), so nothing here switches a view: this owns whether the
+// panel is open and where it hangs, and nothing else.
+const lensesBtn = $('#lenses-btn');
+const lensesPanel = $('#lenses-panel');
+
+/** Open or shut, and — when opening — place the panel under the button.
+ *
+ *  The panel is `position: fixed`, so its coordinates have to be given to it:
+ *  .view-switch clips its own overflow in order to scroll sideways on a phone,
+ *  and an absolutely positioned child of a clipping box is a menu nobody can
+ *  see. Measured on open rather than tracked, because the header does not move
+ *  while a dropdown is down. */
+function setLensesOpen(open) {
+  lensesPanel.hidden = !open;
+  lensesBtn.setAttribute('aria-expanded', String(open));
+  if (!open) return;
+  const at = lensesBtn.getBoundingClientRect();
+  lensesPanel.style.top = `${Math.round(at.bottom + 6)}px`;
+  lensesPanel.style.left = `${Math.round(at.left)}px`;
+  lensesPanel.style.minWidth = `${Math.round(at.width)}px`;
+}
+
+lensesBtn.addEventListener('click', () => setLensesOpen(lensesPanel.hidden));
+// Choosing a view is a move to it, so the panel goes with the press — the ⚙
+// menu's rule, for the same reason: every row in here is a one-shot action.
+lensesPanel.addEventListener('click', (e) => {
+  if (e.target.closest('button')) setLensesOpen(false);
+});
+document.addEventListener('click', (e) => {
+  if (!lensesPanel.hidden && !e.target.closest('.view-lenses')) setLensesOpen(false);
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !lensesPanel.hidden) {
+    setLensesOpen(false);
+    lensesBtn.focus();
+  }
+});
+
+// Settings…, opened from the Menu: the theme, the rail's Plan layout, the
+// habit chime and which filter controls show, in their own dialog now that
+// none of them is a one-shot action. A <dialog> handles Escape itself, so
+// there is nothing else to wire beyond opening it and the Done button.
+$('#settings-btn').addEventListener('click', () => $('#settings-dialog').showModal());
+$('#close-settings').addEventListener('click', () => $('#settings-dialog').close());
+
+// Remove duplicates — the Menu's one card action.
+//
+// A duplicate is a card whose words another card already holds (js/core/
+// duplicates.js decides all of it); the copies that lose go to the Trash
+// through the ordinary whole-board save, whose existing sweep is what
+// soft-deletes the cards a save omits. No new route, no second deletion path,
+// and one press of undo puts the whole removal back.
+//
+// Nothing else on the board is allowed to change with them: a card hanging off
+// a retired copy is re-pointed at the survivor, which is the "no cascade
+// delete" promise reaching this door — applyStep already keeps it at the
+// import's. What a retired habit recorded rides across too, and that half is
+// the leaf's, so the union is decided where it can be tested without a DOM.
+$('#dedupe-btn').addEventListener('click', async () => {
+  const groups = planDedupe(state.cards);
+  const gone = groups.reduce((n, g) => n + g.drop.length, 0);
+  if (!gone) { announce('No duplicate cards on this board'); return; }
+  const label = `${gone} duplicate card${gone === 1 ? '' : 's'}`;
+
+  const ok = await ask({
+    title: `Remove ${label}?`,
+    message: 'These cards hold words another card on this board already holds. The copy that is furthest along '
+      + '— Done, then In Progress, then the Inbox — is the one kept; the rest go to the Trash, where they stay '
+      + 'restorable, and anything hanging off a retired copy moves to the copy that is kept.',
+    okLabel: 'Remove duplicates',
+    danger: true,
+  });
+  if (!ok) return;
+
+  // Where each retired card's children have to end up, read before the cards
+  // are dropped: the survivor may itself be a card whose habit history was
+  // just merged, so the id is what travels, never the object.
+  const survivorOf = new Map();
+  for (const g of groups) for (const c of g.drop) survivorOf.set(c.id, g.keep.id);
+  const kept = new Map(groups.map((g) => [g.keep.id, g.keep]));
+
+  setCards(state.cards
+    .filter((c) => !survivorOf.has(c.id))
+    .map((c) => {
+      const card = kept.get(c.id) || c;
+      const parentId = survivorOf.get(card.parentId);
+      return parentId ? { ...card, parentId } : card;
+    }));
+  commit(`Removed ${label}`);
+  announce(`Removed ${label} — in the Trash, and one undo brings them back`);
+});
+
+// The Settings dialog's Show switches. Same idiom as #habit-mute: hidden stores '1',
 // shown removes the key outright, and boot applies whatever is stored so a
 // reload keeps the choice.
-/** One switch in the Show submenu: a body class the CSS reads, a remembered
+/** One switch in the Show row: a body class the CSS reads, a remembered
  *  flag, and an `aria-pressed` that announces the state ("true" = hidden).
  *
  *  `onSet` is for a switch that changes *which cards are shown* rather than how
@@ -312,12 +409,12 @@ document.addEventListener('keydown', (e) => {
   // when the keypress happened inside it. Escape pressed on the board behind an
   // open widget is not a request to close the widget, and the two dropdowns
   // this handler has already dealt with above have to keep their first claim on
-  // the key. The extras drawer and the search fold have their own listeners, so
-  // they are asked here rather than assumed shut.
+  // the key. The extras drawer has its own listener, so it is asked here rather
+  // than assumed shut — the search fold was asked beside it until 2026-09-10,
+  // by a selector that has matched nothing since the four tools became the
+  // Assistant page's alone.
   const inWidget = document.activeElement?.closest?.('#assistant-widget');
-  const foldOpen = extrasOpen
-    || document.querySelector('#assistant-widget .chat-recall[open]');
-  if (widgetShowing() && inWidget && !foldOpen) closeWidget();
+  if (widgetShowing() && inWidget && !extrasOpen) closeWidget();
 });
 document.addEventListener('keydown', (e) => {
   // Only when the menu inside it is already shut, so one Escape closes one

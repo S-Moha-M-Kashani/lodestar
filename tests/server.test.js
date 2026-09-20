@@ -1396,6 +1396,42 @@ test('confirming a proposal puts it on the board and takes one backup', async ()
 });
 
 // This is an integration test.
+test('a proposed plan survives storage and the confirmation gate', async () => {
+  // The regression for a live defect measured on 2026-09-08: `writeProposal`'s
+  // INSERT named no plan columns while `create_card` had advertised `plan` all
+  // along, so the Assistant proposed a plan date, reported that it had, and the
+  // proposal came back '' — through the database and onto the board. Asserted
+  // at all three points, because each was a place the value was lost.
+  //
+  // `planSrc: 'ai'` is what the tool really sends (tools/board.py sets it
+  // itself when the model names a plan), and it is the half that makes the
+  // plan survive at all: 'auto' is resolved back onto the deadline on the way
+  // in *and* on the way out, so a row storing the plan without its provenance
+  // would answer with the deadline anyway.
+  const s = await startServer();
+  try {
+    const proposal = await (await postProposal(s.base,
+      { title: 'PLAN-PROBE', plan: '2027-03', planSrc: 'ai' })).json();
+    assert.equal(proposal.plan, '2027-03', 'the stored proposal keeps the plan');
+    assert.equal(proposal.planSrc, 'ai', 'and who chose it, or the read resolves it away');
+
+    assert.equal((await act(s.base, proposal.id, 'confirm')).status, 200);
+    const live = (await getJson(s.base, '/api/state')).cards
+      .find((c) => c.id === proposal.id);
+    assert.equal(live.plan, '2027-03', 'and the accepted card is the card proposed');
+    assert.equal(live.planSrc, 'ai');
+
+    // The other half of the pair, stated so the fix cannot be read as "store
+    // everything": a proposal that named no plan follows its deadline, exactly
+    // as a hand-written card does.
+    const auto = await (await postProposal(s.base,
+      { title: 'PLAN-PROBE-auto', deadline: '2027-05-06' })).json();
+    assert.equal(auto.plan, '2027-05-06');
+    assert.equal(auto.planSrc, 'auto');
+  } finally { await s.stop(); }
+});
+
+// This is an integration test.
 test('rejecting a proposal trashes it and takes no backup', async () => {
   const bk = backupSandbox();
   const s = await startServer({ env: bk.env });

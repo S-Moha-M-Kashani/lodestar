@@ -30,6 +30,7 @@ asserts on what this module does with the output.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import tempfile
@@ -94,6 +95,29 @@ CODEX_HARDENING = ['-s', 'read-only',          # the sandbox may not write
                    '--skip-git-repo-check']
 
 
+def _signed_out_hint(said: str) -> str:
+    """Codex's own words, plus what to do about them when they mean "not
+    signed in".
+
+    A 401 from this backend has exactly one cause and exactly one cure, and the
+    CLI names neither: what it prints is `unexpected status 401 Unauthorized:
+    Missing bearer or basic authentication in header`, which is true and leaves
+    the reader nowhere. It matters most in the deployment where it is most
+    likely — a container whose subscription has never been signed in, which is
+    every composed stack on its first turn.
+
+    A substring match on a provider's error text, which is fragile in the
+    direction that costs nothing: if the wording changes the sentence simply
+    stops being added, and a 401 that came from an *expired* subscription rather
+    than an absent one gets the same advice, because it is the same advice.
+    """
+    if '401' not in said and 'Unauthorized' not in said:
+        return said
+    return (f'{said} — the Codex subscription is not signed in where the brain '
+            f'runs. Sign it in from the Assistant settings (the gear), under '
+            f'Your subscriptions.')
+
+
 def _text(message: BaseMessage) -> str:
     content = message.content
     if isinstance(content, str):
@@ -136,6 +160,13 @@ class _CliChatModel(BaseChatModel):
     model: str = ''
     timeout: float = CLI_TIMEOUT
     tools: list = []
+    # Added to the subprocess's environment, never to its argv. The only thing
+    # that travels this way today is Claude Code's subscription token, and the
+    # distinction is the reason it is a field at all: an argv element is printed
+    # by `ps` to every other process on the machine, which is the same class of
+    # leak invariant 5 is about, one process along. The environment is not a
+    # secret store either — it is simply not published.
+    env: dict = {}
 
     def bind_tools(self, tools: Sequence, **kwargs: Any) -> '_CliChatModel':
         """create_agent binds tools to the model; here that means writing their
@@ -199,7 +230,14 @@ class _CliChatModel(BaseChatModel):
         with tempfile.TemporaryDirectory(prefix='lodestar-cli-') as scratch:
             out = subprocess.run(argv, input=stdin, capture_output=True,
                                  text=True, timeout=self.timeout, check=False,
-                                 cwd=scratch)
+                                 cwd=scratch,
+                                 # Added to the inherited environment rather
+                                 # than replacing it: these binaries need PATH,
+                                 # HOME and the rest to find their own login at
+                                 # all, so a bare dict here would sign the
+                                 # subprocess out of everything.
+                                 env={**os.environ, **self.env} if self.env
+                                 else None)
         if out.returncode != 0:
             # Never `check=True`: CalledProcessError says "returned non-zero
             # exit status 1" and discards the reason. The likeliest real failure
@@ -321,7 +359,7 @@ class CodexCliChatModel(_CliChatModel):
             else:
                 continue
             if said:
-                return said
+                return _signed_out_hint(said)
         return super()._failure(stdout, stderr)
 
     def _parse(self, stdout: str) -> tuple[str, dict]:
@@ -341,6 +379,18 @@ class CodexCliChatModel(_CliChatModel):
                 text = item.get('text', '')
             elif event.get('type') == 'turn.completed':
                 usage = event.get('usage') or {}
+        # A turn that failed is not an empty answer, and on this backend it is
+        # the *likelier* of the two. Measured inside the brain's own container
+        # on 2026-09-17, against a codex that had never been signed in: it
+        # printed `turn.failed` with a 401 and **exited 0**, so the exit-code
+        # check in `_generate` never fired and what reached the transcript was an
+        # assistant message with nothing in it. The earlier capture (2026-08-20,
+        # an exhausted plan) exited non-zero, which is why this went unseen: the
+        # two failures this backend has are told apart by the *stream*, not by
+        # the status. Raised only when there is no reply — a warning event
+        # alongside a real answer is not a failed turn.
+        if not text and (said := self._failure(stdout, '')):
+            raise RuntimeError(f'codex-cli failed: {said}')
         if not usage:
             return text, {}
         # Taken at face value, with nothing summed. Codex reports input_tokens

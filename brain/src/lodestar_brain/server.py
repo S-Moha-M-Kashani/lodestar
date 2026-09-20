@@ -16,9 +16,11 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.store.sqlite import AsyncSqliteStore
 from pydantic import BaseModel, Field
 
-from .agent import AgentResult, AgentStep, LodestarAgent
+from .agent import AgentResult, AgentStep
+from .agents import make_agent
 from .agent.trace import TurnTrace
 from .board import BoardClient, BoardSnapshot
+from .cli_auth import CliLogin
 from .config import Settings, load_settings
 from .llm import make_chat_model, served_models
 from .middleware import configure_tracing
@@ -109,6 +111,21 @@ class TranscribeBody(BaseModel):
 
 class KeyBody(BaseModel):
     key: str
+
+
+class CliAuthBody(BaseModel):
+    backend: str = ''
+
+
+class CliTokenBody(BaseModel):
+    """A subscription token for a CLI backend, on its way in and never back out.
+    Same shape as KeyBody and deliberately not the same model: the two carry
+    different credentials to different places, and one body class would invite a
+    route to read the field it was not given.
+    """
+
+    backend: str = ''
+    token: str = ''
 
 
 class VectorsBody(BaseModel):
@@ -270,8 +287,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             logging.getLogger(__name__).warning(
                 'chat index not synced from the record: %s', exc)
 
-    agent = LodestarAgent(settings=settings, tools=tools,
-                          max_steps=settings.max_agent_steps)
+    # Which implementation answers, by name. Built here rather than in the
+    # lifespan for the reason every other seam is: an unrecognised BRAIN_AGENT
+    # has to stop the boot, and `create_app` is what runs before a port opens.
+    # The lifespan still hands it the durable state (`attach`), so both agents
+    # share one checkpointer and one long-term store.
+    # `board` and not `snapshot`: the snapshot is Widget 1's one-fetch-per-turn
+    # optimisation, keyed on a `turn_id` Widget 2 does not mint — it has one
+    # board-reading tool, so there is no second fetch to collapse.
+    agent = make_agent(settings, tools=tools,
+                       max_steps=settings.max_agent_steps, board=board)
     transcriber = make_transcriber(settings)
 
     @asynccontextmanager
@@ -308,12 +333,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 # Dropped before the connections close, so a late request
                 # cannot reach a checkpointer that is already shut.
                 agent.attach()
+                # And the login, if one is still waiting for a code: it is a
+                # subprocess this process started, so it is this process's to
+                # end.
+                cli_login.cancel()
 
     app = FastAPI(title='lodestar-brain', lifespan=lifespan)
 
     @app.get('/health')
     def health() -> dict:
-        return {'ok': True, 'service': 'lodestar-brain'}
+        """Alive, and which agent is answering with what.
+
+        `agent` and `capabilities` are here because during the migration the
+        first question about a running brain is which implementation it is
+        serving and what that one holds — and an absent capability has to be
+        visible without reading the source. `capabilities` is read off the
+        agent's own tools, so neither agent has to maintain a second list of
+        itself, and an empty one is a real answer rather than a fault.
+
+        Local-only, like the rest of this service: the board proxies
+        `/api/agent/*` and `/api/rag/*` and never this route.
+        """
+        return {'ok': True, 'service': 'lodestar-brain',
+                'agent': settings.agent,
+                'capabilities': sorted(tool.name for tool in agent.tools)}
 
     @app.get('/agent/models')
     def models() -> dict:
@@ -331,6 +374,69 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def key_status() -> dict:
         """Whether a hosted-API key is in force — never the key itself."""
         return {'configured': bool(agent.settings.openrouter_api_key)}
+
+    # One device login at a time, for the life of this process. It holds a
+    # subprocess open, so it belongs to the app rather than to a request — and
+    # it is dropped in the lifespan's `finally` below, because a brain that
+    # exits with a `codex login` still waiting leaves a process nobody owns.
+    cli_login = CliLogin()
+
+    # What the brain booted with, so an empty save restores the environment's
+    # token rather than ''. The same rule as `boot_key`, and for the same
+    # reason: a stack configured by env must not be un-configurable from a
+    # browser.
+    boot_claude_token = settings.claude_oauth_token
+
+    @app.get('/agent/cli-auth')
+    def cli_auth() -> dict:
+        """Which subscriptions this brain can run, which are signed in, and the
+        one-time code of a login in flight.
+
+        Distinct from `/agent/models`' `cli` map, which answers whether the
+        *binary* is here and is asked on every widget open. Being signed in
+        costs a subprocess to find out, so it is asked where the question is
+        being looked at — the settings drawer — rather than on the hot path.
+        """
+        return cli_login.state(agent.settings)
+
+    @app.post('/agent/cli-auth/start')
+    def cli_auth_start(body: CliAuthBody) -> dict:
+        """Begin a device login and hand back the link and the code to type.
+
+        A refusal is a 400 carrying the reason, never a 500: the browser has to
+        be able to tell "this machine has no codex" apart from "the brain is
+        broken", because the first is a sentence to show the owner and the
+        second is not.
+        """
+        try:
+            return cli_login.start(body.backend, agent.settings)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except (OSError, RuntimeError) as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+
+    @app.post('/agent/cli-auth/cancel')
+    def cli_auth_cancel() -> dict:
+        """Abandon the login in flight. Reachable from the drawer, and what the
+        shutdown path calls: a code nobody is going to approve should not leave
+        a process waiting for it."""
+        return cli_login.cancel()
+
+    @app.post('/agent/cli-auth/token')
+    def cli_auth_token(body: CliTokenBody) -> dict:
+        """Take a Claude subscription token typed into the settings drawer.
+
+        Write-only, exactly as `/agent/key` is: no response from any route here
+        may carry the token, and the status is yes or no. Only Claude has one —
+        codex signs in through the device flow above, and offering to paste a
+        credential for it would be inviting the owner to dig one out of a file.
+        """
+        if body.backend != 'claude-cli':
+            raise HTTPException(status_code=400,
+                                detail=f'{body.backend} takes no token')
+        token = body.token.strip() or boot_claude_token
+        agent.reconfigure(replace(agent.settings, claude_oauth_token=token))
+        return {'configured': bool(token)}
 
     @app.post('/agent/key')
     def set_key(body: KeyBody) -> dict:

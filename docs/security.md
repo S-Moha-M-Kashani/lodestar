@@ -5,9 +5,22 @@ database on your laptop. This page says exactly who can open it, what stops
 everyone else, and how to reach it from another machine without undoing any of
 that.
 
-There is one sentence to take away: **Lodestar answers on this computer only,
-and asks for a password even there.** Everything below is how that is enforced
-and what it costs you.
+There is one sentence to take away: **Lodestar answers on this computer, and
+beyond it only on addresses its own configuration names out loud — and it asks
+for a password on every one of them.** Today that is loopback plus one fixed
+home-network address, so that a second person in this house can open the board
+on her own device. Everything below is how that is enforced and what it costs
+you.
+
+That second address is **an interim arrangement with a removal date, not the
+design.** The intended end is a private network the owner controls (Tailscale or
+WireGuard): a stable name, a real certificate, encryption the home Wi-Fi does
+not give, and reachability that does not depend on whose Wi-Fi anyone is on.
+When that path works for everybody who needs the board, the home-network
+publish and its allowlist entries come out again and the boundary is loopback
+plus one private name. Read *[The one address beside
+loopback](#the-one-address-beside-loopback-interim)* before you copy this
+arrangement.
 
 ## The trust boundary
 
@@ -16,9 +29,9 @@ each one holds if the others fail.
 
 | | What it does | Where |
 | --- | --- | --- |
-| **Loopback binding** | The server listens on `127.0.0.1`. A peer on the same Wi-Fi has no address to connect to. | `LODESTAR_BIND`, `server.js` |
-| **A Host allowlist** | Only `localhost`, `127.0.0.1` and `[::1]` on the port actually bound are answered. Everything else is refused before the router runs. | `auth/local-auth.mjs` |
-| **A password login** | Every private route needs a session, including on loopback. | `LODESTAR_AUTH_PASSWORD` or `…_HASH` |
+| **A named binding, loopback first** | The server listens on `127.0.0.1`, and Compose publishes it there — plus, as one deliberate and commented exception, on one literal home-network address. Never on every interface, and never a range, a subnet or an interface name. | `LODESTAR_BIND`, `docker-compose.yml`, `tests/compose.test.js` |
+| **A Host allowlist** | Only `localhost`, `127.0.0.1` and `[::1]` on the port actually bound, plus whole names the deployment configured explicitly — today Compose's internal `lodestar:3000` and the two home spellings. Everything else is refused before the router runs. | `LODESTAR_ALLOWED_HOSTS`, `auth/local-auth.mjs` |
+| **A password login** | Every private route needs a session — on loopback and on the home address alike. | `LODESTAR_AUTH_PASSWORD` or `…_HASH` |
 
 Two more sit behind those, for the browser specifically: the session cookie is
 `HttpOnly; SameSite=Strict`, and an authenticated `POST`/`PUT`/`PATCH`/`DELETE`
@@ -32,6 +45,13 @@ from it; your browser then talks to Lodestar from a page the attacker wrote.
 That is DNS rebinding, and the one thing the attacker cannot change is the
 `Host` header the browser sends — it still says their domain. So the allowlist
 is the defence, and it runs before anything reads or writes a card.
+
+It is also the reason a second device works at all. A browser on another machine
+sends the address or the name it was given, which is not a loopback name, so
+both home spellings had to be listed explicitly: whole strings, exactly as
+typed, no suffix and no wildcard. Adding a name there is a decision somebody
+makes and writes down, which is the opposite of a pattern that turns out to
+match more than its author meant.
 
 ### Why a password on a machine only you use
 
@@ -113,33 +133,127 @@ TV, a guest, a printer with firmware from 2019 and whatever your flatmate
 installed; membership of it is not a claim about identity, and a design that
 reads it as one is wrong in a way that only shows up once.
 
-For the same reason there is **no supported direct-LAN mode and no bundled
-reverse proxy.** Putting Lodestar behind nginx on `0.0.0.0` is not configured
-against, but nothing here is written for it: the Host allowlist will refuse the
-proxy's hostname until you add it, the cookie is not `Secure` because the
-service is plain HTTP on loopback, and there is no TLS termination in this
-project. If you do it anyway, you own that boundary — this page does not
-describe it.
+The one address published beside loopback below is not an exception to that.
+It names **an address, not a network**: nothing in Lodestar asks which Wi-Fi
+you are on, and being able to reach the door has never been the same as being
+able to open it. The password is still the only thing that lets anybody in.
+
+For the same reason there is **no all-interfaces mode and no bundled reverse
+proxy.** Putting Lodestar behind nginx on `0.0.0.0` is not configured against,
+but nothing here is written for it: the Host allowlist will refuse the proxy's
+hostname until you add it, the cookie is not `Secure` because the service is
+plain HTTP, and there is no TLS termination in this project. If you do it
+anyway, you own that boundary — this page does not describe it.
+
+## The one address beside loopback (interim)
+
+Since 2026-09-03 Compose publishes the board on one literal home-network
+address as well as on `127.0.0.1`, and the Host allowlist names that address and
+this machine's Bonjour name. That is what lets a second person in the house open
+the board on her own laptop or phone. It is written down in three places that
+have to agree — the mapping and its comment in `docker-compose.yml`, the
+`LODESTAR_ALLOWED_HOSTS` line beside it, and the exception in the configuration
+guard `tests/compose.test.js`, which still fails any mapping that is neither
+loopback nor that one address, and fails if anything but the board leaves
+loopback at all.
+
+**One literal address, never `0.0.0.0`.** Publishing on every interface would
+work on every network, which is exactly the failure this whole page exists to
+end: the machine is a laptop that goes to universities and cafés. Docker cannot
+bind an address that is not present, so naming the address makes the exception
+self-limiting — on any other network `docker compose up` fails loudly instead of
+quietly serving a private life to the room. The price of that safety is that the
+address has to be held still on the machine (Wi-Fi → Details → TCP/IP → *Using
+DHCP with manual address*, or a reservation on the router); if it drifts, the
+board stops starting at home too, which is the noisy failure again rather than a
+silent one.
+
+Four things this costs, all of them chosen rather than discovered:
+
+- **The login crosses the home network in the clear.** Lodestar is plain HTTP.
+  The only encryption between her browser and this machine is the Wi-Fi link
+  itself — WPA2 Personal, measured on this machine on 2026-09-08, not the WPA3
+  that replaced it. Its weakness here is not the cipher but who holds the key:
+  on a pre-shared-key network everyone who knows the Wi-Fi password can derive
+  the others' session keys, so the board password, the session cookie and the
+  cards themselves are readable to anybody already on that network. This is the
+  single strongest reason the arrangement is interim.
+- **Anyone on the home Wi-Fi can reach the login page.** The address decides who
+  sees the door; the password decides who comes in. Five wrong passwords in a
+  row lock login for a minute, and no board data is served before a session
+  exists — but the door is visible to the smart TV, the guest, and the printer
+  with firmware from 2019.
+- **One password means one whole board.** There are no accounts, no roles, no
+  per-person and no per-board access: whoever has the password sees every board
+  and every card on it, and can edit, finish or delete any of them. Sharing the
+  password is sharing the journal, in full, both ways. If partial visibility is
+  ever wanted it is a different design and a much larger change, not a setting.
+- **The board goes where the laptop goes.** While this machine is away from
+  home, nobody else can reach the board at all — not an outage, just what a
+  service hosted on somebody's laptop is.
+
+**Where this ends, and how far it has got.** The private network below gives a
+stable name, a real certificate and end-to-end encryption, and it terminates at
+the same loopback service, so the boundary shrinks back to loopback plus one
+name. It is **live since 2026-09-12** and is how the owner's own phone reaches
+the board. The mapping above nevertheless stays, because the second person's
+device is not on the tailnet and this section is about her: the day it is, the
+named mapping, its two allowlist entries and the guard's exception are removed
+together, and the plain-HTTP hop described here goes with them.
 
 ## Reaching your board from another device
 
-The supported answer is: **make the other device part of this machine's
-loopback, and log in as usual.** Two ways, both of which leave every defence
-above exactly where it is.
+The answer that leaves every defence above exactly where it is: **make the other
+device part of this machine's loopback, and log in as usual.** Two ways — and
+the first of them is where the arrangement above is heading, not an alternative
+to it.
 
-### A private network (Tailscale, WireGuard)
+### A private network (Tailscale) — in use since 2026-09-12
 
-Install [Tailscale](https://tailscale.com/) (or plain WireGuard) on the laptop
-and on the phone or second computer. Then forward the loopback port over it —
-with Tailscale, one command on the laptop:
+Install [Tailscale](https://tailscale.com/) on the laptop and on the phone, and
+sign both into the same tailnet. Then, on the laptop:
 
 ```sh
-tailscale serve --bg 3000
+tailscale serve --bg --https=8443 http://127.0.0.1:3000
 ```
 
-The board is then reachable at the machine's name on your tailnet, from your
-devices only, and Tailscale terminates the connection locally and dials
-`127.0.0.1:3000` itself. Lodestar still asks for the password.
+Tailscale now answers for `https://<machine>.<tailnet>.ts.net:8443`, from your
+own devices only. It terminates TLS on this machine with a real certificate and
+dials `127.0.0.1:3000` itself, so **no port is published to any network**,
+`LODESTAR_BIND` is untouched, and as far as the board is concerned the request
+arrived on its own loopback. Lodestar still asks for the password.
+
+**The step that command does not do, and the board answers 403 without it.** The
+`Host` header survives the proxy intact — the tailnet name *and* the port — and
+the allowlist above is exact-match by design. So the name has to be added to
+`LODESTAR_ALLOWED_HOSTS` in `docker-compose.yml`, and the board restarted:
+
+```yaml
+LODESTAR_ALLOWED_HOSTS: lodestar:3000,…,mohas-macbook-pro.tailf01a94.ts.net:8443
+```
+
+```sh
+docker compose up -d lodestar
+```
+
+Until that entry exists every request from the phone is refused before a row is
+read, and the refusal reads like the board being down rather than like a rule
+being obeyed. `tests/compose.test.js` pins the entry, so an edit aimed at the
+allowlist's other names cannot take it along.
+
+**Why port 8443.** Port 443 on this tailnet already belongs to another service on
+this machine. Any free port works and the certificate is the same one.
+
+**Two things it is worth beyond reach.** The certificate makes the page a *secure
+context*, which is the only condition under which a browser hands a site the
+microphone — so voice input works on the phone, and over the plain-HTTP home
+route it cannot. And the encryption is the tunnel's own, so unlike WPA2 Personal
+it does not rest on a key every device in the building already holds.
+
+**What it does not change.** One password is still one whole board: whoever logs
+in sees every board and every card, and may edit or delete any of it. The laptop
+must be awake and the phone's Tailscale switch on — that is what a service
+hosted on somebody's laptop is, not an outage.
 
 ### An SSH tunnel
 
@@ -162,15 +276,19 @@ them and `LODESTAR_BIND=0.0.0.0`.
 ## Docker
 
 `docker compose up` publishes every port to `127.0.0.1` on the host — the board
-on `:3000` and both Chroma stores on `:8003`/`:8004`. This matters more than it
-looks: Docker publishes a port by writing its own NAT rules, so a bare
-`"3000:3000"` opens the port on every interface **and routes around your host
-firewall**. `tests/compose.test.js` fails on any published mapping that lacks
-the prefix.
+on `:3000` and both Chroma stores on `:8003`/`:8004` — and the board *also* on
+the one named home address described above. This matters more than it looks:
+Docker publishes a port by writing its own NAT rules, so a bare `"3000:3000"`
+opens the port on every interface **and routes around your host firewall**.
+`tests/compose.test.js` fails on any published mapping that is neither prefixed
+`127.0.0.1:` nor that one literal address, and it fails if any mapping outside
+the board service leaves loopback: nobody opens a vector store in a browser, and
+those two hold the same private life one chunk at a time.
 
 Inside the container the app binds `0.0.0.0` (`LODESTAR_BIND`), because Docker
 forwards to the container's own address and a loopback bind there is reachable
-by nothing at all. The loopback boundary is the host-side mapping, one level up.
+by nothing at all. The boundary is the host-side mapping, one level up — today
+loopback plus the one named home address, and nothing else.
 
 The composed stack supplies no password of its own, in either form: compose
 passes `LODESTAR_AUTH_PASSWORD` and `LODESTAR_AUTH_PASSWORD_HASH` through from
@@ -254,10 +372,13 @@ purge.
 
 ## What is deliberately not here
 
-- No user accounts, roles, registration or password reset. One person, one
-  password.
-- No TLS. The service is plain HTTP on loopback; a tunnel or VPN provides the
-  encryption when the traffic leaves the machine.
+- No user accounts, roles, registration or password reset. One password, one
+  whole board — everybody who has it sees and may change everything.
+- No TLS. The service is plain HTTP; on loopback, or inside a tunnel or a
+  private network, that costs nothing — the wrapper is what encrypts the traffic
+  once it leaves the machine. On the interim home-network publish above there is
+  no wrapper, and the Wi-Fi's own WPA2 is the only encryption the login gets —
+  which every other holder of the Wi-Fi password can see through.
 - No third-party auth dependency. The verifier is Node's own `scrypt`; the
   reasoning, and the libraries weighed against it, are in
   `auth/local-auth.mjs`'s *Alternatives considered* note.

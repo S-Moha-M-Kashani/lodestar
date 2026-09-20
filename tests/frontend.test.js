@@ -74,6 +74,11 @@ test('every import resolves, and every module is reached from main.js', () => {
   // controls as they evaluate (the card dialog, the toolbar, the export
   // sheet), so a module that nothing imports is a screen whose buttons quietly
   // do nothing — main.js names those as side-effect imports for this reason.
+  //
+  // No allowlist. js/core/direction.js was the one named exception while the
+  // analysis existed before the surface that shows it; the widget's standing
+  // state imports it as of 2026-09-10, so the exception went with the import
+  // rather than one release later.
   const orphans = allModules()
     .filter((f) => !reached.has(f))
     .map((f) => relative(ROOT, f));

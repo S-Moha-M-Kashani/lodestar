@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from types import SimpleNamespace
 from pathlib import Path
 
 import httpx
@@ -94,11 +95,15 @@ def _tool_names(settings, monkeypatch):
     """
     captured = {}
 
-    class Recorder:
-        def __init__(self, *, settings, tools, max_steps):
-            captured['tools'] = tools
+    # Intercepted at the seam that now chooses the agent (`agents.make_agent`),
+    # not at one agent's constructor: what this test is about is the tool list
+    # `create_app` composes, and that list is handed to whichever agent the
+    # operator named.
+    def recorder(settings_, *, tools, max_steps, board):
+        captured['tools'] = tools
+        return SimpleNamespace(tools=tools)
 
-    monkeypatch.setattr(server, 'LodestarAgent', Recorder)
+    monkeypatch.setattr(server, 'make_agent', recorder)
     server.create_app(settings)
     return {tool.name for tool in captured['tools']}
 

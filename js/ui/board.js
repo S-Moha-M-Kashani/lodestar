@@ -1,6 +1,7 @@
 import { cardLabel, filtersActive, matchesFilters } from '../core/cards.js';
 import { catById, catColor, catLabel, categories } from '../core/categories.js';
 import { PRIO_TITLE, TYPE_META, priorityOf } from '../core/constants.js';
+import { dueWords } from '../core/direction.js';
 import { isHabit } from '../core/habits.js';
 import { planConflict } from '../core/plan.js';
 import { filters, setDraggedId, state } from '../core/state.js';
@@ -136,7 +137,9 @@ function searchBox() {
   return input;
 }
 
-// Rubber-stamp badge for a card's type — always neutral ink.
+// Rubber-stamp badge for a card's type — always neutral ink. The Backlog's
+// rows, the map's tooltip and the Review's stamped cards wear this one: they
+// are lines and panels with room for a word.
 export function typeBadge(card) {
   const badge = document.createElement('span');
   badge.className = `badge type-${card.type}`;
@@ -144,11 +147,39 @@ export function typeBadge(card) {
   return badge;
 }
 
-// Priority stamp (P1–P4), derived on the fly from importance × urgency.
-// Null when either judgement is unset — an unjudged card wears no label.
+// The same stamp for the board card, reduced to its glyph. A card on the board
+// is a glance, and `✓ TASK` in a bordered, rotated stamp was six characters of
+// chrome saying what one already says — the word is still on the badge's own
+// tooltip and inside the card's accessible name, which is where a reader who
+// needs it was always going to find it. Same `.badge type-<type>` classes, so
+// the stamp is still the same thing wherever it is drawn.
+function typeGlyph(card) {
+  const badge = typeBadge(card);
+  badge.classList.add('glyph-only');
+  badge.textContent = TYPE_META[card.type].glyph;
+  badge.title = TYPE_META[card.type].label;
+  return badge;
+}
+
+// Priority on the board card: `P1` alone — urgent *and* important, derived on
+// the fly from the two judgements. Null for everything else, which is most of
+// the board.
+//
+// It was a bare `!` first, which is what the design drew, and the two marks
+// side by side on a real card is what corrected it: `!` is the *problem* type's
+// own glyph (TYPE_META), so a problem that was also urgent and important wore
+// `! !` — two identical marks meaning two different things, next to each other.
+// `P1` is the name the priority filter and the Matrix already give it.
+//
+// It used to paint P1–P4 on every judged card, which meant the commonest thing
+// printed at the top of a card was a coloured pill saying the card could wait.
+// P2–P4 are what the Matrix view is for: it reads the same two fields and is
+// *about* the comparison. The stamp keeps its class and its `data-prio` so
+// nothing downstream has to learn a second name for it, and an unjudged card
+// still wears no label at all.
 function prioBadge(card) {
   const p = priorityOf(card);
-  if (!p) return null;
+  if (p !== 1) return null;
   const badge = document.createElement('span');
   badge.className = 'prio-badge';
   badge.dataset.prio = String(p);
@@ -175,14 +206,21 @@ function planChip(card) {
   return chip;
 }
 
-// Deadline chip — flagged overdue once the date is behind today.
+// Deadline chip — the *reading* rather than the stored value: `overdue by 2
+// days`, `due today`, `due in 4 days`, and the date itself once it is further
+// off than a week. `2026-09-09` is a fact you have to do arithmetic on before
+// it means anything, and the arithmetic was already written: `dueWords` is
+// core/direction.js's own sentence, so the card and the line at the head of
+// the board can never say two different things about one date. Still flagged
+// in red pencil once the day has passed.
 function deadlineChip(card) {
   const chip = document.createElement('span');
   chip.className = 'card-deadline';
-  chip.textContent = card.deadline;
+  chip.textContent = dueWords(card.deadline);
+  chip.title = `Deadline ${card.deadline}`;
   if (card.deadline < new Date().toISOString().slice(0, 10)) {
     chip.dataset.overdue = 'true';
-    chip.title = 'Deadline passed';
+    chip.title = `Deadline passed — ${card.deadline}`;
   }
   return chip;
 }
@@ -202,57 +240,53 @@ function renderCard(card) {
   if (card.category) el.classList.add('categorized');
   el.setAttribute('aria-label', cardAria(card));
 
-  const top = document.createElement('div');
-  top.className = 'card-top';
+  // The card says four things: whose life area it belongs to (the coloured
+  // spine, which has said it since the first commit), what it is, when it is
+  // due, and which card it is. The words come first and everything else is one
+  // quiet line under them — a card on the board is a glance, and the record is
+  // the dialog, which is already a good one.
+  //
+  // What left this face, and where it went:
+  //
+  //   * the type's word, to the glyph's tooltip and the accessible name;
+  //   * P2–P4, to the Matrix, which is the view *about* that comparison;
+  //   * the category's name, to the spine that was already drawing it;
+  //   * every tag, to the dialog and to the tag filters — a tag is how you
+  //     find a card, not what you need to know once you have found it;
+  //   * the raw deadline, to the reading of it (`deadlineChip`).
+  //
+  // Nothing moved to a hover: the actions `+` still occupies layout and still
+  // answers Tab, for the reason written over `.card-menu-btn` in styles.css.
+  const title = document.createElement('p');
+  title.className = 'card-title';
+  title.textContent = card.title;
+  el.append(title);
 
-  const num = document.createElement('span');
-  num.className = 'card-num';
-  num.textContent = cardLabel(card);
-  top.append(num);
-
+  const line = document.createElement('div');
+  line.className = 'card-line';
+  line.append(typeGlyph(card));
+  const prio = prioBadge(card);
+  if (prio) line.append(prio);
+  if (card.deadline) line.append(deadlineChip(card));
+  // Only when it says something the deadline chip does not: while the plan is
+  // simply following the deadline, one chip is the honest count.
+  const plan = card.type === 'habit' ? '' : card.plan;
+  if (plan && plan !== card.deadline) line.append(planChip(card));
   if (card.notes.trim()) {
     const dot = document.createElement('span');
     dot.className = 'notes-dot';
     dot.title = 'Has notes';
     dot.textContent = '¶';
-    top.append(dot);
+    line.append(dot);
   }
-
-  top.append(typeBadge(card));
-  const prio = prioBadge(card);
-  if (prio) top.append(prio);
-  // Last in the header row, after the badges: the card's actions belong beside
-  // its other labels rather than in a corner of their own.
-  top.append(cardMenu(card));
-
-  const title = document.createElement('p');
-  title.className = 'card-title';
-  title.textContent = card.title;
-
-  el.append(top, title);
-
-  const plan = card.type === 'habit' ? '' : card.plan;
-  if (card.category || card.tags.length || card.deadline || plan) {
-    const tags = document.createElement('div');
-    tags.className = 'card-tags';
-    if (card.deadline) tags.append(deadlineChip(card));
-    // Only when it says something the deadline chip does not: while the plan
-    // is simply following the deadline, one chip is the honest count.
-    if (plan && plan !== card.deadline) tags.append(planChip(card));
-    if (card.category) {
-      const cat = document.createElement('span');
-      cat.className = 'card-cat';
-      cat.textContent = catLabel(card.category);
-      tags.append(cat);
-    }
-    for (const t of card.tags) {
-      const chip = document.createElement('span');
-      chip.className = 'card-tag';
-      chip.textContent = t;
-      tags.append(chip);
-    }
-    el.append(tags);
-  }
+  const num = document.createElement('span');
+  num.className = 'card-num';
+  num.textContent = cardLabel(card);
+  line.append(num);
+  // Last on the line: the card's actions belong beside its other marks rather
+  // than in a corner of their own.
+  line.append(cardMenu(card));
+  el.append(line);
 
   // The smaller cards this one is made of, at the foot and closed by default —
   // null for a childless card, which is therefore no taller than it was.
@@ -344,11 +378,33 @@ export function renderCatRail() {
   rail.append(edit);
 }
 
+// The tag search box (#tag-search) is static markup in index.html, so this is
+// the one place that may write it — an imported binding is read-only
+// everywhere else. It narrows which tags are *listed*, in the bar and the
+// dropdown both; it never touches `filters` and so never narrows the board,
+// which is why its handler in js/ui/toolbar.js calls renderTagBar() and not
+// render(). Module-level rather than on `filters`, for that same reason: it
+// is not a board filter, it is display state for this one control.
+let tagQuery = '';
+
+export function setTagQuery(q) {
+  tagQuery = q;
+}
+
 export function renderTagBar() {
   const bar = $('#tag-bar');
+  const search = $('#tag-search');
   const allTags = [...new Set(state.cards.flatMap((c) => c.tags))].sort();
   // Drop filters for tags that no longer exist
   for (const t of [...filters.tags]) if (!allTags.includes(t)) filters.tags.delete(t);
+
+  // Plain substring, case-insensitive, on the trimmed query — no fuzzy match,
+  // no regex. A tag already selected is kept whatever the query says: it is
+  // the only in-place way to un-select itself, and a search that hid it would
+  // take away the reader's way back (the same rule CLAUDE.md states for the
+  // scope filter outranking a running text search).
+  const q = tagQuery.trim().toLowerCase();
+  const shown = allTags.filter((t) => !q || t.toLowerCase().includes(q) || filters.tags.has(t));
 
   // The dropdown twin: same tags as the bar, one pick at a time. Repainted
   // here because this is the one place that already knows every tag; its
@@ -358,21 +414,34 @@ export function renderTagBar() {
   if (dropdown) {
     dropdown.replaceChildren(
       new Option('All tags', ''),
-      ...allTags.map((t) => new Option('#' + t, t)),
+      ...shown.map((t) => new Option('#' + t, t)),
     );
     dropdown.value = filters.tags.size === 1 ? [...filters.tags][0] : '';
   }
 
+  // Shown whenever there is a tag to search for, board-wide — not past some
+  // count, which would be a control the reader can't rely on finding twice in
+  // a row. A board with none at all shows neither this nor the bar it narrows.
+  if (search) search.hidden = allTags.length === 0;
+
   bar.hidden = allTags.length === 0;
   bar.innerHTML = '';
   if (!allTags.length) return;
+
+  if (q && !shown.length) {
+    const note = document.createElement('span');
+    note.className = 'tag-bar-note';
+    note.textContent = `No tags match "${tagQuery.trim()}".`;
+    bar.append(note);
+    return;
+  }
 
   const label = document.createElement('span');
   label.className = 'label';
   label.textContent = 'Tags:';
   bar.append(label);
 
-  for (const tag of allTags) {
+  for (const tag of shown) {
     const chip = document.createElement('button');
     chip.className = 'tag-chip';
     chip.textContent = tag;
