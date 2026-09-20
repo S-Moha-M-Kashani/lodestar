@@ -10,7 +10,40 @@ Dates are the day the release point was built. Versions follow
 [semantic versioning](https://semver.org/) — a major number for a break, a
 minor for a capability, a patch for a fix.
 
-## [Unreleased]
+## [2.0.0] — 2026-09-20
+
+**The header collapses to three destinations and a dropdown, every filter lives
+behind one panel, the habit and plan rail read as one plain list, and a
+calendar replaces the two date boxes.**
+
+**The header row now holds three destinations and one dropdown.** Board,
+Backlog and Review keep their own buttons; Overview, Matrix and Areas — the
+three views that read the same cards a different way — move behind a
+`Lenses ▾` dropdown, and the Assistant is reached from the corner `Ask` pill
+alone. Seven tabs on one line put Review and the Assistant off the edge of a
+phone screen where nothing could reach them; three plus a dropdown fits, and
+scrolls sideways rather than wrapping onto a second line at any width.
+
+**Filtering is one button, not a wall of controls.** Type, priority, tags,
+where a card is filed, when it's due, and whether a child shows up on its
+own — six dropdowns that used to stand above every column, most of them
+switched off and saying nothing — are now one `+ Filter` panel listing what
+the board can be narrowed by, each opening its own page. Nothing underneath
+was renamed: the same controls fire the same listeners they always did, only
+parked out of sight until asked for. A date range is now picked on a
+calendar, in two clicks, instead of typed into two boxes that could quietly
+hold a contradiction — a start after its end. And the plan list beside the
+board now follows every filter, exactly as the board's own cards do; it used
+to sit outside them behind its own switch, so a board narrowed to one
+question still carried a plan answering a different one.
+
+**The habit and plan rail reads as one plain list.** It was four habit groups
+and six plan sections, each behind its own coloured spine naming a cadence or
+a date span every row already said in its own tooltip — height spent, in the
+one panel whose whole job is to be narrow. The redraw trades that structure
+for plain rows: smaller, rounder tick boxes that fill with the card's own
+life-area colour when checked, quiet monospace headings in place of bold
+ones, and a plan row that now reads its date before its title.
 
 **Your Codex or Claude subscription can answer the Assistant in Docker, and you
 sign it in by pressing a button.** Both were already offered when Lodestar runs
@@ -81,6 +114,34 @@ question the two commonest views are made of — had no control at all. It is in
 the filter panel too, as a Due option with an "Up to today" span that includes
 what is already late.
 
+**A few surfaces on the phone were still sized for a mouse.** The board itself
+had already been measured and fixed; this pass opened the card dialog,
+Settings, the Menu and the filter panel and found the same problem waiting one
+level in — a deadline field at 13px, a model picker at 11.5px, a Menu row at
+30px, a Settings picker at 24px. Every typeable field on every one of those
+surfaces is now at least 40px, or 16px for anything you type into, which is
+also what stops the phone zooming in on focus and never zooming back out.
+
+**The ⚙ Menu is eight rows now, not roughly twenty behind three hover
+submenus.** New, Rename and Delete board, History, Export JSON, Import JSON,
+Remove duplicates, and `Settings…` — an action you take now stays in the
+Menu, and a preference you set once a year moves to the new Settings dialog,
+laid out as one property list exactly like the card dialog's own: theme, plan
+layout, habit sound, chime, and the four Show switches, each a labelled row
+instead of a hidden flyout. Nothing about the controls changed, only where
+they live. Alongside it, a board full of tags gained a way to find one by
+name: a small search box narrows the tag dropdown and the tag bar as you
+type, without touching a single card.
+
+**The card says four things, and the board says what it's asking for.** A
+card on the board used to paint ten small marks before it painted a word of
+its own; now it says its life area, its own words, one line of marks, and
+its ledger number, with the rest — the type's glyph, its priority, its tags,
+the raw deadline — moved to a tooltip, the Matrix or the dialog, wherever
+that fact is actually being compared. Above the three columns, a new line
+reads the board's own state in plain words — what's overdue, a habit falling
+behind, what's due soon, a plan naming right now, an area nothing has moved
+in for a month — worked out from the cards alone, with no model asked.
 
 **Two changes: the board is reachable from a phone anywhere in the world, and
 it is finally laid out for one.**
@@ -113,6 +174,39 @@ tall, and the tile carries the nova from the app's own header — rendered from
 that same drawing rather than drawn a second time. Installing is done from the
 board while logged in: the icons and the description file sit behind the session
 like every other file of the app, and the door stays the only public page.
+
+**Two board owner's actions: remove duplicate cards, and empty this board's
+undo history.** A card is its words — title and notes, trimmed and
+lower-cased — and two cards sharing them are duplicates whatever else about
+them differs. `Remove duplicates` keeps the copy furthest along toward Done,
+re-points any child or duplicate-habit onto the survivor, and retires the
+rest to the Trash in one undo-able save; `Empty history` resets the undo log
+to the board as it stands right now, destroying no card, for the times the
+log has grown long enough that "how the board got here" is no longer
+interesting.
+
+**The Assistant opens on the board's own reading of things, not an empty box
+and eight suggestions.** A widget that used to greet you with a blank
+composer now names up to five cards — overdue, a habit behind its cadence,
+due soon, a hand-set plan naming now, a quiet area — worked out from the
+cards alone by a rule with no score and no model call behind it. Opening it
+now costs a handful of requests instead of the dozen it used to, because
+reading the board is not asking the Assistant anything.
+
+**The second assistant, "Widget 2", answers by default now, with three tools
+of its own.** It shipped with none at all; it now finds cards with one call
+covering every filter the board can express, proposes new ones, and suggests
+edits to existing ones — the same confirm-before-anything-changes gate the
+first assistant already uses, so it still has no way to write to the board
+on its own. Which one answers is a setting the composed stack can now make
+too, and two small bugs went with the change: a suggested edit was reaching
+the tools without the chat it was meant to answer inside, and a plan date
+proposed or suggested for a card was silently dropped rather than saved.
+
+**And a fix for anyone running the brain in Docker:** the model it uses to
+understand card text is now cached on the machine rather than the container,
+so rebuilding the stack costs that multi-gigabyte download once per machine,
+not once per rebuild.
 
 ## [v1.9.0] — 2026-09-08
 
@@ -460,6 +554,7 @@ back through, and the board travels as a JSON file.
 **The board exists.** Three columns you drag cards between, saved in the
 browser.
 
+[v2.0.0]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.9.0...v2.0.0
 [v1.9.0]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.8.0...v1.9.0
 [v1.8.0]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.7.7...v1.8.0
 [v1.7.7]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.7.6...v1.7.7
