@@ -12,6 +12,7 @@ import { deleteCard } from './card-actions.js';
 import { childRow, childrenSummary } from './children.js';
 import { $, announce, columnTitle, getCard } from './dom.js';
 import { habitTape } from './habits.js';
+import { renderPlanCalendar, resetPlanCalendar } from './plan-calendar.js';
 import { discardEdit, reviewingEditId, setReviewingEditId } from './proposals.js';
 
 // The card dialog — the one place a card is edited by hand, and the same path
@@ -150,8 +151,34 @@ function syncPlanFields() {
     ? (deadline ? 'Following the deadline. Pick a year to plan it yourself.'
                 : 'Leave it empty, or pick a year — the month and day are optional.')
     : 'Your own plan. The deadline no longer changes it.';
+  paintPlanCalendar(plan);
   return plan;
 }
+
+// --- The plan, on a calendar ------------------------------------------------
+// A second way into the same three dropdowns, for the same reason `Between…`
+// stopped being two date inputs: a reader usually wants to find a day rather
+// than to know one. The grid can only ever name a whole day, so the dropdowns
+// stay — and the calendar's own two controls take the day, and then the month,
+// back off again. Everything lands through `paintPlan`, so there is still one
+// place that writes the plan.
+
+const planCal = $('#card-plan-calendar');
+const planCalBtn = $('#card-plan-cal-btn');
+
+function paintPlanCalendar(plan) {
+  if (planCal.hidden) return;
+  renderPlanCalendar(planCal, plan, (next) => {
+    planSrcNow = 'user'; // a person chose: the deadline stops writing here
+    paintPlan(next);
+  });
+}
+
+planCalBtn.addEventListener('click', () => {
+  planCal.hidden = !planCal.hidden;
+  planCalBtn.setAttribute('aria-expanded', String(!planCal.hidden));
+  paintPlanCalendar(readPlan());
+});
 
 for (const select of [planYear, planMonth, planDay]) {
   select.addEventListener('change', () => {
@@ -451,6 +478,12 @@ function paintForm(shown) {
   $('#card-parent-id').value = shown.parentId || '';
   syncParentLine();
   planSrcNow = planSrcVal(shown.planSrc);
+  // Shut on every open, and with no memory of the month it was left on: a grid
+  // still showing the last card's June is a calendar answering a question
+  // nobody asked.
+  planCal.hidden = true;
+  planCalBtn.setAttribute('aria-expanded', 'false');
+  resetPlanCalendar();
   paintPlan(shown.plan);
   syncHabitFields();
   // Closed on every open, whether or not there are any: it is a list of other
