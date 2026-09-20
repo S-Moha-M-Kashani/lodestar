@@ -354,88 +354,118 @@
                 aria-haspopup="true" aria-expanded="false"
                 aria-label="Narrow the board by type, priority, tags, time, column or depth">+ Filter</button>
         <div id="filter-panel" class="filter-panel" hidden>
-          <div class="filter-row" id="filter-row-type">
-            <label for="type-filter">Type</label>
-            <select id="type-filter">
-              <option value="">All types</option>
-              <option value="question">? Questions</option>
-              <option value="problem">! Problems</option>
-              <option value="task">✓ Tasks</option>
-              <option value="idea">✦ Ideas</option>
-              <option value="dream">☾ Dreams</option>
-              <option value="habit">↻ Habits</option>
-            </select>
-          </div>
-          <div class="filter-row" id="filter-row-prio">
-            <label for="prio-filter">Priority</label>
-            <select id="prio-filter">
-              <option value="">All priorities</option>
-              <option value="1">P1 · urgent &amp; important</option>
-              <option value="2">P2 · urgent</option>
-              <option value="3">P3 · important</option>
-              <option value="4">P4 · neither</option>
-              <option value="none">No label</option>
-            </select>
-          </div>
-          <!-- Tags: the dropdown picks one, the bar under it builds a
-               combination the dropdown has no word for. Both write the same
-               Set, so they are one filter with two handles; the bar's options
-               are painted by renderTagBar(), which already knows every tag. -->
-          <div class="filter-row filter-row-wide" id="filter-row-tags" role="group" aria-label="Filter by tag">
-            <label for="tag-filter">Tags</label>
-            <select id="tag-filter">
-              <option value="">All tags</option>
-            </select>
-            <input type="search" id="tag-search" placeholder="Find a tag…" aria-label="Search tags" hidden>
-            <div id="tag-bar" class="tag-bar" hidden></div>
-          </div>
-          <!-- What a span of time held. Two selects in the order the sentence
-               reads — which date, then which span — and `Between…` reveals two
-               date inputs, either of which may be left empty so that "since the
-               first of March" and "up to the first of March" are both sayable.
-               Remembered between visits, like the scope filter: a filter you set
-               is a filter you meant. What pays for that is the read-back, which
-               states the span in words — three controls showing a field, a
-               preset and two dates never LOOK wrong even when they say something
-               other than what the filter is applying. -->
-          <div class="filter-row filter-row-wide" id="filter-row-range" role="group" aria-label="Filter by time span">
-            <label for="range-field">Time</label>
-            <select id="range-field" aria-label="Measure the span against"></select>
-            <select id="range-preset" aria-label="Filter by time span"></select>
-            <input type="date" id="range-from" aria-label="Span starts" hidden>
-            <input type="date" id="range-to" aria-label="Span ends" hidden>
-            <span id="range-readback" class="range-readback" hidden></span>
-          </div>
-          <!-- Where the card is filed. Inert on the Board — the Board IS the
-               columns, and a control that would empty two of them is a way to
-               lose your own cards — so the row is painted on every other view
-               only. "Open cards" is the default everywhere else: a finished card
-               is a record rather than work, and the map, the matrix and the
-               register all read as busier than the week was with them in. -->
-          <div class="filter-row" id="filter-row-column">
-            <label for="column-filter">Where it is filed</label>
-            <select id="column-filter">
-              <option value="">Open cards</option>
-              <option value="inbox">Inbox</option>
-              <option value="in-progress">In Progress</option>
-              <option value="answered">Done</option>
-              <option value="all">All columns</option>
-            </select>
-          </div>
-          <!-- How deep to read. A child is shown inside its parent whatever
-               this says, so "Parents only" is the default: a child listed
-               beside its parent is one piece of work counted twice. Unlike the
-               column filter this one IS live on the Board — hiding a child
-               there hides it from one place while still showing it in another,
-               where the column filter would have emptied two of the three
-               columns in front of you. A running text search outranks it, or a
-               search could not find a card the board is holding. -->
-          <div class="filter-row" id="filter-row-nesting">
-            <label for="nesting-filter">Child cards</label>
-            <select id="nesting-filter">
-              <option value="">Parents only</option>
-              <option value="all">Parents and children</option>
-            </select>
+          <!-- Two faces, built by js/ui/filter-menu.js: a list of the facets
+               the board offers, and — once one is pressed — that facet's own
+               page. A flat stack of six labelled dropdowns is the header this
+               button was collapsed to end, one level in. -->
+          <div id="filter-root" class="filter-root"></div>
+          <div id="filter-page" class="filter-page" hidden></div>
+          <!-- Where the real controls live when nobody is reading them. Every
+               id below is the one it has always had, wired once at boot by
+               js/ui/toolbar.js: a facet's page either lists that control's own
+               `<option>`s as buttons, or borrows the whole row. So the option
+               list stays the one definition of a facet's choices AND of its
+               wording, every existing listener fires unchanged, `clearFilter`
+               still returns a control to its default, and the chips keep
+               reading their text off the option they came from.
+
+               The rows are parked rather than duplicated, which is what lets
+               the Show switches keep hiding a facet by its own id
+               (`.hide-tags #filter-row-tags`, styles.css) wherever the row
+               happens to be standing. -->
+          <div id="filter-rows" class="filter-rows">
+            <div class="filter-row" id="filter-row-type">
+              <label for="type-filter">Type</label>
+              <select id="type-filter">
+                <option value="">All types</option>
+                <option value="question">? Questions</option>
+                <option value="problem">! Problems</option>
+                <option value="task">✓ Tasks</option>
+                <option value="idea">✦ Ideas</option>
+                <option value="dream">☾ Dreams</option>
+                <option value="habit">↻ Habits</option>
+              </select>
+            </div>
+            <div class="filter-row" id="filter-row-prio">
+              <label for="prio-filter">Priority</label>
+              <select id="prio-filter">
+                <option value="">All priorities</option>
+                <option value="1">P1 · urgent &amp; important</option>
+                <option value="2">P2 · urgent</option>
+                <option value="3">P3 · important</option>
+                <option value="4">P4 · neither</option>
+                <option value="none">No label</option>
+              </select>
+            </div>
+            <!-- Tags: the dropdown picks one, the bar under it builds a
+                 combination the dropdown has no word for. Both write the same
+                 Set, so they are one filter with two handles; the bar's options
+                 are painted by renderTagBar(), which already knows every tag. -->
+            <div class="filter-row filter-row-wide" id="filter-row-tags" role="group" aria-label="Filter by tag">
+              <label for="tag-filter">Tags</label>
+              <select id="tag-filter">
+                <option value="">All tags</option>
+              </select>
+              <input type="search" id="tag-search" placeholder="Find a tag…" aria-label="Search tags" hidden>
+              <div id="tag-bar" class="tag-bar" hidden></div>
+            </div>
+            <!-- What a span of time held. Two selects in the order the sentence
+                 reads — which date, then which span — and `Between…` opens ONE
+                 calendar, pressed twice: the first day starts the span and the
+                 second ends it, the way a flight search asks. It replaced two
+                 date inputs, which asked the reader to know a date rather than to
+                 find a day and which could hold a contradiction — a start after
+                 its end — that the filter could only answer as the empty span it
+                 is. Either end may still be left open, so "since the first of
+                 March" and "up to the first of March" are both sayable.
+
+                 `#range-from` and `#range-to` are the same two inputs, and still
+                 the values the whole app reads and writes; they carry no calendar
+                 of their own any more, so they are hidden ones. Remembered between
+                 visits, like the scope filter: a filter you set is a filter you
+                 meant. What pays for that is the read-back, which states the span
+                 in words — a field, a preset and two dates never LOOK wrong even
+                 when they say something other than what the filter is applying. -->
+            <div class="filter-row filter-row-wide" id="filter-row-range" role="group" aria-label="Filter by time span">
+              <label for="range-field">Time</label>
+              <select id="range-field" aria-label="Measure the span against"></select>
+              <select id="range-preset" aria-label="Filter by time span"></select>
+              <input type="hidden" id="range-from">
+              <input type="hidden" id="range-to">
+              <div id="range-calendar" class="range-calendar" hidden></div>
+              <span id="range-readback" class="range-readback" hidden></span>
+            </div>
+            <!-- Where the card is filed. Inert on the Board — the Board IS the
+                 columns, and a control that would empty two of them is a way to
+                 lose your own cards — so the row is painted on every other view
+                 only. "Open cards" is the default everywhere else: a finished card
+                 is a record rather than work, and the map, the matrix and the
+                 register all read as busier than the week was with them in. -->
+            <div class="filter-row" id="filter-row-column">
+              <label for="column-filter">Where it is filed</label>
+              <select id="column-filter">
+                <option value="">Open cards</option>
+                <option value="inbox">Inbox</option>
+                <option value="in-progress">In Progress</option>
+                <option value="answered">Done</option>
+                <option value="all">All columns</option>
+              </select>
+            </div>
+            <!-- How deep to read. A child is shown inside its parent whatever
+                 this says, so "Parents only" is the default: a child listed
+                 beside its parent is one piece of work counted twice. Unlike the
+                 column filter this one IS live on the Board — hiding a child
+                 there hides it from one place while still showing it in another,
+                 where the column filter would have emptied two of the three
+                 columns in front of you. A running text search outranks it, or a
+                 search could not find a card the board is holding. -->
+            <div class="filter-row" id="filter-row-nesting">
+              <label for="nesting-filter">Child cards</label>
+              <select id="nesting-filter">
+                <option value="">Parents only</option>
+                <option value="all">Parents and children</option>
+              </select>
+            </div>
           </div>
         </div>
       </div>

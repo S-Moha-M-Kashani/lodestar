@@ -9,6 +9,7 @@ import { KEY_PREFIX } from '../core/keys.js';
 import { filters, setCards, state } from '../core/state.js';
 import { RANGE_FIELDS, RANGE_PRESETS, rangeText, rangeVal, spanOf } from '../core/timespan.js';
 import { renderTagBar, setTagQuery } from './board.js';
+import { renderDateRange } from './date-range.js';
 import { ask } from './dialogs.js';
 import { $, announce } from './dom.js';
 import { render } from './render.js';
@@ -80,14 +81,19 @@ for (const { id, label } of RANGE_PRESETS) {
   $('#range-preset').append(new Option(label, id));
 }
 
-/** The two date inputs are shown only for `Between…`, and the read-back only
- *  while the filter is actually narrowing something — "Any time" is already
- *  what the preset select says, so printing it twice would be the one thing a
- *  read-back must not do. */
+/** The calendar is shown only for `Between…`, and the read-back only while the
+ *  filter is actually narrowing something — "Any time" is already what the
+ *  preset select says, so printing it twice would be the one thing a read-back
+ *  must not do.
+ *
+ *  `#range-from` and `#range-to` are hidden inputs now: the calendar
+ *  (js/ui/date-range.js) is what a reader presses, and those two are still the
+ *  values it writes and everything else reads. */
 function syncRangeControls() {
   const custom = filters.range.preset === 'custom';
-  $('#range-from').hidden = !custom;
-  $('#range-to').hidden = !custom;
+  const calendar = $('#range-calendar');
+  calendar.hidden = !custom;
+  renderDateRange();
   const active = spanOf(filters.range) !== null;
   const back = $('#range-readback');
   back.hidden = !active;

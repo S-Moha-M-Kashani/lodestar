@@ -14,23 +14,176 @@ import { render } from './render.js';
 // dropdowns were switched off, and a control at rest that says "All types" is a
 // control whose whole visible state is a synonym for its own absence. The row
 // says nothing now until something is narrowing the board, and then it says
-// exactly that, in words, with an × on each.
+// exactly that, in words, with an × on each. Behind the button is a list of the
+// facets the board offers, and one page per facet.
 //
 // **Nothing moved and nothing was renamed.** `#type-filter`, `#prio-filter`,
 // `#tag-filter`, `#column-filter`, `#nesting-filter` and the four range
 // controls are the same elements with the same ids, wired once at boot by
 // js/ui/toolbar.js; the panel is *where they are*, not *what they are*. So this
-// module owns two things only: whether the panel is open, and what the chips
-// say. Nothing here writes a filter except a chip's own ×, which is the one
-// thing the controls themselves cannot offer — a control put back to its
-// default is a different gesture from a filter being lifted.
+// module owns three things only: whether the panel is open, which facet's page
+// is showing, and what the chips say. Nothing here writes a filter except a
+// facet's page — which writes it by setting the control's own value and firing
+// its own `change` — and a chip's own ×, which is the one thing the controls
+// themselves cannot offer: a control put back to its default is a different
+// gesture from a filter being lifted.
 
 const btn = $('#filter-btn');
 const panel = $('#filter-panel');
+const root = $('#filter-root');
+const page = $('#filter-page');
+const parked = $('#filter-rows');
+
+// --------------------------------------------------------------------------
+// The facets, and the two faces of the panel
+//
+// The panel was a flat stack of six labelled dropdowns — the header this button
+// was collapsed to end, one level in. It is a list of the facets the board
+// offers now, and pressing one opens that facet's own page.
+//
+// `pick` names the `<select>` a single-answer facet is chosen from: its page
+// lists that select's own `<option>`s as buttons and writes the choice back
+// with `value = …` plus a `change` event. So the option list stays the ONE
+// definition of a facet's choices *and* of its wording, every listener
+// js/ui/toolbar.js attached at boot fires unchanged, and the chips keep reading
+// their text off the option they came from. A second hand-kept table of the
+// same names is exactly the failure `EDITABLE_FIELDS` produced twice in 2026-09.
+//
+// The two facets with no `pick` bring controls of their own — a find box over a
+// chip list, and a field chooser with a span — so their page borrows the whole
+// row rather than re-describing it.
+const FACETS = [
+  { key: 'type', label: 'Type', row: '#filter-row-type', pick: '#type-filter' },
+  { key: 'prio', label: 'Priority', row: '#filter-row-prio', pick: '#prio-filter' },
+  {
+    key: 'tags',
+    label: 'Tags',
+    row: '#filter-row-tags',
+    // Stated in words, because the list IS the operator: the board asks for
+    // cards carrying *all* of them, and an AND/OR control would be a second way
+    // to say what ticking a second tag already says.
+    note: 'A card has to carry every tag chosen here, not just one of them.',
+  },
+  { key: 'column', label: 'Where it is filed', row: '#filter-row-column', pick: '#column-filter' },
+  { key: 'range', label: 'When', row: '#filter-row-range' },
+  { key: 'nesting', label: 'Child cards', row: '#filter-row-nesting', pick: '#nesting-filter' },
+];
+
+// Which facet's page is open, or '' for the list. Panel state, not filter
+// state: nothing here narrows the board.
+let openFacet = '';
+
+/** The facets the panel may offer right now.
+ *
+ *  A facet whose row the board has hidden — the three Show switches, and the
+ *  column filter on the Board — is not listed, because a label naming a control
+ *  that is not there is the thing this panel exists to stop. The row's OWN
+ *  computed `display` is what answers it, so the rule stays in styles.css where
+ *  it was written, keyed by the row's id: a parked row is inside a hidden box
+ *  and still reports the display its own rule gives it. */
+const liveFacets = () => FACETS.filter((f) => {
+  const row = $(f.row);
+  return row && getComputedStyle(row).display !== 'none';
+});
+
+/** What a facet is set to, in the words its own control uses. */
+function facetValue(f) {
+  if (f.pick) {
+    const sel = $(f.pick);
+    return sel?.value ? sel.selectedOptions[0].textContent.trim() : '';
+  }
+  if (f.key === 'tags') return [...filters.tags].map((t) => `#${t}`).join(' ');
+  return spanOf(filters.range) !== null ? rangeText(filters.range) : '';
+}
+
+function renderRoot() {
+  root.replaceChildren();
+  for (const f of liveFacets()) {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'filter-facet';
+    row.dataset.facet = f.key;
+    const value = document.createElement('span');
+    value.className = 'filter-facet-value';
+    value.textContent = facetValue(f);
+    row.append(f.label, value);
+    row.addEventListener('click', () => setFacet(f.key));
+    root.append(row);
+  }
+}
+
+function renderPage(f) {
+  page.replaceChildren();
+  const back = document.createElement('button');
+  back.type = 'button';
+  back.className = 'filter-back';
+  back.textContent = `‹ ${f.label}`;
+  back.setAttribute('aria-label', 'Back to all the ways of narrowing the board');
+  back.addEventListener('click', () => setFacet(''));
+  page.append(back);
+
+  if (f.pick) {
+    const sel = $(f.pick);
+    const list = document.createElement('div');
+    list.className = 'filter-options';
+    list.setAttribute('role', 'radiogroup');
+    list.setAttribute('aria-label', f.label);
+    for (const opt of sel.options) {
+      const choice = document.createElement('button');
+      choice.type = 'button';
+      choice.className = 'filter-option';
+      choice.dataset.value = opt.value;
+      choice.setAttribute('role', 'radio');
+      choice.setAttribute('aria-checked', String(opt.value === sel.value));
+      choice.textContent = opt.textContent.trim();
+      choice.addEventListener('click', () => {
+        sel.value = opt.value;
+        sel.dispatchEvent(new Event('change'));
+        // One answer, so the question closes with it.
+        setFacet('');
+      });
+      list.append(choice);
+    }
+    page.append(list);
+    return;
+  }
+
+  page.append($(f.row));
+  if (f.note) {
+    const said = document.createElement('p');
+    said.className = 'filter-note';
+    said.textContent = f.note;
+    page.append(said);
+  }
+}
+
+/** Show the list, or one facet's page. Every row is parked first, so a row can
+ *  never be in two places or left behind in a page nobody is reading. */
+function setFacet(key) {
+  openFacet = FACETS.some((f) => f.key === key) ? key : '';
+  for (const f of FACETS) {
+    const row = $(f.row);
+    if (row && row.parentElement !== parked) parked.append(row);
+  }
+  const facet = FACETS.find((f) => f.key === openFacet);
+  root.hidden = Boolean(facet);
+  page.hidden = !facet;
+  // Which page is showing, on the page itself: a reader never sees it, and it
+  // is what lets a check — or anything else outside this module — ask where the
+  // panel is without reading a heading's words.
+  if (facet) page.dataset.facet = facet.key;
+  else delete page.dataset.facet;
+  if (facet) renderPage(facet);
+  else renderRoot();
+}
 
 export function setFilterMenuOpen(open) {
   panel.hidden = !open;
   btn.setAttribute('aria-expanded', String(open));
+  // Always back to the list: a panel reopened on the page somebody left is a
+  // menu that remembers a question rather than asking one. Closing parks the
+  // rows, which is also what keeps them out of the panel's own scroll height.
+  setFacet('');
 }
 
 btn.addEventListener('click', () => setFilterMenuOpen(panel.hidden));
@@ -49,10 +202,17 @@ document.addEventListener('click', (e) => {
   if (!panel.hidden && !e.target.closest('.filter-menu')) setFilterMenuOpen(false);
 }, true);
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && !panel.hidden) {
-    setFilterMenuOpen(false);
-    btn.focus();
+  if (e.key !== 'Escape' || panel.hidden) return;
+  // One Escape closes one thing, innermost first — the rule the chat row's
+  // actions and the drawer above them already follow. A facet's page is a layer
+  // inside the panel, so it goes before the panel does.
+  if (openFacet) {
+    setFacet('');
+    root.querySelector(`[data-facet="${openFacet}"]`)?.focus();
+    return;
   }
+  setFilterMenuOpen(false);
+  btn.focus();
 });
 
 // --------------------------------------------------------------------------

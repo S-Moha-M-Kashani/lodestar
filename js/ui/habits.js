@@ -152,71 +152,18 @@ export function renderHabitRail() {
   head.append(title, sub);
   rail.append(head);
 
-  // Four lists, shortest period first, each named by a spine down its left
-  // edge. An absent cadence paints nothing at all.
-  for (const freq of CADENCE_ORDER) {
-    const group = running.filter((c) => c.habitFreq === freq);
-    if (group.length) rail.append(cadenceGroup(freq, group));
+  // One list, due first and finished after — a day's ledger, not a nag list.
+  // It was four lists, one per cadence, each named by a rotated spine down its
+  // own left edge: four inks, four accessible names and a 20px inset spent in
+  // the one panel whose whole job is to be the board's narrow margin, to name
+  // groups that every row already states in its own tooltip and its own punch
+  // strip. The rail is one list again.
+  for (const card of [...running].sort((a, b) => Number(habitDue(b)) - Number(habitDue(a)))) {
+    rail.append(habitRailRow(card));
   }
 
   if (retired.length) rail.append(retiredFold(retired));
   return rail;
-}
-
-/** The cadences, shortest period to longest, and the ink each is drawn in.
- *
- *  Fixed, and not derived from what the board holds: a shortest-period-first
- *  reading is what makes the top of the rail today's work, and an order that
- *  moved with the card count would put a yearly habit above a daily one on the
- *  day you happened to keep three of the first.
- *
- *  The inks are the four `--ink-*` hues styles.css already defines in every
- *  theme, and already uses for exactly this job — `--col-accent` on the three
- *  board columns. A cadence group is the same kind of thing as a column, a
- *  container the cards sit in, so the spine is that idiom applied to a
- *  narrower one and **no token is added**. It is emphatically not a category
- *  colour: colour on this board means category, and that is why the colour is
- *  on the group's edge and never on a row, where it would compete with `--cat`
- *  on the same line. */
-const CADENCE_ORDER = ['daily', 'weekly', 'monthly', 'yearly'];
-const CADENCE_LABEL = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly', yearly: 'Yearly' };
-
-/** One cadence's habits, behind one spine.
- *
- *  The spine is the group's **label**, not decoration — which is why the group
- *  carries `role="group"` and an accessible name saying the cadence. Rotated
- *  glyphs are not an accessible name, and a screen reader has to reach "Daily
- *  habits" rather than an unlabelled run of rows. It is also why there is no
- *  horizontal heading: four of those, in a 200px margin, to name lists that are
- *  often one row long, is the height the 2026-09-07 redraw removed. */
-function cadenceGroup(freq, cards) {
-  const group = document.createElement('div');
-  group.className = 'habit-group';
-  group.dataset.cadence = freq;
-  group.setAttribute('role', 'group');
-  group.setAttribute('aria-label', `${CADENCE_LABEL[freq]} habits`);
-
-  const spine = document.createElement('span');
-  spine.className = 'habit-spine';
-  spine.textContent = CADENCE_LABEL[freq];
-  // The spine costs the group width and never height, so on a one-row group
-  // the word is clipped to that row — the same rule as a habit's own name,
-  // which is clipped rather than wrapped because the rail's width is the
-  // user's. The tooltip is what a sighted reader gets back, exactly as it is
-  // for a long habit name.
-  spine.title = `${CADENCE_LABEL[freq]} habits`;
-  // Decoration as far as assistive technology is concerned: the group's
-  // aria-label above is the name, and reading the cadence twice would be the
-  // same fact said twice.
-  spine.setAttribute('aria-hidden', 'true');
-  group.append(spine);
-
-  // Due first, finished after — a day's ledger, not a nag list. The rule is
-  // unchanged; it applies inside a group now rather than across the whole rail.
-  for (const card of [...cards].sort((a, b) => Number(habitDue(b)) - Number(habitDue(a)))) {
-    group.append(habitRailRow(card));
-  }
-  return group;
 }
 
 /** One habit, on one line: its boxes, then its name.
