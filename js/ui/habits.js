@@ -144,7 +144,7 @@ export function renderHabitRail() {
   head.className = 'habit-rail-head';
   const title = document.createElement('h2');
   title.className = 'habit-rail-title';
-  title.textContent = '↻ Habits';
+  title.textContent = 'Habits';
   const sub = document.createElement('p');
   sub.className = 'habit-rail-sub';
   const due = running.filter(habitDue).length;
