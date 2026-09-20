@@ -688,12 +688,21 @@ input, select, textarea { font: inherit; color: inherit; }
 }
 .range-calendar[hidden] { display: none; }
 
-.range-cal-head {
+/* From here to the end of the block, the rules are shared with the card
+   dialog's plan calendar (js/ui/plan-calendar.js). Two selectors rather than
+   one set of class names, because `#range-calendar`'s are test-stable API and a
+   second calendar wearing them would make every one of them ambiguous — but the
+   drawing is one drawing, so it is written once. What differs is kept with the
+   control it belongs to: the two containers, and what a chosen day looks like
+   (a span has two ends and a run between them; a plan has one day). */
+.range-cal-head,
+.plan-cal-head {
   display: flex;
   align-items: center;
   gap: 4px;
 }
-.range-cal-month {
+.range-cal-month,
+.plan-cal-month {
   flex: 1;
   text-align: center;
   font-family: var(--mono);
@@ -701,7 +710,8 @@ input, select, textarea { font: inherit; color: inherit; }
   letter-spacing: 0.04em;
   color: var(--ink);
 }
-.range-cal-step {
+.range-cal-step,
+.plan-cal-step {
   width: 24px;
   height: 24px;
   font-family: var(--mono);
@@ -712,23 +722,29 @@ input, select, textarea { font: inherit; color: inherit; }
   border-radius: 3px;
   cursor: pointer;
 }
-.range-cal-step:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 8%, transparent); }
-.range-cal-step:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: -2px; }
+.range-cal-step:hover,
+.plan-cal-step:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 8%, transparent); }
+.range-cal-step:focus-visible,
+.plan-cal-step:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: -2px; }
 
 .range-cal-week,
-.range-cal-grid {
+.range-cal-grid,
+.plan-cal-week,
+.plan-cal-grid {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 2px;
 }
-.range-cal-week span {
+.range-cal-week span,
+.plan-cal-week span {
   text-align: center;
   font-family: var(--mono);
   font-size: 9px;
   color: var(--ink-soft);
 }
 
-.range-day {
+.range-day,
+.plan-day {
   aspect-ratio: 1;
   min-height: 26px;
   font-family: var(--mono);
@@ -740,9 +756,12 @@ input, select, textarea { font: inherit; color: inherit; }
   cursor: pointer;
 }
 /* The days either side of the month are pressable and quiet, not blanked. */
-.range-day.outside { color: var(--ink-soft); opacity: 0.55; }
-.range-day:hover { background: color-mix(in srgb, var(--ink) 10%, transparent); }
-.range-day:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: -2px; }
+.range-day.outside,
+.plan-day.outside { color: var(--ink-soft); opacity: 0.55; }
+.range-day:hover,
+.plan-day:hover { background: color-mix(in srgb, var(--ink) 10%, transparent); }
+.range-day:focus-visible,
+.plan-day:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: -2px; }
 /* The span a press would give, shown before it is given. No new colour: the
    run is the blue the board already uses for a chosen thing, at reading
    weight in the middle and at full weight on the two ends. */
@@ -750,8 +769,12 @@ input, select, textarea { font: inherit; color: inherit; }
 .range-day.start,
 .range-day.end { background: var(--ink-blue); color: var(--paper); }
 
-.range-cal-open { display: flex; gap: 6px; }
-.range-cal-openend {
+/* The two ways to leave an end open, and the two ways to take precision off a
+   plan: the same row of dashed ghost buttons under the same grid. */
+.range-cal-open,
+.plan-cal-less { display: flex; gap: 6px; }
+.range-cal-openend,
+.plan-cal-clear {
   flex: 1;
   padding: 5px 6px;
   font-family: var(--mono);
@@ -762,9 +785,12 @@ input, select, textarea { font: inherit; color: inherit; }
   border-radius: 3px;
   cursor: pointer;
 }
-.range-cal-openend:hover:not(:disabled) { color: var(--ink); border-color: var(--ink-soft); }
-.range-cal-openend:disabled { opacity: 0.45; cursor: default; }
-.range-cal-openend:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 1px; }
+.range-cal-openend:hover:not(:disabled),
+.plan-cal-clear:hover:not(:disabled) { color: var(--ink); border-color: var(--ink-soft); }
+.range-cal-openend:disabled,
+.plan-cal-clear:disabled { opacity: 0.45; cursor: default; }
+.range-cal-openend:focus-visible,
+.plan-cal-clear:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 1px; }
 
 /* The chips: what is in force, out on the rule where the controls used to be.
    An × on each, and a `Clear` only from two up. */
@@ -2601,16 +2627,19 @@ dialog::backdrop {
   max-height: 86vh;
 }
 
-.card-dialog-head { padding: 22px 24px 0; }
+/* The rule sits under the whole head, not under the titles alone: the lineage
+   line and the finished date are part of what the head says about this card,
+   and a rule above them filed them with the properties below. */
+.card-dialog-head {
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--line);
+}
 
-/* The act on the left, the ledger line on the right, on one line, with the red
-   rule under both. */
+/* The act on the left, the ledger line on the right, on one line. */
 .card-dialog-titles {
   display: flex;
   align-items: baseline;
   gap: 12px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid color-mix(in srgb, var(--rule-red) 55%, transparent);
 }
 
 /* `min-height: 0` is what lets a flex child scroll at all: without it the
@@ -2620,22 +2649,24 @@ dialog::backdrop {
   min-height: 0;
   overflow-y: auto;
   scrollbar-width: thin;
-  padding: 18px 24px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 20px 16px;
 }
 
 #card-form .dialog-actions {
   flex: 0 0 auto;
-  padding: 14px 24px 20px;
-  border-top: 1px solid var(--card-line);
+  padding: 12px 20px 16px;
+  border-top: 1px solid var(--line);
 }
 
 #card-form h2 {
   margin: 0;
   font-family: var(--display);
-  font-size: 16px;
-  font-weight: 400;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
 }
 
 .dialog-body h2 {
@@ -2654,7 +2685,7 @@ dialog::backdrop {
    filed it beside the properties as one more field to fill in. The frame
    appears on focus, where it is a caret's home rather than decoration. */
 .card-words {
-  margin: 0 0 6px;
+  margin: 0;
 }
 .card-words textarea {
   display: block;
@@ -2770,7 +2801,7 @@ dialog::backdrop {
    No `display` is set on the summary: anything other than the UA's `list-item`
    takes the disclosure triangle away with it. */
 .card-details {
-  margin: 0 0 15px;
+  margin: 0;
   border-top: 1px solid var(--card-line);
 }
 
@@ -2807,17 +2838,22 @@ dialog::backdrop {
    No frame, no legend, and no box round a control until the pointer or the
    keyboard reaches it: at rest the values read as written ink, which is what a
    ledger is. */
+/* No rule above the first row: the head already draws one and the body spaces
+   the ledger off the card's words. What separates the rows is a hairline — a
+   drawn rule at 60% rather than a dotted one, which read as a form's dividers
+   rather than as a ledger's ruling. */
 .prop-table {
-  border-top: 1px solid var(--card-line);
+  display: flex;
+  flex-direction: column;
 }
 
 .prop-row {
   display: grid;
-  grid-template-columns: 76px 1fr;
-  gap: 10px;
+  grid-template-columns: 96px 1fr;
+  gap: 12px;
   align-items: start;
-  padding: 8px 0;
-  border-bottom: 1px dotted var(--card-line);
+  padding: 7px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--card-line) 60%, transparent);
 }
 /* `display: grid` outranks the UA's `[hidden]` rule, exactly as it does on
    .assistant-tools and .board-switch — the habit row is hidden on every card
@@ -2826,13 +2862,16 @@ dialog::backdrop {
 /* The children fold draws its own rule, so the ledger stops before it. */
 .prop-table .prop-row:last-child { border-bottom: 0; }
 
+/* Wide-tracked small mono in the gutter: a name being filed under, not a form
+   label being read. The gutter is 96px, which is what lets `How often` and
+   `Compass` stand on one line beside their values. */
 .prop-label {
   font-family: var(--mono);
-  font-size: 10.5px;
-  letter-spacing: 0.04em;
+  font-size: 10px;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--ink-soft);
-  padding-top: 6px;
+  padding-top: 7px;
 }
 /* A label carrying its own explanation says so, rather than the row below
    spending a paragraph on it. */
@@ -2850,12 +2889,12 @@ dialog::backdrop {
 .prop-value input[type="number"],
 .prop-value input[type="time"] {
   font-family: var(--body);
-  font-size: 13px;
+  font-size: 13.5px;
   color: var(--ink);
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius);
-  padding: 4px 6px;
+  padding: 5px 7px;
   max-width: 100%;
 }
 .prop-value input[type="text"] { width: 100%; }
@@ -2874,12 +2913,24 @@ dialog::backdrop {
 .prop-value input::placeholder { color: var(--ink-soft); opacity: 0.6; }
 .prop-value select:disabled { opacity: 0.4; cursor: not-allowed; }
 
+/* The compass's four selects, two by two rather than three and a straggler:
+   the pair that places the card on the Matrix, then the pair that says what
+   reaching it would cost. A flex row wrapped wherever the option texts happened
+   to run out of width, which made the row read as a list that had overflowed.
+   `auto-fit` is what gives a phone one column without a second rule. */
+.compass-row .prop-value {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 4px 8px;
+}
+.compass-row .prop-value select { width: 100%; }
+
 /* Several controls reading as one sentence — "3 times per week", "due …". */
 .prop-line {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
+  gap: 7px;
 }
 /* The three plan lists at fixed widths. A native select sizes to its widest
    option, so an empty Month sat twice as wide as an empty Year and the row read
@@ -2913,34 +2964,37 @@ dialog::backdrop {
   pointer-events: none;
 }
 
-.type-picker .badge {
-  font-size: 10.5px;
-  padding: 4px 8px;
-  display: inline-block;
-  opacity: 0.4;
-  transition: all 0.15s ease;
-}
-
-.type-picker input:checked + .badge {
-  opacity: 1;
-  background: color-mix(in srgb, currentColor 10%, transparent);
-}
-
-/* The column chips. Deliberately not the category swatch and not the type
-   badge: colour on this board means category, and a stamp means type, so where
-   a card lives is drawn in plain ink like the ledger rule it is. */
+/* Where and Type are the same mark: small wide-tracked mono inside a hairline
+   box, quiet at rest and inked when it is the one chosen. Both are drawn in
+   plain ink on purpose — colour on this board means category, so the only
+   coloured picker in the ledger is the one naming a life area. */
+/* 9.5px and 8px of side padding are what put the six type stamps on one line
+   inside the 620px dialog — measured at 463px wanted against 459px of value
+   column at 10px/9px, which wrapped `↻ HABIT` onto a line of its own. The
+   same trap the width itself was widened for in 2026-09-08. */
+.type-picker .badge,
 .col-chip {
   font-family: var(--mono);
-  font-size: 11px;
-  letter-spacing: 0.03em;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   display: inline-block;
   color: var(--ink-soft);
-  border: 1.5px solid var(--card-line);
-  border-radius: 3px;
-  padding: 4px 11px;
+  background: transparent;
+  border: 1.5px solid color-mix(in srgb, var(--ink-soft) 50%, transparent);
+  border-radius: var(--radius);
+  padding: 4px 8px;
+  /* Straight, unlike the rubber stamp the same `.badge` draws on a Backlog
+     row: six tilted stamps on one line of the ledger read as a row that had
+     been knocked, and these are controls being chosen between rather than a
+     mark already made. */
+  transform: none;
+  opacity: 1;
   transition: all 0.15s ease;
 }
 
+.type-picker input:checked + .badge,
 .column-picker input:checked + .col-chip {
   color: var(--ink);
   border-color: var(--ink);
@@ -2956,24 +3010,27 @@ dialog::backdrop {
 }
 .column-picker label:has(input:disabled) { cursor: not-allowed; }
 
+/* The life area is the one picker that carries colour, so it is drawn as the
+   index tab it is on the board: a pill in the area's own ink, filled solid
+   when it is the one the card is filed under. The body face and normal case,
+   because these are names somebody wrote and not stamps. */
 .cat-swatch {
-  font-family: var(--mono);
-  font-size: 11px;
-  letter-spacing: 0.03em;
+  font-family: var(--body);
+  font-size: 12px;
   display: inline-block;
   color: var(--cat);
-  border: 1.5px solid color-mix(in srgb, var(--cat) 45%, transparent);
-  border-radius: 3px;
-  padding: 4px 11px;
-  opacity: 0.6;
+  border: 1.5px solid color-mix(in srgb, var(--cat) 55%, transparent);
+  border-radius: 999px;
+  padding: 3px 11px;
+  opacity: 0.75;
   transition: all 0.15s ease;
 }
-.cat-swatch::before { content: "▪ "; }
 
 .category-picker input:checked + .cat-swatch {
   opacity: 1;
+  color: var(--card);
   border-color: var(--cat);
-  background: color-mix(in srgb, var(--cat) 12%, transparent);
+  background: var(--cat);
 }
 
 .picker-options input:focus-visible + .badge,
@@ -3051,6 +3108,28 @@ dialog::backdrop {
 .prop-value .field-hint { margin: 3px 0 0; }
 .prop-value .plan-follow { margin-top: 5px; font-size: 10px; padding: 3px 8px; }
 .prop-value .field-error { margin-top: 5px; }
+
+/* --- The plan, on a calendar ---------------------------------------------
+   The same grid `Between…` draws, pressed once instead of twice, and shut until
+   the reader is choosing. Everything the two share is written once, up in that
+   control's own block; what is left here is this calendar's own: the box it
+   stands in, and what one chosen day looks like. */
+.prop-value .plan-cal-btn { font-size: 10px; padding: 3px 8px; }
+
+.plan-cal {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  max-width: 280px;
+}
+/* `display: grid` outranks the UA's `[hidden]` rule — the same trap as
+   .prop-row, .assistant-tools and .board-switch. */
+.plan-cal[hidden] { display: none; }
+
+/* No new colour: the day chosen is the blue the board already uses for a chosen
+   thing, exactly as the span's two ends are. A plan names one day, so there is
+   no run between two of them to draw. */
+.plan-day.chosen { background: var(--ink-blue); color: var(--paper); }
 
 /* --- The schedule: one row per repetition -------------------------------- */
 
@@ -5746,9 +5825,15 @@ button.chat-source-card {
   .filter-facet,
   .filter-option,
   .filter-back,
-  .range-cal-openend { min-height: 40px; }
-  .range-day { min-height: 40px; aspect-ratio: auto; }
-  .range-cal-step { min-width: 40px; min-height: 40px; }
+  .range-cal-openend,
+  .plan-cal-clear { min-height: 40px; }
+  .range-day,
+  .plan-day { min-height: 40px; aspect-ratio: auto; }
+  .range-cal-step,
+  .plan-cal-step { min-width: 40px; min-height: 40px; }
+  /* The card dialog's plan grid is inside a 96px gutter's value column, so it
+     takes the width it is given rather than the 280px a laptop allows it. */
+  .plan-cal { max-width: none; }
 
   /* The tag filter, the same way, for the same reason: five tags and a label
      wrapped to two lines and spent 110px of an 844px screen on a filter that

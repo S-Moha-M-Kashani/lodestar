@@ -612,12 +612,20 @@
             </div>
           </div>
 
-          <!-- Two selects, one row. Each option says which control it belongs
-               to, because the gutter names the pair and not the halves — a bare
-               "Not set" twice over would be two dropdowns saying nothing. -->
-          <div class="prop-row" role="group" aria-labelledby="prop-prio-label">
-            <span class="prop-label" id="prop-prio-label"
-                  title="Set both to place this card on the Matrix and stamp its priority.">Priority</span>
+          <!-- The compass: the four judgements that say where a card stands.
+               Importance and urgency place it on the Matrix; effort and control
+               say what reaching it would cost and whether it is yours to reach.
+               They were three rows — Priority, Effort, Control — asking one
+               question in three places, and a reader weighing a card had to
+               read down the ledger to collect the answer.
+
+               Four selects, one row. Each option says which control it belongs
+               to, because the gutter names the set and not its parts — a bare
+               "Not set" or a bare "Medium" among four dropdowns is a control
+               saying nothing. -->
+          <div class="prop-row compass-row" role="group" aria-labelledby="prop-compass-label">
+            <span class="prop-label" id="prop-compass-label"
+                  title="Where the card stands. Importance and urgency place it on the Matrix; effort and control are rough calls and start at the middle.">Compass</span>
             <div class="prop-value prop-line">
               <select id="card-importance" aria-label="Importance">
                 <option value="">importance —</option>
@@ -628,6 +636,16 @@
                 <option value="">urgency —</option>
                 <option value="high">urgent</option>
                 <option value="low">not urgent</option>
+              </select>
+              <select id="card-effort" aria-label="Effort">
+                <option value="low">light effort</option>
+                <option value="medium">medium effort</option>
+                <option value="high">heavy effort</option>
+              </select>
+              <select id="card-control" aria-label="Control">
+                <option value="act">I can act</option>
+                <option value="influence">I can influence</option>
+                <option value="none">out of my hands</option>
               </select>
             </div>
           </div>
@@ -651,37 +669,22 @@
                   <select id="card-plan-year" aria-label="Plan — year"></select>
                   <select id="card-plan-month" aria-label="Plan — month" disabled></select>
                   <select id="card-plan-day" aria-label="Plan — day" disabled></select>
+                  <!-- The same three values, chosen by finding a day instead of
+                       knowing one. A picker and not a fold: it is shut until
+                       you are choosing, exactly as `Between…`'s calendar is
+                       drawn only while the span is being set. -->
+                  <button type="button" id="card-plan-cal-btn" class="btn ghost plan-cal-btn"
+                          aria-expanded="false" aria-controls="card-plan-calendar"
+                          title="Pick the day on a calendar">▦ on a calendar</button>
                   <span id="card-plan-words" class="plan-words"></span>
                 </div>
+                <div id="card-plan-calendar" class="plan-cal" hidden></div>
                 <p id="card-plan-hint" class="field-hint"></p>
                 <button type="button" id="card-plan-follow" class="btn ghost plan-follow" hidden>↻ follow the deadline</button>
               </div>
               <p id="card-plan-error" class="field-error" role="alert" hidden></p>
             </div>
           </div>
-
-          <label class="prop-row">
-            <span class="prop-label"
-                  title="Rough calls are fine — effort and control both start at the midpoint until you (or the assistant) judge them.">Effort</span>
-            <span class="prop-value">
-              <select id="card-effort">
-                <option value="low">Low</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-              </select>
-            </span>
-          </label>
-
-          <label class="prop-row">
-            <span class="prop-label">Control</span>
-            <span class="prop-value">
-              <select id="card-control">
-                <option value="act">I can act</option>
-                <option value="influence">I can influence</option>
-                <option value="none">Out of my hands</option>
-              </select>
-            </span>
-          </label>
 
           <label class="prop-row">
             <span class="prop-label">Tags</span>
