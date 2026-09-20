@@ -122,17 +122,36 @@ export function render() {
   }
 }
 
-const viewButtons = [...document.querySelectorAll('.view-switch button')];
+// Every view button the header holds, the three on the row and the three inside
+// the dropdown alike — one query and one loop, which is why the dropdown's
+// entries are static markup in index.html rather than built by render(). This
+// capture happens once, at module evaluation, so a button built later would
+// never be synced and would never carry the listener at the foot of this file.
+const viewButtons = [...document.querySelectorAll('.view-switch button[data-view]')];
+// The three the dropdown holds, read off the markup rather than listed again
+// here: two hand-kept lists of one thing is how a label drifts.
+const lensesBtn = document.getElementById('lenses-btn');
+const lensesViews = [...document.querySelectorAll('#lenses-panel button[data-view]')]
+  .map((btn) => btn.dataset.view);
 
 export function syncViewButtons() {
   for (const btn of viewButtons) btn.setAttribute('aria-pressed', String(btn.dataset.view === view));
-  // On a phone the switch is one line the seven tabs scroll inside (styles.css,
+  // The dropdown's own pressed state is DERIVED from the view on screen, never
+  // stored: a remembered flag is the one thing here that can be left claiming a
+  // screen the reader has left. It also answers the Assistant honestly — that
+  // view is in neither list, so nothing in the row reads as pressed while it is
+  // up, which is the truth (the row does not offer it) rather than an omission.
+  lensesBtn?.setAttribute('aria-pressed', String(lensesViews.includes(view)));
+  // On a phone the switch is one line its controls scroll inside (styles.css,
   // "The phone"), so the view you are on can be off the end of it — a board
-  // opened on the Assistant would show a strip beginning at Board with nothing
+  // opened on the Backlog would show a strip beginning at Board with nothing
   // pressed in it. `nearest` scrolls only when it has to and never touches the
   // page, which has its own scroll position to keep; on a wide window every
-  // tab is already in view, so this does nothing at all.
-  const pressed = viewButtons.find((btn) => btn.dataset.view === view);
+  // control is already in view, so this does nothing at all. A view inside the
+  // dropdown is represented by the dropdown, which is what is on the row.
+  const pressed = lensesViews.includes(view)
+    ? lensesBtn
+    : viewButtons.find((btn) => btn.dataset.view === view);
   pressed?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   syncProposalBadge();
 }
@@ -153,33 +172,33 @@ function syncAssistantPill() {
   if (pill) pill.hidden = widgetShowing() || view === 'assistant';
 }
 
-// A count on the Assistant tab, so something left waiting while the user is on
+// A count on the corner pill, so something left waiting while the user is on
 // the Board is still noticed. Absent entirely when nothing is pending.
 // Proposals and suggested edits share the count: from the Board they are the
 // same fact — the Assistant is waiting on you.
+//
+// The pill is the whole of it now. It carried this badge beside an Assistant
+// tab until that tab was removed from the view row, and the pill is the better
+// half of the pair anyway: it is in the corner of every view, where the tab was
+// one of seven at the top of one.
 export function syncProposalBadge() {
   const n = assistantState.proposals.length + assistantState.edits.length;
-  // Both ways into the Assistant carry the same count. The pill is in the
-  // corner of every view now, so it — not the tab — is where a proposal left
-  // waiting is most likely to be noticed.
-  for (const btn of [viewButtons.find((b) => b.dataset.view === 'assistant'),
-                     $('#assistant-launcher')]) {
-    if (!btn) continue;
-    let badge = btn.querySelector('.view-badge');
-    if (!n) {
-      if (badge) badge.remove();
-      btn.removeAttribute('aria-description');
-      continue;
-    }
-    if (!badge) {
-      badge = document.createElement('span');
-      badge.className = 'view-badge';
-      btn.appendChild(badge);
-    }
-    badge.textContent = String(n);
-    btn.setAttribute('aria-description',
-      `${n} item${n === 1 ? '' : 's'} awaiting your approval`);
+  const btn = $('#assistant-launcher');
+  if (!btn) return;
+  let badge = btn.querySelector('.view-badge');
+  if (!n) {
+    if (badge) badge.remove();
+    btn.removeAttribute('aria-description');
+    return;
   }
+  if (!badge) {
+    badge = document.createElement('span');
+    badge.className = 'view-badge';
+    btn.appendChild(badge);
+  }
+  badge.textContent = String(n);
+  btn.setAttribute('aria-description',
+    `${n} item${n === 1 ? '' : 's'} awaiting your approval`);
 }
 
 // Where collapsing the Assistant lands. The view the user came from, and the

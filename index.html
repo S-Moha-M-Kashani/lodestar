@@ -242,14 +242,43 @@
           </div>
         </div>
       </div>
+      <!-- Three destinations and one dropdown. Seven buttons stood here on one
+           unwrapped line — a wall of every screen that exists rather than a row
+           of places to go — and on a 390px window that put Review and the
+           Assistant off the right edge where no tap could reach them. Board,
+           Backlog and Review are where you go; Overview, Matrix and Areas read
+           the same cards another way, so they are one press further off behind
+           `Lenses ▾`.
+
+           The dropdown's three buttons are STATIC MARKUP INSIDE .view-switch,
+           and that is load-bearing: js/ui/render.js captures its view buttons
+           once, at module evaluation, so a button built by render() would never
+           be synced and never carry a listener.
+
+           The Assistant has no button at all. It is reached from the corner
+           `Ask` pill and the widget's own expand control, and while it is on
+           screen nothing in this row reads as pressed — the row does not offer
+           that screen, and inventing a pressed button for it would be a claim
+           about the header that is not true. -->
       <div class="view-switch" role="group" aria-label="Switch view">
         <button type="button" data-view="board" aria-pressed="true">Board</button>
         <button type="button" data-view="backlog" aria-pressed="false">Backlog</button>
-        <button type="button" data-view="overview" aria-pressed="false">Overview</button>
-        <button type="button" data-view="matrix" aria-pressed="false">Matrix</button>
-        <button type="button" data-view="areas" aria-pressed="false">Areas</button>
         <button type="button" data-view="review" aria-pressed="false">Review</button>
-        <button type="button" data-view="assistant" aria-pressed="false">Assistant</button>
+        <div class="view-lenses">
+          <button type="button" id="lenses-btn" class="view-lenses-btn"
+                  aria-haspopup="true" aria-expanded="false" aria-pressed="false"
+                  aria-controls="lenses-panel"
+                  title="The same cards read another way — the map, the matrix, the life areas">Lenses ▾</button>
+          <!-- Fixed rather than absolute, for the reason the card's actions
+               panel is: .view-switch clips its own overflow (it has to, to
+               scroll sideways on a phone), and a panel clipped by the row it
+               drops from is a menu that is not there. -->
+          <div id="lenses-panel" class="lenses-panel" role="group" aria-label="Other ways to read the board" hidden>
+            <button type="button" data-view="overview" aria-pressed="false">Overview</button>
+            <button type="button" data-view="matrix" aria-pressed="false">Matrix</button>
+            <button type="button" data-view="areas" aria-pressed="false">Areas</button>
+          </div>
+        </div>
       </div>
       <div class="toolbar">
         <div class="toolbar-menu">
@@ -317,7 +346,7 @@
          control by hand un-presses the row rather than leaving a lit button
          over a board it no longer describes. Filled once at boot from the table
          itself — two hand-kept lists of one thing is how the labels drift. -->
-    <div id="lens-row" class="lens-row" role="group" aria-label="Named views"></div>
+    <div id="lens-row" class="lens-row" role="group" aria-label="What the board is being asked"></div>
     <div class="rail-row">
       <div id="cat-rail" class="cat-rail" role="group" aria-label="Filter by category" hidden></div>
       <div class="filter-menu">

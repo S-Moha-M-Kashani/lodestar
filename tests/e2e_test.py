@@ -228,6 +228,71 @@ def open_filters(page):
         page.wait_for_selector("#filter-panel:not([hidden])")
 
 
+def open_lenses(page):
+    """The header offers three destinations and one dropdown since the
+    prototype was adopted: Overview, Matrix and Areas are inside `Lenses ▾`,
+    and Playwright will not touch a control it cannot see. A no-op when the
+    panel is already open, the `open_filters` rule — a click inside a dropdown
+    is use rather than dismissal."""
+    if page.locator("#lenses-panel").is_hidden():
+        page.click("#lenses-btn")
+        page.wait_for_selector("#lenses-panel:not([hidden])")
+
+
+def go_to_view(page, name):
+    """Switch views the way a person does.
+
+    Board, Backlog and Review are buttons on the row; Overview, Matrix and
+    Areas are two presses away inside the dropdown; and the Assistant has no
+    button at all — the corner launcher opens the widget and the widget's
+    expand control opens the full view. Written once here rather than at the
+    hundred call sites that used to name `.view-switch button[data-view=…]`
+    directly, so the route cannot rot in ninety-nine of them."""
+    # The first render is what sets this, and it is also what un-hides the
+    # launcher. Reached mid-reload — a board switch reloads the page — the
+    # checks below would otherwise read an unpainted document, decide the
+    # widget is shut, and then wait forever on a pill the finished render
+    # hides because the restored view is the Assistant itself.
+    #
+    # Retried, because the reload can also land BETWEEN the wait and the read:
+    # the wait is satisfied by the outgoing document and the evaluate then runs
+    # against an execution context that no longer exists.
+    for attempt in range(4):
+        try:
+            page.wait_for_function("() => document.body.dataset.view")
+            here = page.evaluate("document.body.dataset.view")
+            break
+        except Exception:
+            if attempt == 3:
+                raise
+            page.wait_for_timeout(300)
+    if here == name:
+        return
+    if name == "assistant":
+        if page.locator("#assistant-widget").is_hidden():
+            page.click("#assistant-launcher")
+            page.wait_for_selector("#assistant-widget:not([hidden])")
+        page.click("#assistant-expand")
+        page.wait_for_function("() => document.body.dataset.view === 'assistant'")
+        return
+    btn = page.locator(f'.view-switch button[data-view="{name}"]')
+    if btn.is_hidden():
+        open_lenses(page)
+    btn.click()
+    page.wait_for_function(
+        "v => document.body.dataset.view === v", arg=name)
+
+
+def open_widget(page):
+    """The corner card, opened the way the pill opens it, and a no-op when it
+    is already there. Needed by name since the Assistant lost its view button:
+    expanding to the full view CLOSES the widget, so a block that wants the
+    card back has to ask for it rather than assume a view switch left it."""
+    if page.locator("#assistant-widget").is_hidden():
+        page.click("#assistant-launcher")
+    page.wait_for_selector("#assistant-widget .chat-log")
+
+
 def open_meta(page):
     """Unfold the evidence strip under the newest reply.
 
@@ -1461,6 +1526,91 @@ try:
               page.locator("#menu-btn").inner_text().strip() == "⚙"
               and "assistant-extras-btn" in (page.get_attribute("#menu-btn", "class") or ""))
 
+        # ---- Three destinations, one dropdown, and no Assistant button -------
+        # This is an end-to-end test. Seven buttons stood on this one unwrapped
+        # line, which is a wall of every screen that exists rather than a row of
+        # destinations — and on a 390px window it put Review and the Assistant
+        # off the right edge where no tap could reach them. Board, Backlog and
+        # Review are the row now; the three that read the same cards another way
+        # are behind `Lenses ▾`; and the Assistant has no button at all, because
+        # the corner launcher and the widget's expand control are its way in.
+        shown = page.evaluate("""() => [...document.querySelectorAll('.view-switch button')]
+            .filter((b) => b.offsetParent !== null || b.id === 'lenses-btn')
+            .map((b) => b.textContent.replace('▾', '').trim())""")
+        check(f"view row: three destinations and one Lenses dropdown ({shown})",
+              shown == ["Board", "Backlog", "Review", "Lenses"])
+        check("view row: the Assistant is not a destination anywhere in it",
+              page.locator('.view-switch button[data-view="assistant"]').count() == 0
+              and page.locator("#lenses-panel").is_hidden())
+
+        open_lenses(page)
+        inside = page.evaluate("""() => [...document.querySelectorAll('#lenses-panel button')]
+            .map((b) => b.dataset.view)""")
+        check(f"view row: the map, the matrix and the areas are inside it ({inside})",
+              inside == ["overview", "matrix", "areas"])
+        page.click('#lenses-panel button[data-view="matrix"]')
+        page.wait_for_timeout(200)
+        check("view row: choosing one switches to it and shuts the dropdown",
+              page.evaluate("document.body.dataset.view") == "matrix"
+              and page.locator("#lenses-panel").is_hidden()
+              and page.get_attribute("#lenses-btn", "aria-pressed") == "true"
+              and page.get_attribute('#lenses-panel button[data-view="matrix"]',
+                                     "aria-pressed") == "true")
+
+        # Escape puts it away and hands the focus back, the rule the ⚙ menu and
+        # the filter panel already follow — a panel dismissed from the keyboard
+        # must not strand the caret on a control that is no longer on screen.
+        open_lenses(page)
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(120)
+        check("view row: Escape shuts the dropdown and returns the focus",
+              page.locator("#lenses-panel").is_hidden()
+              and page.evaluate("() => document.activeElement.id") == "lenses-btn")
+
+        # Nothing pressed while the Assistant is on screen: the row does not
+        # offer that screen, and a row that invented a pressed button for it
+        # would be claiming a destination it has not got. Derived on every
+        # repaint, which is the case a stored flag gets wrong.
+        go_to_view(page, "assistant")
+        pressed_on_assistant = page.evaluate(
+            """() => [...document.querySelectorAll('.view-switch button')]
+                 .filter((b) => b.getAttribute('aria-pressed') === 'true')
+                 .map((b) => b.dataset.view || b.id)""")
+        check(f"view row: nothing reads as pressed on the Assistant ({pressed_on_assistant})",
+              pressed_on_assistant == []
+              and page.locator(".view-switch").is_visible())
+        # And the row is the way out of it.
+        go_to_view(page, "backlog")
+        check("view row: pressing Backlog from the Assistant leaves it",
+              page.evaluate("document.body.dataset.view") == "backlog")
+
+        # Matrix → launcher → expand → leave, and the Matrix is back. With no
+        # button in the row the Assistant needs a remembered origin, and a
+        # fixed one would send a reader somewhere they never were.
+        go_to_view(page, "matrix")
+        go_to_view(page, "assistant")
+        page.click("#assistant-collapse")
+        page.wait_for_timeout(250)
+        check("view row: leaving the Assistant returns to the view it was opened from",
+              page.evaluate("document.body.dataset.view") == "matrix")
+        page.click("#assistant-widget .widget-btn#assistant-widget-close")
+        page.wait_for_timeout(150)
+        go_to_view(page, "board")
+
+        # One word, one meaning: the five saved questions keep their row, their
+        # ids and their one press, and stop calling themselves lenses — the
+        # dropdown above them carries that word now.
+        lens_row_words = (page.get_attribute("#lens-row", "aria-label") or "").lower()
+        check(f"view row: the saved questions are not called lenses ({lens_row_words!r})",
+              page.locator("#lens-row").count() == 1
+              and "lens" not in lens_row_words
+              and page.locator("#lens-row .lens-btn").count() == 5
+              and not page.evaluate(
+                  """() => [...document.querySelectorAll('#lens-row *')]
+                       .some((el) => /lens/i.test(el.textContent)
+                                  || /lens/i.test(el.title || '')
+                                  || /lens/i.test(el.getAttribute('aria-label') || ''))"""))
+
         last_tab_bb = page.locator("#cat-rail .cat-tab").last.bounding_box()
         filter_bb = page.locator("#filter-btn").bounding_box()
         check("rail: the button follows the last tab, on its line",
@@ -1701,13 +1851,13 @@ try:
             try:
                 came_from = page.evaluate("document.body.dataset.view")
                 if not page.locator("#menu-btn").is_visible():
-                    page.click('.view-switch button[data-view="board"]')
+                    go_to_view(page, "board")
                     page.wait_for_timeout(150)
                 open_settings()
                 page.select_option("#settings-dialog #theme-select", theme, timeout=1500)
                 close_settings()
                 if came_from and came_from != page.evaluate("document.body.dataset.view"):
-                    page.click(f'.view-switch button[data-view="{came_from}"]')
+                    go_to_view(page, came_from)
                     page.wait_for_timeout(150)
                 return True
             except Exception:
@@ -1864,7 +2014,7 @@ try:
         # behaviour while the star theme is still applied. It passed before the
         # feature existed only because 'star' was unselectable.
         select_theme("light")
-        page.click('[data-view="assistant"]')
+        go_to_view(page, "assistant")
         page.wait_for_selector(".assistant-sheet")
         check("assistant: the sheet is opaque on the paper themes", sheet_alpha() == 1)
 
@@ -1905,7 +2055,7 @@ try:
         check("assistant: the header mark is gone but the tagline remains",
               css(".brand-mark", "display") == "none" and page.locator(".tagline").is_visible())
         select_theme("light")
-        page.click('[data-view="board"]')
+        go_to_view(page, "board")
         page.wait_for_selector(".card")
 
         # ---- The header fits one row ----------------------------------------
@@ -2176,7 +2326,7 @@ try:
 
         # ---- Backlog view ---------------------------------------------------
         inbox_count = page.locator('[data-col="inbox"] .card').count()
-        page.locator('.view-switch button[data-view="backlog"]').click()
+        go_to_view(page, "backlog")
         page.wait_for_selector("#board.backlog")
         check("backlog: rows match Inbox card count",
               page.locator(".backlog-row").count() == inbox_count)
@@ -2229,7 +2379,7 @@ try:
         else:
             check("backlog: sort-by-type control present when >1 row", False)
 
-        page.locator('.view-switch button[data-view="board"]').click()
+        go_to_view(page, "board")
         page.wait_for_selector("#board.board")
         check("backlog: switching back restores the board",
               page.locator('.column[data-col="inbox"]').count() == 1)
@@ -2261,7 +2411,7 @@ try:
             if 0 < left < n_open:
                 open_tag = name_i
                 break
-        page.locator('.view-switch button[data-view="overview"]').click()
+        go_to_view(page, "overview")
         page.wait_for_selector("#board.overview .plot-dot")
         check("overview: one dot per open card, the finished ones left off",
               page.locator(".plot-dot").count() == n_open)
@@ -2284,7 +2434,7 @@ try:
         k = page.locator(".plot-dot").count()
         check(f"overview: tag filter narrows the map (#{open_tag})",
               open_tag is not None and 0 < k < n_open)
-        page.locator('.view-switch button[data-view="board"]').click()
+        go_to_view(page, "board")
         page.wait_for_selector("#board.board")
         check("overview: its tag filter matches the board's own filtering",
               page.locator('.column:not([data-col="answered"]) .card').count() == k)
@@ -2293,7 +2443,7 @@ try:
              if c.inner_text().strip() == open_tag).click()  # clear the filter
         page.wait_for_timeout(60)
 
-        page.locator('.view-switch button[data-view="overview"]').click()
+        go_to_view(page, "overview")
         page.wait_for_selector("#board.overview .plot-dot")
         page.locator(".plot-dot").first.click()
         page.wait_for_selector("#card-dialog[open]")
@@ -2303,7 +2453,7 @@ try:
         page.screenshot(path=shot("overview.png"))
 
         # ---- Matrix view (Eisenhower importance × urgency) ------------------
-        page.locator('.view-switch button[data-view="matrix"]').click()
+        go_to_view(page, "matrix")
         page.wait_for_selector("#board.matrix .matrix-grid")
         check("matrix: view button marked pressed",
               page.get_attribute('.view-switch button[data-view="matrix"]', "aria-pressed") == "true")
@@ -2321,7 +2471,7 @@ try:
         # Routing: set an unplaced question to Important + not urgent → the Schedule quadrant
         hl_before = page.locator('.matrix-quad[data-imp="high"][data-urg="low"] .plot-dot').count()
         placed_before = page.locator(".matrix-quad-dots .plot-dot").count()
-        page.locator('.view-switch button[data-view="board"]').click()
+        go_to_view(page, "board")
         page.wait_for_selector("#board.board")
         page.locator('.card', has_text="speculative decoding").first.click()
         page.wait_for_selector("#card-dialog[open]")
@@ -2329,7 +2479,7 @@ try:
         page.select_option("#card-urgency", "low")
         page.click('#card-form button[type="submit"]')
         page.wait_for_timeout(150)
-        page.locator('.view-switch button[data-view="matrix"]').click()
+        go_to_view(page, "matrix")
         page.wait_for_selector("#board.matrix .matrix-grid")
         check("matrix: setting importance & urgency routes the question to its quadrant",
               page.locator('.matrix-quad[data-imp="high"][data-urg="low"] .plot-dot').count() == hl_before + 1
@@ -2340,7 +2490,7 @@ try:
         check("matrix: importance & urgency persist to the database",
               spec is not None and spec.get("importance") == "high" and spec.get("urgency") == "low")
 
-        page.locator('.view-switch button[data-view="board"]').click()
+        go_to_view(page, "board")
         page.wait_for_selector("#board.board")
 
         # ---- Automatic priority label ---------------------------------------
@@ -2475,7 +2625,7 @@ try:
         # the corner. Since 2026-09-13 its reading is at the head of the Board,
         # which is what pays for the card having stopped shouting: the filters
         # existed so the board could be hunted through for what needs doing.
-        page.locator('.view-switch button[data-view="board"]').click()
+        go_to_view(page, "board")
         page.wait_for_selector("#board.board")
         page.wait_for_timeout(120)
 
@@ -3084,10 +3234,10 @@ try:
               and any(c["title"] == "OMIT-GUARD-gamma" for c in api_trash()["cards"]))
 
         # ---- Assistant view (brain service in offline fake mode) ------------
-        page.locator('.view-switch button[data-view="assistant"]').click()
+        go_to_view(page, "assistant")
         page.wait_for_selector("#chat-input")
         check("assistant: view opens with composer",
-              page.get_attribute('.view-switch button[data-view="assistant"]', "aria-pressed") == "true")
+              page.evaluate("document.body.dataset.view") == "assistant")
         # ---- The direction: what the board says, on a chat with nothing in it -
         # This is an end-to-end test.
         # An empty transcript held eight suggestion chips until 2026-09-10 — one
@@ -3372,7 +3522,7 @@ try:
             seeded.append({"role": "assistant", "content": f"seeded answer {i}"})
         api_chat_append(long_chat, seeded)
         page.reload()
-        page.locator('.view-switch button[data-view="assistant"]').click()
+        go_to_view(page, "assistant")
         page.wait_for_selector("#chat-input")
         open_chat_history(page)
         page.locator(".chat-history-item", has_text="seeded question 0").first.click()
@@ -3622,11 +3772,11 @@ try:
         ordered = all(row) and all(
             row[i]["x"] < row[i + 1]["x"] for i in range(len(row) - 1))
         menu_gone_here = not page.locator("#menu-btn").is_visible()
-        page.click("[data-view='board']")
+        go_to_view(page, "board")
         page.wait_for_selector(".column")
         away = page.locator(".assistant-head").count() == 0
         menu_back = page.locator("#menu-btn").is_visible()
-        page.click("[data-view='assistant']")
+        go_to_view(page, "assistant")
         page.wait_for_selector("#chat-input")
         check("tools: search, History, New chat and the gear sit right of the Assistant heading",
               in_head and ordered and menu_gone_here and away and menu_back)
@@ -4043,7 +4193,7 @@ try:
                        and not page.locator("#menu-btn").is_visible()
                        and not page.locator("#cat-rail").is_visible()
                        and not page.locator(".app-footer").is_visible())
-        page.locator('.view-switch button[data-view="board"]').click()
+        go_to_view(page, "board")
         page.wait_for_selector(".board .column")
         back_on_board = (page.locator("#search").is_visible()
                          and page.locator("#filter-btn").is_visible()
@@ -4052,7 +4202,7 @@ try:
                          and page.locator(".app-footer").is_visible())
         check("assistant: the board's own controls leave with the board",
               hidden_here and back_on_board)
-        page.locator('.view-switch button[data-view="assistant"]').click()
+        go_to_view(page, "assistant")
         page.wait_for_selector("#chat-input")
 
         # ---- Recall: /rag/recall has existed with no UI at all ---------------
@@ -4163,7 +4313,7 @@ try:
               and page.locator(".proposal-approve").count() == 1
               and page.locator(".proposal-reject").count() == 1)
         check("gate: the Assistant tab carries a count badge",
-              page.locator('.view-switch button[data-view="assistant"] .view-badge')
+              page.locator('#assistant-launcher .view-badge')
                   .inner_text().strip() == "1")
 
         # This is an end-to-end test.
@@ -4202,8 +4352,8 @@ try:
         check("gate: approving puts the card on the board",
               any(c["title"] == "What is Leiden clustering?" for c in api_state()["cards"]))
         check("gate: the badge clears once nothing is pending",
-              page.locator('.view-switch button[data-view="assistant"] .view-badge').count() == 0)
-        page.locator('.view-switch button[data-view="board"]').click()
+              page.locator('#assistant-launcher .view-badge').count() == 0)
+        go_to_view(page, "board")
         approved = page.locator(".card", has_text="What is Leiden clustering?").first
         check("gate: approved card visible on the board", approved.count() >= 1)
         # ensureNums must run on adopt, or the confirmed card shows C-000.
@@ -4211,7 +4361,7 @@ try:
               approved.locator(".card-num").inner_text().strip() not in ("C-000", ""))
 
         # Rejecting sends the proposal to the Trash rather than erasing it.
-        page.locator('.view-switch button[data-view="assistant"]').click()
+        go_to_view(page, "assistant")
         page.wait_for_selector("#chat-input")
         # Filled and verified, not filled once. Entering the Assistant fires the
         # refreshes that repaint the composer, and render() rebuilds the
@@ -4252,8 +4402,8 @@ try:
         # Away and back: setView refreshes the waiting lists on entry, and the
         # previous block left us already on the Assistant, where a click is a
         # no-op. A suggestion made by a real chat turn arrives on its own flag.
-        page.locator('.view-switch button[data-view="board"]').click()
-        page.locator('.view-switch button[data-view="assistant"]').click()
+        go_to_view(page, "board")
+        go_to_view(page, "assistant")
         page.wait_for_selector(".suggestion")
         check("edits: the suggestion renders with review and dismiss",
               page.locator(".suggestion").count() == 1
@@ -4273,7 +4423,7 @@ try:
               next(c for c in api_state()["cards"]
                    if c["id"] == target["id"])["title"] == target["title"])
         check("edits: a waiting suggestion counts on the Assistant tab",
-              page.locator('.view-switch button[data-view="assistant"] .view-badge')
+              page.locator('#assistant-launcher .view-badge')
                   .inner_text().strip() == "1")
 
         page.click(".suggestion-review")
@@ -4331,8 +4481,8 @@ try:
                                         "effort": "high", "control": "none",
                                         "habitFreq": "weekly", "habitCount": 3,
                                         "habitTimes": [{"time": "07:00"}]})
-        page.locator('.view-switch button[data-view="board"]').click()
-        page.locator('.view-switch button[data-view="assistant"]').click()
+        go_to_view(page, "board")
+        go_to_view(page, "assistant")
         page.wait_for_selector(".suggestion")
         said = page.inner_text(".suggestion-change")
         check("edits: the row names every field of the widened allowlist",
@@ -4355,7 +4505,7 @@ try:
         # the app can make. The card's emptiness is asserted rather than
         # assumed: a stray filter leaking a category into a future add_card
         # would otherwise make the check vacuous.
-        page.locator('.view-switch button[data-view="board"]').click()
+        go_to_view(page, "board")
         page.wait_for_selector("#board.board")
         add_card(page, "EDIT-probe bare card")
         wait_until(lambda: any(c["title"] == "EDIT-probe bare card"
@@ -4368,7 +4518,7 @@ try:
             or bare.get("planSrc") != "auto" or bare.get("effortSrc") != "default"
             or bare.get("controlSrc") != "default")
         api_suggest_edit(bare["id"], {"notes": "a note the agent wanted"})
-        page.locator('.view-switch button[data-view="assistant"]').click()
+        go_to_view(page, "assistant")
         page.wait_for_selector(".suggestion")
         page.click(".suggestion-review")
         page.wait_for_selector("#card-dialog[open]")
@@ -4413,7 +4563,7 @@ try:
         ALT_OMNI = ["openai/gpt-audio-mini"]
         # The one embedder the brain actually runs — fixed, local, not a pick.
         FIXED_EMBED = "heydariAI/persian-embeddings"
-        page.locator('.view-switch button[data-view="assistant"]').click()
+        go_to_view(page, "assistant")
         page.wait_for_selector("#chat-input")
 
         # This is an end-to-end test.
@@ -4425,9 +4575,9 @@ try:
         folded_first = not page.locator("#model-text").is_visible()
         open_models(page)
         unfolded = page.locator("#model-text").is_visible()
-        page.locator('.view-switch button[data-view="board"]').click()
+        go_to_view(page, "board")
         page.wait_for_selector(".board .column")
-        page.locator('.view-switch button[data-view="assistant"]').click()
+        go_to_view(page, "assistant")
         page.wait_for_selector("#chat-input")
         # The settings are a dropdown in the header now, so leaving the view
         # dismisses the drawer the way a click anywhere else does. What has to
@@ -4720,7 +4870,7 @@ try:
                                state="attached")
         page.select_option("#board-select", second)
         page.wait_for_load_state()
-        page.locator('.view-switch button[data-view="assistant"]').click()
+        go_to_view(page, "assistant")
         # open_models, not open_extras: a reload resets the Models fold, and the
         # picker is inside it.
         open_models(page)
@@ -4729,7 +4879,7 @@ try:
               page.input_value("#model-provider") == "ollama")
         page.select_option("#board-select", "main")
         page.wait_for_load_state()
-        page.locator('.view-switch button[data-view="assistant"]').click()
+        go_to_view(page, "assistant")
         open_models(page)
         check("assistant: coming back to a board restores the backend it was on",
               page.input_value("#model-provider") == "claude-cli")
@@ -4748,7 +4898,7 @@ try:
         page.select_option("#model-text", ALT_TEXT)
         page.reload()
         page.wait_for_selector("#board")
-        page.locator('.view-switch button[data-view="assistant"]').click()
+        go_to_view(page, "assistant")
         # attached, not visible: the Models panel is folded after a reload, so
         # waiting for the select to be *visible* would wait for a click that has
         # not happened yet.
@@ -4767,7 +4917,7 @@ try:
             [MODELS_KEY, ALT_TEXT])
         page.reload()
         page.wait_for_selector("#board")
-        page.locator('.view-switch button[data-view="assistant"]').click()
+        go_to_view(page, "assistant")
         # attached, not visible: the Models panel is folded after a reload, so
         # waiting for the select to be *visible* would wait for a click that has
         # not happened yet.
@@ -4788,7 +4938,7 @@ try:
             [MODELS_KEY, HAND_PICKED])
         page.reload()
         page.wait_for_selector("#board")
-        page.locator('.view-switch button[data-view="assistant"]').click()
+        go_to_view(page, "assistant")
         # attached, not visible: the Models panel is folded after a reload, so
         # waiting for the select to be *visible* would wait for a click that has
         # not happened yet.
@@ -4804,7 +4954,7 @@ try:
         page.wait_for_selector("#board")
 
         # ---- Assistant error path: a 503 renders the friendly unavailable message.
-        page.locator('.view-switch button[data-view="assistant"]').click()
+        go_to_view(page, "assistant")
         page.wait_for_selector("#chat-input")
         n_before = len(errors)
         page.route("**/api/agent/chat/stream", lambda route: route.fulfill(
@@ -4851,7 +5001,7 @@ try:
             page.unroute("**/api/agent/chat/stream")
             for e in [e for e in errors[n_before:] if str(status) in e]:
                 errors.remove(e)
-        page.locator('.view-switch button[data-view="board"]').click()
+        go_to_view(page, "board")
 
         # ---- The chrome around a turn: banner, Retry, worked-for, footer -----
         # This is an end-to-end test.
@@ -4859,7 +5009,7 @@ try:
         # real error only in the console and the user's own words gone from the
         # composer. It is a banner now: one line, the whole error behind a
         # reveal, a copy, and a Retry that re-sends what they already typed.
-        page.locator('.view-switch button[data-view="assistant"]').click()
+        go_to_view(page, "assistant")
         page.wait_for_selector("#chat-input")
         # A chat of its own. The transcript above this point is full of turns
         # the earlier blocks deliberately failed, and "exactly one banner" is
@@ -4919,7 +5069,7 @@ try:
             errors.remove(e)
         page.reload()   # drop the failed turn from view; the cache keeps it
         page.wait_for_selector("#board")
-        page.locator('.view-switch button[data-view="assistant"]').click()
+        go_to_view(page, "assistant")
         page.wait_for_selector("#chat-input")
 
         # What the turn cost in time and tools, on the turn itself. Exact
@@ -4994,7 +5144,7 @@ try:
               and page.input_value("#chat-model") == picked
               and page.input_value("#model-text") == picked)
         page.click("#assistant-extras-btn")   # shut the drawer again
-        page.locator('.view-switch button[data-view="board"]').click()
+        go_to_view(page, "board")
 
         # ---- Chat transcript survives a reload (Session 6) -------------------
         # This is an end-to-end test.
@@ -5018,7 +5168,7 @@ try:
         page.evaluate("key => localStorage.removeItem(key)", CHAT_KEY)
         page.reload()
         page.wait_for_selector("#board")
-        page.locator('.view-switch button[data-view="assistant"]').click()
+        go_to_view(page, "assistant")
         page.wait_for_selector("#chat-input")
 
         page.fill("#chat-input", "remember this across a reload")
@@ -5040,7 +5190,7 @@ try:
         before = page.locator(".chat-msg").count()
         page.reload()
         page.wait_for_selector("#board")
-        page.locator('.view-switch button[data-view="assistant"]').click()
+        go_to_view(page, "assistant")
         page.wait_for_selector("#chat-input")
         check("chat: the transcript survives a reload",
               wait_until(lambda: page.locator(".chat-msg").count() == before)
@@ -5071,7 +5221,7 @@ try:
         # asserted in one test because they are one feature with a switch, not
         # two features: the failure worth catching is a format that renders the
         # wrong transcript or an empty one, and that is the same bug twice.
-        page.locator('.view-switch button[data-view="assistant"]').click()
+        go_to_view(page, "assistant")
         page.wait_for_selector("#chat-input")
         check("chat: the Assistant offers an export control",
               page.locator("#chat-export-btn").count() == 1)
@@ -5106,7 +5256,7 @@ try:
             page.click("#cancel-export")
             wait_until(lambda: not page.locator("#export-dialog").is_visible())
             # The board's own export must still produce a board, not a chat.
-            page.locator('.view-switch button[data-view="board"]').click()
+            go_to_view(page, "board")
             page.click("#menu-btn")
             page.click("#export-btn")
             wait_until(lambda: page.locator("#export-dialog").is_visible())
@@ -5125,7 +5275,7 @@ try:
         # earlier failed turn, so the skip rule runs against real data: an
         # errored or partial turn is withheld from the record exactly as it is
         # withheld from the model.
-        page.locator('.view-switch button[data-view="assistant"]').click()
+        go_to_view(page, "assistant")
         page.wait_for_selector("#chat-input")
         check("chat import: the Assistant offers an import control",
               page.locator("#chat-import-btn").count() == 1
@@ -5172,14 +5322,14 @@ try:
             check("chat import: a failed turn's text is never recorded",
                   not any(r["content"] in failed_texts for r in imported_rows))
 
-        page.locator('.view-switch button[data-view="board"]').click()
+        go_to_view(page, "board")
 
         # ---- Assistant voice input -------------------------------------------
         # Chrome feeds getUserMedia a synthetic tone (MEDIA_ARGS), the browser
         # encodes it to WAV, and the brain's fake transcriber answers offline —
         # so this is a real end-to-end dictation with no hardware and no network.
         FAKE_TRANSCRIPT = "FAKE TRANSCRIPT: hello from the microphone"
-        page.locator('.view-switch button[data-view="assistant"]').click()
+        go_to_view(page, "assistant")
         page.wait_for_selector("#chat-input")
         check("voice: mic button sits in the composer",
               page.locator(".chat-composer .chat-mic").count() == 1
@@ -5301,12 +5451,12 @@ try:
         page.evaluate("() => { window.fetch = window.__origFetch; }")
         # Reply lands ~1.2s later; the mic comes back with it.
         page.wait_for_function("!document.querySelector('.chat-mic').disabled")
-        page.locator('.view-switch button[data-view="board"]').click()
+        go_to_view(page, "board")
 
         # ---- Import the grown life sample (substitute) -----------------------
         sample_path = os.path.join(ROOT, "sample-overview.json")
         sample = json.load(open(sample_path))
-        page.locator('.view-switch button[data-view="board"]').click()
+        go_to_view(page, "board")
         page.wait_for_selector("#board.board")
         page.set_input_files("#import-input", sample_path)
         page.wait_for_selector("#import-mode-dialog[open]")
@@ -5362,7 +5512,7 @@ try:
         # silently doing nothing. That the projection ARITHMETIC is right is
         # pinned in brain/tests/test_projection.py, where it can be asserted
         # against numbers rather than against pixel positions.
-        page.locator('.view-switch button[data-view="overview"]').click()
+        go_to_view(page, "overview")
         page.wait_for_selector("#board.overview .plot-dot")
         n_dots = page.locator(".plot-dot").count()
         check("map: it renders with the semantic layer switched off", n_dots > 0)
@@ -5383,9 +5533,9 @@ try:
         page.on("request", lambda r: rag_calls.append(r.url) if "/api/rag/" in r.url else None)
         pca_pos = page.eval_on_selector_all(
             ".plot-dot", "els => els.map(e => e.dataset.id + '@' + e.style.left + ',' + e.style.top)")
-        page.locator('.view-switch button[data-view="board"]').click()
+        go_to_view(page, "board")
         page.wait_for_selector("#board.board")
-        page.locator('.view-switch button[data-view="overview"]').click()
+        go_to_view(page, "overview")
         page.wait_for_selector("#board.overview .plot-dot")
         check("map: the offline switch makes no network call", rag_calls == [])
         # And the layout is cached rather than recomputed: leaving the view and
@@ -5397,7 +5547,7 @@ try:
               == pca_pos)
 
         # ---- Matrix: the four-lens picker -----------------------------------
-        page.locator('.view-switch button[data-view="matrix"]').click()
+        go_to_view(page, "matrix")
         page.wait_for_selector("#board.matrix .matrix-grid")
         check("matrices: picker offers the four lenses",
               page.locator(".matrix-switch button").count() == 4
@@ -5458,7 +5608,7 @@ try:
         page.click('.matrix-switch button[data-matrix="eisenhower"]')
 
         # ---- Areas view ------------------------------------------------------
-        page.locator('.view-switch button[data-view="areas"]').click()
+        go_to_view(page, "areas")
         page.wait_for_selector("#board.areas .area-tile")
         in_use = len({c["category"] for c in api_state()["cards"] if c.get("category")})
         check("areas: one tile per life area in use, wheel drawn",
@@ -5504,7 +5654,7 @@ try:
 
         # A long area name must not spill off the wheel either — the ring makes
         # room for the widest label, not the other way round.
-        page.locator('.view-switch button[data-view="board"]').click()
+        go_to_view(page, "board")
         page.wait_for_selector("#board.board")
         page.click("#edit-cats-btn")
         page.wait_for_selector("#cats-dialog[open]")
@@ -5518,7 +5668,7 @@ try:
         page.locator('.category-picker label:has(input[value="photography"])').click()
         page.click('#card-form button[type="submit"]')
         page.wait_for_timeout(100)
-        page.locator('.view-switch button[data-view="areas"]').click()
+        go_to_view(page, "areas")
         page.wait_for_selector("#board.areas svg.wheel")
         long_clipped = page.evaluate(clipped_labels)
         check("areas: a long area name still fits inside the wheel viewport",
@@ -5529,7 +5679,7 @@ try:
         page.screenshot(path=shot("areas-long-label.png"))
 
         # ---- Review view -----------------------------------------------------
-        page.locator('.view-switch button[data-view="review"]').click()
+        go_to_view(page, "review")
         page.wait_for_selector("#board.review .review-tiles")
         check("review: the four stat tiles render",
               page.locator(".review-tile").count() == 4
@@ -5552,7 +5702,7 @@ try:
         check("review: the Reviewed stamp persists in localStorage",
               page.locator(".review-stamped").count() == 1)
         page.screenshot(path=shot("review.png"))
-        page.locator('.view-switch button[data-view="board"]').click()
+        go_to_view(page, "board")
         page.wait_for_selector("#board.board")
 
         # ---- Habits ---------------------------------------------------------
@@ -5951,7 +6101,7 @@ try:
         page.select_option("#type-filter", "habit")
         page.wait_for_timeout(200)
         board_cards = page.locator(".card").count()
-        page.locator('.view-switch button[data-view="backlog"]').click()
+        go_to_view(page, "backlog")
         page.wait_for_selector("#board")
         open_filters(page)
         page.select_option("#column-filter", "all")
@@ -5962,7 +6112,7 @@ try:
               and "Meditate" in rows.first.inner_text())
         page.select_option("#column-filter", "")
         page.select_option("#type-filter", "")
-        page.locator('.view-switch button[data-view="board"]').click()
+        go_to_view(page, "board")
         page.wait_for_selector("#board.board")
         page.wait_for_timeout(150)
 
@@ -6547,7 +6697,7 @@ try:
               # which is why opening the panel here would not reveal it.
               and not col_filter.is_visible())
 
-        page.locator('.view-switch button[data-view="overview"]').click()
+        go_to_view(page, "overview")
         page.wait_for_selector("#board.overview .plot-dot")
         page.wait_for_timeout(300)
         dot_titles = """() => [...document.querySelectorAll('.plot-dot')]
@@ -6578,12 +6728,12 @@ try:
 
         # The other two card views hide it by the same rule, so the default is
         # one decision rather than four.
-        page.locator('.view-switch button[data-view="matrix"]').click()
+        go_to_view(page, "matrix")
         page.wait_for_selector("#board.matrix .matrix-grid")
         page.wait_for_timeout(250)
         matrix_clear = not any("DONE-probe finished" in t
                                for t in page.evaluate(dot_titles))
-        page.locator('.view-switch button[data-view="areas"]').click()
+        go_to_view(page, "areas")
         page.wait_for_selector("#board.areas")
         page.wait_for_timeout(250)
         areas_clear = page.locator(".area-row", has_text="DONE-probe finished").count() == 0
@@ -6593,7 +6743,7 @@ try:
         # Switched off in the Menu like every other filter, and it takes its
         # narrowing with it — a hidden control still doing its work is a board
         # nobody can explain.
-        page.locator('.view-switch button[data-view="overview"]').click()
+        go_to_view(page, "overview")
         page.wait_for_selector("#board.overview .plot-dot")
         open_filters(page)
         page.select_option("#column-filter", "answered")
@@ -6615,7 +6765,7 @@ try:
         open_filters(page)
         page.select_option("#column-filter", "")
         page.wait_for_timeout(200)
-        page.locator('.view-switch button[data-view="board"]').click()
+        go_to_view(page, "board")
         page.wait_for_selector("#board.board")
 
         # ---- The time range --------------------------------------------------
@@ -6643,7 +6793,7 @@ try:
         # than named, or this check would go stale the next time a habit is
         # added to the run.
         rail_habits = set(titles_on(".habit-rail .habit-rail-open"))
-        page.locator('.view-switch button[data-view="backlog"]').click()
+        go_to_view(page, "backlog")
         page.wait_for_selector("#board.backlog")
         page.wait_for_timeout(200)
         backlog_now = set(titles_on(".backlog-row .row-title"))
@@ -6713,7 +6863,7 @@ try:
         # off, "Finished this month" kept the right three cards and hid the only
         # column that paints them, answering a question the reader asked by name
         # with a wholly empty board and two columns reading "No cards match".
-        page.locator('.view-switch button[data-view="board"]').click()
+        go_to_view(page, "board")
         page.wait_for_selector("#board.board")
         menu_toggle("toggle-done-col")
         page.wait_for_timeout(150)
@@ -6736,13 +6886,13 @@ try:
               and page.get_attribute("#toggle-done-col", "aria-pressed") == "true")
         menu_toggle("toggle-done-col")  # leave the board as this block found it
         page.wait_for_timeout(150)
-        page.locator('.view-switch button[data-view="backlog"]').click()
+        go_to_view(page, "backlog")
         page.wait_for_selector("#board.backlog")
         page.wait_for_timeout(150)
 
         # Left as it was found: the sections after this one open on whatever
         # view is stored, and a board switch reloads the page into it.
-        page.locator('.view-switch button[data-view="board"]').click()
+        go_to_view(page, "board")
         page.wait_for_selector("#board.board")
 
         # ---- The card's actions, wherever the card is shown ------------------
@@ -6752,7 +6902,7 @@ try:
         # else. The right-click that already opens the menu on a card now opens
         # the same menu on a row and on a dot: one panel, one set of entries,
         # one dismiss rule.
-        page.locator('.view-switch button[data-view="backlog"]').click()
+        go_to_view(page, "backlog")
         page.wait_for_selector("#board.backlog .backlog-row")
         row = page.locator(".backlog-row").first
         row_title = row.locator(".row-title").inner_text()
@@ -6780,7 +6930,7 @@ try:
         page.locator(".card-menu-panel:not([hidden]) .menu-item",
                      has_text="Done").click()
         page.wait_for_timeout(250)
-        page.locator('.view-switch button[data-view="board"]').click()
+        go_to_view(page, "board")
         page.wait_for_selector("#board.board")
         check("card menu: Move to from a Backlog row carries the card to Done",
               escaped_backlog
@@ -6793,7 +6943,7 @@ try:
         # A dot is the same card at its smallest. The panel cannot hang inside
         # the dot — a dot is itself a button — so this is the case that proves
         # the menu is anchored to whatever element was right-clicked.
-        page.locator('.view-switch button[data-view="overview"]').click()
+        go_to_view(page, "overview")
         page.wait_for_selector("#board.overview .plot-dot")
         page.wait_for_timeout(250)
         page.locator(".plot-dot").first.click(button="right")
@@ -6819,7 +6969,7 @@ try:
               # in the page per right-click is a leak that ends as a stack of
               # dead menus under the board.
               and page.locator(".card-menu-floating").count() == 0)
-        page.locator('.view-switch button[data-view="board"]').click()
+        go_to_view(page, "board")
         page.wait_for_selector("#board.board")
 
         # ---- Filing a card from the card itself ------------------------------
@@ -7048,7 +7198,7 @@ try:
         page.wait_for_timeout(200)
         check("nest: parents and children shows the child a row of its own",
               titled("NEST-probe book the hut").count() == 1)
-        page.locator('.view-switch button[data-view="matrix"]').click()
+        go_to_view(page, "matrix")
         page.wait_for_selector("#board.matrix .matrix-grid")
         page.wait_for_timeout(200)
         both = page.locator(".plot-dot").count()
@@ -7058,7 +7208,7 @@ try:
         parents_only = page.locator(".plot-dot").count()
         check("nest: the Matrix plots each piece of work once by default",
               both > parents_only)
-        page.locator('.view-switch button[data-view="board"]').click()
+        go_to_view(page, "board")
         page.wait_for_selector("#board.board")
         page.wait_for_timeout(150)
 
@@ -7649,16 +7799,20 @@ try:
         # widget), and it is what fails the moment both paint at once.
         one_input = lambda: page.locator("#chat-input").count() == 1
         board_open = one_input()
-        page.locator('.view-switch button[data-view="assistant"]').click()
+        go_to_view(page, "assistant")
         page.wait_for_selector(".assistant-sheet #chat-input")
         view_open = one_input()
         hidden_on_view = not pill.is_visible()
         check("widget: exactly one message input exists in every state",
               board_open and view_open
               and not page.locator("#assistant-widget").is_visible())
-        page.locator('.view-switch button[data-view="board"]').click()
+        # The sheet's own ⤡ is the way back down. With no Assistant button in
+        # the view row it is also the route that keeps the conversation in the
+        # corner: expanding closes the widget, and leaving by a view button is
+        # leaving the conversation rather than shrinking it.
+        page.click("#assistant-collapse")
         page.wait_for_selector("#assistant-widget .chat-log")
-        check("widget: leaving the Assistant view hands the conversation back",
+        check("widget: collapsing the Assistant view hands the conversation back",
               one_input()
               and page.locator("#assistant-widget #chat-input").count() == 1)
         # Escape closes the innermost thing that is open — with no panel of its
@@ -7686,14 +7840,14 @@ try:
         page.wait_for_selector("#assistant-widget .chat-log")
         in_widget = page.locator("#assistant-widget .assistant-tools").count()
         parked = not page.locator(".assistant-tools").is_visible()
-        page.locator('.view-switch button[data-view="assistant"]').click()
+        go_to_view(page, "assistant")
         page.wait_for_selector(".assistant-sheet #chat-input")
         on_page = (page.locator(".assistant-head .assistant-tools").count() == 1
                    and page.locator(".assistant-tools .chat-recall").count() == 1
                    and page.locator("#chat-history-btn").is_visible()
                    and page.locator("#chat-new").is_visible()
                    and page.locator("#assistant-extras-btn").is_visible())
-        page.locator('.view-switch button[data-view="board"]').click()
+        page.click("#assistant-collapse")
         page.wait_for_selector("#assistant-widget .chat-log")
         check("widget: search, chats, New chat and settings are the Assistant"
               " page's alone",
@@ -7711,7 +7865,7 @@ try:
                     and page.input_value("#chat-input") == "still here")
         page.fill("#search", "")
         page.wait_for_timeout(150)
-        page.locator('.view-switch button[data-view="backlog"]').click()
+        go_to_view(page, "backlog")
         page.wait_for_selector(".backlog-row")
         check("widget: it survives a repaint and a view switch",
               survived
@@ -7807,8 +7961,8 @@ try:
         # ---- One conversation, two shells: the draft crosses both ways -------
         # From the Board, so that what collapse returns to is a fact the check
         # can name: the view the Assistant was reached from.
-        page.locator('.view-switch button[data-view="board"]').click()
-        page.wait_for_selector("#assistant-widget .chat-log")
+        go_to_view(page, "board")
+        open_widget(page)
         page.fill("#chat-input", "half a thought")
         page.click("#assistant-expand")
         page.wait_for_selector(".assistant-sheet #chat-input")
@@ -7931,12 +8085,12 @@ try:
 
         # A turn of each kind, taken through the widget so the trace and the
         # shell that links to it are exercised together.
-        page.locator('.view-switch button[data-view="board"]').click()
+        go_to_view(page, "board")
         page.wait_for_selector("#new-card-btn")
         # New chat is the Assistant page's control now, so the clean chat is
         # started there and folded back into the corner — the turns below are
         # still taken through the widget.
-        page.locator('.view-switch button[data-view="assistant"]').click()
+        go_to_view(page, "assistant")
         page.wait_for_selector(".assistant-sheet #chat-input")
         page.click("#chat-new")
         page.wait_for_selector(".chat-direction")
@@ -8162,7 +8316,7 @@ try:
         # what would otherwise answer this lens with an empty screen, and the
         # suspension it stands down by is the one `askingAboutFinished` already
         # writes — nothing here is a rule written for lenses.
-        page.click('.view-switch button[data-view="backlog"]')
+        go_to_view(page, "backlog")
         page.wait_for_selector(".backlog-sheet")
         page.click('#lens-row .lens-btn[data-lens="done"]')
         page.wait_for_timeout(250)
@@ -8177,7 +8331,7 @@ try:
         row_seen = {}
         for v in ["board", "backlog", "overview", "matrix", "areas", "review",
                   "assistant"]:
-            page.click(f'.view-switch button[data-view="{v}"]')
+            go_to_view(page, v)
             page.wait_for_timeout(250)
             row_seen[v] = page.locator("#lens-row").is_visible()
         check(f"lens: the row is wherever the filters are, and nowhere else "
@@ -8185,7 +8339,7 @@ try:
               all(row_seen[v] for v in ["board", "backlog", "overview",
                                         "matrix", "areas", "review"])
               and not row_seen["assistant"])
-        page.click('.view-switch button[data-view="board"]')
+        go_to_view(page, "board")
         page.wait_for_selector("#new-card-btn")
         # And the block takes its own cards away again. One of them is overdue,
         # which is real work for the summary line at the head of the board —
@@ -8227,18 +8381,31 @@ try:
                        "areas", "review", "assistant"]
         reached, sideways = {}, {}
         for v in PHONE_VIEWS:
-            tab = ph.locator(f'.view-switch button[data-view="{v}"]')
             try:
-                # A real tap, with its own short deadline: a tab that cannot be
+                # A real tap, with its own short deadline: a view that cannot be
                 # brought under a thumb must fail this check rather than abort
-                # the suite on a 30s timeout.
-                tab.click(timeout=3000)
+                # the suite on a 30s timeout. The route is the helper's, because
+                # three of these are two presses away and one has no button.
+                go_to_view(ph, v)
                 ph.wait_for_timeout(250)
-                reached[v] = tab.get_attribute("aria-pressed") == "true"
+                reached[v] = ph.evaluate("document.body.dataset.view") == v
             except Exception:
                 reached[v] = False
             sideways[v] = ph.evaluate(
                 "() => document.documentElement.scrollWidth - window.innerWidth")
+        # The row scrolls inside itself rather than dropping a control onto a
+        # second line: every control shares one top edge, and what does not fit
+        # is reachable by swiping. A wrapped row is how Review and the Assistant
+        # ended up off the bottom of the header instead of off its right.
+        go_to_view(ph, "board")
+        row_tops = ph.evaluate("""() => [...document.querySelectorAll('.view-switch > *')]
+            .map((el) => Math.round(el.getBoundingClientRect().top))""")
+        check(f"phone: the view row scrolls rather than wraps ({row_tops})",
+              len(set(row_tops)) == 1
+              and ph.evaluate("""() => {
+                    const r = document.querySelector('.view-switch');
+                    return getComputedStyle(r).overflowX !== 'visible';
+                  }"""))
         check(f"phone: every view is reachable from the switch "
               f"({[v for v, ok in reached.items() if not ok]} were not)",
               all(reached.values()))
@@ -8246,7 +8413,7 @@ try:
               f"({ {v: px for v, px in sideways.items() if px > 1} })",
               all(px <= 1 for px in sideways.values()))
 
-        ph.locator('.view-switch button[data-view="board"]').click(timeout=3000)
+        go_to_view(ph, "board")
         ph.wait_for_timeout(250)
         ph.screenshot(path=shot("board-phone.png"))
         board_top = ph.evaluate(
@@ -8270,7 +8437,7 @@ try:
             ("the card dialog", ".card", "Escape"),
             # Not a panel but a view, and the only one holding a composer: the
             # model list beside Send was 11.5px and the mic and Send 33px.
-            ("the Assistant", '.view-switch button[data-view="assistant"]', None),
+            ("the Assistant", "#assistant-launcher,#assistant-expand", None),
         ]
 
         # Only the controls a person types or picks into: a radio or a checkbox
@@ -8336,7 +8503,7 @@ try:
         # chain scrolled: the right half of every lens was cut off with its
         # headers ending mid-word. A matrix is read by comparing its quadrants
         # at a glance, so the assertion is that it FITS, not that it scrolls.
-        ph.locator('.view-switch button[data-view="matrix"]').click(timeout=3000)
+        go_to_view(ph, "matrix")
         ph.wait_for_timeout(500)
         spill = ph.evaluate("""() => {
           const g = document.querySelector('.matrix-grid');
@@ -8344,7 +8511,7 @@ try:
         }""")
         check(f"phone: the whole matrix fits the window ({spill}px over)",
               0 <= spill <= 4)
-        ph.locator('.view-switch button[data-view="board"]').click(timeout=3000)
+        go_to_view(ph, "board")
         ph.wait_for_timeout(250)
 
         # Added to the home screen it runs in its own window, which is the one

@@ -828,15 +828,25 @@ input, select, textarea { font: inherit; color: inherit; }
   color: var(--ink-soft);
 }
 
-/* View switch — index tabs into the ledger */
+/* View switch — index tabs into the ledger.
+
+   Three destinations and one dropdown since the prototype was adopted. It
+   scrolls sideways rather than wrapping at every width: a control dropped onto
+   a second line is how Review and the Assistant ended up under the header
+   instead of off its right edge, and a row of destinations that is two rows
+   tall is not a row. `overflow-x: auto` also keeps the clip that rounds the
+   ends, which is what `overflow: hidden` was here for. */
 .view-switch {
   display: inline-flex;
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   box-shadow: var(--shadow-card);
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
 }
+.view-switch::-webkit-scrollbar { display: none; }
 
 .view-switch button {
   font-family: var(--mono);
@@ -5548,17 +5558,16 @@ button.chat-source-card {
     order: 3;
     min-width: 0;
     display: flex;
-    overflow-x: auto;
-    overflow-y: hidden;
     scroll-snap-type: x proximity;
-    scrollbar-width: none;
   }
-  .view-switch::-webkit-scrollbar { display: none; }
-  .view-switch button {
+  .view-switch button,
+  .view-switch .view-lenses {
     flex: 0 0 auto;
+    scroll-snap-align: start;
+  }
+  .view-switch button {
     min-height: 44px;
     padding: 12px 15px;
-    scroll-snap-align: start;
   }
 
   /* ---- The category rail and the filters: two swiped lines ---------------
