@@ -6257,7 +6257,7 @@ try:
         # .prop-table/.prop-row ledger since 2026-09-13, and an unscoped query
         # picks up its five rows too — present in the document (just behind a
         # closed <dialog>, not the `hidden` attribute this loop filters on) —
-        # which would count 13 rows for a dialog that only ever draws 8.
+        # which would count 11 rows for a dialog that only ever draws 6.
         rows = page.evaluate("""() => {
           const out = [];
           for (const row of document.querySelectorAll('#card-dialog .prop-table .prop-row')) {
@@ -6271,10 +6271,9 @@ try:
           return out;
         }""")
         check("ledger: every row is a name in the gutter and a value beside it",
-              len(rows) == 8 and all(r and r["leftOf"] for r in rows)
+              len(rows) == 6 and all(r and r["leftOf"] for r in rows)
               and [r["name"] for r in rows] == ["Where", "Type", "Category",
-                                                "Priority", "When", "Effort",
-                                                "Control", "Tags"])
+                                                "Compass", "When", "Tags"])
         page.locator('.category-picker label:has(input[value="work"])').click()
         page.fill("#card-tags", "ledger, probe")
         page.click("#save-card")
@@ -7676,6 +7675,56 @@ try:
         check("dialog: handing the plan back to the deadline clears the refusal",
               page.locator("#card-plan-error[hidden]").count() == 1
               and page.locator("#card-when.has-error").count() == 0)
+
+        # This is an end-to-end test. The plan is a *partial* date, so the
+        # calendar is a second way into the same three dropdowns rather than a
+        # replacement for them: a grid can only ever name a whole day, and the
+        # two controls at its foot are what take the day, and then the month,
+        # back off again. Asserted through the dropdowns, because they are what
+        # `readForm` saves — a grid agreeing with itself proves nothing.
+        page.click("#card-plan-cal-btn")
+        page.wait_for_selector("#card-plan-calendar .plan-day")
+        # Paged forward and back before anything is pressed. The grid follows
+        # the plan when the *plan* moves and stays put otherwise — read the
+        # first as "does the plan name a month the grid is not showing" and the
+        # step buttons move the grid only for as long as it takes the next
+        # repaint to put it back, which is no time at all.
+        shown = page.locator("#card-plan-calendar .plan-cal-month").inner_text()
+        page.locator("#card-plan-calendar .plan-cal-step").nth(1).click()
+        page.wait_for_timeout(150)
+        paged = page.locator("#card-plan-calendar .plan-cal-month").inner_text()
+        page.locator("#card-plan-calendar .plan-cal-step").first.click()
+        page.wait_for_timeout(150)
+        back = page.locator("#card-plan-calendar .plan-cal-month").inner_text()
+        page.locator("#card-plan-calendar .plan-day:not(.outside)").nth(2).click()
+        page.wait_for_timeout(150)
+        picked = page.evaluate("""() => ({
+          chosen: document.querySelector('#card-plan-calendar .plan-day.chosen')?.dataset.day,
+          y: document.querySelector('#card-plan-year').value,
+          m: document.querySelector('#card-plan-month').value,
+          d: document.querySelector('#card-plan-day').value,
+          words: document.querySelector('#card-plan-words').textContent,
+        })""")
+        page.locator("#card-plan-calendar .plan-cal-clear").first.click()
+        page.wait_for_timeout(150)
+        no_day = page.evaluate("""() => ({
+          y: document.querySelector('#card-plan-year').value,
+          m: document.querySelector('#card-plan-month').value,
+          d: document.querySelector('#card-plan-day').value,
+        })""")
+        page.locator("#card-plan-calendar .plan-cal-clear").nth(1).click()
+        page.wait_for_timeout(150)
+        no_month = page.evaluate("""() => ({
+          y: document.querySelector('#card-plan-year').value,
+          m: document.querySelector('#card-plan-month').value,
+        })""")
+        check("dialog: the calendar sets the plan, and gives the day and the month back",
+              paged != shown and back == shown
+              and picked["chosen"] == f"{picked['y']}-{picked['m']}-{picked['d']}"
+              and picked["d"] != "" and picked["words"].strip() != ""
+              # the day off, the month kept — and then the month off with it
+              and no_day["d"] == "" and no_day["m"] == picked["m"]
+              and no_month["m"] == "" and no_month["y"] == picked["y"])
         page.click("#cancel-dialog")
         page.wait_for_timeout(150)
 
