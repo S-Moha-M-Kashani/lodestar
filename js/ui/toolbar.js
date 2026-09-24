@@ -307,14 +307,19 @@ function displaySwitch(btnId, cls, key, onSet = null) {
   });
 }
 
-// The four paint toggles: tag chips (and the tag filter bar), priority stamps,
-// type stamps, the Done column. No card data is touched. (The ledger numbers
+// The paint toggles: tag chips (and the tag filter bar), priority stamps,
+// type stamps. No card data is touched. (The ledger numbers
 // had a toggle here once; review retired it — they are simply never shown now,
 // styles.css.)
 displaySwitch('#toggle-tags', 'hide-tags', KEY_PREFIX + 'hideTags');
 displaySwitch('#toggle-prios', 'hide-prios', KEY_PREFIX + 'hidePrios');
 displaySwitch('#toggle-types', 'hide-types', KEY_PREFIX + 'hideTypes');
-displaySwitch('#toggle-done-col', 'hide-done-col', KEY_PREFIX + 'hideDoneCol');
+// The three column switches repaint (the empty `onSet`), because render()
+// counts the card tracks the grid lays out, and a hidden Backlog or On hold is
+// left out of the board so the capture row heads whichever column is leftmost.
+displaySwitch('#toggle-done-col', 'hide-done-col', KEY_PREFIX + 'hideDoneCol', () => {});
+displaySwitch('#toggle-inbox-col', 'hide-inbox-col', KEY_PREFIX + 'hideInboxCol', () => {});
+displaySwitch('#toggle-hold-col', 'hide-hold-col', KEY_PREFIX + 'hideHoldCol', () => {});
 
 // And the one that is not paint. Switching the column filter off has to take
 // the hide-Done default with it, or cards go missing behind a dropdown that is

@@ -1008,11 +1008,18 @@ try:
               page.locator('[data-col="inbox"] .card', has_text="THROWAWAY EDIT").count() == 0)
 
         # ---- Keyboard moves -------------------------------------------------
+        # On hold stands between Backlog and In Progress since 2026-09-24, so
+        # `]` walks the card through it: one press per column, in board order.
         card.focus()
         page.keyboard.press("]")
         page.wait_for_timeout(100)
+        held = page.locator('[data-col="on-hold"] .card', has_text="speculative decoding")
+        held_once = held.count() == 1
+        page.keyboard.press("]")
+        page.wait_for_timeout(100)
         moved = page.locator('[data-col="in-progress"] .card', has_text="speculative decoding")
-        check("keyboard: ] moved card to In Progress", moved.count() == 1)
+        check("keyboard: ] moved card to On hold, then In Progress",
+              held_once and moved.count() == 1)
         check("keyboard: focus restored after move",
               page.evaluate("document.activeElement?.classList.contains('card')"))
 
@@ -1024,13 +1031,17 @@ try:
 
         page.keyboard.press("[")
         page.wait_for_timeout(100)
-        check("keyboard: [ moved card back to Inbox",
+        page.keyboard.press("[")
+        page.wait_for_timeout(100)
+        check("keyboard: [ moved card back to Backlog, through On hold",
               page.locator('[data-col="inbox"] .card', has_text="speculative decoding").count() == 1)
 
         # ---- Sort -----------------------------------------------------------
         # One sort menu per column header: a command-select that applies the
         # chosen order, then snaps back to its "Sort ⇅" placeholder.
         page.locator('[data-col="inbox"] .card', has_text="speculative decoding").first.press("]")
+        page.wait_for_timeout(100)
+        page.keyboard.press("]")
         page.wait_for_timeout(100)
         sort_values = page.locator('[data-col="in-progress"] .sort-select option').evaluate_all(
             "opts => opts.map(o => o.value)")
@@ -1100,10 +1111,16 @@ try:
         # panels would stand open at once with the second card's on top, which
         # looks right and is not. So the open panel's own card is read back,
         # not just counted. The second card is found by index rather than by a
-        # title this block would then have to keep in step with the seed data.
-        other_idx = page.evaluate("""() => [...document.querySelectorAll('.card')]
-            .findIndex(c => c.querySelector('.card-title').textContent
-                            !== 'Menu probe card')""")
+        # title this block would then have to keep in step with the seed data,
+        # and in another column: with four columns the open panel covers the
+        # card under the probe, and a right-click has to land on its target.
+        other_idx = page.evaluate("""() => {
+          const cards = [...document.querySelectorAll('.card')];
+          const col = (c) => c.closest('.column')?.dataset.col;
+          const probe = cards.find(c => c.querySelector('.card-title').textContent
+                                        === 'Menu probe card');
+          return cards.findIndex(c => c !== probe && col(c) !== col(probe));
+        }""")
         second = page.locator(".card").nth(other_idx)
         second_title = second.locator(".card-title").inner_text()
         probe().click(button="right")
@@ -1286,7 +1303,8 @@ try:
                               "habit-mute", "sound-marimba", "sound-bell",
                               "sound-droplet", "sound-kalimba", "toggle-tags",
                               "toggle-prios", "toggle-types", "toggle-columns",
-                              "toggle-done-col")
+                              "toggle-done-col", "toggle-inbox-col",
+                              "toggle-hold-col")
 
         def open_settings():
             """Reach the Settings dialog through the Menu's own row — a no-op
@@ -1476,6 +1494,74 @@ try:
         }""")
         page.keyboard.press("Escape")
         page.wait_for_timeout(50)
+
+        # ---- Backlog and On hold (2026-09-24) ---------------------------------
+        # This is an end-to-end test. The Inbox is called Backlog now (its id is
+        # still `inbox`, which every stored card carries), a fourth column `On
+        # hold` stands between it and In Progress, and Settings can hide either.
+        # The capture row — `+ New card` and the search — stays at the head of
+        # whichever column is leftmost on screen, and a card made from it lands
+        # in that column rather than in one the reader has hidden.
+        # text_content, not inner_text: the header is set in capitals by CSS.
+        titles = lambda: [t.strip() for t in
+                          page.locator("#board .column .column-title").all_text_contents()]
+        check("columns: Backlog, On hold, In Progress, Done, in that order",
+              titles() == ["Backlog", "On hold", "In Progress", "Done"])
+
+        def capture_in(col):
+            return (page.locator(f'[data-col="{col}"] #new-card-btn').count() == 1
+                    and page.locator(f'[data-col="{col}"] #search').count() == 1)
+
+        check("columns: the capture row starts at the head of Backlog",
+              capture_in("inbox"))
+
+        toggled = menu_toggle("toggle-inbox-col")
+        page.wait_for_timeout(150)
+        backlog_col = page.locator('section.column[data-col="inbox"]')
+        hold_col = page.locator('section.column[data-col="on-hold"]')
+        board_left = page.locator("#board").bounding_box()["x"]
+        check("hide: the Backlog toggle hides Backlog and the capture row moves to On hold",
+              toggled and body_has("hide-inbox-col")
+              and not backlog_col.is_visible() and hold_col.is_visible()
+              and capture_in("on-hold")
+              and bool(page.evaluate("localStorage.getItem('lodestar:hideInboxCol')"))
+              # Its grid track goes with it, as Done's does: On hold stands
+              # where Backlog stood rather than a column's width to its right.
+              and hold_col.bounding_box()["x"] - board_left < 40)
+
+        page.click("#new-card-btn")
+        page.wait_for_selector("#card-dialog[open]")
+        page.fill("#card-title", "HOLD-probe captured")
+        page.click("#save-card")
+        check("hide: + New card files the card in the column it sits in",
+              wait_until(lambda: hold_col.locator(".card", has_text="HOLD-probe captured")
+                         .count() == 1)
+              and backlog_col.locator(".card", has_text="HOLD-probe captured").count() == 0)
+
+        # Both hidden: the row walks one further, to In Progress.
+        toggled_hold = menu_toggle("toggle-hold-col")
+        page.wait_for_timeout(150)
+        check("hide: with Backlog and On hold both hidden, the row heads In Progress",
+              toggled_hold and body_has("hide-hold-col") and not hold_col.is_visible()
+              and capture_in("in-progress"))
+
+        menu_toggle("toggle-hold-col")
+        menu_toggle("toggle-inbox-col")
+        page.wait_for_timeout(150)
+        check("hide: toggling both back restores Backlog and the row at its head",
+              not body_has("hide-inbox-col") and not body_has("hide-hold-col")
+              and backlog_col.is_visible() and hold_col.is_visible()
+              and capture_in("inbox"))
+
+        # The card was filed On hold for real, not painted there: a reload reads
+        # it back from the server, whose column list used to know three ids.
+        page.reload()
+        page.wait_for_selector("#board.board")
+        check("columns: a card filed On hold is still On hold after a reload",
+              wait_until(lambda: page.locator('[data-col="on-hold"] .card',
+                                              has_text="HOLD-probe captured").count() == 1))
+        # The export further down counts the board against this figure.
+        count_before = page.locator(".card").count()
 
         # ---- Header and chrome styling ---------------------------------------
         # This is an end-to-end test. Three quiet-chrome rules from review:
@@ -6737,6 +6823,7 @@ try:
               };
               return {
                 inbox: w('.column[data-col="inbox"]'),
+                hold: w('.column[data-col="on-hold"]'),
                 progress: w('.column[data-col="in-progress"]'),
                 done: w('.column[data-col="answered"]'),
                 rail: w('.board-rail'),
@@ -6804,7 +6891,7 @@ try:
 
         before = board_widths()
         # Dragging the divider left gives the rail the room, so the rail grows
-        # and each column loses a third of what it gained.
+        # and each of the four columns loses a quarter of what it gained.
         page.mouse.move(grip_box["x"] + grip_box["width"] / 2,
                         grip_box["y"] + grip_box["height"] / 2)
         page.mouse.down()
@@ -6813,12 +6900,13 @@ try:
         page.mouse.up()
         page.wait_for_timeout(200)
         after = board_widths()
-        check("rail: dragging the divider widens the rail and narrows all three"
+        check("rail: dragging the divider widens the rail and narrows all four"
               " columns together",
               all(v is not None for v in list(before.values()) + list(after.values()))
               and abs((after["rail"] - before["rail"]) - 60) <= 4
-              and abs((before["inbox"] - after["inbox"]) - 20) <= 4
-              and abs(after["inbox"] - after["progress"]) <= 1
+              and abs((before["inbox"] - after["inbox"]) - 15) <= 4
+              and abs(after["inbox"] - after["hold"]) <= 1
+              and abs(after["hold"] - after["progress"]) <= 1
               and abs(after["progress"] - after["done"]) <= 1)
 
         # The keyboard half. A separator that only answers the mouse is one a
@@ -6863,13 +6951,12 @@ try:
         # two of them is a way to lose your own cards.
         add_card(page, "DONE-probe finished")
         page.locator('.card', has_text="DONE-probe finished").first.focus()
-        # Two presses, and a beat between them: each move re-renders the board
-        # and puts focus back on the card, so a second key sent inside that
-        # repaint would land on nothing.
-        page.keyboard.press("]")
-        page.wait_for_timeout(200)
-        page.keyboard.press("]")
-        page.wait_for_timeout(200)
+        # Three presses (through On hold and In Progress), and a beat between
+        # them: each move re-renders the board and puts focus back on the card,
+        # so a key sent inside that repaint would land on nothing.
+        for _ in range(3):
+            page.keyboard.press("]")
+            page.wait_for_timeout(200)
         check("columns: the probe card is in Done to start with",
               page.locator('[data-col="answered"] .card',
                            has_text="DONE-probe finished").count() == 1)
@@ -6882,7 +6969,8 @@ try:
               col_filter.count() == 1
               and page.locator("#filter-row-column #column-filter").count() == 1
               and [o.strip() for o in col_filter.locator("option").all_inner_texts()]
-              == ["Open cards", "Inbox", "In Progress", "Done", "All columns"]
+              == ["Open cards", "Backlog", "On hold", "In Progress", "Done",
+                  "All columns"]
               # Inert on the Board, and therefore not offered there either —
               # the Board IS the three columns, so a control for emptying two
               # of them is a way to lose your own cards.
@@ -7283,7 +7371,7 @@ try:
               placement is not None
               and placement["folded"] is False
               and placement["beforeType"] is True
-              and placement["values"] == ["inbox", "in-progress", "answered"]
+              and placement["values"] == ["inbox", "on-hold", "in-progress", "answered"]
               and placement["checked"] == "inbox"
               and page.locator("#card-column").is_visible())
 
@@ -7415,7 +7503,7 @@ try:
         check("nest: opening it lists both, with numbers, titles and columns",
               rows().count() == 2
               and rows().first.locator(".child-num").inner_text().startswith("C-")
-              and "Inbox" in rows().first.locator(".child-col").inner_text()
+              and "Backlog" in rows().first.locator(".child-col").inner_text()
               and "Done" in rows().last.locator(".child-col").inner_text())
         # A finished child is marked by its text, never by a colour: colour on
         # this board means category and could be mistaken for one.

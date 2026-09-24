@@ -75,6 +75,23 @@ test('PUT /api/state persists a card and echoes full board', async () => {
   } finally { await s.stop(); }
 });
 
+// This is an integration test. `on-hold` is the fourth column (2026-09-24);
+// the server's own column list used to coerce any id it did not know back to
+// the Inbox, which would quietly un-file every card the browser put there.
+test('a card filed On hold stays On hold through a save and a re-read', async () => {
+  const s = await startServer();
+  try {
+    const put = await fetch(s.base + '/api/state', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ version: 1, cards: [{ id: 'h1', columnId: 'on-hold', title: 'Wait and see' }] }),
+    });
+    assert.equal((await put.json()).cards[0].columnId, 'on-hold');
+    const again = await (await fetch(s.base + '/api/state')).json();
+    assert.equal(again.cards.find((c) => c.id === 'h1').columnId, 'on-hold');
+  } finally { await s.stop(); }
+});
+
 // This is an integration test.
 test('omitting a live card from PUT soft-deletes it into trash', async () => {
   const s = await startServer();

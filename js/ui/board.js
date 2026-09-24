@@ -18,7 +18,7 @@ import { render } from './render.js';
 // The Board view: a column and its cards, the create control, the card itself,
 // and the two rails — categories and tags — that filter what it shows.
 
-export function renderColumn(col) {
+export function renderColumn(col, leftmost = false) {
   const section = document.createElement('section');
   section.className = 'column';
   section.dataset.col = col.id;
@@ -52,7 +52,9 @@ export function renderColumn(col) {
 
   section.append(header);
 
-  if (col.id === 'inbox') section.append(renderCaptureRow());
+  // The capture row heads whichever column is leftmost, so hiding the Backlog
+  // moves it rather than taking it away — and a card made there lands there.
+  if (leftmost) section.append(renderCaptureRow(col));
 
   const cardsEl = document.createElement('div');
   cardsEl.className = 'cards';
@@ -61,6 +63,7 @@ export function renderColumn(col) {
   if (visible.length === 0) {
     const emptyCopy = {
       'inbox': 'Start a card above — a question, a task, an idea',
+      'on-hold': 'Cards you are keeping an eye on, not acting on yet',
       'in-progress': 'Drag a card here when you start on it',
       'answered': 'Finished and answered cards land here',
     };
@@ -83,26 +86,26 @@ export function renderColumn(col) {
 // or to look something up — and search left the header for this row on
 // 2026-09-04. Shared, so there is one of each: #new-card-btn and #search are
 // ids, and only one view renders into #board at a time.
-export function renderCaptureRow() {
+export function renderCaptureRow(col = null) {
   const row = document.createElement('div');
   row.className = 'capture-row';
-  row.append(newCardButton(), searchBox());
+  row.append(newCardButton(col), searchBox());
   return row;
 }
 
 // The create control. It builds nothing: the dialog holds the one
 // card-construction path, so a capture that is cancelled halfway burns no
-// ledger number, writes no undo entry and leaves no Trash row behind. No
-// argument — a draft with no source starts empty and inherits the drawer it
-// was opened in, which is the dialog's decision to make, not this button's.
-function newCardButton() {
+// ledger number, writes no undo entry and leaves no Trash row behind. The one
+// thing it hands over is the column it heads, painted into the draft's Where
+// row; on the Backlog view there is none and the draft keeps its default.
+function newCardButton(col) {
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.id = 'new-card-btn';
   btn.className = 'new-card-btn';
   btn.textContent = '+ New card';
-  btn.setAttribute('aria-label', 'Add a card to the Inbox');
-  btn.addEventListener('click', () => openNewCard());
+  btn.setAttribute('aria-label', `Add a card to ${col ? col.title : 'the Backlog'}`);
+  btn.addEventListener('click', () => openNewCard(null, col ? { columnId: col.id } : null));
   return btn;
 }
 

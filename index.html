@@ -445,7 +445,8 @@
               <label for="column-filter">Where it is filed</label>
               <select id="column-filter">
                 <option value="">Open cards</option>
-                <option value="inbox">Inbox</option>
+                <option value="inbox">Backlog</option>
+                <option value="on-hold">On hold</option>
                 <option value="in-progress">In Progress</option>
                 <option value="answered">Done</option>
                 <option value="all">All columns</option>
@@ -568,7 +569,8 @@
                aria-labelledby="prop-column-label">
             <span class="prop-label" id="prop-column-label">Where</span>
             <div class="picker-options prop-value">
-              <label><input type="radio" name="column" value="inbox"><span class="col-chip">Inbox</span></label>
+              <label><input type="radio" name="column" value="inbox"><span class="col-chip">Backlog</span></label>
+              <label><input type="radio" name="column" value="on-hold"><span class="col-chip">On hold</span></label>
               <label><input type="radio" name="column" value="in-progress"><span class="col-chip">In Progress</span></label>
               <label><input type="radio" name="column" value="answered"><span class="col-chip">Done</span></label>
             </div>
@@ -883,7 +885,11 @@
               <button type="button" id="toggle-columns" class="menu-item" aria-pressed="false" title="Hide the column filter — and with it the rule that keeps Done cards off every view but the Board">Columns</button>
             </div>
             <hr class="menu-sep">
-            <button type="button" id="toggle-done-col" class="menu-item" aria-pressed="false" title="Hide the Done column on the Board view">Done column</button>
+            <div class="picker-options">
+              <button type="button" id="toggle-inbox-col" class="menu-item" aria-pressed="false" title="Hide the Backlog column on the Board view — + New card and the search move to the next column">Backlog column</button>
+              <button type="button" id="toggle-hold-col" class="menu-item" aria-pressed="false" title="Hide the On hold column on the Board view">On hold column</button>
+              <button type="button" id="toggle-done-col" class="menu-item" aria-pressed="false" title="Hide the Done column on the Board view">Done column</button>
+            </div>
           </div>
         </div>
       </div>
