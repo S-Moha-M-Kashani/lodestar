@@ -193,7 +193,7 @@ export function renderReview() {
     return t;
   };
   tiles.append(
-    stat('inbox', columnCards('inbox').length, 'in the inbox'),
+    stat('inbox', columnCards('inbox').length, 'in the backlog'),
     stat('answered-week', answeredIn(wk1, Infinity).length, 'answered this week'),
     stat('new-week', createdIn(wk1, Infinity).length, 'new this week'),
     stat('open', open.length, 'open in total'),

@@ -210,7 +210,7 @@ function agentRetryAfter() {
 const BACKUP_ON_WRITE = process.env.LODESTAR_BACKUP_ON_WRITE !== '0';
 const BACKUP_SCRIPT = join(ROOT, 'scripts', 'backup-db.mjs');
 
-const COLUMN_IDS = ['inbox', 'in-progress', 'answered'];
+const COLUMN_IDS = ['inbox', 'on-hold', 'in-progress', 'answered'];
 // 'plan' was a type until 2026-08-28 and is now a date on every card. One
 // still arriving as a plan — an older browser, an old export, an assistant
 // working from memory — is stored as a task with its dates intact; coercing it

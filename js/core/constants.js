@@ -1,9 +1,13 @@
 
-// The board's fixed vocabulary: its three columns, the card types and their
+// The board's fixed vocabulary: its four columns, the card types and their
 // neutral ink stamps, the priority labels, and the seven views.
 
 export const COLUMNS = [
-  { id: 'inbox', title: 'Inbox' },
+  // 'inbox' is the id every stored card carries; the label became Backlog on
+  // 2026-09-24, because the Backlog view had only ever listed this column.
+  { id: 'inbox', title: 'Backlog' },
+  // Kept an eye on rather than acted on — between the backlog and the work.
+  { id: 'on-hold', title: 'On hold' },
   { id: 'in-progress', title: 'In Progress' },
   // 'answered' is the id every stored card and saved board already carries;
   // only the label changed, because the column finishes tasks and habits too.
