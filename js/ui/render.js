@@ -5,6 +5,9 @@ import { widgetShowing } from '../assistant/shell.js';
 import { renderAssistantWidget } from '../assistant/widget.js';
 import { askingAboutFinished } from '../core/cards.js';
 import { COLUMNS, VIEWS, VIEW_LABELS } from '../core/constants.js';
+
+// The body class each Settings switch sets to take a column off the Board.
+const HIDDEN_BY = { 'inbox': 'hide-inbox-col', 'on-hold': 'hide-hold-col' };
 import { timeline } from '../core/history.js';
 import { VIEW_KEY } from '../core/keys.js';
 import { dealCards, focusCardId, setCurrentView, setDealCards, setFocusCard, view } from '../core/state.js';
@@ -81,7 +84,16 @@ export function render() {
   } else if (view === 'assistant') {
     board.appendChild(renderAssistant());
   } else {
-    for (const col of COLUMNS) board.appendChild(renderColumn(col));
+    // A hidden Backlog or On hold is left out rather than painted and hidden,
+    // so the first column drawn is the one that carries the capture row, and
+    // --cols tells the grid how many card tracks to lay out. A hidden Done is
+    // still painted (CSS hides it, and a finished-span suspends that), so it
+    // is subtracted here rather than skipped.
+    const body = document.body.classList;
+    const shown = COLUMNS.filter((c) => !body.contains(HIDDEN_BY[c.id]));
+    shown.forEach((col, i) => board.appendChild(renderColumn(col, i === 0)));
+    const doneHidden = body.contains('hide-done-col') && !body.contains('show-done-col');
+    board.style.setProperty('--cols', shown.length - (doneHidden ? 1 : 0));
     board.appendChild(boardRail());
     board.classList.add('has-rail');
   }

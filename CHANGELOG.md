@@ -10,6 +10,24 @@ Dates are the day the release point was built. Versions follow
 [semantic versioning](https://semver.org/) — a major number for a break, a
 minor for a capability, a patch for a fix.
 
+## [2.2.0] — 2026-09-24
+
+**The board has a fourth column, On hold, the Inbox is called Backlog, and
+Settings can hide either of them.**
+
+The Board now reads **Backlog · On hold · In Progress · Done**. The Inbox was
+renamed Backlog, because the Backlog view had only ever listed that column; the
+stored column id is unchanged, so every existing card stays where it was. **On
+hold** stands between Backlog and In Progress, for cards you are keeping an eye
+on rather than acting on yet, and it is offered wherever a column can be chosen
+— the card's Where row, the Move to menu, the column filter, and the `[` `]`
+keys, which now walk a card through it.
+
+Settings → Show gains a **Backlog column** and an **On hold column** switch
+beside the Done one. Hiding a column takes its grid width with it, and the
+search and `+ New card` stay at the head of whichever column is now leftmost —
+a card made there is filed in that column rather than in one you cannot see.
+
 ## [2.1.0] — 2026-09-20
 
 **Priority, effort and control are one row on the card, called Compass, and the
