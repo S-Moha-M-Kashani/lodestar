@@ -1,6 +1,7 @@
 import { catColor, catLabel } from '../core/categories.js';
 import { direction } from '../core/direction.js';
 import { habitDoneIn, habitExpectedBy, habitPeriod } from '../core/habits.js';
+import { KEY_PREFIX } from '../core/keys.js';
 import { state, view } from '../core/state.js';
 import { $ } from './dom.js';
 import { openDialog } from './edit-dialog.js';
@@ -72,6 +73,36 @@ function directionItem(item) {
   return btn;
 }
 
+// On a phone the line folds to one tappable head (styles.css shows the items
+// only under `direction-open`), because four reasons stacked one per line cost
+// a phone a quarter of its screen before the first card. Shut by default and
+// remembered per device. A wide window never shows the head.
+const DIRECTION_KEY = KEY_PREFIX + 'phoneDirectionOpen';
+try {
+  document.body.classList.toggle('direction-open', localStorage.getItem(DIRECTION_KEY) === '1');
+} catch (_) { /* private mode: shut */ }
+
+/** The head: how many things the line names, and the switch that shows them.
+ *  A count and not a reason, so it adds no wording of its own to the leaf's.
+ *  Only when there are items: the note that says there are none is one line
+ *  already, and a head over it would say the same thing twice. */
+function directionToggle(count) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'board-direction-toggle';
+  btn.textContent = `${count} ${count === 1 ? 'thing needs' : 'things need'} you`;
+  btn.setAttribute('aria-expanded', String(document.body.classList.contains('direction-open')));
+  btn.addEventListener('click', () => {
+    const open = document.body.classList.toggle('direction-open');
+    btn.setAttribute('aria-expanded', String(open));
+    try {
+      if (open) localStorage.setItem(DIRECTION_KEY, '1');
+      else localStorage.removeItem(DIRECTION_KEY);
+    } catch (_) { /* private mode: not remembered */ }
+  });
+  return btn;
+}
+
 /** The line, painted into its own static slot above `#board`.
  *
  *  Its own slot and not a child of `#board`: the board is a grid of three card
@@ -100,6 +131,7 @@ export function renderDirectionLine() {
   line.setAttribute('role', 'group');
   line.setAttribute('aria-label', 'What the board says to do next');
 
+  if (items.length) line.append(directionToggle(items.length));
   for (const item of items) line.append(directionItem(item));
 
   // Exactly one of the two is ever painted: `note` is '' unless no rule found

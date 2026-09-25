@@ -403,6 +403,13 @@ export function renderFilterChips() {
   // guard renderCatRail() applies — the tabs paint the category filter and
   // this row must not be the one place a dead id survives.
   if (filters.category && !catById(filters.category)) filters.category = '';
+  // The phone's Filters toggle names the life area, because the tabs that
+  // would otherwise say so are what it hides. Every other filter is a chip,
+  // and the chips stay on screen when the toggle is shut.
+  const toggle = $('#board-tools-toggle');
+  if (toggle) {
+    toggle.textContent = filters.category ? `Filters · ${catById(filters.category).label}` : 'Filters';
+  }
   slot.replaceChildren();
 
   const active = activeFilters();

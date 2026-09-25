@@ -327,6 +327,24 @@ displaySwitch('#toggle-hold-col', 'hide-hold-col', KEY_PREFIX + 'hideHoldCol', (
 displaySwitch('#toggle-columns', 'hide-columns', KEY_PREFIX + 'hideColumns',
   (hidden) => { filters.columnsOff = hidden; });
 
+// The phone's Filters toggle: opens and closes the lenses, the life areas and
+// + Filter (styles.css hides them while `tools-open` is off, and only on a
+// phone). Shut by default, because on a 390px screen they stood between the
+// reader and the first card. Remembered per device, like the switches above.
+const toolsToggle = $('#board-tools-toggle');
+const TOOLS_KEY = KEY_PREFIX + 'phoneToolsOpen';
+const setToolsOpen = (open) => {
+  document.body.classList.toggle('tools-open', open);
+  toolsToggle.setAttribute('aria-expanded', String(open));
+};
+setToolsOpen(localStorage.getItem(TOOLS_KEY) === '1');
+toolsToggle.addEventListener('click', () => {
+  const open = !document.body.classList.contains('tools-open');
+  if (open) localStorage.setItem(TOOLS_KEY, '1');
+  else localStorage.removeItem(TOOLS_KEY);
+  setToolsOpen(open);
+});
+
 // The Assistant's Chat menu closes the same two ways. Registered here, once,
 // rather than in renderChatActions: the rail is rebuilt on every render, and
 // a listener added there would be added again on each one.

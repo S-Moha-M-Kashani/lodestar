@@ -2289,12 +2289,9 @@ const STATIC = {
   // listed by hand rather than walked: a directory walk is how js/ earns its
   // whitelist, and four names do not need one.
   //
-  // Behind the session like every other static file, deliberately: the four
-  // public paths are the door and the liveness ping, and installing is done
-  // from the board itself, which is a page only a logged-in browser ever
-  // sees. Both links carry the session — iOS fetches `apple-touch-icon` as an
-  // ordinary subresource of the page, and the manifest link asks for it with
-  // `crossorigin="use-credentials"`.
+  // The manifest is behind the session (its link says
+  // `crossorigin="use-credentials"`); the three icons are not — see
+  // PUBLIC_ICONS: iOS fetches `apple-touch-icon` without the cookie.
   '/manifest.webmanifest': ['manifest.webmanifest', 'application/manifest+json; charset=utf-8'],
   '/icons/lodestar-180.png': ['icons/lodestar-180.png', 'image/png'],
   '/icons/lodestar-192.png': ['icons/lodestar-192.png', 'image/png'],
@@ -2472,6 +2469,12 @@ let activePort = PORT;
 // is behind the session.
 const LOGIN_PAGE = '/login';
 const PUBLIC_PATHS = new Set([LOGIN_PAGE, '/api/login', '/api/logout', '/api/health']);
+// The home-screen icons, and nothing else static. A phone fetches them without
+// the session cookie when it saves the board to its home screen, so behind the
+// session it got a 401 and drew a letter instead. They are the logo and hold
+// no board data; they fall through to the static whitelist below.
+const PUBLIC_ICONS = new Set(['/icons/lodestar-180.png', '/icons/lodestar-192.png',
+  '/icons/lodestar-512.png']);
 
 const boundary = () => ({ port: activePort, extra: ALLOWED_HOSTS });
 
@@ -2583,7 +2586,7 @@ async function handleRequest(req, res) {
       return sendText(res, 500, 'Login page missing');
     }
   }
-  if (!who) {
+  if (!who && !PUBLIC_ICONS.has(path)) {
     // A browser asking for the app gets the door; everything else gets a
     // status it can act on. Neither carries a byte of board, chat or
     // configuration, which is the whole requirement: the login boundary must
