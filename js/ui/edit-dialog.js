@@ -1,6 +1,7 @@
 import { cardLabel, catVal, columnAccepts, controlVal, deadlineVal, effortVal, iuVal, matchesFilters, placeCard, typeVal, uid } from '../core/cards.js';
 import { catColor, categories } from '../core/categories.js';
 import { COLUMNS, TYPES, TYPE_META } from '../core/constants.js';
+import { dueWords } from '../core/direction.js';
 import { blankDraft, draftFrom } from '../core/draft.js';
 import { HABIT_EVERY, habitCountVal, habitFreqVal, habitTimesVal, scheduleSentence } from '../core/habits.js';
 import { canHaveChildren, childrenOf } from '../core/nesting.js';
@@ -504,6 +505,73 @@ function paintForm(shown) {
   const done = $('#card-done-line');
   done.hidden = !shown.doneAt;
   done.textContent = shown.doneAt ? `✓ finished ${fmtDay(shown.doneAt)}` : '';
+  syncFolds(true);
+}
+
+// On a phone the dialog fits one screen: four rows show their value as one
+// line (`.prop-fold`) and open on a tap, and styles.css hides the controls of
+// a shut row. The line is read off the controls themselves, so it says what a
+// Save would write. A wide window never shows the line or folds a row.
+const optionText = (sel) => sel.selectedOptions[0]?.text || '';
+const FOLDS = [
+  ['#card-habit', () =>
+    `${$('#card-habit-count').value} × a ${optionText($('#card-habit-freq'))}`],
+  ['.compass-row', () =>
+    ['#card-importance', '#card-urgency', '#card-effort', '#card-control']
+      .map((id) => $(id)).filter((sel) => sel.value).map(optionText).join(' · ')],
+  ['#card-when', () =>
+    [$('#card-deadline').value && dueWords($('#card-deadline').value),
+      planWords(readPlan()) && `plan ${planWords(readPlan())}`]
+      .filter(Boolean).join(' · ') || 'No date'],
+  ['#card-tags-row', () => $('#card-tags').value.trim() || 'No tags'],
+].map(([sel, words]) => [$(sel), words]);
+
+// The width the phone rules in styles.css apply below.
+const narrow = () => matchMedia('(max-width: 640px)').matches;
+
+/** On a phone the title and the notes grow to fit what they hold, up to eight
+ *  lines of notes, so a short card leaves no blank lines and a long one hides
+ *  nothing. A wide window keeps the rows the markup gives them. */
+function fitWords() {
+  for (const el of [$('#card-title'), $('#card-notes')]) {
+    el.style.height = '';
+    if (!narrow()) continue;
+    el.style.height = '0';
+    const max = el.id === 'card-notes' ? 8 * 1.6 * 16 + 14 : Infinity;
+    el.style.height = `${Math.min(el.scrollHeight + 2, max)}px`;
+  }
+}
+for (const id of ['#card-title', '#card-notes']) $(id).addEventListener('input', fitWords);
+
+function setFold(row, open) {
+  row.classList.toggle('open', open);
+  row.querySelector('.prop-fold').setAttribute('aria-expanded', String(open));
+}
+
+/** Rewrite every fold's line; `shut` also closes them, which every open does.
+ *  The chosen chip of each picker is scrolled into view on the next frame,
+ *  after the dialog has a layout: a phone swipes those rows sideways. */
+function syncFolds(shut = false) {
+  for (const [row, words] of FOLDS) {
+    if (shut) setFold(row, false);
+    row.querySelector('.prop-fold').textContent = words();
+  }
+  if (shut) {
+    requestAnimationFrame(() => {
+      fitWords();
+      for (const on of form.querySelectorAll('.picker-options input:checked')) {
+        on.closest('label').scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      }
+    });
+  }
+}
+
+for (const [row] of FOLDS) {
+  row.querySelector('.prop-fold').addEventListener('click', () => {
+    setFold(row, !row.classList.contains('open'));
+  });
+  // `click` too: the plan calendar sets the plan by pressing, not typing.
+  for (const type of ['input', 'change', 'click']) row.addEventListener(type, () => syncFolds());
 }
 
 // `suggested` prefills the form with an Assistant suggestion instead of what
@@ -551,7 +619,11 @@ export function openDialog(cardId, suggested = null) {
   // a *queued task*, so it would run after the new card had been painted and
   // reset `draft`, `editingId` and `sourceId` out from under it.
   if (!dialog.open) dialog.showModal();
-  $('#card-title').focus();
+  // On a phone, focusing the title raises the keyboard over half the card a
+  // reader opened to read. A new card or a child still takes the caret: there
+  // the reason for opening is to write.
+  if (narrow()) document.activeElement?.blur();
+  else $('#card-title').focus();
 }
 
 /** Add a child to this card: the dialog re-opens on a draft that already names
@@ -714,6 +786,7 @@ function decideReview(kind) {
       && planConflict(readPlan(), deadlineVal($('#card-deadline').value))) {
     syncPlanFields();
     announce($('#card-plan-error').textContent);
+    setFold($('#card-when'), true);
     planYear.focus();
     return;
   }
@@ -798,6 +871,7 @@ form.addEventListener('submit', (e) => {
     // The plan, of the two: it is the field the message names, and the deadline
     // is a date somebody has already committed to. The message and the mark now
     // cover both, so either can be the one they reach for.
+    setFold($('#card-when'), true);
     planYear.focus();
     return;
   }

@@ -281,6 +281,12 @@
         </div>
       </div>
       <div class="toolbar">
+        <!-- Phone only (styles.css): opens and closes the lenses, the life
+             areas and + Filter, which otherwise stand between the reader and
+             the first card. Filters in force stay visible as chips while it is
+             shut, and the life area is named on the button itself. -->
+        <button type="button" id="board-tools-toggle" class="board-tools-toggle"
+                aria-expanded="false" aria-controls="lens-row cat-rail">Filters</button>
         <div class="toolbar-menu">
           <!-- The board's menu behind the same quiet gear the Assistant's
                settings use — one look, two contents, each on its own page. -->
@@ -586,6 +592,11 @@
             <div id="category-picker-options" class="picker-options prop-value"></div>
           </div>
 
+          <!-- On a phone (styles.css) the four rows carrying a .prop-fold show
+               their value as one line, and a tap on it opens the controls:
+               that is what fits a card on one screen. js/ui/edit-dialog.js
+               writes the line and shuts them on every open. A wide window
+               never shows the button and never folds. -->
           <!-- The cadence and its schedule, in the ledger beside the stamp that
                decides whether they apply at all. One row per repetition; the
                fields the period cannot use are disabled and visible, so the
@@ -593,6 +604,7 @@
           <div class="prop-row habit-fields" id="card-habit" role="group"
                aria-labelledby="prop-habit-label" hidden>
             <span class="prop-label" id="prop-habit-label">How often</span>
+            <button type="button" class="prop-fold" aria-expanded="false"></button>
             <div class="prop-value">
               <div class="prop-line">
                 <input id="card-habit-count" type="number" min="1" max="99" step="1"
@@ -628,6 +640,7 @@
           <div class="prop-row compass-row" role="group" aria-labelledby="prop-compass-label">
             <span class="prop-label" id="prop-compass-label"
                   title="Where the card stands. Importance and urgency place it on the Matrix; effort and control are rough calls and start at the middle.">Compass</span>
+            <button type="button" class="prop-fold" aria-expanded="false"></button>
             <div class="prop-value prop-line">
               <select id="card-importance" aria-label="Importance">
                 <option value="">importance —</option>
@@ -660,6 +673,7 @@
           <div class="prop-row when-fields" id="card-when" role="group"
                aria-labelledby="prop-when-label">
             <span class="prop-label" id="prop-when-label">When</span>
+            <button type="button" class="prop-fold" aria-expanded="false"></button>
             <div class="prop-value">
               <div class="prop-line">
                 <span class="prop-caption">due</span>
@@ -688,8 +702,9 @@
             </div>
           </div>
 
-          <label class="prop-row">
+          <label class="prop-row" id="card-tags-row">
             <span class="prop-label">Tags</span>
+            <button type="button" class="prop-fold" aria-expanded="false"></button>
             <span class="prop-value">
               <input id="card-tags" type="text" placeholder="comma separated">
             </span>

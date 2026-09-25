@@ -171,6 +171,11 @@ test('nothing private is served before login', async () => {
     const health = await rawFetch(s.base + '/api/health');
     assert.equal(health.status, 200);
     assert.deepEqual(await health.json(), { ok: true });
+    // The home-screen icon too: a phone saving the board fetches it with no
+    // cookie, and a 401 there leaves a letter where the logo should be.
+    const icon = await rawFetch(s.base + '/icons/lodestar-180.png');
+    assert.equal(icon.status, 200);
+    assert.equal(icon.headers.get('content-type'), 'image/png');
 
     // A mutation is refused before it can mutate: seed a card through an
     // authenticated session, then try to wipe the board without one.

@@ -1,7 +1,8 @@
 import { THEME_KEY } from '../core/keys.js';
 import { $ } from './dom.js';
 
-// The theme picker. Five themes, and the choice is remembered.
+// The theme picker. Five themes, and the choice is remembered. Day ('white')
+// is the default for a browser that has not chosen one, dark system or not.
 
 const THEMES = ['light', 'white', 'sepia', 'dark', 'star'];
 const themeSelect = $('#theme-select');
@@ -21,7 +22,7 @@ function paintStatusBar() {
 }
 
 function applyTheme(theme) {
-  if (!THEMES.includes(theme)) theme = 'light';
+  if (!THEMES.includes(theme)) theme = 'white';
   document.documentElement.dataset.theme = theme;
   themeSelect.value = theme;
   paintStatusBar();
@@ -34,4 +35,4 @@ themeSelect.addEventListener('change', () => {
 
 let savedTheme = null;
 try { savedTheme = localStorage.getItem(THEME_KEY); } catch (_) { /* private mode */ }
-applyTheme(savedTheme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
+applyTheme(savedTheme || 'white');
