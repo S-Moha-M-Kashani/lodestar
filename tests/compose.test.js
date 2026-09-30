@@ -500,7 +500,7 @@ test('both chroma services pin one exact image version, never latest', () => {
 // private life to a cafe. The address must therefore be held fixed on the
 // machine (System Settings -> Wi-Fi -> Details -> TCP/IP -> Using DHCP with
 // manual address), or the board stops starting at home too.
-const HOME_LAN = '192.168.0.194:';
+const HOME_LAN = '192.168.0.121:';
 
 // This is a configuration invariant.
 test('every published host port binds loopback or the one home address', () => {
