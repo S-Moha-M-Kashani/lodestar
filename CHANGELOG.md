@@ -10,6 +10,16 @@ Dates are the day the release point was built. Versions follow
 [semantic versioning](https://semver.org/) — a major number for a break, a
 minor for a capability, a patch for a fix.
 
+## [2.3.2] — 2026-10-20
+
+**Personal names are gone from two design records and a test.**
+
+A board name in the Postgres design record and in the merge test, and a sample
+board name in the CLI-backends record, carried the owner's first name. They read
+as neutral stand-ins now (`Shared`, `Personal`, `work`). Nothing in the product
+changed. Earlier release points still contain the old wording; only the current
+files are cleaned.
+
 ## [2.3.1] — 2026-10-20
 
 **The automatic test run on GitHub works again.**
@@ -625,6 +635,7 @@ back through, and the board travels as a JSON file.
 **The board exists.** Three columns you drag cards between, saved in the
 browser.
 
+[v2.3.2]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v2.3.1...v2.3.2
 [v2.3.1]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v2.3.0...v2.3.1
 [v2.3.0]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v2.2.0...v2.3.0
 [v2.2.0]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v2.1.0...v2.2.0
