@@ -14,27 +14,24 @@ still lose a card even with every individual tool behaving.
 | apply an edit without the user saving it    | `test_edit_suggestions.py` (a suggestion, not a write) |
 | write a habit history the user did not earn | `test_edit_suggestions.py` (no field reaches it) |
 | reach SQLite, or the board off its API     | **here** — one file opens one file, and it is not a board |
-| put a card on the board unconfirmed        | `test_board_tools.py` (proposal, not save)|
-| record a habit completion                  | `test_board_tools.py` (no ticking tool)   |
+| put a card on the board unconfirmed        | `test_widget2_write.py` (proposal, not save)|
+| record a habit completion                  | **here** — no ticking tool, and the prompt says so |
 | widen the confirmation gate                | `test_server.py` (PROPOSING/MUTATING sets)|
 | overrun the context window                 | `test_server.py` (413 past MAX_MESSAGES/CHARS)|
-| run forever                                | `test_agent.py` (step limit, sync + async)|
-| have planted text read as instruction      | `test_agent.py` (the fence)               |
+| run forever                                | `test_trace.py` (step limit)              |
+| have planted text read as instruction      | `test_widget2.py` (the fence)             |
 | …and be obeyed anyway                      | `evals/test_injection.py` (rate unmeasured)|
 | send the API key to a local model          | `test_llm.py`                             |
 | flood the assistant surface                | `tests/server.test.js` (429 + Retry-After)|
-| offer a link to an unsafe site              | `test_url_safety.py` (destination checked, result dropped) |
+| search the web or offer a link             | **here** — no such tool exists            |
 
 A withheld capability the user is never told about is indistinguishable from a
 broken one, so one row of this catalogue is about the *telling* rather than the
 withholding: **here** — the prompt names the delete limit and what to do instead.
 
-**Still not on this list:** nothing screens what the model *searches for*, and
-that is a choice rather than an omission. The check is on where a result leads
-(`safety.py`), because a keyword screen on the query would refuse this board's own
-legitimate questions — it holds a private life, and "unlawful eviction, what are
-my rights" is a question it exists to answer — while saying nothing about what
-comes back, which is where the harm is.
+**Still not on this list:** the agent cannot search the web, so there is no
+query to screen and no link to offer. The reputation checker (`safety.py`)
+remains a named backend for anyone who builds it; a turn never consults it.
 
 The distinction that decides what belongs here: these are **code-enforced**
 limits, true whatever the model decides, so they are asserted rather than
@@ -49,91 +46,59 @@ from __future__ import annotations
 
 import asyncio
 import re
-from types import SimpleNamespace
 from pathlib import Path
 
 import httpx
 import respx
+from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
 import lodestar_brain
 from lodestar_brain import server
-from lodestar_brain.agent import SYSTEM_PROMPT, LodestarAgent
+from lodestar_brain.board.client import BoardClient
 from lodestar_brain.config import Settings, load_settings
 from lodestar_brain.llm import FakeChat
-from lodestar_brain.tools.board import BoardClient, make_board_tools
+from lodestar_brain.widget2 import Widget2Agent
+from lodestar_brain.widget2.prompt import SYSTEM_PROMPT
+from lodestar_brain.widget2.tools import make_tools
 
 BOARD = 'http://board.test'
 
-# What create_app is allowed to hand the agent. Nothing here can delete a card,
-# write a habit completion, or reach the database. daily_recap reads the board
-# and the chat record and writes nothing.
-#
-# `remember_fact` is the one tool that writes anywhere, and the boundary is worth
-# drawing precisely: it writes a sentence into the agent's *own* store — the
-# checkpoint file, which holds threads and notes and no user record. It cannot
-# reach a card, the chat record, or SQLite through any other door, and every one
-# of its writes is a step the user sees, which is the same rule that keeps the
-# agent from ticking a habit. The durability promise is about board.db and
-# assistant.db and is untouched: losing the whole store costs the agent a note.
-CORE_TOOLS = {'list_cards', 'create_card', 'update_card', 'web_search',
-              'find_related', 'daily_recap', 'remember_fact'}
-# The one conditional tool: appended only when Chroma answers, since chat memory
-# is optional infrastructure.
-OPTIONAL_TOOLS = {'recall_chat'}
+# What the one agent holds. Read off `/health`, which reads the agent's own
+# tools, so a test that rebuilt the list would still pass if the service grew
+# another one. Chat memory does not add a tool: the agent cannot recall other
+# conversations.
+HELD = {'find_cards', 'create_card', 'update_card'}
 
 # Offline and keyless. 'fake' transcriber because the default would import mlx.
 SETTINGS = Settings(llm_provider='fake', embedder='fake', transcriber='fake')
 
 
-def _tool_names(settings, monkeypatch):
-    """The tools `create_app` really hands the agent.
-
-    Captured by standing in for LodestarAgent rather than rebuilt here: a test
-    that reconstructed the list would be asserting its own copy of the
-    composition and would still pass if create_app grew a seventh tool.
-    """
-    captured = {}
-
-    # Intercepted at the seam that now chooses the agent (`agents.make_agent`),
-    # not at one agent's constructor: what this test is about is the tool list
-    # `create_app` composes, and that list is handed to whichever agent the
-    # operator named.
-    def recorder(settings_, *, tools, max_steps, board):
-        captured['tools'] = tools
-        return SimpleNamespace(tools=tools)
-
-    monkeypatch.setattr(server, 'make_agent', recorder)
-    server.create_app(settings)
-    return {tool.name for tool in captured['tools']}
-
-
 # This is a configuration invariant: the agent's capabilities are an allocation,
 # and widening it must break a test rather than pass quietly.
-def test_the_agents_tool_surface_is_closed(monkeypatch):
+def test_the_agents_tool_surface_is_closed():
     """No prompt can invoke a capability that was never registered.
 
     This is the guardrail every "delete all my cards" phrasing meets, and the
-    only one that cannot be argued around: `create_agent` binds a fixed tool
-    list, so a tool absent from it is absent from the model's options entirely.
-    Asserted as an exact set, in both configurations, because a *new* tool is
-    exactly the change this has to catch — a subset check would wave it through.
+    only one that cannot be argued around: the agent binds a fixed tool list, so
+    a tool absent from it is absent from the model's options entirely. Asserted
+    as an exact set, with and without the chat index, because a *new* tool is
+    exactly the change this has to catch — a subset check would wave it through,
+    and the index must not smuggle a recall tool back in.
     """
-    without_memory = _tool_names(
-        Settings(**{**vars(SETTINGS), 'chroma_url': ''}), monkeypatch)
-    assert without_memory == CORE_TOOLS
-
-    with_memory = _tool_names(
-        Settings(**{**vars(SETTINGS), 'chroma_url': 'memory'}), monkeypatch)
-    assert with_memory == CORE_TOOLS | OPTIONAL_TOOLS, (
-        'recall_chat is the only tool Chroma may add')
+    for chroma in ('', 'memory'):
+        app = server.create_app(Settings(**{**vars(SETTINGS), 'chroma_url': chroma}))
+        body = TestClient(app).get('/health').json()
+        assert body['agent'] == 'widget2'
+        assert set(body['capabilities']) == HELD
 
     # Stated as intent, not just as an absence: these are the verbs a tool would
     # carry if someone added the capability this design deliberately withholds —
-    # destroying a card, or writing a completion the user did not perform.
+    # destroying a card, searching the web, or writing a completion the user did
+    # not perform.
     forbidden = ('delete', 'remove', 'purge', 'destroy', 'drop', 'wipe',
-                 'complete', 'tick', 'done')
-    assert not [name for name in with_memory
+                 'complete', 'tick', 'done', 'search', 'recall', 'remember')
+    assert not [name for name in HELD
                 if any(verb in name for verb in forbidden)]
 
 
@@ -198,9 +163,8 @@ def test_the_prompt_says_it_cannot_delete_and_what_to_do_instead():
     idea where the real delete lives.
 
     So the limit and the way out must travel *together*, in one breath. A prompt
-    that says "cannot delete" three paragraphs away from "move it to Done" leaves
-    the model free to pair the refusal with silence, which is the bug being
-    fixed. Asserted as one clause for exactly that reason.
+    that says "cannot delete" and never says where the person's own delete lives
+    leaves them stuck. Asserted as one clause for exactly that reason.
     """
     prompt = SYSTEM_PROMPT.lower()
     assert 'cannot delete' in prompt, 'the prompt must state the limit outright'
@@ -209,31 +173,10 @@ def test_the_prompt_says_it_cannot_delete_and_what_to_do_instead():
     # n characters would break on an unrelated extra word, which is a test
     # failing about its own arithmetic rather than about the guardrail.
     guidance = prompt[prompt.index('cannot delete'):].split('\n\n')[0]
-    # The three things a stuck user needs: what the assistant can do instead,
-    # where their own delete lives, and that reaching it is a card they open.
-    for alternative in ('done', 'trash', 'open the card'):
+    # Where their own delete lives, and that the assistant's job is to say so.
+    for alternative in ('trash', 'tell them where'):
         assert alternative in guidance, (
             f'the refusal must offer {alternative!r} in the same breath')
-
-
-# This is a unit test.
-def test_the_prompt_assigns_each_lookup_a_role_and_says_one_is_enough():
-    """The board is fetched once a turn (board/snapshot.py) and identical calls
-    are cached (middleware/cache.py) — the transport cannot be the fix for a
-    model that runs find_related → list_cards → find_related. The prompt is:
-    each lookup gets a role, and one lookup settles a question.
-
-    Read as one paragraph, for the same reason the delete limit above is read as
-    one: three claims that arrive in separate breaths leave the model free to
-    honour the roles and still run both lookups. The paragraph is found by its
-    own phrase rather than by index, with a default rather than a bare `next()`
-    — a StopIteration is a red that names nothing.
-    """
-    paragraph = next((p for p in SYSTEM_PROMPT.split('\n\n')
-                      if 'find_related is for meaning' in p), '')
-    assert paragraph, 'no paragraph in the prompt gives find_related a role'
-    assert 'list_cards is for enumeration' in paragraph
-    assert 'One lookup is enough' in paragraph
 
 
 def _card(id, title, column='inbox', **extra):
@@ -245,10 +188,6 @@ def _card(id, title, column='inbox', **extra):
 def _call(name, arguments):
     return AIMessage(content='', tool_calls=[
         {'name': name, 'args': arguments, 'id': f'{name}-0'}])
-
-
-def _tools(client):
-    return {tool.name: tool for tool in make_board_tools(client)}
 
 
 # This is an integration test: a whole agent turn over the real board tools.
@@ -271,9 +210,9 @@ def test_asking_the_agent_to_delete_a_card_gets_nowhere_harmlessly():
         'version': 1, 'cards': [_card('a', 'Renew the passport'),
                                 _card('b', 'Descale the boiler')]}))
     client = BoardClient(BOARD)
-    agent = LodestarAgent(
+    agent = Widget2Agent(
         settings=Settings(llm_provider='fake'),
-        tools=make_board_tools(client),
+        tools=make_tools(client),
         llm=FakeChat(script=[
             _call('delete_card', {'id': 'a'}),
             AIMessage(content='I have no way to delete a card. You can move it '

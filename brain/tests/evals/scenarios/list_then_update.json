@@ -19,9 +19,9 @@
     {
       "tool_calls": [
         {
-          "name": "list_cards",
+          "name": "find_cards",
           "arguments": {
-            "search": "offsite"
+            "keyword": "offsite"
           }
         }
       ]
@@ -43,7 +43,7 @@
   ],
   "expect": {
     "tools_called": [
-      "list_cards",
+      "find_cards",
       "update_card"
     ],
     "reply_contains": "suggested",

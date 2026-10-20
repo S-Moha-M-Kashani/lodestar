@@ -2,32 +2,26 @@
 
 `BRAIN_AGENT` names an implementation. It follows the idiom every other backend
 in this service follows: a named value, an unknown one raising at boot, and no
-`auto` mode. **Widget 2 is the default since 2026-09-10** — the migration's one
-reversible step, landed on its own so that undoing it undoes nothing else, and
-`BRAIN_AGENT=widget1` plus a restart is the whole of that undo.
+`auto` mode. **There is one agent.** Widget 2 is that agent, and it is the
+default. `widget1` is not a name this seam accepts: the previous agent was
+retired, and naming it fails the same way any other unknown value fails.
 
-**Its own module, beside `llm.py` and `safety.py`, and not inside either agent's
-package.** A selector living in `agent/` would die with the package it chooses
+**Its own module, beside `llm.py` and `safety.py`, and not inside the agent's
+package.** A selector living in the agent would die with a package it chooses
 from, and one living in `server.py` would be the single seam in this service
 whose choice sits in its caller rather than beside the thing being chosen.
 
-**Not a registry.** Two names, two branches, one raise. The one-entry
+**Not a registry.** One name, one branch, one raise. The one-entry
 agent-builder registry this project had was deliberately removed in August 2026,
-and a dict of factories to manage a two-agent overlap that ends with one of them
-deleted would be that mistake made again with a better excuse. When Widget 1
-goes, this file becomes one line or nothing at all.
+and a dict of factories for a single agent would be that mistake again.
 
 **Why an operator switch and never a UI control.** The model picker chooses an
 *engine*, which is a per-turn question the user owns. Which implementation is in
-service is an operator question for the length of a migration, and putting it in
-the browser would mean a frontend change in a ladder whose whole premise is that
-the frontend does not move.
+service is an operator question, and putting it in the browser would mean a
+frontend change. With one agent the switch only refuses a wrong name.
 """
 from __future__ import annotations
 
-from langchain_core.tools import BaseTool
-
-from .agent import LodestarAgent
 from .board.client import BoardClient
 from .config import Settings
 from .widget2 import Widget2Agent
@@ -35,29 +29,17 @@ from .widget2.tools import make_tools
 
 #: The names `BRAIN_AGENT` accepts. Named in the error below, so an operator who
 #: mistypes one is told what exists rather than left to read this file.
-AGENTS = ('widget1', 'widget2')
+AGENTS = ('widget2',)
 
 
-def make_agent(settings: Settings, *, tools: list[BaseTool],
-               max_steps: int, board: BoardClient):
+def make_agent(settings: Settings, *, max_steps: int, board: BoardClient):
     """Build the agent `settings.agent` names, or refuse to start.
 
-    **Each agent's capabilities are decided inside its own package, and that is
-    the point of the ladder rather than a detail of this function.** `tools` is
-    Widget 1's list, assembled in `server.py` across five factories; Widget 2's
-    is `make_tools(board)`, assembled in one place that can be read end to end.
-    Handing Widget 2 Widget 1's list would make its capability set a fact about
-    the composition root instead of a decision somebody took — which is exactly
-    how a capability arrives without a review.
-
-    So this function passes each what it takes: `board`, because Widget 2's
-    tools all reach the same board over the same client and need nothing else,
-    and `max_steps`, which both now spend — it means tool *rounds*, and it was
-    correctly refused while Widget 2 had no tools to spend it on.
+    The capability set is decided inside the agent's own package.
+    `make_tools(board)` is that set, assembled in one place that can be read
+    end to end. Building it here would make the capabilities a fact about the
+    composition root instead of a decision somebody took.
     """
-    if settings.agent == 'widget1':
-        return LodestarAgent(settings=settings, tools=tools,
-                             max_steps=max_steps)
     if settings.agent == 'widget2':
         return Widget2Agent(settings=settings, tools=make_tools(board),
                             max_steps=max_steps)

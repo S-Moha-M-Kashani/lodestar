@@ -1420,8 +1420,8 @@ test('a proposed plan survives storage and the confirmation gate', async () => {
   // proposal came back '' — through the database and onto the board. Asserted
   // at all three points, because each was a place the value was lost.
   //
-  // `planSrc: 'ai'` is what the tool really sends (tools/board.py sets it
-  // itself when the model names a plan), and it is the half that makes the
+  // `planSrc: 'ai'` is what the tool really sends (widget2/tools/write.py sets
+  // it when the model names a plan), and it is the half that makes the
   // plan survive at all: 'auto' is resolved back onto the deadline on the way
   // in *and* on the way out, so a row storing the plan without its provenance
   // would answer with the deadline anyway.

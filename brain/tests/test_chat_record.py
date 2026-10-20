@@ -42,7 +42,7 @@ from fastapi.testclient import TestClient
 from lodestar_brain.config import Settings
 from lodestar_brain.retrieval import ChatStore, LexicalHashEmbeddings, MEMORY_URL
 from lodestar_brain.server import ChatBody, create_app
-from lodestar_brain.tools.board import BoardClient
+from lodestar_brain.board.client import BoardClient
 
 BOARD = 'http://board.test'
 

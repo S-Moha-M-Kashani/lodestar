@@ -17,7 +17,7 @@ convention. And it does not ride along in the run config, which is what a
 checkpoint records: a session id in `configurable` is a session id in the
 thread's saved metadata, and this brain has no reason to persist one twice.
 
-This module imports nothing from the agent package.
+This module imports nothing from the agent that uses it.
 """
 from __future__ import annotations
 

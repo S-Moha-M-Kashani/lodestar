@@ -10,8 +10,8 @@ guardrail rather than a rule anybody here has to remember.
 **The honesty is in the descriptions, because the names cannot carry it.** The
 tools are called `create_card` and `update_card` for a mechanical reason: the
 board's integration is keyed on those two words. `server.PROPOSING_TOOLS`
-decides the `proposed` flag the browser reads to refresh its suggestion lists,
-and `middleware/cache.py` asserts its `NEVER_CACHED` is that same pair. A
+decides the `proposed` flag the browser reads to refresh its suggestion lists.
+A
 better word would cost a server change, a frontend change and a broken
 assertion. So each description says *propose* and *suggest*, and says plainly
 that the model must not claim the board changed.

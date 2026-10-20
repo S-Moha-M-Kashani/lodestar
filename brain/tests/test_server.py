@@ -14,25 +14,12 @@ from lodestar_brain.voice.fake import FAKE_TRANSCRIPT
 
 # This is an integration test.
 def test_health_says_which_agent_it_built_and_what_that_one_holds():
-    """Alive, plus the two facts a migration needs: which implementation is
-    answering, and what it can do.
+    """Alive, and which implementation is answering, and what it can do.
 
-    Both agents in one test, because the claim is a *comparison* — an operator
-    switching `BRAIN_AGENT` needs the tool list to change, and a `capabilities`
-    key answering the same thing either way would satisfy each half on its own.
-    It is read off the agent's own tools, so neither maintains a second
-    description of itself that could drift.
-
-    Asserted as **each holding something the other does not**, which is the
-    sharpest available form: `list_cards` is Widget 1's and was deliberately not
-    carried, `find_cards` is Widget 2's and was built rather than moved. A test
-    naming only tools they share would pass against a route reporting one
-    agent's list for both.
-
-    The *unnamed* half is Widget 2, which is the default since 2026-09-10, so
-    this route is asked what an operator who set nothing is actually served —
-    and Widget 1 is the one named explicitly, which is what reverting the flip
-    looks like from here.
+    Read off the agent's own tools, so it does not keep a second description
+    of itself that could drift. The retired name fails here, at boot, the same
+    way any unknown name does — a health check that answered for it would mean
+    the name still built an agent.
     """
     res = TestClient(create_app(Settings(llm_provider='fake', embedder='fake')))\
         .get('/health')
@@ -42,21 +29,16 @@ def test_health_says_which_agent_it_built_and_what_that_one_holds():
                           'capabilities': ['create_card', 'find_cards',
                                            'update_card']}
 
-    one = TestClient(create_app(Settings(llm_provider='fake', embedder='fake',
-                                         agent='widget1'))).get('/health')
-    assert one.json()['agent'] == 'widget1'
-    assert 'list_cards' in one.json()['capabilities']
-    assert 'find_cards' not in one.json()['capabilities']
+    with pytest.raises(ValueError, match="'widget2'"):
+        create_app(Settings(llm_provider='fake', embedder='fake',
+                            agent='widget1'))
 
 
-# Widget 1 by name, not by default (2026-09-10). These route tests assert its
-# own tool payloads — a `create_card` step whose result is a card dict, where
-# Widget 2's is rendered text — so the flip must not rewrite them, and a pin
-# written down is the list task 3.1 needs. The routes under Widget 2 are covered
-# by the parametrized cost test below and by `test_widget2.py`'s graph tests.
-def fake_app(agent='widget1'):
+# The default agent. These route tests run against the only one the service
+# builds. A `create_card` step's result is the rendered text the tool returns.
+def fake_app():
     return create_app(Settings(llm_provider='fake', embedder='fake',
-                               transcriber='fake', agent=agent,
+                               transcriber='fake',
                                board_api_url='http://board.test'))
 
 
@@ -165,11 +147,10 @@ def test_chat_add_proposes_a_card_without_mutating_the_board():
     assert step['tool'] == 'create_card'
     assert step['arguments'] == {'title': 'What is Leiden clustering?'}
     # `result` rides along with the name and the arguments: the Assistant shows
-    # what each tool answered, and 'pending' is how the user learns this card is
-    # a proposal rather than a board row. Asserted by key rather than whole-dict
-    # so that widening a tool's return is not a failing server test.
-    assert step['result']['id'] == 'n1'
-    assert step['result']['pending'] is True
+    # what each tool answered. The tool says the card is a proposal, in words,
+    # and names the id the board assigned.
+    assert 'n1' in step['result']
+    assert 'Proposed' in step['result']
 
 
 # This is a unit test.
@@ -192,14 +173,10 @@ def test_chat_echo_reports_neither_flag():
 
 
 # This is an integration test.
-@pytest.mark.parametrize('agent', ['widget1', 'widget2'])
-def test_a_turn_reports_what_it_cost_and_says_nothing_when_it_cannot(agent):
-    """`cost` rides alongside `usage`, on both chat routes and for either agent.
+def test_a_turn_reports_what_it_cost_and_says_nothing_when_it_cannot():
+    """`cost` rides alongside `usage`, on both chat routes.
 
-    Parameterised rather than copied: whichever agent answered, a turn reports
-    the same facts, because both build their result with the same readers and
-    the route prices whatever it is handed. A second copy of this test would
-    have let the two shapes drift apart while both stayed green.
+    One agent builds the result, and the route prices whatever it is handed.
 
 
     On the wire rather than computed in the browser: the model is chosen per
@@ -213,12 +190,12 @@ def test_a_turn_reports_what_it_cost_and_says_nothing_when_it_cannot(agent):
     unknown model or an unreachable price list reports None, and the Assistant
     then shows no figure at all.
     """
-    client = TestClient(fake_app(agent))
+    client = TestClient(fake_app())
     body = client.post('/agent/chat', json={
         'messages': [{'role': 'user', 'content': 'just talking'}]}).json()
     assert body['usage'], 'the fake backend reports usage; cost rides with it'
     assert body['cost'] == 0.0
-    # The same keys, in the same shape, from either agent. A tool-less turn's
+    # A turn that called nothing still reports an empty step list. A tool-less turn's
     # `steps` is empty — which is a report and not an absence.
     assert body['steps'] == [] and body['mutated'] is False
 
@@ -370,9 +347,8 @@ def test_a_model_that_drops_the_audio_is_reported_not_transcribed():
 # Docker container. The HTTP path lives in test_chat_memory_server.py.
 
 def memory_app(collection):
-    # Widget 1 by name, for the reason above `fake_app`.
     return create_app(Settings(llm_provider='fake', embedder='fake',
-                               transcriber='fake', agent='widget1',
+                               transcriber='fake',
                                board_api_url='http://board.test',
                                chroma_url='memory',
                                chat_collection=str(collection)))
@@ -553,7 +529,7 @@ def test_the_streamed_turn_reports_each_tool_then_agrees_with_the_buffered_one()
     assert kinds.count('done') == 1 and kinds[-1] == 'done'
     assert kinds.index('step') < kinds.index('done'), 'the step arrived too late to be progress'
     step = next(data for name, data in events if name == 'step')
-    assert step['tool'] == 'create_card' and step['result']['id'] == 'n1'
+    assert step['tool'] == 'create_card' and 'n1' in step['result']
 
     # The tool is announced when it is *requested*, not only when it answers.
     # A web search runs for seconds, and without this the slowest stretch of a
@@ -583,13 +559,13 @@ def test_a_stream_that_dies_says_so_instead_of_going_quiet(monkeypatch):
     status code left to fail with. Without an explicit event the browser just
     sees a short stream and sits on "Thinking…" forever — the exact hang this
     route was added to remove."""
-    from lodestar_brain.agent import LodestarAgent
+    from lodestar_brain.widget2 import Widget2Agent
 
     async def boom(self, *args, **kwargs):
         raise RuntimeError('model exploded')
         yield  # never reached; makes boom an async generator
 
-    monkeypatch.setattr(LodestarAgent, 'astream', boom)
+    monkeypatch.setattr(Widget2Agent, 'astream', boom)
     events = sse_events(TestClient(fake_app()),
                         {'messages': [{'role': 'user', 'content': 'hello'}]})
     assert events[-1][0] == 'error'
@@ -712,10 +688,10 @@ def test_reconfigure_swaps_settings_and_drops_the_graph_cache():
     on the wire, and nothing raises."""
     from dataclasses import replace
 
-    from lodestar_brain.agent.graph import LodestarAgent
+    from lodestar_brain.widget2 import Widget2Agent
 
-    agent = LodestarAgent(settings=Settings(llm_provider='fake',
-                                            embedder='fake'), tools=[])
+    agent = Widget2Agent(settings=Settings(llm_provider='fake',
+                                           embedder='fake'), tools=[])
     before = agent._graph(None, None)
     agent.reconfigure(replace(agent.settings, openrouter_api_key='sk-or-new'))
     assert agent.settings.openrouter_api_key == 'sk-or-new'

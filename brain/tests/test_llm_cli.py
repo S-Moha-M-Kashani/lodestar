@@ -23,7 +23,7 @@ import pytest
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
 
-from lodestar_brain.agent import LodestarAgent
+from lodestar_brain.widget2 import Widget2Agent
 from lodestar_brain.config import PROVIDER_MODELS, Settings
 from lodestar_brain.llm import make_chat_model
 
@@ -304,7 +304,7 @@ def test_a_cli_backed_agent_actually_runs_the_tool_it_asks_for(tmp_path, monkeyp
     answers = json.dumps({'type': 'result', 'usage': {}, 'result': 'done'})
     monkeypatch.setenv('BRAIN_CLAUDE_CLI_BIN',
                        _replies(tmp_path, 'claude', asks, answers))
-    agent = LodestarAgent(settings=Settings(llm_provider='claude-cli'),
+    agent = Widget2Agent(settings=Settings(llm_provider='claude-cli'),
                           tools=[echo], system_prompt='sys')
     result = agent.run([{'role': 'user', 'content': 'echo ping'}])
     assert ran == ['ping'], 'the tool the model asked for never ran'

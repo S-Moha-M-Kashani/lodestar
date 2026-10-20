@@ -16,26 +16,20 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.store.sqlite import AsyncSqliteStore
 from pydantic import BaseModel, Field
 
-from .agent import AgentResult, AgentStep
 from .agents import make_agent
-from .agent.trace import TurnTrace
-from .board import BoardClient, BoardSnapshot
+from .board import BoardClient
 from .cli_auth import CliLogin
 from .config import Settings, load_settings
-from .llm import make_chat_model, served_models
+from .llm import served_models
 from .middleware import configure_tracing
 from .pricing import model_prices, turn_cost
-from .safety import make_url_safety
+from .result import AgentResult, AgentStep
 from .retrieval.projection import (LayoutCache, card_fingerprint, layout_key,
                                    map_card_text, project, vector_model_id)
 from .retrieval import (CardIndex, ChatStore, coverage, expand_queries,
-                        gate_llm, make_embeddings, make_reranker)
+                        make_embeddings, make_reranker)
 from .topics import detect_drift
-from .tools.board import make_board_tools
-from .tools.memory import make_memory_tool
-from .tools.recap import make_recap_tool
-from .tools.retrieve import make_recall_tool, make_retrieve_tool
-from .tools.websearch import DdgsSearch, make_search_tool
+from .trace import TurnTrace
 from .voice import make_transcriber
 from .voice.base import TranscriptionError
 
@@ -200,25 +194,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     board = BoardClient(settings.board_api_url,
                         token=settings.board_api_token)
-    # One snapshot behind all three board-reading tools, which is what makes a
-    # turn that reaches for three of them fetch `/api/state` once. The routes
-    # below deliberately keep the bare client: they are not a turn, and nothing
-    # bounds how stale an answer of theirs would be allowed to get.
-    snapshot = BoardSnapshot(board)
     embeddings = make_embeddings(settings.embedder, settings,
                                  settings.embed_model)
-    # Built here and not inside the index, like the url-safety checker: an
-    # unknown BRAIN_RERANKER, or a hosted one with no key, must stop the boot
-    # rather than be discovered on somebody's first question.
+    # Built here and not inside the index: an unknown BRAIN_RERANKER, or a
+    # hosted one with no key, must stop the boot rather than be discovered on
+    # somebody's first question. The card index serves the /rag routes. The
+    # agent does not search it — that tool was dropped with Widget 1.
     index = CardIndex(embeddings, rerank=make_reranker(settings.reranker,
                                                        settings,
                                                        settings.rerank_model))
-    # One chat model serves the gate and the recap summary — the same model
-    # that answers, so neither needs a model of its own. `gate_llm` is where
-    # BRAIN_GRADER is validated: an unknown value raises at boot rather than
-    # leaving the gate quietly switched off.
-    chat_model = make_chat_model(settings)
-    grader = gate_llm(settings.grader, chat_model)
     memory = None
     if settings.chroma_url:
         try:
@@ -226,34 +210,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                collection=settings.chat_collection,
                                database=settings.chroma_database)
         except Exception as exc:
-            # Chroma is optional infrastructure: the agent, board tools, web
-            # search and card retrieval all work without it. Taking the whole
-            # brain down because a container is stopped would be the worse
+            # Chroma is optional infrastructure: the agent and the /rag routes
+            # that do not read the chat index all work without it. Taking the
+            # whole brain down because a container is stopped would be the worse
             # failure — so log loudly and serve on with recall unavailable.
             memory = None
             logging.getLogger(__name__).warning(
                 'chat memory disabled: Chroma at %s is unreachable (%s)',
                 settings.chroma_url, exc)
-    tools = [*make_board_tools(snapshot),
-             # Built here, not inside the tool: an unconfigured checker must stop
-             # the boot, not be discovered on the first search.
-             make_search_tool(DdgsSearch(),
-                              safety=make_url_safety(settings.url_safety, settings)),
-             # find_related is the agent's one search over everything the user
-             # has: the board, and — when Chroma is up — the chat record too.
-             make_retrieve_tool(index, snapshot, llm=grader,
-                                threshold=settings.grade_threshold,
-                                memory=memory),
-             # daily_recap answers "what were my concerns?" from the records —
-             # a missing Chroma costs it the chunk count, never the recap.
-             make_recap_tool(snapshot, store=memory, llm=chat_model),
-             # The agent's own notes across conversations. It needs no client:
-             # the store is attached to the graph by the lifespan and reaches the
-             # tool through ToolRuntime, so a brain with no durable state simply
-             # has a tool that says so.
-             make_memory_tool()]
-    if memory is not None:
-        tools.append(make_recall_tool(memory))
+
     async def sync_chat_index() -> None:
         """Rebuild what the derived Chroma index missed while it was down.
 
@@ -289,14 +254,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # Which implementation answers, by name. Built here rather than in the
     # lifespan for the reason every other seam is: an unrecognised BRAIN_AGENT
-    # has to stop the boot, and `create_app` is what runs before a port opens.
-    # The lifespan still hands it the durable state (`attach`), so both agents
-    # share one checkpointer and one long-term store.
-    # `board` and not `snapshot`: the snapshot is Widget 1's one-fetch-per-turn
-    # optimisation, keyed on a `turn_id` Widget 2 does not mint — it has one
-    # board-reading tool, so there is no second fetch to collapse.
-    agent = make_agent(settings, tools=tools,
-                       max_steps=settings.max_agent_steps, board=board)
+    # — including the retired name — has to stop the boot, and `create_app` is
+    # what runs before a port opens. The lifespan still hands it the durable
+    # state (`attach`). The agent's own tools are built inside the seam, from
+    # the board client: there is no second list composed here.
+    agent = make_agent(settings, max_steps=settings.max_agent_steps, board=board)
     transcriber = make_transcriber(settings)
 
     @asynccontextmanager
@@ -344,12 +306,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def health() -> dict:
         """Alive, and which agent is answering with what.
 
-        `agent` and `capabilities` are here because during the migration the
-        first question about a running brain is which implementation it is
-        serving and what that one holds — and an absent capability has to be
-        visible without reading the source. `capabilities` is read off the
-        agent's own tools, so neither agent has to maintain a second list of
-        itself, and an empty one is a real answer rather than a fault.
+        `agent` and `capabilities` are here so a running brain says which
+        implementation it is serving and what that one holds — an absent
+        capability has to be visible without reading the source. `capabilities`
+        is read off the agent's own tools, so it does not maintain a second
+        list of itself, and an empty one is a real answer rather than a fault.
 
         Local-only, like the rest of this service: the board proxies
         `/api/agent/*` and `/api/rag/*` and never this route.
@@ -546,7 +507,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post('/agent/chat')
     async def chat(body: ChatBody, background: BackgroundTasks) -> dict:
         # Async because cycle 2's MCP tools are coroutine-only. Safe today: the
-        # sync tools (board HTTP, ddgs, Chroma) run in LangChain's thread
+        # sync tools (board HTTP, Chroma) run in LangChain's thread
         # executor, so nothing here blocks the event loop.
         _refuse_if_oversized(body.messages)
         trace = tracing_turn(body)
@@ -781,8 +742,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """Rebuild the card index. `rebuilt` is false when the board has not
         changed since the last one — the fingerprint, made observable.
 
-        Off the client and not the snapshot: this is not a turn, and an answer
-        about whether the board changed must not come from a copy of it."""
+        Off the client: this is not a turn, and an answer about whether the
+        board changed must not come from a copy of it."""
         cards = await board.list_cards()
         return {'cards': len(cards), 'rebuilt': index.build(cards)}
 

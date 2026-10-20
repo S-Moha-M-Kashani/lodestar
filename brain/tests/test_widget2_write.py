@@ -207,12 +207,10 @@ def test_two_tools_named_what_the_board_expects_and_no_third_door():
     completion. Absent rather than gated, which is how the durability promise
     is kept.
     """
-    from lodestar_brain.middleware.cache import NEVER_CACHED
     from lodestar_brain.server import PROPOSING_TOOLS
 
     tools = _tools()
-    assert set(tools) == {'create_card', 'update_card'} == PROPOSING_TOOLS \
-        == set(NEVER_CACHED)
+    assert set(tools) == {'create_card', 'update_card'} == PROPOSING_TOOLS
 
     assert 'propose' in tools['create_card'].description
     assert 'never that you added it' in tools['create_card'].description

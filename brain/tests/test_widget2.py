@@ -214,7 +214,6 @@ def test_the_prompt_names_what_it_holds_and_what_it_still_cannot_do():
     design, so a prompt that stopped saying so would be inviting the model to
     look for one.
     """
-    from lodestar_brain.agent import SYSTEM_PROMPT as WIDGET1_PROMPT
     from lodestar_brain.board.client import BoardClient
     from lodestar_brain.widget2 import SYSTEM_PROMPT
     from lodestar_brain.widget2.tools import make_tools
@@ -237,9 +236,7 @@ def test_the_prompt_names_what_it_holds_and_what_it_still_cannot_do():
     assert not any(name in SYSTEM_PROMPT for name in
                    ('find_related', 'list_cards', 'web_search', 'recall_chat',
                     'remember_fact', 'daily_recap')), (
-        'the prompt names a tool of Widget 1 that was never carried')
-    # And it must not simply be Widget 1's, which teaches eight tools by name.
-    assert SYSTEM_PROMPT != WIDGET1_PROMPT
+        'the prompt names a tool that was dropped and is not held')
 
 
 # This is a unit test: the prompt is the only place the user meets what this
@@ -274,38 +271,26 @@ def test_the_prompt_is_a_coach_and_knows_where_to_stop():
 
 
 # This is a unit test.
-def test_the_agent_seam_names_both_and_refuses_anything_else():
+def test_the_agent_seam_accepts_only_widget2():
     """No `auto`, no fallback: an unknown name is a boot error that says what
-    exists. A fallback here would serve a board the wrong agent in silence,
-    which is the one outcome a migration cannot tolerate."""
-    from langchain_core.tools import tool
-
+    exists. `widget1` is unknown — the previous agent was retired, and a name
+    that still built it would be a half-deletion."""
     from lodestar_brain.board.client import BoardClient
 
-    @tool
-    def probe(text: str) -> str:
-        """A tool, so the widget1 branch has one to be given."""
-        return text
-
     board = BoardClient('http://board.test')
-    one = make_agent(Settings(llm_provider='fake', agent='widget1'),
-                     tools=[probe], max_steps=3, board=board)
-    two = make_agent(Settings(llm_provider='fake', agent='widget2'),
-                     tools=[probe], max_steps=3, board=board)
+    agent = make_agent(Settings(llm_provider='fake', agent='widget2'),
+                       max_steps=3, board=board)
+    # The capability set is `widget2/tools/`, not a list handed in from the
+    # composition root. An empty list passed to the seam must not become the
+    # agent's tools.
+    assert {t.name for t in agent.tools} == {'find_cards', 'create_card',
+                                             'update_card'}
 
-    assert [t.name for t in one.tools] == ['probe']
-    # **Each agent's capabilities come from its own package**, which is the
-    # whole point of the ladder: the list `server.py` composes is Widget 1's,
-    # and handing it to Widget 2 would make Widget 2's capability set a fact
-    # about the composition root rather than a decision anybody took. So `probe`
-    # must not appear here, and what does appear is what `widget2/tools/` says.
-    assert 'probe' not in {t.name for t in two.tools}
-    assert {t.name for t in two.tools} == {'find_cards', 'create_card',
-                                           'update_card'}
-
-    with pytest.raises(ValueError, match="'widget1' or 'widget2'"):
-        make_agent(Settings(llm_provider='fake', agent='widget-2'),
-                   tools=[probe], max_steps=3, board=board)
+    for name in ('widget1', 'widget-2'):
+        with pytest.raises(ValueError, match="'widget2'") as raised:
+            make_agent(Settings(llm_provider='fake', agent=name),
+                       max_steps=3, board=board)
+        assert 'widget1' not in str(raised.value).split('expected', 1)[-1]
 
 
 # This is a configuration invariant: engine parity has to come from the shared
@@ -613,7 +598,7 @@ def test_a_tool_is_handed_the_session_it_is_serving():
     from langchain.tools import ToolRuntime
     from langchain_core.tools import tool
 
-    from lodestar_brain.agent import TurnContext
+    from lodestar_brain.state import TurnContext
 
     seen: list = []
 
