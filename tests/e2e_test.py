@@ -3589,24 +3589,24 @@ try:
         # The strip is built from what the turn *did*, so it is only complete once
         # the turn has settled. Waited for rather than read immediately: this
         # check used to pass on the count race above, reading the previous turn's
-        # already-finished strip instead of this one's.
-        folded = page.locator(".chat-meta").last
-        # Waited on the settled row itself — "Worked for", past tense — rather
-        # than on the word "tool" appearing somewhere in the strip. Those used
-        # to be the same wait by accident: the counts tail carried the tool
-        # count too, so "tool" showed up the moment a tool started running. It
-        # is named once now, by the row, so the substring only arrives when the
-        # turn settles, and a machine under load could reach the deadline with
-        # the answer already on screen. This says what the comment above always
-        # meant, and asserts the count in the strip separately.
-        settled_meta = wait_until(
-            lambda: folded.locator(".chat-meta-summary").count() == 1
+        # already-finished strip instead of this one's. `.chat-meta`.last is
+        # that previous strip until this reply paints its own, and wait_until
+        # reports its second sample — a true reading of the previous reply,
+        # then a false one when this reply's tools are still open, is a red
+        # line that took no time. The wait is on this reply, and the fold is
+        # in the same predicate, so it stays false until this strip has settled
+        # and stays true after that.
+        folded = page.locator(".chat-msg.assistant").nth(replies_before).locator(".chat-meta")
+        # "Worked for" is the settled row. "tool" is in that same row ("1 tool"
+        # / "2 tools"), so it arrives with the past tense, not when a tool starts.
+        settled_meta = wait_until(lambda: (
+            folded.locator(".chat-meta-summary").count() == 1
             and folded.locator(".chat-worked").count() == 1
-            and folded.locator(".chat-worked").inner_text().startswith("Worked for"))
-        settled_meta = settled_meta and "tool" in folded.locator(
-            ".chat-meta-summary").inner_text()
+            and folded.locator(".chat-worked").inner_text().startswith("Worked for")
+            and "tool" in folded.locator(".chat-meta-summary").inner_text()
+            and not folded.locator(".chat-steps").is_visible()))
         check("assistant: the evidence under a reply is folded until asked for",
-              settled_meta and not folded.locator(".chat-steps").is_visible())
+              settled_meta)
         open_meta(page)
         check("assistant: tool chip shown for create_card",
               "create_card" in page.inner_text(".chat-log"))
