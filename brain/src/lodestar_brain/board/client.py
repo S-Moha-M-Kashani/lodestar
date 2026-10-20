@@ -183,6 +183,23 @@ class BoardClient:
         return await self._put('/api/vectors', {'model': model, 'vectors': vectors},
                                self._scope(board_id))
 
+    async def list_note_summaries(self, model: str, board_id: str = '') -> list[dict]:
+        """One board's stored note readings, for one model."""
+        body = await self._get('/api/note-summaries',
+                               {**self._scope(board_id), 'model': model})
+        return body['summaries']
+
+    async def write_note_summaries(self, model: str, summaries: list[dict],
+                                   board_id: str = '') -> dict:
+        """Store shorter readings of long notes. Not a card write.
+
+        The board keeps the text it is given and refuses a card it does not
+        hold. This client still has no whole-board PUT.
+        """
+        return await self._put('/api/note-summaries',
+                               {'model': model, 'summaries': summaries},
+                               self._scope(board_id))
+
     async def create_edit(self, card_id: str, fields: dict) -> dict:
         """Offer a change to an existing card, for the user to review and save.
 

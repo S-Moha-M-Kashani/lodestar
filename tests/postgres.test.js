@@ -85,7 +85,7 @@ function postgresSchema() {
   return tables;
 }
 
-// The one table that is deliberately NOT mirrored, and why — a named set rather
+// The tables that are deliberately NOT mirrored, and why — a named set rather
 // than a silent gap, so the exception has to be argued for rather than
 // forgotten into existence.
 //
@@ -96,12 +96,17 @@ function postgresSchema() {
 // megabytes of Float32 blobs into a migration that could regenerate them by
 // opening the map once. The day something reads it that a person would miss,
 // this line is what has to be deleted first.
-const NOT_MIRRORED = new Set(['card_vectors']);
+//
+// `card_note_summaries` holds a shorter reading of long notes. It is derived,
+// and losing it costs time and no card, the same argument as `card_vectors`.
+const NOT_MIRRORED = new Set(['card_vectors', 'card_note_summaries']);
 
 // This is a configuration invariant.
 test('the Postgres schema mirrors every SQLite table, column for column', () => {
   assert.ok(existsSync(join(ROOT, SCHEMA_FILE)),
     `${SCHEMA_FILE} does not exist — there is nothing to apply to the server`);
+  assert.ok(read('server.js').includes('CREATE TABLE IF NOT EXISTS card_note_summaries'),
+    'the table is missing: server.js does not contain CREATE TABLE IF NOT EXISTS card_note_summaries');
   const sqlite = sqliteSchema();
   const pg = postgresSchema();
   for (const [table, cols] of sqlite) {

@@ -598,6 +598,23 @@ db.exec(`
   );
 `);
 
+// A shorter reading of long notes. Its own table, keyed the same way as
+// `card_vectors`: one reading per card per model, with a fingerprint of the
+// notes it was made from. Not a column on `cards` — `readBoard` is `SELECT *`,
+// and a reading is derived data. Outside `rev`, outside the JSON export,
+// outside the Postgres mirror. Losing the table costs time and no card.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS card_note_summaries (
+    card_id     TEXT    NOT NULL,
+    board_id    TEXT    NOT NULL,
+    model       TEXT    NOT NULL,
+    fingerprint TEXT    NOT NULL,
+    summary     TEXT    NOT NULL,
+    updated_at  INTEGER NOT NULL,
+    PRIMARY KEY (card_id, model)
+  );
+`);
+
 // An edit the Assistant wants is a SUGGESTION, and it lives here rather than in
 // `cards`. A pending row in `cards` would be a card — it would need a title, a
 // ledger number, a place in Trash when discarded, and `readBoard` would have to
@@ -881,6 +898,7 @@ function purgeBoard(id) {
     // in purgeCard: this is the other place a card is really destroyed, and a
     // row keyed to a card id nothing will look up again is an orphan.
     db.prepare('DELETE FROM card_vectors WHERE board_id = ?').run(id);
+    db.prepare('DELETE FROM card_note_summaries WHERE board_id = ?').run(id);
     cards = db.prepare('DELETE FROM cards WHERE board_id = ?').run(id).changes;
     db.prepare('DELETE FROM categories WHERE board_id = ?').run(id);
     db.prepare('DELETE FROM boards WHERE id = ?').run(id);
@@ -1942,7 +1960,12 @@ function purgeCard(id) {
   try {
     const gone = db.prepare('DELETE FROM cards WHERE id = ? AND deleted_at IS NOT NULL')
       .run(id).changes > 0;
-    if (gone) db.prepare('DELETE FROM card_vectors WHERE card_id = ?').run(id);
+    if (gone) {
+      db.prepare('DELETE FROM card_vectors WHERE card_id = ?').run(id);
+      // The Trash keeps the reading, the same way it keeps the vector. Only
+      // the permanent delete takes it, inside this same transaction.
+      db.prepare('DELETE FROM card_note_summaries WHERE card_id = ?').run(id);
+    }
     db.exec('COMMIT');
     return gone;
   } catch (err) {
@@ -2020,6 +2043,61 @@ function writeVectors(boardId, model, incoming) {
       if (!live.has(cardId)) { refused.push(cardId); continue; }
       upsert.run(cardId, boardId, model, vec.length,
         typeof v.fingerprint === 'string' ? v.fingerprint : '', vecToBlob(vec), now);
+      written += 1;
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  return { written, refused };
+}
+
+/** One model's readings for one board's live cards. A card in the Trash is
+ *  absent here and still has its row, so restoring it shows the same reading. */
+function readNoteSummaries(boardId, model) {
+  const rows = db.prepare(`
+    SELECT s.card_id, s.fingerprint, s.summary
+      FROM card_note_summaries s
+      JOIN cards c ON c.id = s.card_id
+     WHERE s.board_id = ? AND s.model = ? AND c.board_id = ?
+       AND c.deleted_at IS NULL AND c.pending = 0
+     ORDER BY s.card_id`).all(boardId, model, boardId);
+  return rows.map((r) => ({
+    cardId: r.card_id, fingerprint: r.fingerprint, summary: r.summary,
+  }));
+}
+
+/** Store readings for cards this board holds, and name the ones it does not.
+ *  The server keeps the text it is given. How long the notes were, and whether
+ *  the reading is at most three sentences, is the producer's decision. */
+function writeNoteSummaries(boardId, model, incoming) {
+  const live = new Set(db.prepare(
+    'SELECT id FROM cards WHERE board_id = ? AND deleted_at IS NULL AND pending = 0')
+    .all(boardId).map((r) => r.id));
+  const now = Date.now();
+  const upsert = db.prepare(`
+    INSERT INTO card_note_summaries
+      (card_id, board_id, model, fingerprint, summary, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(card_id, model) DO UPDATE SET
+      board_id = excluded.board_id,
+      fingerprint = excluded.fingerprint,
+      summary = excluded.summary,
+      updated_at = excluded.updated_at`);
+  const refused = [];
+  let written = 0;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const row of incoming) {
+      const cardId = typeof row?.cardId === 'string' ? row.cardId : '';
+      const summary = typeof row?.summary === 'string' ? row.summary : null;
+      if (!cardId || summary === null || !live.has(cardId)) {
+        if (cardId) refused.push(cardId);
+        continue;
+      }
+      upsert.run(cardId, boardId, model,
+        typeof row.fingerprint === 'string' ? row.fingerprint : '', summary, now);
       written += 1;
     }
     db.exec('COMMIT');
@@ -2865,6 +2943,35 @@ async function handleRequest(req, res) {
         if (!named) return sendJson(res, 400, { error: 'Missing model' });
         if (!Array.isArray(body.vectors)) return sendJson(res, 400, { error: 'Missing vectors' });
         return sendJson(res, 200, { model: named, ...writeVectors(boardId, named, body.vectors) });
+      } catch (err) {
+        if (!(err instanceof SyntaxError) && !err.badRequest) throw err;
+        return sendJson(res, 400, { error: 'Invalid JSON: ' + err.message });
+      }
+    }
+    return sendJson(res, 405, { error: 'Method not allowed' });
+  }
+
+  // A shorter reading of long notes. The browser may read; only the brain writes.
+  // Same split as the vectors, and the same reason it is not under /api/rag/*:
+  // those paths proxy to the brain, and this table lives here. A write does not
+  // touch `cards`, so it does not move `rev`.
+  if (path === '/api/note-summaries') {
+    if (boardId === null) return noSuchBoard();
+    const model = (url.searchParams.get('model') || '').trim();
+    if (req.method === 'GET') {
+      if (!model) return sendJson(res, 400, { error: 'Missing model' });
+      return sendJson(res, 200, { summaries: readNoteSummaries(boardId, model) });
+    }
+    if (req.method === 'PUT') {
+      if (who !== 'service') return sendJson(res, 403, { error: 'Forbidden' });
+      try {
+        const body = JSON.parse(await readBody(req));
+        const named = (body?.model || '').trim();
+        if (!named) return sendJson(res, 400, { error: 'Missing model' });
+        if (!Array.isArray(body.summaries)) {
+          return sendJson(res, 400, { error: 'Missing summaries' });
+        }
+        return sendJson(res, 200, writeNoteSummaries(boardId, named, body.summaries));
       } catch (err) {
         if (!(err instanceof SyntaxError) && !err.badRequest) throw err;
         return sendJson(res, 400, { error: 'Invalid JSON: ' + err.message });
