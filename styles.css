@@ -3579,6 +3579,10 @@ kbd {
     scroll-snap-type: x mandatory;
     padding-bottom: 16px;
   }
+  /* The board view's own `overflow: hidden` is more specific than `.board`
+     above and froze the carousel: columns past the first were clipped with no
+     way to swipe to them. Sideways it scrolls; downwards each .cards does. */
+  body[data-view="board"] .board { overflow-x: auto; overflow-y: hidden; }
   .column {
     flex: 0 0 285px;
     scroll-snap-align: start;
@@ -5610,6 +5614,14 @@ button.chat-source-card {
    afford to make taller. js/ui/render.js scrolls the pressed view tab into
    view, so the strip never opens showing a tab nobody is on.
 --------------------------------------------------------------------------- */
+/* Three controls that exist only on a phone, where the block below shows them:
+   the header's Filters toggle, the summary line's head, and the one-line value
+   of a folded row in the card dialog. A wide window has the room to show what
+   they fold, so it never draws them. */
+.board-tools-toggle,
+.board-direction-toggle,
+.prop-fold { display: none; }
+
 @media (max-width: 640px) {
   /* ---- The window's own edges -------------------------------------------
      viewport-fit=cover (index.html) lets the page paint under the notch and
@@ -5671,6 +5683,10 @@ button.chat-source-card {
   }
   .brand h1 { white-space: nowrap; }
   .board-switch { min-width: 0; }
+  /* A long board name shrinks rather than sliding under the Filters toggle
+     beside it and taking its taps. */
+  .board-switch #board-select { max-width: 100%; text-overflow: ellipsis; }
+  .board-tools-toggle { flex: none; }
   /* Shrinkable, not fixed, and its own base width decides where it goes: a
      flex item wraps when its BASE width will not fit beside its neighbour. On
      the Board this holds one 40px gear and stays beside the name; on the
@@ -5975,16 +5991,153 @@ button.chat-source-card {
      showing: the peek is the only thing that says there are three. */
   .column { flex: 0 0 86vw; padding: 0 10px; }
   .board-rail { flex: 0 0 80vw; }
+  /* The page scrolls, not each column. The wide board is one window tall with
+     the header pinned, which on a phone left the cards a strip under a frozen
+     header. Here the body grows with the tallest column, so the header scrolls
+     away and the cards get the screen; the columns still swipe sideways. */
+  body[data-view="board"] { height: auto; overflow: visible; }
+  body[data-view="board"] .board { align-items: flex-start; }
+  body[data-view="board"] .cards,
+  body[data-view="board"] .board-rail { max-height: none; overflow-y: visible; }
   /* A column, the rail and the transcript each scroll themselves; without this
      the end of one hands the gesture to the page behind it, which on a phone
-     is a pull-to-refresh that throws the board away mid-read. */
+     is a pull-to-refresh that throws the board away mid-read. Vertical only:
+     containing both axes swallowed every sideways swipe that started on a
+     card, so the carousel of columns could not be moved by its own cards. */
   .cards,
   .board-rail,
-  .chat-log { overscroll-behavior: contain; }
+  .chat-log { overscroll-behavior-y: contain; }
 
   /* The dialog is measured against the window it is actually in, like every
      other full-height box here. */
   #card-form { max-height: 86dvh; }
+
+  /* ---- What stands above the cards, folded ------------------------------
+     The lenses, the life areas and + Filter sit behind one Filters toggle in
+     the header, and the summary line behind its own head. Both are shut by
+     default and remembered per device (js/ui/toolbar.js, js/ui/direction.js):
+     on a 390px screen the two stood between the reader and the first card.
+     The chips of filters in force are never folded, so a narrowed board says
+     so whichever state the toggle is in. */
+  .board-tools-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 40px;
+    padding: 0 12px;
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+    color: var(--ink);
+    background: var(--card);
+    border: 1px solid var(--card-line);
+    border-radius: var(--radius);
+  }
+  .board-tools-toggle::after { content: '▾'; color: var(--ink-soft); }
+  body.tools-open .board-tools-toggle { background: var(--paper); }
+  body.tools-open .board-tools-toggle::after { content: '▴'; }
+  body:not(.tools-open) #lens-row,
+  body:not(.tools-open) .rail-row > .cat-rail,
+  body:not(.tools-open) .rail-row > .filter-menu { display: none; }
+
+  .board-direction { padding: 0 0 0 10px; }
+  .board-direction-toggle {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    min-height: 40px;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    color: var(--ink);
+    text-align: left;
+    cursor: pointer;
+  }
+  .board-direction-toggle::after {
+    content: '▾';
+    margin-left: auto;
+    padding-right: 4px;
+    color: var(--ink-soft);
+  }
+  body.direction-open .board-direction-toggle::after { content: '▴'; }
+  body:not(.direction-open) .board-direction-item { display: none; }
+  .board-direction-note { padding-block: 10px; }
+  body.direction-open .board-direction { padding-bottom: 8px; }
+  .board-direction-item { min-height: 40px; align-items: center; }
+
+  /* ---- The card, compact -------------------------------------------------
+     Less paper round the words, and the actions + reaching into the card's
+     own padding: it keeps its 40px target without making the line 40px tall,
+     which was most of every card's height. */
+  .cards { gap: 8px; }
+  .card { padding: 7px 10px 5px; }
+  .card-line { margin-top: 3px; }
+  .card-line .card-menu { margin: -8px -8px -8px auto; }
+
+  /* ---- The card dialog, one screen ---------------------------------------
+     A sheet the size of the window rather than a box floating in it, with the
+     head and the actions fixed and less padding everywhere. Where, Type and
+     Category are one swiped line each; How often, Compass, When and Tags show
+     their value as one line and open on a tap (.prop-fold). What is left fits
+     a phone's screen with the actions on it. */
+  #card-dialog {
+    width: 100vw;
+    max-width: 100vw;
+    height: 100dvh;
+    max-height: 100dvh;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+  }
+  #card-form { height: 100dvh; max-height: 100dvh; }
+  .card-dialog-head { padding: calc(10px + env(safe-area-inset-top)) 14px 8px; }
+  .card-dialog-titles { gap: 8px; min-width: 0; }
+  #card-form h2 { flex: none; font-size: 15px; }
+  #card-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card-dialog-body { padding: 8px 14px 12px; gap: 8px; }
+  .card-words #card-title { font-size: 18px; }
+  /* Sized to their text by js/ui/edit-dialog.js (fitWords); these are the
+     floors, so empty notes still read as a place to write. */
+  .card-words #card-notes { min-height: calc(2 * 1.6em + 14px); }
+  #card-form .dialog-actions { padding: 8px 14px calc(8px + env(safe-area-inset-bottom)); }
+
+  #card-dialog .prop-row {
+    grid-template-columns: 76px minmax(0, 1fr);
+    gap: 4px 8px;
+    align-items: center;
+    padding: 3px 0;
+  }
+  #card-dialog .prop-label { padding-top: 0; }
+  #card-dialog .picker-options {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    padding-block: 3px;
+  }
+  #card-dialog .picker-options::-webkit-scrollbar { display: none; }
+  #card-dialog .picker-options label { flex: 0 0 auto; }
+
+  .prop-fold {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-height: 40px;
+    padding: 0;
+    border: 0;
+    background: none;
+    font-family: var(--body);
+    font-size: 14px;
+    color: var(--ink);
+    text-align: left;
+    cursor: pointer;
+  }
+  .prop-fold::after { content: '▾'; margin-left: auto; color: var(--ink-soft); }
+  .prop-row.open > .prop-fold::after { content: '▴'; }
+  .prop-row:has(> .prop-fold) > .prop-value { grid-column: 1 / -1; }
+  .prop-row:has(> .prop-fold):not(.open) > .prop-value { display: none; }
 
   /* The Ask pill sits in the corner the home indicator crosses. */
   #assistant-launcher {

@@ -56,10 +56,14 @@ BARE_CARD = {
 
 # This is a unit test.
 def test_a_populated_card_at_both_levels():
-    """`line` carries the list's nine facts; `full` adds the block's own."""
+    """`line` carries the list's nine facts; `full` adds the block's own.
+
+    Both carry the id: `update_card` and `card_id` take nothing else, and a
+    list that named cards only by ledger number left the model unable to
+    suggest an edit to any card it had just found (regression, 2026-09-24)."""
     line = render_card(FULL_CARD, level='line', labels=LABELS, now=NOW)
     assert line == (
-        'C-042 “Plan a long weekend in the mountains” · task · Travel · '
+        'C-042 “Plan a long weekend in the mountains” (id id-1) · task · Travel · '
         'In Progress · important, urgent · due 2026-09-12 (in 4 days) · '
         'plan 2027-03 · tags: mountains, autumn · 3 child cards')
     # One card per line, or a list of eighty is a wall of text.
@@ -67,7 +71,7 @@ def test_a_populated_card_at_both_levels():
 
     block = render_card(FULL_CARD, level='full', labels=LABELS, now=NOW)
     assert block == '\n'.join([
-        'C-042 “Plan a long weekend in the mountains”',
+        'C-042 “Plan a long weekend in the mountains” (id id-1)',
         'type: task',
         'life area: Travel',
         'status: In Progress',
@@ -97,7 +101,7 @@ def test_a_nearly_empty_card_reads_every_absence_as_an_absence():
     eventually report a card as due in 1970."""
     line = render_card(BARE_CARD, level='line', labels=LABELS, now=NOW)
     assert line == (
-        '(no ledger number yet) “Call the dentist” · question · uncategorised · '
+        '(no ledger number yet) “Call the dentist” (id id-2) · question · uncategorised · '
         'Inbox · no priority set · no deadline · no plan · no tags')
     # `C-000` is the shape this guards: `cardLabel` would produce it for a
     # proposal, which is why `ensureNums` exists on the other side.

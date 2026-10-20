@@ -2093,8 +2093,8 @@ try:
         page.evaluate("() => localStorage.setItem('lodestar:theme', 'supernova')")
         page.reload()
         page.wait_for_selector(".card")
-        check("theme: an unknown stored theme falls back to Morning",
-              page.evaluate("document.documentElement.dataset.theme") == "light")
+        check("theme: an unknown stored theme falls back to Day",
+              page.evaluate("document.documentElement.dataset.theme") == "white")
         select_theme("white")
         page.reload()
         page.wait_for_selector(".card")
@@ -8827,6 +8827,25 @@ try:
         go_to_view(ph, "board")
         ph.wait_for_timeout(250)
         ph.screenshot(path=shot("board-phone.png"))
+        # A sideways swipe that starts on a card moves the columns. Two rules
+        # froze them: the board view's overflow:hidden outranked the carousel's
+        # overflow-x, and .cards contained overscroll on both axes. Wheel, not
+        # scrollBy: a script can scroll an overflow:hidden box, a finger cannot.
+        ph.evaluate("document.getElementById('board').style.scrollSnapType = 'none'")
+        card_box = ph.locator(".column .card").first.bounding_box()
+        ph.mouse.move(card_box["x"] + 40, card_box["y"] + 20)
+        ph.mouse.wheel(300, 0)
+        ph.wait_for_timeout(400)
+        swiped = ph.evaluate("document.getElementById('board').scrollLeft")
+        ph.evaluate("""() => { const b = document.getElementById('board');
+            b.style.scrollSnapType = ''; b.scrollLeft = 0; }""")
+        check(f"phone: swiping on a card moves the columns ({swiped}px)", swiped > 100)
+        # And down: the page scrolls rather than pinning the header over a
+        # strip of cards, so the body is neither clipped nor one window tall.
+        locked = ph.evaluate("""() => { const b = getComputedStyle(document.body);
+            return [b.overflowY, document.body.clientHeight, innerHeight]; }""")
+        check(f"phone: the board page scrolls down, header and all ({locked})",
+              locked[0] != "hidden")
         board_top = ph.evaluate(
             "() => Math.round(document.getElementById('board').getBoundingClientRect().top)")
         check(f"phone: the cards start inside the first screenful "
@@ -8855,7 +8874,10 @@ try:
             ("the When facet", ".filter-btn,"
                                '#filter-root .filter-facet[data-facet="range"]',
              "Escape,Escape"),
-            ("the card dialog", ".card", "Escape"),
+            # Opened row by row: on a phone the dialog shows these as one
+            # line each, and the controls a reading must reach are inside.
+            ("the card dialog", ".card,.compass-row .prop-fold,"
+                                "#card-when .prop-fold,#card-tags-row .prop-fold", "Escape"),
             # Not a panel but a view, and the only one holding a composer: the
             # model list beside Send was 11.5px and the mic and Send 33px.
             ("the Assistant", "#assistant-launcher,#assistant-expand", None),
@@ -8889,7 +8911,9 @@ try:
                     + ' .filter-facet, .filter-option, .filter-back,'
                     + ' .plot-proj-toggle button, .matrix-switch button,'
                     + ' .assistant-tools button, .composer-model,'
-                    + ' .chat-mic, .chat-send, .widget-btn';
+                    + ' .chat-mic, .chat-send, .widget-btn,'
+                    + ' #board-tools-toggle, .board-direction-toggle,'
+                    + ' .board-direction-item, .prop-fold';
           const out = [];
           for (const el of document.querySelectorAll(sel)) {
             const r = el.getBoundingClientRect();
@@ -8900,6 +8924,38 @@ try:
           }
           return out;
         }"""
+
+        # The phone folds what stands above the cards: the lenses, the life
+        # areas and + Filter behind one toggle, the summary line behind its
+        # head. Both shut by default and both open on a tap; the readings below
+        # are taken open, so every control they hide is measured too.
+        shut = ph.locator("#lens-row").is_visible() or ph.locator(".filter-btn").is_visible()
+        ph.click("#board-tools-toggle")
+        ph.wait_for_timeout(150)
+        check("phone: the Filters toggle folds the lenses, areas and + Filter",
+              not shut and ph.locator("#lens-row").is_visible()
+              and ph.locator(".filter-btn").is_visible())
+        head = ph.locator(".board-direction-toggle")
+        if head.count():
+            items_shut = ph.locator(".board-direction-item").first.is_visible()
+            head.click()
+            ph.wait_for_timeout(150)
+            check("phone: the summary line folds to its head and opens on a tap",
+                  not items_shut and ph.locator(".board-direction-item").first.is_visible())
+
+        # A card opened on a phone fits the screen: its words, the swiped
+        # pickers, a line per folded row and the actions, with nothing to
+        # scroll to. The first card of the Backlog, short notes or none.
+        ph.locator(".column .card").first.click()
+        ph.wait_for_timeout(300)
+        spare = ph.evaluate("""() => {
+          const b = document.querySelector('.card-dialog-body');
+          return [b.scrollHeight - b.clientHeight, document.activeElement.tagName];
+        }""")
+        ph.keyboard.press("Escape")
+        ph.wait_for_timeout(250)
+        check(f"phone: an opened card fits one screen and raises no keyboard ({spare})",
+              spare[0] <= 1 and spare[1] != "TEXTAREA")
 
         tiny_font, cramped, sideways_open = [], [], {}
         for name, opener, closer in SURFACES:

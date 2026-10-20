@@ -7,7 +7,7 @@ absent one reads as. That is why the reader was built after this module rather
 than beside it.
 
 **Two levels, one function.** `line` is one line for a list — the ledger
-number, the words, the type, the life area, the status, the priority, the dates,
+number, the words, the id, the type, the life area, the status, the priority, the dates,
 the tags and the child count. `full` is a block for one card, adding effort,
 control, both timestamps, the finished date, the cadence and the notes. One
 function with an argument, because two functions are two places for a wording
@@ -176,6 +176,10 @@ def render_card(card: dict, *, level: Level = 'line',
     """
     title = (card.get('title') or '').strip() or '(untitled)'
     head = f'{_ledger(card)} “{title}”'
+    # The id is what `update_card` and `card_id` take, and a ledger number is
+    # not one: a card named without it is a card the model cannot act on.
+    if card_id := card.get('id'):
+        head += f' (id {card_id})'
     status = COLUMN_LABELS.get(card.get('columnId') or '') or 'no status'
     due, tags, kids = _due(card, now), _tags(card), _children(card)
 

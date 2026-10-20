@@ -86,12 +86,15 @@ export const brainModels = { provider: '', verified: false, models: [], default:
                              cli: {} };
 
 /** The provider options to offer: the two API routes always, and a CLI backend
- *  only when the brain says it can serve it. The current pick is kept even when
+ *  only when the brain says it can serve it (Codex leads the list). The current pick is kept even when
  *  unavailable, so a saved choice still shows as selected while the probe is in
  *  flight rather than silently reading as something else. */
 function providerOptions() {
-  const offered = ['ollama', 'openrouter',
-                   ...CLI_PROVIDERS.filter((name) => brainModels.cli?.[name])];
+  const clis = CLI_PROVIDERS.filter((name) => brainModels.cli?.[name]);
+  // Codex first when this brain can run it: it is the default engine, with
+  // Ollama's fast local model as the second choice.
+  const offered = [...clis.filter((name) => name === 'codex-cli'), 'ollama',
+                   'openrouter', ...clis.filter((name) => name !== 'codex-cli')];
   return offered.includes(assistantModels.provider)
     ? offered : [...offered, assistantModels.provider];
 }
@@ -188,7 +191,9 @@ function pickerOptions(picker) {
   return picker.options;
 }
 const persistModels = () => {
-  try { localStorage.setItem(MODELS_KEY, JSON.stringify(assistantModels)); }
+  // `chosen` separates a provider somebody picked from one the probe adopted
+  // from the brain: only the first may outlive a change of the brain's default.
+  try { localStorage.setItem(MODELS_KEY, JSON.stringify({ ...assistantModels, chosen: savedTextProvider })); }
   catch { /* private mode — the pick still applies to this session */ }
 };
 let savedTextProvider = false;
@@ -201,7 +206,7 @@ try {
   // A CLI backend is remembered like any other. Whether the brain can still
   // serve it is a separate question, answered by the probe — not here, where
   // nothing has been asked yet.
-  if (PROVIDER_LABELS[saved.provider]) {
+  if (saved.chosen && PROVIDER_LABELS[saved.provider]) {
     assistantModels.provider = saved.provider;
     savedTextProvider = true;
   }

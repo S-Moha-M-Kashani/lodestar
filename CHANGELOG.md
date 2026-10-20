@@ -10,6 +10,24 @@ Dates are the day the release point was built. Versions follow
 [semantic versioning](https://semver.org/) — a major number for a break, a
 minor for a capability, a patch for a fix.
 
+## [2.3.0] — 2026-10-20
+
+**The board fits a phone: filters, the summary line and a card's properties fold
+away until tapped, so a card opens on one screen.**
+
+On a 390px screen the lenses, the life areas, `+ Filter` and the summary line
+stood between the reader and the first card. A single **Filters** toggle now
+holds the lens row, the life-area tabs and `+ Filter` (the chips of filters in
+force always stay visible), the summary line folds to a count, and the board
+page scrolls instead of being one window tall. A card opens as a full-window
+sheet: Where, Type and Category are one swiped line each, and How often,
+Compass, When and Tags show their value on one line and open on a tap. Wide
+windows are untouched.
+
+The Assistant can now edit the cards it finds, because it is shown each card's
+id. The model picker lists Codex first and forgets an engine it chose on its
+own. The board is published on the laptop's new home address.
+
 ## [2.2.0] — 2026-09-24
 
 **The board has a fourth column, On hold, the Inbox is called Backlog, and
@@ -596,6 +614,8 @@ back through, and the board travels as a JSON file.
 **The board exists.** Three columns you drag cards between, saved in the
 browser.
 
+[v2.3.0]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v2.2.0...v2.3.0
+[v2.2.0]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v2.1.0...v2.2.0
 [v2.1.0]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v2.0.0...v2.1.0
 [v2.0.0]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.9.0...v2.0.0
 [v1.9.0]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v1.8.0...v1.9.0
