@@ -10,6 +10,17 @@ Dates are the day the release point was built. Versions follow
 [semantic versioning](https://semver.org/) — a major number for a break, a
 minor for a capability, a patch for a fix.
 
+## [2.3.1] — 2026-10-20
+
+**The automatic test run on GitHub works again.**
+
+The brain declares `requires-python = ">=3.13"` with no ceiling, so the test
+runner on GitHub resolved it to the newest Python it could download, 3.15, for
+which `onnxruntime` ships no build — the install stopped before one test ran.
+`brain/.python-version` now pins 3.13, the version the brain is developed and
+deployed on, beside the one the repository root already had. Nothing in the
+board or the Assistant changed.
+
 ## [2.3.0] — 2026-10-20
 
 **The board fits a phone: filters, the summary line and a card's properties fold
@@ -614,6 +625,7 @@ back through, and the board travels as a JSON file.
 **The board exists.** Three columns you drag cards between, saved in the
 browser.
 
+[v2.3.1]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v2.3.0...v2.3.1
 [v2.3.0]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v2.2.0...v2.3.0
 [v2.2.0]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v2.1.0...v2.2.0
 [v2.1.0]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v2.0.0...v2.1.0
