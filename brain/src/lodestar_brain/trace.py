@@ -24,8 +24,8 @@ fullest one, and the tape is that envelope followed by the answer it produced.
 `TurnTrace` keeps only that, which is also why it costs one list per turn rather
 than one per model call.
 
-This module imports nothing from the rest of the agent package, the `result.py`
-rule: `graph` reads it, and it reads no part of `graph`.
+This module imports nothing from the agent that uses it, the `result.py`
+rule: the graph reads it, and it reads no part of the graph.
 """
 from __future__ import annotations
 

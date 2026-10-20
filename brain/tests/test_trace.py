@@ -32,11 +32,10 @@ from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 
-from lodestar_brain.agent import LodestarAgent
-from lodestar_brain.agent.trace import TraceCollector, TurnTrace
 from lodestar_brain.config import Settings, load_settings
 from lodestar_brain.llm import FakeChat
 from lodestar_brain.server import create_app
+from lodestar_brain.trace import TraceCollector, TurnTrace
 from lodestar_brain.widget2 import Widget2Agent
 
 BOARD = 'http://board.test'
@@ -55,7 +54,7 @@ def call(name, args, i=0):
 
 
 def build(script, tools=(), **kw):
-    return LodestarAgent(settings=SETTINGS, tools=list(tools),
+    return Widget2Agent(settings=SETTINGS, tools=list(tools),
                          system_prompt='you are lodestar',
                          llm=FakeChat(script=script), **kw)
 
@@ -148,10 +147,10 @@ def test_the_agent_captures_the_envelope_it_really_sent():
             seen.append(list(messages))
             return super()._generate(messages, stop, run_manager, **kwargs)
 
-    agent = LodestarAgent(settings=SETTINGS, tools=[weather],
-                          system_prompt='you are lodestar',
-                          llm=Recording(script=[call('weather', {'city': 'bern'}),
-                                                AIMessage('clear skies')]))
+    agent = Widget2Agent(settings=SETTINGS, tools=[weather],
+                         system_prompt='you are lodestar',
+                         llm=Recording(script=[call('weather', {'city': 'bern'}),
+                                               AIMessage('clear skies')]))
     trace = TurnTrace(session_id='chat-5')
     result = agent.run([{'role': 'user', 'content': 'weather in bern?'}], trace=trace)
     record = trace.as_dict()
@@ -166,12 +165,10 @@ def test_the_agent_captures_the_envelope_it_really_sent():
     assert [(t.replace('human', 'human'), c) for t, c in handed] == shown
     assert record['entries'][-1]['content'] == 'clear skies'
 
-    # Whichever agent answered, and that is the reason this is one test rather
-    # than two: the trace is the review instrument for carrying a tool across,
-    # so an agent whose envelope is never filed cannot be reviewed at all. A
-    # tool-less turn's tape is shorter and has to be just as real — the failure
-    # this catches is a second agent that simply never wires the collector, and
-    # then files an empty record that renders as a turn nobody can explain.
+    # The same agent with no tools. A tool-less turn's tape is shorter and has
+    # to be just as real — the failure this catches is a graph that simply
+    # never wires the collector, and then files an empty record that renders as
+    # a turn nobody can explain.
     seen.clear()
     bare = Widget2Agent(settings=SETTINGS, system_prompt='you are lodestar',
                         llm=Recording(script=[AIMessage('no tools here')]))
@@ -184,7 +181,7 @@ def test_the_agent_captures_the_envelope_it_really_sent():
     assert roles(bare_record) == ['system', 'human', 'ai']
     assert [(m.type, m.content) for m in seen[-1]] == [
         (e['role'], e['content']) for e in bare_record['entries'][:-1]]
-    # The system prompt on the tape is the one that turn used, not Widget 1's.
+    # The system prompt on the tape is the one that turn used.
     assert bare_record['entries'][0]['content'] == 'you are lodestar'
     assert bare_record['entries'][-1]['content'] == 'no tools here'
     assert bare_record['status'] == 'completed'
@@ -192,8 +189,8 @@ def test_the_agent_captures_the_envelope_it_really_sent():
 
 # This is an integration test.
 def test_a_step_limited_turn_is_interrupted_rather_than_completed():
-    agent = LodestarAgent(settings=SETTINGS, tools=[weather],
-                          system_prompt='sys', max_steps=1,
+    agent = Widget2Agent(settings=SETTINGS, tools=[weather],
+                         system_prompt='sys', max_steps=1,
                           llm=FakeChat(script=[call('weather', {'city': 'a'}, 0),
                                                call('weather', {'city': 'b'}, 1),
                                                call('weather', {'city': 'c'}, 2)]))

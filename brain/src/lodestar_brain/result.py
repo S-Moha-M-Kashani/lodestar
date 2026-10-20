@@ -6,8 +6,7 @@ LangChain transcript is turned into one. They are pure functions over a message
 list, which is what lets the step-limit path report the steps and the spend of a
 run that never finished.
 
-This module imports nothing from the agent package: `graph` reads it, and it
-reads no part of `graph`.
+`widget2/graph.py` reads it, and it reads no part of that graph.
 """
 from __future__ import annotations
 
@@ -16,7 +15,7 @@ from dataclasses import dataclass, field
 
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 
-from ..middleware.untrusted import result_of
+from .middleware.untrusted import result_of
 
 STEP_LIMIT_REPLY = 'I hit my step limit before finishing — try a smaller request.'
 

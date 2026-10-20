@@ -20,10 +20,11 @@ became a list nobody had read end to end.
   delete one and merely happened to be gated would put that promise in a
   policy; not having the tool puts it in the shape of the surface.
 - **No habit completion.** A record a model can write into is not a record.
-- **None of Widget 1's other five** — `find_related`, `recall_chat`,
-  `web_search`, `remember_fact`, `daily_recap`. The owner saw all eight and
-  took none: *"I dont want any of the tools of widget 1 for now."* "For now" is
-  his word, so this is a deferral, and Widget 1 keeps every one of them.
+- **None of the five that were not rebuilt** — `find_related`, `recall_chat`,
+  `web_search`, `remember_fact`, `daily_recap`. The owner saw Widget 1's eight
+  and took none of those five: *"I dont want any of the tools of widget 1 for
+  now."* "For now" is his word, and the absence is a recorded drop. The package
+  that held them is gone; they are not waiting behind a flag.
 
 **Both writers wait for him.** `create_card` files a proposal that is invisible
 until he accepts it; `update_card` files a suggestion that applies only when he

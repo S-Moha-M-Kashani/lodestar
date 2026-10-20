@@ -1,17 +1,14 @@
-"""The board, as the brain sees it: one HTTP client and one per-turn view.
+"""The board, as the brain sees it: one HTTP client, and which board a call is for.
 
 | Module | Job |
 | --- | --- |
 | `client.py` | `BoardClient` — the Node board API, with no way to write a card |
-| `snapshot.py` | `BoardSnapshot` — one `/api/state` fetch per turn, shared |
+| `snapshot.py` | `board_of` — which board a tool call is scoped to |
 
-**The direction is one way.** `snapshot` reads `client`; `client` knows nothing
-about turns, and nothing here imports the tools that use either. `tools/board.py`
-keeps `make_board_tools` and imports `BoardClient` from here, so
-`from lodestar_brain.tools.board import BoardClient` still resolves exactly as it
-did — the name moved house, it did not change.
+**The direction is one way.** `snapshot` reads nothing from `client`. Nothing
+here imports the tools that use either.
 """
 from .client import BoardClient
-from .snapshot import BoardSnapshot, board_of, turn_of
+from .snapshot import board_of
 
-__all__ = ['BoardClient', 'BoardSnapshot', 'board_of', 'turn_of']
+__all__ = ['BoardClient', 'board_of']

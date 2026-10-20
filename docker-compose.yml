@@ -142,13 +142,12 @@ services:
       # BRAIN_LLM=ollama reaches the daemon on the host, so the composed brain is
       # local-first like the native one.
       # tests/compose.test.js fails if either pin goes missing.
-      # Which agent answers a turn. Widget 2 is the default here as it is in
-      # the code — the same flip, so a composed stack and a native one cannot
-      # disagree about who answers — and `BRAIN_AGENT=widget1` in .env or the
-      # shell puts the incumbent back. An unknown name refuses to boot rather
-      # than falling back. It has to be passed through explicitly or the seam
-      # is unreachable in the one deployment that is actually used, which is a
-      # switch that exists only for people running the service by hand.
+      # Which agent answers a turn. Widget 2 is the only agent, and the default
+      # here as it is in the code, so a composed stack and a native one cannot
+      # disagree about who answers. Any other name, including the retired one,
+      # refuses to boot rather than falling back. It has to be passed through
+      # explicitly or the seam is unreachable in the one deployment that is
+      # actually used.
       BRAIN_AGENT: ${BRAIN_AGENT:-widget2}
       BRAIN_EMBEDDER: ${BRAIN_EMBEDDER:-sentence-transformers}
       BRAIN_TRANSCRIBER: ${BRAIN_TRANSCRIBER:-openrouter}
@@ -161,11 +160,9 @@ services:
       # shared with a native brain through the published host port. Set
       # BRAIN_CHROMA_URL=memory to run without it (memory is then per-boot).
       BRAIN_CHROMA_URL: ${BRAIN_CHROMA_URL:-http://chroma:8000}
-      # Where a search result leads is checked before the model may cite it, and
-      # the real backend refuses to boot without a key on purpose. Pinning 'off'
-      # here keeps `docker compose up --build` working out of the box for someone
-      # who has no Safe Browsing key; set GOOGLE_SAFE_BROWSING_KEY and
-      # BRAIN_URL_SAFETY=google-safe-browsing to turn the check on.
+      # The agent does not search the web, so this checker is not consulted at
+      # boot. Pinned off so a composed stack does not look as if it were about
+      # to require a Safe Browsing key.
       BRAIN_URL_SAFETY: ${BRAIN_URL_SAFETY:-off}
       GOOGLE_SAFE_BROWSING_KEY: ${GOOGLE_SAFE_BROWSING_KEY:-}
       # Tracing is the same shape of decision as the link check above: the *env*

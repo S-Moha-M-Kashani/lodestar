@@ -171,39 +171,38 @@ def test_the_checkpoint_file_is_real_from_the_environment_and_inert_in_code():
 
 
 # This is a configuration invariant: which agent answers is real in code as
-# well as from the environment, unlike url_safety or tracing. Which
-# implementation answered is the thing under comparison during the migration, so
-# a test or an eval must be able to name one and be given it.
-#
-# **Widget 2 is the default from both directions since 2026-09-10** — the
-# reversible step of the migration. Both directions are asserted because the
-# default is written twice (the field, and `load_settings`' own `env.get`), and
-# a flip that reached one of them would serve one agent to the service and the
-# other to every test building `Settings()` by hand. The third assert is the
-# revert: naming Widget 1 still gets Widget 1, which is the whole rollback.
+# well as from the environment, unlike url_safety or tracing. The default is
+# written twice (the field, and `load_settings`' own `env.get`), and a change
+# that reached one of them would serve one agent to the service and another to
+# every test building `Settings()` by hand.
 def test_the_agent_choice_defaults_to_widget_2_from_every_direction():
     assert load_settings(env={}).agent == 'widget2'
     assert Settings().agent == 'widget2'
-    assert load_settings(env={'BRAIN_AGENT': 'widget1'}).agent == 'widget1'
 
 
 # This is a configuration invariant: no `auto` and no fallback, the same rule
 # BRAIN_TRACING and BRAIN_URL_SAFETY follow. Refused where the seam is read
 # rather than where the value is parsed, because `create_app` is what runs
 # before a port opens — an unknown name must cost the boot, not the first
-# question somebody asks.
+# question somebody asks. `widget1` is an unknown name: the previous agent was
+# retired, and naming it has to fail the same way a typo does.
 def test_an_unknown_agent_name_is_refused_at_boot():
     from lodestar_brain.agents import make_agent
     from lodestar_brain.board.client import BoardClient
 
-    settings = load_settings(env={'BRAIN_AGENT': 'widget2-beta'})
-    with pytest.raises(ValueError) as raised:
-        make_agent(settings, tools=[], max_steps=1,
-                   board=BoardClient('http://board.test'))
-    # The value the operator typed *and* the names that exist: an error naming
-    # only one of the two leaves them guessing at the other.
-    assert 'widget2-beta' in str(raised.value)
-    assert "'widget1' or 'widget2'" in str(raised.value)
+    board = BoardClient('http://board.test')
+    for name in ('widget2-beta', 'widget1'):
+        settings = load_settings(env={'BRAIN_AGENT': name})
+        with pytest.raises(ValueError) as raised:
+            make_agent(settings, max_steps=1, board=board)
+        message = str(raised.value)
+        # The value the operator typed, and the one name that exists. The
+        # retired name must not be offered in the "expected" half, or the
+        # error would tell them to set it.
+        assert name in message
+        expected = message.split('expected', 1)[-1]
+        assert "'widget2'" in expected
+        assert 'widget1' not in expected
 
 
 # Real data and non-real data live in *different Chroma databases*, so all

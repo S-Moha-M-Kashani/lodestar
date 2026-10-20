@@ -20,7 +20,7 @@ from langchain_core.tools import tool
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.store.sqlite import AsyncSqliteStore
 
-from lodestar_brain.agent import LodestarAgent
+from lodestar_brain.widget2 import Widget2Agent
 from lodestar_brain.config import Settings
 from lodestar_brain.llm import FakeChat
 from lodestar_brain.server import create_app
@@ -81,7 +81,7 @@ def test_a_resent_transcript_is_not_appended_twice(tmp_path):
     """
     chat = RecordingChat(script=[AIMessage(content='answer one'),
                                  AIMessage(content='answer two')])
-    agent = LodestarAgent(settings=SETTINGS, tools=[lookup],
+    agent = Widget2Agent(settings=SETTINGS, tools=[lookup],
                           system_prompt='sys', llm=chat)
 
     async def run():
@@ -120,7 +120,7 @@ def test_the_second_turn_sees_what_the_browser_no_longer_carries(tmp_path):
     chat = RecordingChat(script=[call('lookup', {'text': 'wifi password'}),
                                  AIMessage(content='the wifi password is 42'),
                                  AIMessage(content='no, it has not changed')])
-    agent = LodestarAgent(settings=SETTINGS, tools=[lookup],
+    agent = Widget2Agent(settings=SETTINGS, tools=[lookup],
                           system_prompt='sys', llm=chat)
 
     async def run():
@@ -152,7 +152,7 @@ def test_an_unsessioned_turn_never_lands_in_a_named_chat(tmp_path):
     thread of whichever named chat it was mistaken for.
     """
     chat = RecordingChat(script=[AIMessage(content=str(i)) for i in range(4)])
-    agent = LodestarAgent(settings=SETTINGS, tools=[lookup],
+    agent = Widget2Agent(settings=SETTINGS, tools=[lookup],
                           system_prompt='sys', llm=chat)
 
     async def run():

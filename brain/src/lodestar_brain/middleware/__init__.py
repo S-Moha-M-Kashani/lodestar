@@ -2,19 +2,18 @@
 
 One place per rule, so a tool added next year cannot forget it. `untrusted`
 fences every tool result on its way back to the model and `errors` turns a
-raising tool into something the model can read; `cache` answers a repeated tool
-call once. Their order is load-bearing and is written where the graph is built,
-not here. `summarize` and `memory` touch the model call instead: what a long
-conversation costs, and what the agent remembers between conversations.
-`tracing` is the odd member: it is a boot-time composition-root call rather than
-an `AgentMiddleware`, and it lives here because it is the same kind of thing — a
+raising tool into something the model can read. Their order is load-bearing
+and is written where the graph is built, not here. `tracing` is the odd
+member: it is a boot-time composition-root call rather than an
+`AgentMiddleware`, and it lives here because it is the same kind of thing — a
 decision about the whole turn that belongs to no single tool.
+
+The result cache, the long-term memory injection and the summariser were
+Widget 1's. They were dropped with it (stage 3 recorded each reason) and are
+not imported here: an eager import would keep a deleted module alive.
 """
 from langchain.agents.middleware import AgentMiddleware
 
-from .cache import NEVER_CACHED, ToolResultCache
-from .memory import LongTermMemory, facts_namespace
-from .summarize import make_context_editor, make_summarizer
 from .tracing import configure_tracing
 from .untrusted import (BEGIN, END, PROMPT_RULE, UntrustedToolOutput, decode,
                         fence, result_of)
@@ -28,13 +27,11 @@ def count_hooks(middleware: list, hook: str) -> int:
     rather than hard-coding a number means a middleware added later is counted
     without anyone remembering to.
 
-    Here rather than in an agent, because it is a fact about middleware and not
-    about either agent — and because both agents need it for the same reason.
-    `recursion_limit` counts *nodes*, so a middleware with a state hook silently
-    shortens the tool budget: adding two of them once cut a `max_steps=2` run to
-    one tool call, which reads as the model having got worse. Each agent derives
-    its limit from the stack it actually installed, and a second copy of this
-    function is how the two would come to disagree about what a step costs.
+    Here rather than in the agent, because it is a fact about middleware and
+    not about the agent. `recursion_limit` counts *nodes*, so a middleware with
+    a state hook silently shortens the tool budget: adding two of them once cut
+    a `max_steps=2` run to one tool call, which reads as the model having got
+    worse. The agent derives its limit from the stack it actually installed.
     """
     return sum(1 for m in middleware
                if getattr(m.__class__, hook) is not getattr(AgentMiddleware, hook)
@@ -42,7 +39,5 @@ def count_hooks(middleware: list, hook: str) -> int:
                is not getattr(AgentMiddleware, f'a{hook}'))
 
 
-__all__ = ['BEGIN', 'END', 'NEVER_CACHED', 'PROMPT_RULE', 'LongTermMemory',
-           'ToolResultCache', 'UntrustedToolOutput', 'configure_tracing',
-           'count_hooks', 'decode', 'facts_namespace', 'fence',
-           'make_context_editor', 'make_summarizer', 'result_of']
+__all__ = ['BEGIN', 'END', 'PROMPT_RULE', 'UntrustedToolOutput',
+           'configure_tracing', 'count_hooks', 'decode', 'fence', 'result_of']

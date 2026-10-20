@@ -32,25 +32,6 @@ PROVIDER_MODELS = {'openrouter': 'openai/gpt-5-nano',
                    'claude-cli': 'sonnet',
                    'codex-cli': ''}
 
-# What a long conversation is allowed to cost, and in which order the two
-# defences fire. The argument for these four numbers is in
-# `middleware/summarize.py`; they live here because a threshold nobody can move
-# without editing code is a threshold nobody moves. Either trigger set to 0
-# switches its middleware off entirely.
-#
-# CLEAR_TOOLS_TOKENS is deliberately half of SUMMARY_TOKENS: dropping tool
-# output the model has already read back is cheap and reversible, and summarising
-# the conversation is neither, so the cheap one gets first refusal on the
-# request. It does not get first refusal on the *trigger* — the summariser counts
-# the thread, which the clearing never edits, so half is not a stay of execution.
-# Measured 2026-08-13 in tests/evals/test_context_budget.py; the values are still
-# a judgement call, and summarize.py says what would settle them.
-SUMMARY_TOKENS = 8_000
-SUMMARY_KEEP = 20
-CLEAR_TOOLS_TOKENS = 4_000
-CLEAR_TOOLS_KEEP = 3
-
-
 @dataclass(frozen=True)
 class Settings:
     openrouter_api_key: str = ''
@@ -166,7 +147,7 @@ class Settings:
     tracing: str = 'off'
     langsmith_api_key: str = ''
     # 'board' | 'off' — whether a turn's exact model envelope is filed with the
-    # board for the developer trace page (`agent/trace.py`). Off everywhere by
+    # board for the developer trace page (`trace.py`). Off everywhere by
     # default, including from the environment, and for a different reason from
     # `tracing` above: nothing leaves this machine either way, but a trace is the
     # system prompt and every tool result in one record, and two extra round
@@ -175,25 +156,14 @@ class Settings:
     # the board — capture and viewing are two switches because they are two
     # risks, each in the service that owns it.
     trace: str = 'off'
-    # 'widget1' | 'widget2' — which agent implementation answers a turn
-    # (`server.py`'s `build_agent`). Real in code as well as from the
-    # environment, unlike url_safety or tracing: which agent answered is the
-    # thing under comparison during the migration, so a test or an eval must be
-    # able to name one and get it.
+    # 'widget2' — the only agent. Real in code as well as from the environment,
+    # unlike url_safety or tracing, so a test can name it and get it. Any other
+    # value, including the retired name `widget1`, is refused at boot by
+    # `make_agent`. There is no `auto`.
     #
     # An operator switch and never a UI control: the picker chooses an *engine*,
-    # which is a per-turn question the user owns, whereas which implementation
-    # is in service is an operator question for the length of a migration. An
-    # unrecognised name raises at boot, and there is no `auto`.
-    #
-    # **`widget2` is the default since 2026-09-10, and that is the reversible
-    # step of the migration** — the one change with a before and after anybody
-    # can see, landed on its own so that undoing it undoes nothing else.
-    # `BRAIN_AGENT=widget1` puts the incumbent back with a restart, and it is
-    # still built, still tested and still holds five tools Widget 2 has not
-    # (parity.md, stage 4). Flipped rather than merely offered because a
-    # migration whose replacement nobody is actually served is a migration that
-    # never finds out what is missing.
+    # which is a per-turn question the user owns. Which implementation is in
+    # service is not.
     agent: str = 'widget2'
     # The agent's own working memory: LangGraph's checkpointer (one thread per
     # chat, so reopening a conversation resumes it) and its long-term store,
@@ -205,15 +175,6 @@ class Settings:
     # a script, and none of those may write into databases/real. ':memory:' is
     # per-process and disappears with it.
     checkpoint_db: str = ':memory:'
-    # Context budget. Real in code as well as from the environment — unlike
-    # tracing or the checkpoint file, these change what the *model* is sent, so a
-    # test or an eval that ran with different thresholds than the product would
-    # be measuring a different agent. `middleware/summarize.py` argues the
-    # numbers; 0 on either trigger switches that middleware off.
-    summary_tokens: int = SUMMARY_TOKENS
-    summary_keep: int = SUMMARY_KEEP
-    clear_tools_tokens: int = CLEAR_TOOLS_TOKENS
-    clear_tools_keep: int = CLEAR_TOOLS_KEEP
 
     def __post_init__(self):
         # An unknown provider gets the remote slug and is rejected by
@@ -307,10 +268,4 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
                               'databases/real/brain-checkpoints.db'),
         parakeet_model=env.get('BRAIN_PARAKEET_MODEL',
                                'mlx-community/parakeet-tdt-0.6b-v3'),
-        summary_tokens=int(env.get('BRAIN_SUMMARY_TOKENS', SUMMARY_TOKENS)),
-        summary_keep=int(env.get('BRAIN_SUMMARY_KEEP', SUMMARY_KEEP)),
-        clear_tools_tokens=int(env.get('BRAIN_CLEAR_TOOLS_TOKENS',
-                                       CLEAR_TOOLS_TOKENS)),
-        clear_tools_keep=int(env.get('BRAIN_CLEAR_TOOLS_KEEP',
-                                     CLEAR_TOOLS_KEEP)),
     )
