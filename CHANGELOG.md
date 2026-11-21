@@ -10,6 +10,20 @@ Dates are the day the release point was built. Versions follow
 [semantic versioning](https://semver.org/) — a major number for a break, a
 minor for a capability, a patch for a fix.
 
+## [2.4.0] — 2026-11-21
+
+**The Assistant answers through Claude by default.**
+
+The Docker setup now starts the Assistant on the Claude subscription instead of
+Codex, and the engine picker lists Claude first. Each engine now uses its own
+default model; before, one local model name was sent to every engine, and only
+Ollama could load it. Claude signs in with the token `claude setup-token`
+prints, passed in as `CLAUDE_CODE_OAUTH_TOKEN`.
+
+A card whose notes run past 600 characters can also keep a shorter reading
+beside them. The reading lives in its own table, so saving the board never
+changes it, and deleting the card for good takes the reading with it.
+
 ## [2.3.2] — 2026-10-20
 
 **Personal names are gone from two design records and a test.**
@@ -635,6 +649,7 @@ back through, and the board travels as a JSON file.
 **The board exists.** Three columns you drag cards between, saved in the
 browser.
 
+[v2.4.0]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v2.3.2...v2.4.0
 [v2.3.2]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v2.3.1...v2.3.2
 [v2.3.1]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v2.3.0...v2.3.1
 [v2.3.0]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v2.2.0...v2.3.0
