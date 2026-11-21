@@ -86,15 +86,15 @@ export const brainModels = { provider: '', verified: false, models: [], default:
                              cli: {} };
 
 /** The provider options to offer: the two API routes always, and a CLI backend
- *  only when the brain says it can serve it (Codex leads the list). The current pick is kept even when
+ *  only when the brain says it can serve it (Claude leads the list). The current pick is kept even when
  *  unavailable, so a saved choice still shows as selected while the probe is in
  *  flight rather than silently reading as something else. */
 function providerOptions() {
   const clis = CLI_PROVIDERS.filter((name) => brainModels.cli?.[name]);
-  // Codex first when this brain can run it: it is the default engine, with
+  // Claude first when this brain can run it: it is the default engine, with
   // Ollama's fast local model as the second choice.
-  const offered = [...clis.filter((name) => name === 'codex-cli'), 'ollama',
-                   'openrouter', ...clis.filter((name) => name !== 'codex-cli')];
+  const offered = [...clis.filter((name) => name === 'claude-cli'), 'ollama',
+                   'openrouter', ...clis.filter((name) => name !== 'claude-cli')];
   return offered.includes(assistantModels.provider)
     ? offered : [...offered, assistantModels.provider];
 }

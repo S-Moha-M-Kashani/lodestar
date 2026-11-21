@@ -4,6 +4,7 @@ import base64
 import binascii
 import json
 import logging
+import re
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -20,12 +21,13 @@ from .agents import make_agent
 from .board import BoardClient
 from .cli_auth import CliLogin
 from .config import Settings, load_settings
-from .llm import served_models
+from .llm import make_chat_model, served_models
 from .middleware import configure_tracing
 from .pricing import model_prices, turn_cost
 from .result import AgentResult, AgentStep
 from .retrieval.projection import (LayoutCache, card_fingerprint, layout_key,
-                                   map_card_text, project, vector_model_id)
+                                   map_card_text, project, text_hash,
+                                   vector_model_id)
 from .retrieval import (CardIndex, ChatStore, coverage, expand_queries,
                         make_embeddings, make_reranker)
 from .topics import detect_drift
@@ -60,6 +62,86 @@ PROPOSING_TOOLS = {'create_card', 'update_card'}
 # The user is told to start a new chat, and keeps the old one on screen.
 MAX_MESSAGES = 80
 MAX_CHARS = 120_000
+
+# Notes shorter than this are left as they are. Measured 2026-09-09 and again
+# 2026-10-20; the cut stayed 600. The producer is the only place that applies it.
+NOTE_SUMMARY_MIN = 600
+_SENTENCE_END = re.compile(r'[.!?]+')
+
+
+def _note_model_id(chat) -> str:
+    """Which namespace this reading belongs to. One string, stable for one chat."""
+    for attr in ('model_name', 'model'):
+        value = getattr(chat, attr, None)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return 'chat'
+
+
+def _reply_text(reply) -> str:
+    if isinstance(reply, str):
+        return reply
+    content = getattr(reply, 'content', None)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict):
+                parts.append(str(block.get('text') or ''))
+        return ''.join(parts)
+    return ''
+
+
+def _sentence_count(text: str) -> int:
+    return sum(1 for part in _SENTENCE_END.split(text) if part.strip())
+
+
+async def _ask(chat, prompt: str) -> str:
+    send = getattr(chat, 'ainvoke', None)
+    reply = await send(prompt) if send is not None else chat.invoke(prompt)
+    return _reply_text(reply)
+
+
+async def fill_note_summaries(board, chat, board_id: str = '') -> dict:
+    """Write a shorter reading for notes of at least 600 characters.
+
+    The chat model is the one the caller passes — the existing chat seam, not
+    a new one. A card under the cut is not sent. A reply of more than three
+    sentences is not stored. A stored fingerprint that still matches the notes
+    is not sent again. Notes on the cards are never written.
+    """
+    doc = await board.list_board(board_id)
+    cards = doc.get('cards') or []
+    model = _note_model_id(chat)
+    stored = {
+        row['cardId']: row.get('fingerprint') or ''
+        for row in await board.list_note_summaries(model, board_id)
+    }
+    fresh = []
+    for card in cards:
+        notes = card.get('notes') or ''
+        card_id = card.get('id')
+        if not card_id or not isinstance(notes, str) or len(notes) < NOTE_SUMMARY_MIN:
+            continue
+        fingerprint = text_hash(notes)
+        if stored.get(card_id) == fingerprint:
+            continue
+        text = await _ask(
+            chat,
+            'Summarize these notes in at most three sentences. '
+            f'Reply with only those sentences.\n\n{notes}',
+        )
+        if _sentence_count(text) > 3 or not text.strip():
+            continue
+        fresh.append({'cardId': card_id, 'fingerprint': fingerprint, 'summary': text})
+    written = 0
+    if fresh:
+        result = await board.write_note_summaries(model, fresh, board_id)
+        written = result.get('written', len(fresh))
+    return {'model': model, 'written': written}
 
 
 class ChatBody(BaseModel):
@@ -700,6 +782,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {'model': vector_model, 'embedded': written.get('written', 0),
                 'reused': len(stored) - len(todo) if len(stored) > len(todo) else 0,
                 'missing': written.get('refused', []), 'error': None}
+
+    @app.post('/rag/note-summaries')
+    async def fill_notes(board_id: str = Query('', alias='board')) -> dict:
+        """Produce shorter readings and write them through the board's API.
+
+        Not on the card-save path. The caller asks, the same way the map asks
+        for vectors. The model is the chat seam this process already has.
+        """
+        chat = make_chat_model(settings)
+        return await fill_note_summaries(board, chat, board_id)
 
     @app.post('/rag/projection')
     async def projection(body: ProjectionBody,

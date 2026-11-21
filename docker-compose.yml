@@ -99,19 +99,23 @@ services:
     environment:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
-      BRAIN_MODEL: ${BRAIN_MODEL:-4skl/gemma4-e2b-mtp}
-      # The composed brain answers through the Codex subscription by default
-      # (2026-09-17). It is the only backend here that needs neither an API key
-      # nor a model pulled onto the host: `codex login --device-auth` runs
-      # inside this container from the Assistant's settings drawer, and the
-      # login it earns lands in the volume below. Ollama is still one variable
-      # away (`BRAIN_LLM=ollama`) and still reaches the daemon on the host.
+      # Empty by default: each backend then answers with its own model
+      # (PROVIDER_MODELS in brain/src/lodestar_brain/config.py — sonnet for
+      # Claude, the gemma tag for Ollama). A slug here would be sent to every
+      # backend, and only one of them can load it.
+      BRAIN_MODEL: ${BRAIN_MODEL:-}
+      # The composed brain answers through the Claude subscription by default
+      # (2026-11-21, owner's decision; Codex was the default from 2026-09-17).
+      # It needs no API key and no model pulled onto the host, only the
+      # long-lived token `claude setup-token` prints, passed through as
+      # CLAUDE_CODE_OAUTH_TOKEN below. Codex and Ollama are still one variable
+      # away (`BRAIN_LLM=codex-cli` / `BRAIN_LLM=ollama`).
       #
-      # The cost, named: a stack built today cannot answer a single turn until
-      # that login is done once. The failure is legible — codex says so and the
-      # Assistant shows what it said — and the drawer is where it is fixed.
+      # The cost, named: a stack built without that token cannot answer a single
+      # turn. The failure is legible — claude says "Not logged in" and the
+      # Assistant shows what it said — and the drawer names the fix.
       # tests/compose.test.js refuses any CLI default the image cannot run.
-      BRAIN_LLM: ${BRAIN_LLM:-codex-cli}
+      BRAIN_LLM: ${BRAIN_LLM:-claude-cli}
       BRAIN_OLLAMA_BASE_URL: ${BRAIN_OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
       # Both backends are named outright because there is no 'auto' mode to fall
       # back on any more. The embedder is the architecture: this one measured

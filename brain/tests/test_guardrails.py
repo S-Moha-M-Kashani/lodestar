@@ -254,9 +254,12 @@ def test_the_brain_has_no_way_to_write_a_card():
     # so it can neither create, change nor destroy a card. This set breaking is
     # how a fourth write gets argued for rather than shipped, which is what it
     # did here.
+    # `write_note_summaries` stores a derived reading, not a card, the same
+    # argument as `write_vectors`.
     assert surface == {'list_board', 'list_cards', 'list_chat', 'list_all_chat',
                        'record_chat', 'record_trace', 'create_proposal',
-                       'create_edit', 'list_vectors', 'write_vectors'}
+                       'create_edit', 'list_vectors', 'write_vectors',
+                       'list_note_summaries', 'write_note_summaries'}
     # And the claim the whole test is named for, stated separately from the set
     # so it cannot be satisfied by adding a name to a list: there is no
     # whole-board write here at all, under any spelling.
@@ -266,4 +269,5 @@ def test_the_brain_has_no_way_to_write_a_card():
     # `list_cards` has always made.
     assert not [name for name in surface
                 if 'save' in name or 'write' in name.replace('write_vectors', '')
+                .replace('write_note_summaries', '')
                 or name.startswith('put')]

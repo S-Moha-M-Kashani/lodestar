@@ -954,6 +954,103 @@ test('writing a vector needs the service token; reading one needs only the login
   } finally { await s.stop(); }
 });
 
+// GET /api/note-summaries answers the live board, so only a direct count can
+// prove a purge left no row behind.
+const summaryRows = (s) => {
+  const conn = new DatabaseSync(s.dbPath, { readOnly: true });
+  try { return conn.prepare('SELECT COUNT(*) AS n FROM card_note_summaries').get().n; }
+  finally { conn.close(); }
+};
+const putSummaries = (base, body) => rawFetch(base + '/api/note-summaries', {
+  method: 'PUT',
+  headers: { 'content-type': 'application/json', authorization: `Bearer ${TEST_SERVICE_TOKEN}` },
+  body: JSON.stringify(body),
+});
+
+// This is an integration test.
+test('a note summary is stored for a long card, stays out of the board record, and follows the card through the Trash', async () => {
+  const s = await startWithToken();
+  try {
+    const longNotes = 'n'.repeat(600);
+    const longCard = { id: 'long', columnId: 'inbox', title: 'A long note', notes: longNotes };
+    const shortCard = { id: 'short', columnId: 'inbox', title: 'A short note', notes: 'hi' };
+    await putCards(s.base, [longCard, shortCard]);
+
+    const wrote = await putSummaries(s.base, { model: 'm1', summaries: [
+      { cardId: 'long', fingerprint: 'fp-long', summary: 'One. Two. Three.' },
+      { cardId: 'ghost', fingerprint: 'fp-g', summary: 'No.' },
+    ] });
+    assert.equal(wrote.status, 200);
+    assert.deepEqual(await wrote.json(), { written: 1, refused: ['ghost'] });
+
+    assert.deepEqual(await (await fetch(s.base + '/api/note-summaries?model=m1')).json(), {
+      summaries: [{ cardId: 'long', fingerprint: 'fp-long', summary: 'One. Two. Three.' }],
+    });
+    const board = await (await fetch(s.base + '/api/state')).json();
+    const byId = Object.fromEntries(board.cards.map((c) => [c.id, c]));
+    assert.equal(byId.long.notes, longNotes);
+    assert.equal(byId.short.notes, 'hi');
+    assert.ok(!Object.hasOwn(board, 'summaries'));
+    for (const c of board.cards) assert.ok(!Object.hasOwn(c, 'summary'), `${c.id} carries a summary field`);
+
+    const m2 = await putSummaries(s.base, { model: 'm2', summaries: [
+      { cardId: 'long', fingerprint: 'fp-m2', summary: 'Aye. Bee. See.' },
+    ] });
+    assert.equal(m2.status, 200);
+    assert.deepEqual(await (await fetch(s.base + '/api/note-summaries?model=m1')).json(), {
+      summaries: [{ cardId: 'long', fingerprint: 'fp-long', summary: 'One. Two. Three.' }],
+    });
+    assert.deepEqual(await (await fetch(s.base + '/api/note-summaries?model=m2')).json(), {
+      summaries: [{ cardId: 'long', fingerprint: 'fp-m2', summary: 'Aye. Bee. See.' }],
+    });
+
+    const renamed = { ...longCard, title: 'A long note, renamed' };
+    await putCards(s.base, [renamed, shortCard]);
+    assert.deepEqual(await (await fetch(s.base + '/api/note-summaries?model=m1')).json(), {
+      summaries: [{ cardId: 'long', fingerprint: 'fp-long', summary: 'One. Two. Three.' }],
+    });
+
+    // A summary must not move the rev. A save written against this rev is still
+    // current, and the sweep it was authorised to do actually happened.
+    const rev = (await (await fetch(s.base + '/api/state')).json()).rev;
+    const again = await putSummaries(s.base, { model: 'm1', summaries: [
+      { cardId: 'long', fingerprint: 'fp-long', summary: 'One. Two. Three.' },
+    ] });
+    assert.equal(again.status, 200);
+    const saved = await (await fetch(s.base + '/api/state', {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ version: 1, rev, cards: [renamed] }),
+    })).json();
+    assert.ok(!saved.stale);
+    assert.equal(saved.cards.length, 1);
+
+    await putCards(s.base, []);
+    await putCards(s.base, [renamed]);
+    assert.deepEqual(await (await fetch(s.base + '/api/note-summaries?model=m1')).json(), {
+      summaries: [{ cardId: 'long', fingerprint: 'fp-long', summary: 'One. Two. Three.' }],
+    });
+
+    await putCards(s.base, []);
+    await fetch(s.base + '/api/cards/long', { method: 'DELETE' });
+    assert.equal(summaryRows(s), 0, 'a purge leaves no orphan row');
+
+    const bare = await rawFetch(s.base + '/api/note-summaries', {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'm1', summaries: [
+        { cardId: 'long', fingerprint: 'fp-long', summary: 'One. Two. Three.' },
+      ] }),
+    });
+    assert.equal(bare.status, 401);
+    const asBrowser = await fetch(s.base + '/api/note-summaries', {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'm1', summaries: [
+        { cardId: 'long', fingerprint: 'fp-long', summary: 'One. Two. Three.' },
+      ] }),
+    });
+    assert.equal(asBrowser.status, 403);
+  } finally { await s.stop(); }
+});
+
 // This is an integration test.
 test('a malformed habit history is replaced with an empty one', async () => {
   const s = await startServer();
