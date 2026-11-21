@@ -4836,16 +4836,17 @@ try:
               page.locator("#model-provider").count() == 1)
         check("assistant: the provider defaults to the local daemon",
               page.input_value("#model-provider") == "ollama")
-        # The two API routes, then whichever CLI subscription this machine can
+        # Claude (the default engine) first, then the two API routes — but only
+        # the CLI subscriptions this machine can
         # actually serve. `claude` is stubbed into the brain's env for this run
         # and `codex` deliberately is not, so the list proves the gating in both
         # directions: a picker that offered every CLI it knows the name of would
         # hand the brain a backend with no binary behind it, and every turn
         # would fail with no way out from the UI.
-        check("assistant: the provider selector offers the two APIs and the "
-              "installed CLI, and not the missing one",
+        check("assistant: the provider selector offers the installed CLI first, "
+              "the two APIs, and not the missing one",
               option_values("#model-provider")
-              == ["ollama", "openrouter", "claude-cli"])
+              == ["claude-cli", "ollama", "openrouter"])
         check("assistant: the CLI option says whose subscription pays for it",
               "subscription" in " ".join(
                   page.locator("#model-provider option").all_inner_texts()).lower())

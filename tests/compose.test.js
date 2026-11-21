@@ -612,7 +612,7 @@ test('the composed stack supplies no password of its own, in either form', () =>
 // never serve — or rather, correctly offered neither, which is a feature the
 // board gained precisely so a missing binary could not fail every turn.
 //
-// Making `codex-cli` the composed default turns that honesty into a boot
+// Making a CLI backend the composed default turns that honesty into a boot
 // requirement: a default the image cannot run is a stack whose every chat turn
 // fails with nothing on screen able to fix it. These three assertions are the
 // same shape as the embedder pin above — the compose file may only name what
@@ -639,6 +639,13 @@ test('compose pins a chat backend the brain image can actually run', () => {
       `The container would start, answer /health, offer the backend in the ` +
       `picker and fail every single chat turn.`,
   );
+});
+
+// This is a configuration invariant.
+test('compose leaves the chat model to the chosen backend', () => {
+  // BRAIN_MODEL outranks the per-backend default, so a slug pinned here was
+  // sent to claude-cli too: `4skl/gemma4-e2b-mtp` is an Ollama tag only.
+  assert.equal(brainEnvPin('BRAIN_MODEL'), '${BRAIN_MODEL:-}');
 });
 
 // This is a configuration invariant.
