@@ -60,8 +60,12 @@ export let state = loadState();
 // which is a real value and not an absent one. Unlike the scope filter it is
 // only ever in force because the reader set it, and unlike the *rail's* other
 // filters it is remembered between visits (js/ui/toolbar.js).
-export const filters = { search: '', type: '', category: '', prio: '', column: '', columnsOff: false, nesting: '',
-  range: rangeVal(null), tags: new Set() };
+// Every multi-answer filter is a Set, and an empty Set means "any". `column`
+// empty is the default: every column on the Board, the open ones elsewhere.
+// `tagMode` says whether a card needs every chosen tag or any one of them.
+export const filters = { search: '', category: new Set(), type: new Set(), column: new Set(), columnsOff: false,
+  importance: new Set(), urgency: new Set(), effort: new Set(), control: new Set(),
+  nesting: '', range: rangeVal(null), tags: new Set(), tagMode: 'all' };
 export let focusCardId = null; // restore focus after re-render (keyboard moves)
 export let draggedId = null;
 export let dealCards = true; // deal-in animation runs on first render only

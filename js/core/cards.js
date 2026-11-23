@@ -1,5 +1,5 @@
 import { categories, sanitizeCategories } from './categories.js';
-import { COLUMNS, TYPES, priorityOf } from './constants.js';
+import { COLUMNS, TYPES } from './constants.js';
 import { habitCountVal, habitFreqVal, habitHistoryVal, habitTimesVal, isHabit } from './habits.js';
 import { parentIdVal, resolveLineage } from './nesting.js';
 import { planSrcVal, planVal, resolvePlan } from './plan.js';
@@ -169,32 +169,24 @@ export function parseState(json) {
 
 /** Which column a card is in, as a filter.
  *
- *  Two rules in one, and both of them are about where the reader is. On the
- *  Board this is inert: the Board *is* the three columns, and a filter that
- *  emptied two of them would read as cards having gone missing. Everywhere
- *  else a finished card is a record rather than work — it belongs in the Done
- *  column and in nothing that is asking what to do next — so Done is out
- *  unless the reader asks for it by name, or for 'all'.
+ *  `filters.column` is a Set of column ids. Named, it is the whole answer, on
+ *  every view — on the Board the columns it leaves out are not painted
+ *  (js/ui/render.js). Empty is the default, and the default differs by view:
+ *  the Board shows every column it paints, and everywhere else a finished card
+ *  is a record rather than work, so Done is out unless the reader asks for it.
  *
- *  `columnsOff` is the Menu switching the whole idea off: the default goes
- *  with the control, because a rule still narrowing the board from behind a
- *  hidden dropdown is a board nobody can explain. */
-// Is the rule in force at all? Off on the Board, and off when the Menu has
-// switched the filter away. Shared with filtersActive below, which would
-// otherwise claim a filter is narrowing the Board — and answer "No cards match"
-// over a column the reader emptied themselves.
-export const columnFilterOn = () => view !== 'board' && !filters.columnsOff;
+ *  `columnsOff` is the Settings switch taking the whole control away: the
+ *  default goes with it, because a rule still narrowing the board from behind a
+ *  hidden control is a board nobody can explain. */
+export const columnFilterOn = () => !filters.columnsOff;
 
 function matchesColumn(card) {
-  if (!columnFilterOn() || filters.column === 'all') return true;
-  if (filters.column) return card.columnId === filters.column;
+  if (!columnFilterOn()) return true;
+  if (filters.column.size) return filters.column.has(card.columnId);
+  if (view === 'board') return true;
   // The hide-Done *default* stands down while the range is asking about
-  // finished cards: a reader who asks for what they finished last month and is
-  // answered with an empty view has been shown a control hiding the very thing
-  // they named, which is the rule the scope filter already bends for a running
-  // search. A column the reader picked by name is left alone above — they chose
-  // that, and "Inbox, finished last month" is a question with no answer rather
-  // than a filter getting in the way.
+  // finished cards: "what did I finish last month" must not be answered with
+  // an empty view.
   if (askingAboutFinished()) return true;
   return card.columnId !== 'answered';
 }
@@ -259,17 +251,25 @@ export function matchesRange(card) {
 export const matchesNesting = (card) =>
   Boolean(filters.nesting === 'all' || searchNeedle() || !card.parentId);
 
+/** A Set filter: empty is "any", otherwise the card's value must be in it. */
+const inSet = (set, value) => set.size === 0 || set.has(value);
+
+/** The four compass judgements, each a Set of the values the card may carry
+ *  ('' is "not set" for importance and urgency). */
+export const COMPASS_KEYS = ['importance', 'urgency', 'effort', 'control'];
+
 export function matchesFilters(card) {
   if (!matchesNesting(card)) return false;
   if (!matchesRange(card)) return false;
   if (!matchesColumn(card)) return false;
-  if (filters.type && card.type !== filters.type) return false;
-  if (filters.category && card.category !== filters.category) return false;
-  if (filters.prio) {
-    const p = priorityOf(card); // 0 = unlabelled (either judgement missing)
-    if (filters.prio === 'none' ? p !== 0 : String(p) !== filters.prio) return false;
+  if (!inSet(filters.type, card.type)) return false;
+  if (!inSet(filters.category, card.category)) return false;
+  for (const k of COMPASS_KEYS) if (!inSet(filters[k], card[k] || '')) return false;
+  if (filters.tags.size) {
+    const has = (t) => card.tags.includes(t);
+    const tags = [...filters.tags];
+    if (filters.tagMode === 'any' ? !tags.some(has) : !tags.every(has)) return false;
   }
-  if (filters.tags.size && ![...filters.tags].every((t) => card.tags.includes(t))) return false;
   // `filters.search` is the text as typed — the search box is rebuilt from it
   // on every repaint, so trimming or lower-casing it there would eat a space
   // mid-word and undo a capital letter under the caret. Normalising belongs
@@ -284,20 +284,13 @@ export function matchesFilters(card) {
 
 const searchNeedle = () => filters.search.trim().toLowerCase();
 
-// The column filter counts only where it is narrowing to one named column: the
-// default hides Done on its own, and "No cards match" over an empty Backlog
-// would blame a filter the reader never set.
-export const filtersActive = () => Boolean(searchNeedle() || filters.type || filters.category || filters.prio || filters.tags.size
-  // The range counts, and it counts everywhere — it is never a default, so an
-  // empty column, an empty list and an empty map all have to be able to say a
-  // span is responsible. It is remembered between visits, which is exactly why:
-  // a reader opening the app on Monday to three cards is told why.
+// What counts as narrowing: every Set that names something, the range, a
+// named column set, and the scope default while the board holds children —
+// so an empty column can say a filter is responsible rather than "empty".
+export const filtersActive = () => Boolean(searchNeedle() || filters.type.size || filters.category.size
+  || COMPASS_KEYS.some((k) => filters[k].size) || filters.tags.size
   || spanOf(filters.range) !== null
-  || (columnFilterOn() && filters.column && filters.column !== 'all')
-  // The scope filter counts, and its *default* is the narrowing one — so the
-  // empty-column hint must not say "No cards match" over children the reader
-  // cannot see and did not switch off. It is inert while a search is running,
-  // where the search itself is already in this list.
+  || (columnFilterOn() && filters.column.size)
   || (filters.nesting !== 'all' && !searchNeedle() && state.cards.some((c) => c.parentId)));
 
 /** File a card in a column, and record nothing.

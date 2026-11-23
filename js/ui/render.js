@@ -3,14 +3,14 @@ import { renderAssistant } from '../assistant/sheet.js';
 import { renderAssistantTools, rescueAssistantTools } from '../assistant/tools.js';
 import { widgetShowing } from '../assistant/shell.js';
 import { renderAssistantWidget } from '../assistant/widget.js';
-import { askingAboutFinished } from '../core/cards.js';
+import { askingAboutFinished, columnFilterOn } from '../core/cards.js';
 import { COLUMNS, VIEWS, VIEW_LABELS } from '../core/constants.js';
 
 // The body class each Settings switch sets to take a column off the Board.
 const HIDDEN_BY = { 'inbox': 'hide-inbox-col', 'on-hold': 'hide-hold-col' };
 import { timeline } from '../core/history.js';
 import { VIEW_KEY } from '../core/keys.js';
-import { dealCards, focusCardId, setCurrentView, setDealCards, setFocusCard, view } from '../core/state.js';
+import { dealCards, filters, focusCardId, setCurrentView, setDealCards, setFocusCard, view } from '../core/state.js';
 import { renderCatRail, renderColumn, renderTagBar } from './board.js';
 import { renderDirectionLine } from './direction.js';
 import { $, announce } from './dom.js';
@@ -64,7 +64,9 @@ export function render() {
   // match" over work the reader asked for by name. It is an override class
   // rather than a change to the switch, so the switch keeps its own state and
   // the column hides itself again the moment the span is cleared.
-  document.body.classList.toggle('show-done-col', askingAboutFinished());
+  // Naming Done in the filter's Where row shows it the same way.
+  document.body.classList.toggle('show-done-col',
+    askingAboutFinished() || (columnFilterOn() && filters.column.has('answered')));
   // The assistant's tools live in the sheet's head while the Assistant is
   // open, and the sheet is about to be torn down — rescue the wired-once node
   // back to its header parking spot BEFORE the wipe destroys it.
@@ -90,9 +92,12 @@ export function render() {
     // still painted (CSS hides it, and a finished-span suspends that), so it
     // is subtracted here rather than skipped.
     const body = document.body.classList;
-    const shown = COLUMNS.filter((c) => !body.contains(HIDDEN_BY[c.id]));
+    // A column the filter's Where row leaves out is left out the same way.
+    const picked = columnFilterOn() && filters.column.size ? filters.column : null;
+    const shown = COLUMNS.filter((c) => !body.contains(HIDDEN_BY[c.id]) && (!picked || picked.has(c.id)));
     shown.forEach((col, i) => board.appendChild(renderColumn(col, i === 0)));
-    const doneHidden = body.contains('hide-done-col') && !body.contains('show-done-col');
+    const doneHidden = shown.some((c) => c.id === 'answered')
+      && body.contains('hide-done-col') && !body.contains('show-done-col');
     board.style.setProperty('--cols', shown.length - (doneHidden ? 1 : 0));
     board.appendChild(boardRail());
     board.classList.add('has-rail');

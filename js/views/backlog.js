@@ -14,7 +14,7 @@ import { onCardKeydown } from '../ui/keyboard.js';
 /** Which column this register is reading out. The Inbox by default — a backlog
  *  is what has not been started — and whatever the column filter names when one
  *  is set, so that filter narrows this view rather than emptying it. `null` is
- *  "All columns", the one case with no single column to name or to sort.
+ *  several columns at once, the one case with no single column to name or sort.
  *
  *  **The Inbox default stands down while the range asks about finished cards**
  *  (2026-09-07), the same suspension `matchesColumn` makes and for the same
@@ -26,8 +26,9 @@ import { onCardKeydown } from '../ui/keyboard.js';
  *  still wins above: "Inbox, finished last month" is a question with no answer,
  *  and it should read as one. */
 function backlogColumn() {
-  if (!columnFilterOn() || !filters.column) return askingAboutFinished() ? 'answered' : 'inbox';
-  return filters.column === 'all' ? null : filters.column;
+  if (!columnFilterOn() || !filters.column.size) return askingAboutFinished() ? 'answered' : 'inbox';
+  // Several columns named: every card, and matchesFilters keeps the chosen ones.
+  return filters.column.size === 1 ? [...filters.column][0] : null;
 }
 
 export function renderBacklog() {

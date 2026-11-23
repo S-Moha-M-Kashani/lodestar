@@ -1,4 +1,4 @@
-import { cardLabel, catVal, columnAccepts, controlVal, deadlineVal, effortVal, iuVal, matchesFilters, placeCard, typeVal, uid } from '../core/cards.js';
+import { COMPASS_KEYS, cardLabel, catVal, columnAccepts, controlVal, deadlineVal, effortVal, iuVal, matchesFilters, placeCard, typeVal, uid } from '../core/cards.js';
 import { catColor, categories } from '../core/categories.js';
 import { COLUMNS, TYPES, TYPE_META } from '../core/constants.js';
 import { dueWords } from '../core/direction.js';
@@ -671,17 +671,20 @@ $('#card-parent-detach').addEventListener('click', () => {
  *
  *  `source` is the card a Duplicate was asked for; `draftFrom` decides which of
  *  its fields travel (and that its completion history does not). */
+const onlyOne = (set) => (set.size === 1 ? [...set][0] : '');
+
 export function openNewCard(source = null, prefill = null) {
   editingId = null;
   sourceId = source ? source.id : null;
   // A blank capture inherits the drawer it was written in: with a category tab
   // or type filter open, the card belongs there. That was the quick-add form's
   // one good idea, and here the inherited values are visible and changeable
-  // before the save. An unfiltered board reads '' on both, which blankDraft
+  // before the save. Only a filter naming exactly one value is inherited; an
+  // unfiltered board (or several chosen) reads '', which blankDraft
   // turns into the standing defaults.
   draft = source
     ? draftFrom(source)
-    : blankDraft({ type: filters.type, category: filters.category });
+    : blankDraft({ type: onlyOne(filters.type), category: onlyOne(filters.category) });
   // `prefill` is the one caller that knows something the filters do not: Add a
   // child card, which hands over the parent it was pressed on (and that
   // parent's life area, since a part of a piece of work usually belongs to the
@@ -932,17 +935,21 @@ form.addEventListener('submit', (e) => {
       const firstInCol = state.cards.findIndex((c) => c.columnId === draft.columnId);
       state.cards.splice(firstInCol === -1 ? state.cards.length : firstInCol, 0, draft);
     }
-    // A search, tag or priority filter could still hide the fresh card —
+    // A search, tag or compass filter could still hide the fresh card —
     // clear those so the capture never vanishes silently.
     if (!matchesFilters(draft)) {
-      filters.search = '';
-      filters.tags.clear();
-      filters.prio = '';
       // The search box is painted from `filters.search` by the render this
       // commit triggers, so clearing the field is the same act as clearing the
       // filter — and reaching for #search here would throw on the views that
       // have no capture row to hold one.
-      $('#prio-filter').value = '';
+      filters.search = '';
+      filters.tags.clear();
+      // Any one-field Set filter the card falls outside is lifted too — the
+      // Where row on the Board included, or a card saved to the Backlog would
+      // be filed in a column that is not on screen.
+      const own = { type: draft.type, category: draft.category, column: draft.columnId };
+      for (const k of COMPASS_KEYS) own[k] = draft[k] || '';
+      for (const [k, v] of Object.entries(own)) if (!filters[k].has(v)) filters[k].clear();
     }
     commit(`Added ${cardLabel(draft)} “${short(draft.title)}”`);
     announce(`Added “${draft.title}” to ${columnTitle(draft.columnId)}`);

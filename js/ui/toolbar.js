@@ -14,30 +14,13 @@ import { ask } from './dialogs.js';
 import { $, announce } from './dom.js';
 import { render } from './render.js';
 
-// Toolbar: the type and priority filters, the actions menu and its Settings
+// Toolbar: the scope, time and tag-search filters, the actions menu and its Settings
 // dialog, the Assistant's
 // header controls, and the keyboard shortcuts that reach them.
 //
 // The text search is not wired here. It is painted into the board beside
 // `+ New card` (js/ui/board.js) and so is rebuilt on every repaint, which is
 // the one control whose listener cannot be attached once at boot.
-
-$('#type-filter').addEventListener('change', (e) => {
-  filters.type = e.target.value;
-  render();
-});
-
-$('#prio-filter').addEventListener('change', (e) => {
-  filters.prio = e.target.value;
-  render();
-});
-
-// Where the card is filed. Painted on every view but the Board, where it would
-// be a control for emptying two of the three columns you are looking at.
-$('#column-filter').addEventListener('change', (e) => {
-  filters.column = e.target.value;
-  render();
-});
 
 // How deep to read: parents only, or parents and children. Wired here beside
 // the other filters and deliberately NOT through `displaySwitch`, which is for
@@ -132,19 +115,8 @@ for (const [sel, key] of [['#range-field', 'field'], ['#range-preset', 'preset']
   $(sel).addEventListener('change', (e) => setRange({ ...filters.range, [key]: e.target.value }));
 }
 
-// The tags dropdown: one tag or all of them. It writes the same Set the #
-// bar toggles, so the two stay one filter with two handles — picking here
-// replaces whatever combination the bar had built, and the empty option
-// clears it.
-$('#tag-filter').addEventListener('change', (e) => {
-  filters.tags.clear();
-  if (e.target.value) filters.tags.add(e.target.value);
-  render();
-});
-
 // The tag search narrows which tags are LISTED here, never which cards the
-// board shows — so this repaints only the bar and the dropdown (renderTagBar,
-// which already owns both), never the whole board via render(). A `search`
+// board shows — so this repaints only the bar (renderTagBar), never the whole board via render(). A `search`
 // input's native × fires `input` too, so one listener covers typing and
 // clearing alike.
 $('#tag-search').addEventListener('input', (e) => {

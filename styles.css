@@ -528,152 +528,258 @@ input, select, textarea { font: inherit; color: inherit; }
 .filter-btn:hover,
 .filter-btn[aria-expanded="true"] { color: var(--ink); border-color: var(--ink-soft); }
 
-/* The panel drops from the button, over the board. `[hidden]` needs its own
-   rule here for the reason five other surfaces in this file already document:
-   `display: grid` outranks the UA's `[hidden]`. */
+/* The filter window drops from the button, over the board: the card dialog's
+   property ledger, a row per field, every answer a stamp. `[hidden]` needs its
+   own rule because `display: grid` outranks the UA's. */
 .filter-panel {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
+  position: fixed;
+  top: var(--fp-top, 120px);
+  left: var(--fp-left, 16px);
   z-index: 60;
   display: grid;
-  gap: 10px;
-  min-width: 320px;
-  padding: 12px 14px;
+  width: min(640px, calc(100vw - 32px));
+  max-height: var(--fp-max-h, 78vh);
+  overflow-y: auto;
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  box-shadow: var(--shadow-lift);
+  box-shadow: var(--shadow-modal);
 }
 .filter-panel[hidden] { display: none; }
+.filter-open #assistant-launcher { display: none; }
 
-/* Where the real controls stand when nobody is reading them. A facet's page
-   borrows the row it needs and hands it back; the rows are never copied, so a
-   Show switch keying off the row's own id keeps working wherever it stands. */
-.filter-rows { display: none; }
-
-/* The list of facets. One row each — what it narrows, and what it is set to —
-   and a chevron saying there is a page behind it. */
-.filter-root { display: grid; gap: 2px; }
-/* `display: grid` outranks the UA's `[hidden]` rule. This file has documented
-   that trap nine times and it caught the tenth here, in the same change that
-   introduced the eleventh below: a list that would not go away left the facets
-   stacked above the page they opened. */
-.filter-root[hidden] { display: none; }
-.filter-facet {
+.filter-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 10px;
-  width: 100%;
-  padding: 8px 8px 8px 6px;
-  font-family: var(--mono);
-  font-size: 11.5px;
-  text-align: left;
-  color: var(--ink);
-  background: transparent;
-  border: none;
-  border-radius: 3px;
-  cursor: pointer;
+  justify-content: space-between;
+  gap: 4px 12px;
+  padding: 14px 18px 10px;
+  border-bottom: 1px solid var(--line);
 }
-.filter-facet::after { content: "›"; margin-left: auto; color: var(--ink-soft); }
-.filter-facet:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); }
-.filter-facet:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: -2px; }
-/* What the facet is set to, beside its name. Empty when it is set to nothing,
-   which is the whole of what a quiet panel says. */
-.filter-facet-value {
-  margin-left: auto;
-  font-size: 10.5px;
-  color: var(--ink-soft);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 55%;
+.filter-title {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 19px;
+  font-weight: 700;
 }
-.filter-facet-value:empty { display: none; }
-
-/* One facet's page: the way back, then either its options as a named list or
-   the row that already holds its own controls. */
-.filter-page { display: grid; gap: 8px; }
-.filter-page[hidden] { display: none; }
-.filter-back {
-  justify-self: start;
-  padding: 4px 6px 4px 0;
+.filter-count {
   font-family: var(--mono);
   font-size: 11px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
   color: var(--ink-soft);
-  background: transparent;
-  border: none;
-  cursor: pointer;
+  font-variant-numeric: tabular-nums;
 }
-.filter-back:hover { color: var(--ink); }
-.filter-back:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 2px; }
+.filter-ledger { display: flex; flex-direction: column; padding: 0 18px; }
 
-.filter-options { display: grid; gap: 2px; }
-.filter-option {
-  display: block;
-  width: 100%;
-  padding: 8px 10px;
-  font-family: var(--mono);
-  font-size: 11.5px;
-  text-align: left;
-  color: var(--ink);
-  background: transparent;
-  border: none;
-  border-radius: 3px;
-  cursor: pointer;
-}
-.filter-option:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); }
-.filter-option:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: -2px; }
-.filter-option[aria-checked="true"] { background: var(--ink-blue); color: var(--paper); }
-
-/* The one sentence a facet may need. The tags' is what says that two chosen
-   tags mean BOTH — the list is the operator, so there is no control to read it
-   off and it has to be said. */
-.filter-note {
-  margin: 0;
-  font-family: var(--mono);
-  font-size: 10px;
-  line-height: 1.5;
-  color: var(--ink-soft);
-}
-
-/* Inside a facet's page the row has no neighbours to line up with, so the
-   gutter that made six rows read as one table is width spent on one label. */
-.filter-page .filter-row { grid-template-columns: minmax(0, 1fr); }
-.filter-page .filter-row > label { grid-column: 1; }
-.filter-page .filter-row-wide > :not(label),
-.filter-page .filter-row-wide .range-readback { grid-column: 1; }
-
-/* A row is its name in a left gutter and its control beside it — the card
-   dialog's own `.prop-row`, which is what a reader of this app already knows
-   a setting to look like. A row holding several controls names the group. */
+/* A row is its name in a 96px gutter and its answers beside it — `.prop-row`. */
 .filter-row {
   display: grid;
   grid-template-columns: 96px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--card-line) 60%, transparent);
+}
+.filter-row[hidden] { display: none; }
+.filter-ledger .filter-row:last-child { border-bottom: 0; }
+.filter-label {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding-top: 5px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+/* Shown only while the row narrows: the way back to "any". */
+.filter-row-clear {
+  padding: 0;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--ink-blue);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.filter-row-clear:hover { text-decoration: underline; }
+.filter-row-clear[hidden] { display: none; }
+
+.filter-opts { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.filter-compass,
+.filter-tags,
+.filter-range { display: grid; gap: 8px; min-width: 0; }
+.filter-sub {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+.filter-sub > span {
+  align-self: start;
+  padding-top: 6px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-soft);
+}
+
+/* The dialog's Where and Type stamp: quiet at rest, inked when pressed. Plain
+   ink on purpose; colour on this board means category. */
+.filter-stamp {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  background: transparent;
+  border: 1.5px solid color-mix(in srgb, var(--ink-soft) 50%, transparent);
+  border-radius: var(--radius);
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.filter-stamp-soft { font-weight: 400; letter-spacing: 0.02em; text-transform: none; font-size: 11px; }
+.filter-stamp:hover { color: var(--ink); }
+.filter-stamp[aria-pressed="true"] {
+  color: var(--ink);
+  border-color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+}
+/* The life area, drawn as the dialog's pill in the area's own ink. */
+.filter-pill {
+  font-family: var(--body);
+  font-size: 12px;
+  color: var(--cat);
+  background: transparent;
+  border: 1.5px solid color-mix(in srgb, var(--cat) 55%, transparent);
+  border-radius: 999px;
+  padding: 3px 11px;
+  cursor: pointer;
+  opacity: 0.8;
+  transition: all 0.15s ease;
+}
+.filter-pill[aria-pressed="true"] { opacity: 1; color: var(--card); border-color: var(--cat); background: var(--cat); }
+.filter-stamp:focus-visible,
+.filter-pill:focus-visible,
+.filter-row-clear:focus-visible,
+.tag-mode button:focus-visible { outline: 2px solid var(--ink-blue); outline-offset: 2px; }
+
+/* Tags: the find box and the and/or switch on one line, a read-back of the
+   choice as a sentence, then the chips — pressed like the stamps above. */
+.tag-tools {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
 }
-.filter-row[hidden] { display: none; }
-.filter-row > label {
+.filter-tags #tag-search {
+  border: 0;
+  border-bottom: 1px dashed var(--line);
+  border-radius: 0;
+  background: transparent;
+  padding: 4px 0;
+}
+.filter-tags #tag-search:focus { outline: none; border-bottom: 1px solid var(--ink); }
+.tag-mode {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper);
+}
+.tag-mode button {
+  min-width: 38px;
   font-family: var(--mono);
   font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
   color: var(--ink-soft);
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  padding: 3px 10px;
+  cursor: pointer;
+  transition: all 0.15s ease;
 }
-.filter-row select {
-  box-sizing: border-box;
-  font-size: 11.5px;
-  min-width: 0;
+.tag-mode button:hover { color: var(--ink); }
+.tag-mode button[aria-checked="true"] { color: var(--paper); background: var(--ink); }
+.tag-readback {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
 }
-/* The tags row and the time row each hold several controls, so their values
-   wrap under the gutter rather than being squeezed onto one line. */
-.filter-row-wide {
-  grid-template-columns: 96px minmax(0, 1fr);
-  align-items: start;
+.tag-readback[hidden] { display: none; }
+.filter-tags .tag-bar {
+  max-height: 120px;
+  padding-bottom: 2px;
+  -webkit-mask-image: linear-gradient(to bottom, #000 80%, transparent);
+  mask-image: linear-gradient(to bottom, #000 80%, transparent);
 }
-.filter-row-wide > :not(label) { grid-column: 2; }
-.filter-row-wide .range-readback { grid-column: 2; }
+.filter-tags .tag-chip {
+  border-radius: 999px;
+  border-color: color-mix(in srgb, var(--ink-soft) 40%, transparent);
+  cursor: pointer;
+}
+.filter-tags .tag-chip[aria-pressed="true"] {
+  color: var(--ink);
+  border-color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+}
+
+/* When: a span stamp carries the days it covers under its name, so "This
+   week" says which week before it is pressed. */
+.filter-spans .filter-stamp {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  text-align: left;
+}
+.filter-hint {
+  font-size: 9.5px;
+  color: var(--ink-soft);
+  opacity: 0.85;
+  font-variant-numeric: tabular-nums;
+}
+.filter-stamp[aria-pressed="true"] .filter-hint { opacity: 1; }
+.filter-range .range-calendar { justify-self: start; }
+.filter-range .range-readback {
+  font-size: 11px;
+  color: var(--ink);
+  white-space: normal;
+}
+
+.filter-range select { box-sizing: border-box; font-size: 11.5px; min-width: 0; justify-self: start; }
+
+.filter-foot {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 18px;
+  border-top: 1px solid var(--line);
+  background: var(--card);
+}
+.filter-clear-all,
+.filter-done {
+  font-family: var(--mono);
+  font-size: 12px;
+  border-radius: var(--radius);
+  padding: 7px 14px;
+  cursor: pointer;
+}
+.filter-clear-all { color: var(--danger); background: transparent; border: 1px solid var(--danger); }
+.filter-clear-all:disabled { opacity: 0.35; cursor: default; }
+.filter-done { color: var(--card); background: var(--ink-blue); border: 1px solid var(--ink-blue); }
 
 /* ---- `Between…`, on one calendar ----------------------------------------
    One month, pressed twice. It replaced two `<input type="date">`s, which
@@ -1006,12 +1112,6 @@ input, select, textarea { font: inherit; color: inherit; }
   overflow-y: auto;
 }
 .tag-bar[hidden] { display: none; }
-
-.tag-bar .label {
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--ink-soft);
-}
 
 .tag-chip {
   font-family: var(--mono);
@@ -1461,14 +1561,11 @@ body[data-view="board"] .cards { min-height: 0; }
    label in a menu naming nothing. The ids are unchanged — the controls moved
    behind `+ Filter` on 2026-09-13 and were not renamed. */
 .hide-tags #filter-row-tags { display: none; }
-.hide-prios #filter-row-prio { display: none; }
+.hide-prios #filter-row-compass { display: none; }
 .hide-types #filter-row-type { display: none; }
-/* Two ways this control is absent, and they mean different things. Switched off
-   in the Menu it is gone everywhere, and js/core/cards.js stops applying it.
-   On the Board it is merely not painted: the Board is the three columns, so the
-   filter has nothing to say there and every card is shown regardless. */
+/* Switched off in the Menu, the Where row is gone and js/core/cards.js stops
+   applying it. */
 .hide-columns #filter-row-column { display: none; }
-body[data-view="board"] #filter-row-column { display: none; }
 /* #nesting-filter has no rule here on purpose: the scope filter is live on
    every view, the Board included. Hiding a child on the Board hides it from
    one place while still showing it in another — its parent's fold — where the
@@ -5812,36 +5909,36 @@ button.chat-source-card {
   .filter-chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
   .filter-chips::-webkit-scrollbar { display: none; }
   .filter-chip { flex: 0 0 auto; }
-  /* The panel is a dropdown on a laptop and a sheet against both edges here —
-     a 320px menu hanging off a button on a 390px screen is a menu with its own
-     horizontal scrollbar. */
-  /* A sheet against both edges, not a menu hanging off a button: a 320px panel
-     dropped from a control on a 390px screen is a menu with a sideways scroll
-     of its own. Square against the window's sides for the same reason — the
-     8px it used to keep on each side was 16px of a narrow screen spent on
-     saying this is a dropdown, which at this width it is not. */
+  /* A sheet against both edges here, not a window hanging off a button: a
+     640px panel on a 390px screen would scroll sideways. */
   .filter-panel {
     position: fixed;
     left: 0;
     right: 0;
     top: auto;
-    min-width: 0;
-    max-height: 70dvh;
-    overflow-y: auto;
+    bottom: 0;
+    width: auto;
+    max-height: 85dvh;
     border-left: none;
     border-right: none;
     border-radius: var(--radius) var(--radius) 0 0;
   }
-  .filter-row { grid-template-columns: 1fr; gap: 4px; }
-  .filter-row-wide > :not(label),
-  .filter-row-wide .range-readback { grid-column: 1; }
-  /* A facet is a row of a menu here and the thumb is the pointer. The
-     calendar's days are a grid of seven across a 390px window, so 40px each
-     would be 280px of a 358px panel: they take the width the grid gives them
-     and 40px of height, which is the dimension a thumb misses in. */
-  .filter-facet,
-  .filter-option,
-  .filter-back,
+  .filter-row { grid-template-columns: 1fr; gap: 6px; }
+  .filter-label { flex-direction: row; justify-content: space-between; padding-top: 0; width: 100%; }
+  .filter-sub { grid-template-columns: 1fr; gap: 4px; }
+  /* The thumb is the pointer here. */
+  .filter-stamp,
+  .filter-pill,
+  .filter-row-clear,
+  .tag-mode button,
+  .filter-clear-all,
+  .filter-done { min-width: 40px; }
+  .filter-stamp,
+  .filter-pill,
+  .filter-row-clear,
+  .tag-mode button,
+  .filter-clear-all,
+  .filter-done,
   .range-cal-openend,
   .plan-cal-clear { min-height: 40px; }
   .range-day,
@@ -5862,7 +5959,6 @@ button.chat-source-card {
     scrollbar-width: none;
   }
   .tag-bar::-webkit-scrollbar { display: none; }
-  .tag-bar .label,
   .tag-chip { flex: 0 0 auto; }
 
   /* ---- Everything a thumb has to land on --------------------------------
@@ -5889,7 +5985,7 @@ button.chat-source-card {
      left --rail-h behind with it, so the seven selects that had been 40px in
      the strip were 26px in the panel. This is that number, put back where the
      controls now live. */
-  .filter-row select,
+  .filter-range select,
   #tag-search { min-height: 40px; }
   /* The composer, and the widget's own head. Send and the mic sit against the
      home bar, and the three head buttons — trace, expand, close — were 21px:
@@ -5953,7 +6049,7 @@ button.chat-source-card {
   .toolbar input[type="search"],
   .toolbar select,
   #theme-select,
-  .filter-row select,
+  .filter-range select,
   #tag-search,
   .sort-select,
   .board-switch #board-select,

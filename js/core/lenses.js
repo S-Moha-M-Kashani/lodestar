@@ -34,8 +34,13 @@ const NO_SPAN = { field: 'created', preset: '', from: '', to: '' };
 /** The fields a lens sets, with the values every lens shares left at their
  *  defaults. Everything a lens may narrow by appears here exactly once. */
 const base = (over = {}) => ({
-  type: '', prio: '', tags: [], column: '', nesting: '', range: NO_SPAN, ...over,
+  type: [], column: [], importance: [], urgency: [], effort: [], control: [],
+  tags: [], nesting: '', range: NO_SPAN, ...over,
 });
+
+/** The fields that hold several answers at once — a Set on `filters`, an
+ *  array here. Empty is "any", never "none". */
+export const MULTI_KEYS = ['type', 'column', 'importance', 'urgency', 'effort', 'control', 'tags'];
 
 export const LENSES = [
   {
@@ -67,11 +72,9 @@ export const LENSES = [
     id: 'waiting',
     label: 'Waiting on me',
     // The In Progress column: work already begun and stalled on nobody else.
-    // Inert on the Board by the rule that already governs that filter — the
-    // Board *is* its columns — so this lens answers on the Backlog, the map,
-    // the Matrix and the register.
+    // On the Board it leaves the In Progress column alone on screen.
     hint: 'Started and not finished — the In Progress column',
-    set: base({ column: 'in-progress' }),
+    set: base({ column: ['in-progress'] }),
   },
   {
     id: 'done',
@@ -80,7 +83,7 @@ export const LENSES = [
     // default stands down by the suspension `askingAboutFinished` already
     // writes rather than by a rule invented for lenses.
     hint: 'Finished this month',
-    set: base({ column: 'answered', range: { field: 'done', preset: 'month', from: '', to: '' } }),
+    set: base({ column: ['answered'], range: { field: 'done', preset: 'month', from: '', to: '' } }),
   },
 ];
 
@@ -92,10 +95,12 @@ const byId = (id) => LENSES.find((l) => l.id === id) || null;
 export function lensFilters(id) {
   const lens = byId(id);
   if (!lens) return null;
-  return { ...lens.set, tags: [...lens.set.tags], range: { ...lens.set.range } };
+  const out = { ...lens.set, range: { ...lens.set.range } };
+  for (const k of MULTI_KEYS) out[k] = [...lens.set[k]];
+  return out;
 }
 
-const sameTags = (a, b) => {
+const sameSet = (a, b) => {
   const x = [...(a || [])].sort();
   const y = [...(b || [])].sort();
   return x.length === y.length && x.every((t, i) => t === y[i]);
@@ -113,11 +118,8 @@ export function lensOf(filters) {
   const r = f.range || {};
   for (const lens of LENSES) {
     const s = lens.set;
-    if ((f.type || '') !== s.type) continue;
-    if ((f.prio || '') !== s.prio) continue;
-    if ((f.column || '') !== s.column) continue;
+    if (MULTI_KEYS.some((k) => !sameSet(f[k], s[k]))) continue;
     if ((f.nesting || '') !== s.nesting) continue;
-    if (!sameTags(f.tags, s.tags)) continue;
     if ((r.field || 'created') !== s.range.field) continue;
     if ((r.preset || '') !== s.range.preset) continue;
     if ((r.from || '') !== s.range.from) continue;
