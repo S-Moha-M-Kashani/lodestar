@@ -110,7 +110,7 @@ async function removeCategory(id) {
   });
   if (!sure) return;
   setCategories(categories.filter((c) => c.id !== id));
-  if (filters.category === id) filters.category = '';
+  filters.category.delete(id);
   const now = Date.now();
   for (const c of state.cards) if (c.category === id) { c.category = ''; c.updatedAt = now; }
   commit(`Removed category “${cat.label}”`);

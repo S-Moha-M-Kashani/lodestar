@@ -228,7 +228,7 @@ export function renderAreas() {
     tile.style.setProperty('--cat', catColor(cat.id));
     // ink-fade staleness tint: fully saturated at 6 months of carrying
     tile.style.setProperty('--stale', Math.min(1, stats.oldestAge / (180 * DAY)).toFixed(2));
-    tile.setAttribute('aria-pressed', String(filters.category === cat.id));
+    tile.setAttribute('aria-pressed', String(filters.category.has(cat.id)));
 
     const th = document.createElement('span');
     th.className = 'area-tile-head';
@@ -256,16 +256,21 @@ export function renderAreas() {
     tile.append(renderSparkline(stats.cards));
 
     tile.addEventListener('click', () => {
-      filters.category = filters.category === cat.id ? '' : cat.id;
+      const only = filters.category.size === 1 && filters.category.has(cat.id);
+      filters.category.clear();
+      if (!only) filters.category.add(cat.id);
       render();
-      announce(filters.category ? `${cat.label} in focus` : 'Area focus cleared');
+      announce(only ? 'Area focus cleared' : `${cat.label} in focus`);
     });
     grid.append(tile);
   }
   sheet.append(grid);
 
-  if (filters.category && inUse.some(({ cat }) => cat.id === filters.category)) {
-    sheet.append(renderAreaDetail(filters.category));
+  // The detail sheet reads one area; several chosen in the filter window
+  // light their tiles and open none.
+  const focus = filters.category.size === 1 ? [...filters.category][0] : '';
+  if (focus && inUse.some(({ cat }) => cat.id === focus)) {
+    sheet.append(renderAreaDetail(focus));
   }
   return sheet;
 }

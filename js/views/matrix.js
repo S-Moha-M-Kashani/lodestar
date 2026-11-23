@@ -1,7 +1,9 @@
-import { controlVal, effortVal, matchesFilters } from '../core/cards.js';
+import { cardLabel, controlVal, effortVal, matchesFilters } from '../core/cards.js';
+import { commit } from '../core/history.js';
 import { KEY_PREFIX } from '../core/keys.js';
 import { state } from '../core/state.js';
-import { announce } from '../ui/dom.js';
+import { announce, getCard } from '../ui/dom.js';
+import { openDialog } from '../ui/edit-dialog.js';
 import { render } from '../ui/render.js';
 import { renderPlotDot, renderPlotLegend } from './plot.js';
 
@@ -26,8 +28,8 @@ const MATRICES = {
     cols: ['high', 'low'],
     colOf: (c) => c.urgency,
     placed: (c) => Boolean(c.importance && c.urgency),
-    pending: (cards) => cards.filter((c) => !(c.importance && c.urgency)).length,
     awaiting: 'importance & urgency',
+    needs: ['importance', 'urgency'],
     cells: {
       'high|high': { verb: 'Answer now', sub: 'important · urgent', accent: 'var(--high)' },
       'high|low':  { verb: 'Schedule', sub: 'important · not urgent', accent: 'var(--ink-blue)' },
@@ -42,8 +44,8 @@ const MATRICES = {
     cols: ['low', 'medium', 'high'],
     colOf: (c) => effortVal(c.effort),
     placed: (c) => Boolean(c.importance),
-    pending: (cards) => cards.filter((c) => !c.importance).length,
     awaiting: 'importance',
+    needs: ['importance'],
     cells: {
       'high|low':    { verb: 'Quick win', sub: 'important · low effort', accent: 'var(--high)' },
       'high|medium': { verb: 'Solid bet', sub: 'important · medium effort', accent: 'var(--ink-blue)' },
@@ -60,8 +62,8 @@ const MATRICES = {
     cols: ['act', 'influence', 'none'],
     colOf: (c) => controlVal(c.control),
     placed: (c) => Boolean(c.importance),
-    pending: (cards) => cards.filter((c) => !c.importance).length,
     awaiting: 'importance',
+    needs: ['importance'],
     cells: {
       'high|act':       { verb: 'Act now', sub: 'important · in your hands', accent: 'var(--high)' },
       'high|influence': { verb: 'Nudge', sub: 'important · can influence', accent: 'var(--ink-blue)' },
@@ -78,8 +80,8 @@ const MATRICES = {
     cols: ['fresh', 'aging', 'stale'],
     colOf: ageBucket,
     placed: (c) => Boolean(c.importance) && c.columnId !== 'answered',
-    pending: (cards) => cards.filter((c) => c.columnId !== 'answered' && !c.importance).length,
     awaiting: 'importance',
+    needs: ['importance'],
     cells: {
       'high|fresh': { verb: 'On it', sub: 'important · touched < 2 weeks', accent: 'var(--ink-blue)' },
       'high|aging': { verb: 'Watch', sub: 'important · 2–6 weeks old', accent: 'var(--ink-amber)' },
@@ -103,6 +105,164 @@ function matrixAxis(className, text) {
   el.className = className;
   el.textContent = text;
   return el;
+}
+
+// --------------------------------------------------------------------------
+// The Unknown corner
+//
+// A card this matrix cannot place yet — importance, or urgency on the
+// Eisenhower, not set — used to be a number in the status line and nowhere
+// else. It waits in a pocket pinned on the corner where the two axes meet,
+// the one spot that belongs to no square, sorted by what it is missing. A card
+// that knows its importance but not its urgency is also marked on the edge of
+// the row it already belongs to. Pressing any of these opens a small box that
+// asks only the missing question; the last answer drops it into its square.
+
+const WORD = {
+  importance: [['high', 'important'], ['low', 'not important']],
+  urgency: [['high', 'urgent'], ['low', 'not urgent']],
+};
+
+/** What this lens still needs to know about a card, in order. */
+const missingOf = (lens, card) => lens.needs.filter((k) => !card[k]);
+
+/** The cards this lens considers but cannot place, under the filters. */
+const unknownCards = (lens) => state.cards.filter((c) => matchesFilters(c)
+  && (matrixLens !== 'followthrough' || c.columnId !== 'answered')
+  && missingOf(lens, c).length > 0);
+
+let ask = null; // the open quick-answer box
+
+function closeAsk() {
+  ask?.remove();
+  ask = null;
+}
+
+/** Ask the card's missing questions, beside the dot that was pressed. */
+function openAsk(cardId, anchor) {
+  closeAsk();
+  const card = getCard(cardId);
+  const lens = MATRICES[matrixLens];
+  if (!card || !anchor) return;
+  const missing = missingOf(lens, card);
+  if (!missing.length) return;
+
+  ask = document.createElement('div');
+  ask.className = 'matrix-ask';
+  ask.setAttribute('role', 'dialog');
+  ask.setAttribute('aria-label', `Place ${cardLabel(card)} on the matrix`);
+  const num = document.createElement('span');
+  num.className = 'card-num';
+  num.textContent = cardLabel(card);
+  const title = document.createElement('p');
+  title.className = 'matrix-ask-title';
+  title.textContent = card.title;
+  ask.append(num, title);
+
+  for (const key of missing) {
+    const row = document.createElement('div');
+    row.className = 'matrix-ask-row';
+    const name = document.createElement('span');
+    name.textContent = key;
+    row.append(name);
+    for (const [value, word] of WORD[key]) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'matrix-ask-stamp';
+      b.dataset.key = key;
+      b.dataset.value = value;
+      b.textContent = word;
+      b.addEventListener('click', () => {
+        card[key] = value;
+        card.updatedAt = Date.now();
+        closeAsk();
+        commit(`Set ${key} on ${cardLabel(card)}`);
+        const still = missingOf(MATRICES[matrixLens], card);
+        if (still.length) openAsk(card.id, document.querySelector(`.matrix-unknown .plot-dot[data-id="${card.id}"]`));
+        else announce(`${cardLabel(card)} placed`);
+      });
+      row.append(b);
+    }
+    ask.append(row);
+  }
+  const open = document.createElement('button');
+  open.type = 'button';
+  open.className = 'matrix-ask-open';
+  open.textContent = 'Open the card';
+  open.addEventListener('click', () => { closeAsk(); openDialog(card.id); });
+  ask.append(open);
+
+  document.body.append(ask);
+  // Fixed, from the dot's rectangle, kept inside the window.
+  const r = anchor.getBoundingClientRect();
+  const w = ask.offsetWidth;
+  const h = ask.offsetHeight;
+  ask.style.left = `${Math.max(8, Math.min(r.left + r.width / 2 - w / 2, innerWidth - w - 8))}px`;
+  ask.style.top = `${r.bottom + 8 + h > innerHeight ? Math.max(8, r.top - h - 8) : r.bottom + 8}px`;
+  ask.querySelector('button').focus();
+}
+
+document.addEventListener('click', (e) => {
+  if (ask && !e.target.closest('.matrix-ask, .matrix-unknown .plot-dot, .matrix-edge .plot-dot')) closeAsk();
+}, true);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && ask) closeAsk();
+});
+
+/** A dot for a card the matrix cannot place: hollow, and a press asks. */
+function unknownDot(card, lens) {
+  const dot = renderPlotDot(card);
+  dot.classList.add('plot-dot-unknown');
+  dot.setAttribute('aria-label', `${dot.getAttribute('aria-label')}, ${missingOf(lens, card).join(' and ')} unknown`);
+  // Replace the dot's own click (open the editor) with the quick answer.
+  dot.addEventListener('click', (e) => {
+    e.stopImmediatePropagation();
+    openAsk(card.id, dot);
+  }, { capture: true });
+  return dot;
+}
+
+function renderUnknown(lens, cards) {
+  const pocket = document.createElement('aside');
+  pocket.className = 'matrix-unknown';
+  pocket.setAttribute('aria-label', 'Cards this matrix cannot place yet');
+  const head = document.createElement('div');
+  head.className = 'matrix-unknown-head';
+  const label = document.createElement('span');
+  label.className = 'matrix-unknown-label';
+  label.textContent = 'Unknown';
+  const count = document.createElement('span');
+  count.className = 'matrix-quad-count';
+  count.textContent = cards.length;
+  head.append(label, count);
+  pocket.append(head);
+
+  const lanes = lens.needs.length === 2
+    ? [['both unknown', (c) => !c.importance && !c.urgency],
+      ['importance ?', (c) => !c.importance && c.urgency],
+      ['urgency ?', (c) => c.importance && !c.urgency]]
+    : [['importance ?', () => true]];
+  for (const [name, test] of lanes) {
+    const these = cards.filter(test);
+    if (!these.length) continue;
+    const lane = document.createElement('div');
+    lane.className = 'matrix-unknown-lane';
+    const what = document.createElement('span');
+    what.className = 'matrix-unknown-what';
+    what.textContent = `${name} · ${these.length}`;
+    const dots = document.createElement('div');
+    dots.className = 'matrix-unknown-dots';
+    for (const c of these) dots.append(unknownDot(c, lens));
+    lane.append(what, dots);
+    pocket.append(lane);
+  }
+  if (!cards.length) {
+    const done = document.createElement('p');
+    done.className = 'matrix-unknown-empty';
+    done.textContent = 'Every card is placed.';
+    pocket.append(done);
+  }
+  return pocket;
 }
 
 export function renderMatrix() {
@@ -142,9 +302,9 @@ export function renderMatrix() {
   const status = document.createElement('p');
   status.className = 'plot-status';
   const placed = state.cards.filter((c) => lens.placed(c) && matchesFilters(c));
-  const awaiting = lens.pending(state.cards);
+  const unknown = unknownCards(lens);
   status.textContent = `${placed.length} placed`
-    + (awaiting ? ` · ${awaiting} awaiting ${lens.awaiting}` : '');
+    + (unknown.length ? ` · ${unknown.length} unknown, waiting in the corner for ${lens.awaiting}` : '');
   head.append(title, pick, caption, status);
   sheet.append(head, renderPlotLegend());
 
@@ -191,10 +351,25 @@ export function renderMatrix() {
       dots.className = 'matrix-quad-dots';
       for (const card of cards) dots.append(renderPlotDot(card));
       cell.append(dots);
+      // Half-known: importance set, urgency not. Marked on the edge of the
+      // row it already belongs to; the corner holds it too.
+      if (x === 0 && lens.needs.includes('urgency')) {
+        const half = unknown.filter((c) => c.importance === imp && !c.urgency);
+        if (half.length) {
+          const edge = document.createElement('div');
+          edge.className = 'matrix-edge';
+          edge.title = 'Importance known, urgency not yet';
+          for (const c of half) edge.append(unknownDot(c, lens));
+          cell.append(edge);
+        }
+      }
       grid.append(cell);
     });
   }
 
+  const pocket = renderUnknown(lens, unknown);
+  pocket.style.gridRow = '4';
+  grid.append(pocket);
   sheet.append(grid);
   return sheet;
 }
