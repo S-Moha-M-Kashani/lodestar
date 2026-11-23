@@ -2684,11 +2684,129 @@ body[data-view="board"] .board-rail {
   transform: scale(1.22) rotate(-2deg);
 }
 
+/* The Unknown corner: cards this matrix cannot place yet, in a dashed pocket
+   pinned on the corner where the axes meet, sorted by what they miss. */
+.matrix-unknown {
+  grid-column: 1 / -1;
+  justify-self: start;
+  position: relative;
+  z-index: 2;
+  margin-top: -30px;
+  margin-left: -4px;
+  width: min(360px, 100%);
+  box-sizing: border-box;
+  padding: 9px 12px 11px;
+  background: var(--paper);
+  border: 1.5px dashed var(--ink-soft);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lift);
+}
+.matrix-unknown::before {
+  content: "?";
+  position: absolute;
+  left: -11px;
+  top: -11px;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--display);
+  font-size: 14px;
+  font-weight: 700;
+}
+.matrix-unknown-head { display: flex; align-items: baseline; gap: 8px; }
+.matrix-unknown-label {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+.matrix-unknown-lane {
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.matrix-unknown-what { font-family: var(--mono); font-size: 10px; color: var(--ink-soft); }
+.matrix-unknown-dots { display: flex; flex-wrap: wrap; gap: 8px; padding: 2px; }
+.matrix-unknown-empty { margin: 6px 0 0; font-family: var(--mono); font-size: 11px; color: var(--ink-soft); }
+
+/* An unknown dot: hollow and dashed in its area's ink, flowing in place. */
+.matrix-unknown .plot-dot,
+.matrix-edge .plot-dot { position: static; transform: rotate(-2deg); }
+.plot-dot.plot-dot-unknown {
+  background: var(--paper);
+  color: var(--dot);
+  border: 2px dashed var(--dot);
+  box-shadow: none;
+}
+.matrix-unknown .plot-dot:hover,
+.matrix-unknown .plot-dot:focus-visible,
+.matrix-edge .plot-dot:hover,
+.matrix-edge .plot-dot:focus-visible { transform: scale(1.18) rotate(-2deg); }
+
+/* Half-known: importance set, urgency not — marked on the left edge of its row. */
+.matrix-quad { position: relative; }
+.matrix-edge {
+  position: absolute;
+  left: -13px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 2;
+}
+.matrix-edge .plot-dot { width: 22px; height: 22px; }
+.matrix-edge .plot-dot-num { font-size: 8px; }
+
+/* The quick answer: only the missing questions, beside the dot. */
+.matrix-ask {
+  position: fixed;
+  z-index: 90;
+  width: 320px;
+  max-width: calc(100vw - 16px);
+  box-sizing: border-box;
+  padding: 12px 14px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lift);
+}
+.matrix-ask-title { margin: 2px 0 8px; font-family: var(--display); font-size: 14px; line-height: 1.3; }
+.matrix-ask-row {
+  display: grid;
+  grid-template-columns: 72px auto auto;
+  justify-content: start;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+.matrix-ask-row > span { font-family: var(--mono); font-size: 10px; color: var(--ink-soft); }
+.matrix-ask-stamp,
+.matrix-ask-open {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 4px 9px;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.matrix-ask-stamp { color: var(--ink); background: transparent; border: 1.5px solid color-mix(in srgb, var(--ink-soft) 50%, transparent); }
+.matrix-ask-stamp:hover { border-color: var(--ink); background: color-mix(in srgb, var(--ink) 8%, transparent); }
+.matrix-ask-open { margin-top: 10px; color: var(--ink-blue); background: none; border: 0; padding-left: 0; }
+.matrix-ask-open:hover { text-decoration: underline; }
+
 @media (max-width: 640px) {
   .overview, .matrix { padding: 12px 14px 20px; }
   .plot-sheet { padding: 18px 16px 18px; }
   .plot-field { height: 66vh; }
   .matrix-quad { min-height: 120px; }
+  .matrix-unknown { margin: 4px 0 0; width: 100%; }
 }
 
 /* ---------------------------------------------------------------------------
@@ -6034,6 +6152,8 @@ button.chat-source-card {
      A matrix is read by comparing its quadrants at a glance, so it is made to
      fit rather than given a sideways scroll of its own. */
   .matrix-quad { min-width: 0; }
+  .matrix-ask-stamp,
+  .matrix-ask-open { min-height: 40px; }
   .matrix-quad-head { flex-wrap: wrap; row-gap: 2px; }
   .matrix-quad-count { margin-left: auto; }
 

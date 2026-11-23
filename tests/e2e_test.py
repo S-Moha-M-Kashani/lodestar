@@ -2681,6 +2681,43 @@ try:
               page.locator(".matrix-quad-dots .plot-dot").count() == placed_expected)
         page.screenshot(path=shot("matrix.png"))
 
+        # This is an end-to-end test. A card the matrix cannot place waits in
+        # the Unknown corner, sorted by what it misses, and answering the
+        # missing questions there drops it into its square.
+        unknown_cards = [c for c in api_state()["cards"]
+                         if c.get("columnId") != "answered"
+                         and not (c.get("importance") and c.get("urgency"))]
+        pocket = page.locator(".matrix-unknown")
+        check(f"matrix: every unplaced open card waits in the Unknown corner "
+              f"({pocket.locator('.plot-dot').count()} of {len(unknown_cards)})",
+              pocket.count() == 1
+              and pocket.locator(".plot-dot.plot-dot-unknown").count() == len(unknown_cards)
+              and "unknown" in page.inner_text(".plot-status"))
+        probe = next((c for c in unknown_cards if "speculative decoding" not in c["title"]
+                      and not c.get("importance") and not c.get("urgency")), None)
+        if probe:
+            placed_now = page.locator(".matrix-quad-dots .plot-dot").count()
+            pocket.locator(f'.plot-dot[data-id="{probe["id"]}"]').click()
+            page.wait_for_selector(".matrix-ask")
+            asked = page.locator(".matrix-ask-row > span").all_text_contents()
+            page.click('.matrix-ask-stamp[data-key="importance"][data-value="high"]')
+            page.wait_for_timeout(150)
+            still_asking = page.locator(".matrix-ask-row > span").all_text_contents()
+            page.click('.matrix-ask-stamp[data-key="urgency"][data-value="high"]')
+            page.wait_for_timeout(450)
+            saved = next(c for c in api_state()["cards"] if c["id"] == probe["id"])
+            check(f"matrix: the corner asks only what is missing, and the last answer "
+                  f"places the card ({asked} then {still_asking})",
+                  asked == ["importance", "urgency"] and still_asking == ["urgency"]
+                  and page.locator(".matrix-ask").count() == 0
+                  and page.locator(f'.matrix-quad[data-imp="high"][data-urg="high"] '
+                                   f'.plot-dot[data-id="{probe["id"]}"]').count() == 1
+                  and page.locator(".matrix-quad-dots .plot-dot").count() == placed_now + 1
+                  and saved.get("importance") == "high" and saved.get("urgency") == "high")
+        else:
+            check("matrix: the corner asks only what is missing, and the last answer "
+                  "places the card", False)
+
         # Routing: set an unplaced question to Important + not urgent → the Schedule quadrant
         hl_before = page.locator('.matrix-quad[data-imp="high"][data-urg="low"] .plot-dot').count()
         placed_before = page.locator(".matrix-quad-dots .plot-dot").count()
