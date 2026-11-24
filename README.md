@@ -1,159 +1,99 @@
-# Lodestar
+<div align="center">
+
+# ✦ Lodestar
+
+**A local-first board for everything on your mind — work, love, family, health, money and the rest.**
+
+Questions, tasks, ideas, dreams and habits in one place, on your own machine,<br>
+with an optional AI assistant that proposes changes and never makes them on its own.
 
 [![CI](https://github.com/S-Moha-M-Kashani/lodestar/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/S-Moha-M-Kashani/lodestar/actions/workflows/ci.yml?query=branch%3Amaster)
-[![Licence: all rights reserved](https://img.shields.io/badge/licence-all%20rights%20reserved-8a1c1c)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-2b4c7e)](LICENSE)
 [![Node 23.4+](https://img.shields.io/badge/node-23.4%2B-1f6f4a)](package.json)
+[![Python 3.13](https://img.shields.io/badge/python-3.13-1f6f4a)](brain/pyproject.toml)
 
-*Your compass for life.*
+[Features](#features) · [Quick start](#quick-start) · [Screenshots](#screenshots) · [Architecture](#architecture) · [Contributing](#contributing)
 
-One board for your whole life — work, love, family, health, mind, music, travel, home, money.
-Every open question, task, habit and dream sits in one place, so none of it has to live in your head.
+</div>
 
-![Lodestar's Board view: three columns — Inbox, In Progress, Done — holding six cards, each with a
-ledger number, a neutral type stamp and a coloured life-area label, above a rail of nine life-area
-tabs.](docs/img/hero.png)
+![The Lodestar board: Backlog, In Progress and Done columns of index cards coloured by life area, a habits and plan rail on the right, and a summary line naming what is overdue or due soon.](docs/img/hero.png)
 
-**What makes it different**
+## Why Lodestar
 
-- **Built for a life, not a sprint.** A card is a question, a problem, a task, an idea, a dream or a
-  habit, filed under a life area rather than a project.
-- **Yours, on your machine, keyless.** No account, no cloud, no API key: vanilla HTML/CSS/JavaScript,
-  a zero-dependency Node server, one SQLite file — and by default even the AI models run locally.
-  Clone it and `npm start`; there is no install step and no build step.
-- **The assistant proposes, you decide.** It has no way to write to your board: a card it invents
-  waits for your approval, and an edit it suggests opens in the ordinary card dialog for you to change.
-- **Nothing disappears quietly.** Destroying a card takes two deliberate acts, a save that looks
-  lossy archives to the Trash instead of deleting, and the database keeps backing itself up.
-- **It looks like an engineer's card ledger.** Quad-ruled paper, ruled index cards with permanent IDs
-  (`C-001`, `C-002`, …), card types as ink stamps, life areas as coloured index tabs.
+Most planning tools are built for work: projects, sprints, tickets. Real life is not shaped like
+that. *"Should we move to another city?"* is a question, not a task. *"See Japan in 2027"* is a
+dream. *"Meditate twice a day"* never finishes.
+
+Lodestar gives each of those a home, keeps them on your own computer, and tells you each day
+which few deserve your attention.
 
 ## Features
 
-- **Three-column lifecycle**: Inbox → In Progress → Done, with drag & drop and full keyboard support
-- **Seven views**: Board, Backlog (the Inbox as a scannable list), Overview (a semantic map — cards plotted by meaning, embedded in-browser), Matrix (importance crossed with urgency, effort, control, or staleness), Areas (which part of your life is starved), Review (the GTD weekly sweep), and Assistant (chat with the brain)
-- **Card types**: question, problem, task, idea, dream, habit — habits repeat rather than finish, wear a punch strip of per-period tick boxes, and remind you when due
-- **Categories**: ten life areas to start, each with its own colour; add, remove, and recolour up to 24. Every board keeps its own set
-- **Deadlines and derived priority**: importance × urgency gives P1–P4, never stored, so it can't disagree with the judgements behind it
-- **Plan dates**: any card can say when you mean to get to it — a year, a year and month, or a full day. It follows the deadline until you set it by hand, and a rail beside the board groups the planned cards by how near they are
-- **Quick capture, search, filters, tags**, and a pro/con balance sheet on any card tagged `decision`
-- **Undo & History**: every change is logged and any logged state can be restored, git-style
-- **Four themes**, following your system preference until you pick one
+- **Six kinds of card** — question, problem, task, idea, dream and habit.
+- **Life areas, not projects** — nine colour-coded areas out of the box; rename, recolour or add your own.
+- **A daily summary line** — overdue cards, habits falling behind, plans due now, areas gone quiet.
+- **Habits** — "twice a day" or "every Sunday at 10", with a punch strip and a history.
+- **Deadlines and plans** — *when it's due* and *when you mean to do it*, from "2027" down to a day.
+- **Cards with parts** — break a big card into smaller ones.
+- **Filters and lenses** — one-click views (*Today*, *This week*, *Waiting on me*, *Finished*) and a filter window for type, area, priority, tags and dates.
+- **Other views** — a meaning map, an Eisenhower matrix, a life-area radar and a weekly review.
+- **Several boards** — e.g. a shared one for a household and a private one for yourself.
+- **Works on a phone** — installable to the home screen, no separate app.
+- **AI assistant (optional)** — ask in plain language or by voice. It can search and *propose* cards or edits; nothing changes until you approve. Runs on a local model (Ollama), your Claude or ChatGPT subscription, or OpenRouter.
+- **MCP server** — use the board from Claude Code, Claude Desktop or any MCP client.
 
-## A look at it
+**Private by design:** one SQLite file on your machine, no account, no cloud, no telemetry.
+Password-protected and loopback-only by default. Deleting a card takes two deliberate steps,
+every change can be undone, and the database backs itself up. See [`SECURITY.md`](SECURITY.md).
 
-Every shot below is a real screenshot — from the end-to-end test suite, or from
-a scripted session driving the app for the purpose. None is a mockup and none is
-retouched. The card text in them comes from the six seed cards the app ships
-with, the demo board in `sample-overview.json` (both already in this
-repository), and two titles typed into a throwaway board while recording, so
-none of it is anyone's real board. Details of each image, how it was made, and
-what it is evidence for are in [`docs/img/README.md`](docs/img/README.md).
+## Quick start
 
-| | |
-| --- | --- |
-| ![The Areas view: a nine-spoke radar wheel labelled Work, Love, Family, Health, Mind, Music, Travel, Home, Money, with per-area tiles below showing open counts, how long each has been carried, and a sparkline.](docs/img/areas.png) **Areas** — nine life areas side by side. A lopsided wheel means a starved corner. | ![The Matrix view: four Eisenhower quadrants — Answer now, Schedule, Delegate, Drop — each holding a category-coloured dot, with a per-area colour legend above.](docs/img/matrix.png) **Matrix** — importance against urgency, placed by the card's own fields. |
-| ![The same board grown to 61 cards across nine life areas, with a "1 habit due — Meditate (1/2 today)" banner at the top, a Habits rail on the right, and a habit card showing its punch strip and a 21-day completion tape reading "15 of 21 complete".](docs/img/board-habits.png) **Habits** — a due banner, a rail, and a 21-day tape per habit. | ![The Review view scrolled to Today's Resurfacing: three long-untouched cards, each offering "Still matters", "Open" and "To Trash", above a "Stamp the review done" button.](docs/img/review.png) **Review** — three old thoughts re-met on purpose: keep, open, or let go. |
-| ![The Board History dialog listing timestamped changes newest first with a Restore button on each, one row marked CURRENT, and a Deleted cards section explaining that "Delete permanently" is the only thing that truly erases a card.](docs/img/history.png) **History** — every change logged and restorable; only *Delete permanently* really erases. | ![The Categories dialog listing ten life areas, each in its own colour with its card count and a Remove button, plus a new-category field and a row of colour swatches.](docs/img/categories.png) **Life areas** — yours to name and colour; removing one never deletes its cards. |
-
-## Run it
-
-Needs **Node 23.4+** (for built-in `node:sqlite`) and, for the Assistant, **uv**. The board alone is enough to capture and organise cards; each further service adds a capability and degrades cleanly when absent.
+**Board only** — needs [Node.js 23.4+](https://nodejs.org). No `npm install`, no build step.
 
 ```sh
 git clone https://github.com/S-Moha-M-Kashani/lodestar.git
 cd lodestar
-npm run auth:setup                       # once — prints a line for .env
-npm start                                # the board on http://localhost:3000
+npm run auth:setup   # choose a password; paste the printed line into .env
+npm start            # open http://localhost:3000
 ```
 
-`npm run auth:setup` asks for a password without echoing it and prints one line
-(`LODESTAR_AUTH_PASSWORD_HASH=…`) to put in `.env`; the server refuses to boot
-without it. Apart from that there is nothing to install and nothing to build:
-the server has zero dependencies and the frontend is native ES modules, so
-there is no `npm install` step and no bundler.
-
-**Lodestar answers on this computer only, and asks for the password even
-there.** It listens on `127.0.0.1`, refuses any `Host` other than the local
-ones, and puts every board and chat route behind a session — so a peer on the
-same university or café Wi-Fi cannot reach it at all. There is no LAN mode and
-no "trusted network" detection; to use the board from another device, forward
-the loopback port over Tailscale/WireGuard or an SSH tunnel and log in as
-usual. [`docs/security.md`](docs/security.md) covers all of it.
-
-For the **Assistant**, start the brain (port 9000) in a second terminal:
+**Board + AI assistant** — needs [Docker](https://docs.docker.com/get-docker/).
 
 ```sh
-set -a; . ./.env; set +a                 # if you keep a .env — uvicorn never reads it itself
+cp .env.example .env   # then run `npm run auth:setup` and paste its line into .env
+docker compose up --build
+```
+
+The assistant uses your Claude subscription by default: put the token from `claude setup-token`
+in `.env` as `CLAUDE_CODE_OAUTH_TOKEN`. Other engines, phone access and every setting are
+documented in [`.env.example`](.env.example),
+[`docs/cli-backends.md`](docs/cli-backends.md) and [`docs/security.md`](docs/security.md).
+
+<details>
+<summary><b>Run the assistant without Docker</b></summary>
+
+Needs [uv](https://docs.astral.sh/uv/).
+
+```sh
+set -a; . ./.env; set +a   # uvicorn does not read .env on its own
 uv run --project brain --extra local-embeddings uvicorn lodestar_brain.server:app --port 9000
 ```
 
-The `local-embeddings` extra is ~1 GB of torch for real semantic retrieval; `BRAIN_EMBEDDER=fake uv run --project brain uvicorn …` skips it and makes retrieval lexical. The default chat backend is a local model via [Ollama](https://ollama.com):
+Choose the model with `BRAIN_LLM`: `ollama` (default), `claude-cli`, `codex-cli`, or
+`openrouter` (with `OPENROUTER_API_KEY`). Use `BRAIN_EMBEDDER=fake` to skip the ~1 GB
+embedding model.
+
+</details>
+
+<details>
+<summary><b>Use the board from an MCP client</b></summary>
 
 ```sh
-ollama pull 4skl/gemma4-e2b-mtp          # the default BRAIN_MODEL
+npm start      # the board
+npm run mcp    # the MCP server, on stdio
 ```
 
-`OPENROUTER_API_KEY` plus `BRAIN_LLM=openrouter` switches chat to a hosted model — the key lives only in the brain's environment; the browser never sees it. Chat memory (the assistant recalling past conversations) needs a [Chroma](https://www.trychroma.com/) server on :8003 (`docker compose up -d chroma` starts one); without it the brain logs a warning, disables recall, and serves everything else.
-
-Or run board and brain together with Docker (Chroma and Ollama stay on the host):
-
-```sh
-docker compose up --build                # then open http://localhost:3000
-```
-
-Chat still needs a model from the host's side: have Ollama running, or `export OPENROUTER_API_KEY=… BRAIN_LLM=openrouter` before composing. Without either, chat fails while the board and every non-chat feature keep working.
-
-Every backend — chat model, embedder, transcriber, search — is chosen by an env var, and an unknown value raises at boot rather than silently picking something else. Every variable is documented in `.env.example`, and the same settings are commented in `docker-compose.yml`.
-
-## How your data is stored
-
-Local-first: the browser keeps a working copy in `localStorage`, and the Node server persists every change to a single SQLite file (`board.db`, or wherever `BOARD_DB` points). No external database server, no cloud dependency, and boards never sync off the machine.
-
-One deliberate durability guarantee: **a card is destroyed only by a two-step act** — delete it from the board, then "Delete permanently" from the Trash. A save missing some cards archives them to the Trash rather than removing them, so a partial or buggy write can never blank your board. Export/Import as JSON moves a board deliberately.
-
-Every test run backs up `board.db` first (timestamped copies under `backups/`, plus Google Drive if [rclone](https://rclone.org/) is configured — one-time OAuth, no Google password ever stored or read), and the server snapshots the database whenever a save brings a card it has never seen.
-
-## The Assistant
-
-The Assistant view talks to the brain — one function-calling agent that researches questions on the web (with cited urls), operates the board in plain language, finds connections between your cards (hybrid dense + BM25 retrieval with a relevance gate, so it can honestly say *"I have nothing on that"*), and recalls past conversations. Each reply shows the tools it actually called.
-
-It cannot put a card on your board by itself: a card it invents is a **proposal**, held off the board until you approve it, and an edit it suggests opens in the ordinary card dialog for you to change and apply. Deleting is yours alone. A mic beside Send dictates into the composer — locally by default (Parakeet on Apple Silicon), and the transcript is editable text, never auto-sent.
-
-![The Assistant view: a question asking for a new task card, the assistant's reply saying it has
-proposed one, and above it a dashed panel headed "PROPOSED — 1 CARD AWAITING YOUR APPROVAL" holding
-the card "Book a dentist appointment" with Reject and Approve buttons.](docs/img/assistant.png)
-
-![Fifteen seconds of the same thing: a question is typed, the reply streams in, the proposed card
-appears, Approve is pressed, and the card lands on the Board as C-061 "Book a dentist appointment"
-in Health.](docs/img/approval-gate.gif)
-
-*The gate, still and then in motion, both recorded against a live model.* The assistant answers,
-proposes a card, and stops. Nothing reaches the board until **Approve** is pressed — and then it
-arrives as an ordinary card with a ledger number of its own. What was recorded to make these, and
-why it had to be a live model rather than the test suite's fake one, is in
-[`docs/img/README.md`](docs/img/README.md).
-
-Privacy is a design rule, not a setting: conversations are never sent to any tracing or analytics service, web snippets and recalled text are fenced as data rather than instructions before the model reads them, and every link a web search returns is safety-checked before the model may cite it.
-
-## The board from your editor (MCP)
-
-Lodestar speaks [MCP](https://modelcontextprotocol.io), so an assistant that
-lives where you work — Claude Code in a terminal, Claude Desktop — can read and
-run the board without a browser tab. `mcp/server.mjs` is a small stdio server
-with no dependencies; it is a **client of the board's HTTP API**, so the running
-board stays the one thing that touches the database.
-
-Start the board first, then point a client at the server:
-
-```sh
-npm start                                # the board on :3000 — the MCP server talks to this
-npm run mcp                              # the MCP server, on stdin/stdout
-```
-
-In Claude Code the wiring is already in the repo: open this project and approve
-the `lodestar` server when prompted (`.mcp.json`). `claude mcp list` shows it
-connected. For Claude Desktop, add the same three lines to
-`claude_desktop_config.json`:
+Claude Code picks it up from `.mcp.json`. For Claude Desktop:
 
 ```json
 {
@@ -167,174 +107,60 @@ connected. For Claude Desktop, add the same three lines to
 }
 ```
 
-It authenticates with `LODESTAR_SERVICE_TOKEN` — the same non-browser
-credential the brain uses, read straight out of `.env`, so there is nothing to
-export and no password held by a second process. Set `LODESTAR_BOARD_URL` to
-reach a board on another port; `npm run mcp-test` points it at the `:3001`
-sandbox.
+Tools: `describe_board`, `list_cards`, `get_card`, `create_card`, `update_card`,
+`delete_card` (moves to Trash), `list_trash`, `restore_card`.
 
-**Eight tools.** `describe_board` (the life-area ids and tags, which are this
-board's own and cannot be guessed), `list_cards` (every filter the board can
-express — keyword, column, type, life area, importance, urgency, effort,
-control, tags, lineage, and date spans over captured/finished/updated/due/plan
-— combined with AND), `get_card`, `create_card`, `update_card`, `delete_card`,
-`list_trash`, `restore_card`.
+</details>
+
+## Screenshots
+
+All screenshots show the bundled demo data ([`sample-overview.json`](sample-overview.json)).
+
+| | |
+| --- | --- |
+| ![The card editor: title, notes, and one row each for column, type, life area, priority, dates and tags.](docs/img/card.png) **Card editor** — every property on one page. | ![The filter window: rows of toggles for column, type, life area, priority, tags, dates and sub-cards.](docs/img/filters.png) **Filters** — every row takes several answers. |
+| ![The Overview map: cards as numbered dots, placed so that similar cards sit close together.](docs/img/overview.png) **Overview** — cards mapped by meaning. | ![The Matrix view: Eisenhower quadrants of numbered dots, plus an Unknown corner for unrated cards.](docs/img/matrix.png) **Matrix** — importance against urgency. |
+| ![The Areas view: a radar of open cards per life area above one tile per area.](docs/img/areas.png) **Areas** — a lopsided wheel shows a neglected corner. | ![The Review view: weekly counts, a week-over-week table and a list of neglected cards.](docs/img/review.png) **Weekly review** — what moved and what was forgotten. |
+| ![The Assistant proposing a card, with Reject and Approve buttons.](docs/img/assistant.png) **Assistant** — proposals wait for your approval. | <img src="docs/img/mobile.png" width="260" alt="Lodestar on a phone: the board narrowed, with large touch targets and the next column peeking in from the right."> <br> **Phone** — same app, narrowed. |
+
+<details>
+<summary><b>The approval flow in 15 seconds</b></summary>
+
+![A question is typed into the assistant, it proposes a card, Approve is pressed, and the card lands on the board.](docs/img/approval-gate.gif)
+
+</details>
+
+## Architecture
 
 ```
-▸ list_cards({"keyword":"mountain"})
-C-004 · task · In Progress · Travel · #autumn — Plan a long weekend in the mountains  [46a3ffe8…]
-
-▸ create_card({"title":"try the MCP server","category":"work","deadline":"2026-09-30"})
-Written down:
-C-397 · task · Inbox · Work · due 2026-09-30 · #mcp — try the MCP server  [id-lxspvu10…]
+browser ──▶ board server :3000 ──▶ assistant "brain" :9000 ──▶ Chroma :8003
+vanilla JS   Node + SQLite          Python, LangGraph           chat memory
+no build     one dependency         one agent, three tools      (optional)
 ```
 
-Two things it deliberately cannot do. **It cannot destroy a card**: `delete_card`
-moves it to the Trash, where `list_trash` and `restore_card` reach it, and
-"Delete permanently" stays on the board itself where you can see what you are
-emptying. And **it never sends a partial board** — every write reads the whole
-board, changes it and puts all of it back, which is what keeps one edit from
-archiving everything it did not mention.
+- **Frontend:** native ES modules, no framework, no bundler.
+- **Server:** `node:http` + `node:sqlite`; the board works fully without the assistant.
+- **Assistant:** a LangGraph agent with hybrid search (dense + BM25 + reranking). It can read
+  and propose, but has no tool that writes or deletes on its own.
+- **Swappable backends:** chat model, embedder, reranker and speech-to-text are each chosen by
+  an environment variable; an unknown value stops startup instead of silently falling back.
 
-Unlike the Assistant's own agent, these tools write straight to the board: you
-are driving them yourself and your client shows you each call before it runs.
-One undo in the app puts back anything a call got wrong.
+More detail: [`ARCHITECTURE.md`](ARCHITECTURE.md) · design records in
+[`docs/decisions/`](docs/decisions/) · release notes in [`CHANGELOG.md`](CHANGELOG.md).
 
-## Why I built this
+## Contributing
 
-I have more ambitions and ideas than I will ever get through — a running
-backlog of things I want to build, learn, fix, or just sit with, and most of
-them used to quietly disappear, because there was nowhere for them to live
-between having them and getting to them. Every tool I tried was built for
-work. They assume a project, a sprint, a deadline — and the things that
-actually take up room in a head are not shaped like that. *"How do we support
-mum's move this autumn?"* is not a ticket. It is a question that will sit
-unresolved for months, that belongs beside a guitar I mean to restring and a
-deploy that keeps failing on Fridays, and that no kanban board has a column
-for. So the things I most needed to stop carrying were the things no tool
-would hold, and they stayed in my head.
-
-Lodestar is the tool that holds them, meant to outlast any one sprint because
-a life does. A card can be a *question* with no answer yet, and that is a
-legitimate state to be in rather than a task nobody has started. Nine life
-areas sit at the same level, so work cannot quietly take the whole board.
-Nothing is ever deleted by accident, because the whole promise falls apart the
-first time it loses something. And it runs on my own machine with no account
-and no cloud, because a board holding this much of a private life should not
-be somewhere else.
-
-**What's exclusive to it, not incidental:** the assistant reads everything and
-writes nothing — a card it invents is a proposal waiting on a click, never a
-fact already on the board; every backend it depends on (chat model, embedder,
-reranker, transcriber, search, link safety) is a named seam with no `auto`
-mode, so nothing silently picks a paid API on one machine and a local model on
-another; and the sync protocol is a hash of the exact bytes a client was sent
-— the answer to two laptops once costing 24 real cards in one save.
-
-**The effort, in what it actually cost:** this was not a weekend build —
-fourteen dated design records in [`docs/decisions/`](docs/decisions/), each
-written *before* its code and several carrying an amendment for where reality
-disagreed; four layers of tests, developed test-first and run fully offline; a
-whole security-hardening pass (loopback-only binding, an exact `Host`
-allowlist, a server that refuses to boot rather than serve on a missing
-password); and, for the one security claim that matters most, a measured and
-published number instead of a promise — 3 of 12 injection payloads got
-through, not "it's safe."
-
-The AI part came last and deliberately weakest: it can read everything and
-write nothing. See below.
-
-## How it's built
-
-Three services, each degrading cleanly when the next one is absent:
-
-- **The browser** — vanilla HTML, CSS and JavaScript as 51 native ES modules,
-  no framework, no bundler, no build step. `index.html` loads one entry point.
-- **The board server** (`:3000`) — the whole backend in one file of raw
-  `node:http` and `node:sqlite`, with **one** npm dependency (`pg`, and only
-  because Postgres has no equivalent in the standard library). It owns the
-  SQLite databases, serves the frontend, and proxies the assistant so the API
-  key never reaches the browser.
-- **The brain** (`:9000`) — a Python FastAPI service wrapping one LangGraph
-  agent: tools, hybrid retrieval over your cards, and chat memory in
-  [Chroma](https://www.trychroma.com/) (`:8003`) when it is running.
-
-Four things are worth more than the diagram:
-
-- **The assistant has no write path to the board at all.** Not a permission it
-  is denied — the set of mutating tools is empty and the brain's board client
-  carries no save method. A card it invents is a row waiting for your click.
-- **Every backend is a seam chosen by an environment variable, and none has an
-  `auto` mode.** Chat model, embedder, reranker, relevance gate, transcriber,
-  search, link safety, tracing. An unknown value raises at boot rather than
-  quietly picking something — because a config that silently transcribed
-  privately on one machine and billed a paid API on another is a bug this
-  project already shipped once.
-- **The prompt-injection defence is a fence, and its measurement is published
-  rather than implied**: 3 of 12 hostile payloads got through on
-  `openai/gpt-5-nano` — 25%, all three in the card-notes channel. Written down
-  because a security claim with no number behind it is marketing.
-- **The server owns the board whenever it answers.** Two laptops and one board
-  server once cost 24 cards; the protocol that replaced that is a hash of the
-  exact bytes a client was sent, and it is the most carefully argued code here.
-
-Full detail, with a link to the source or test behind every claim:
-**[`ARCHITECTURE.md`](ARCHITECTURE.md)**, and the fourteen dated design records
-in [`docs/decisions/`](docs/decisions/) — each written before its code and kept
-afterwards, several carrying an amendment saying where reality disagreed.
-
-## Contributing, and your own data
-
-This is a personal project under a proprietary licence, so there is no
-contribution process and no pull requests. Issues pointing out a bug or a wrong
-claim are welcome, and there is a form for each. A security problem goes to
-email rather than an issue — [`SECURITY.md`](SECURITY.md) says where and what is
-in scope.
-
-What changed in each release, newest first, is in
-[`CHANGELOG.md`](CHANGELOG.md); every entry there is a tag you can check out and
-run.
-
-**If you do run a copy, two things matter:**
-
-- **Never put a real database or a real conversation anywhere near a commit,
-  an issue, or a screenshot.** `databases/` and `backups/` are ignored
-  wholesale, every test entry point backs up `board.db` before it runs, and
-  [`scripts/release-hygiene.mjs`](scripts/release-hygiene.mjs) scans a branch's
-  whole *history* — not just its current tree — for database paths and for
-  identifiers you name, refusing to pass if it finds any. A file deleted in a
-  later commit is still reachable from the branch; that gate exists because the
-  tidy-up commit is what people do instead of a rewrite and it looks identical
-  from outside.
-- **The security boundary is loopback plus a password**, and it is not a
-  suggestion: the server binds `127.0.0.1`, allows an exact set of `Host`
-  values rather than a pattern, and fails to boot if the password hash is
-  missing or malformed. [`docs/security.md`](docs/security.md) explains what
-  that does and does not protect, and what to do instead of exposing a port.
-
-Before publishing anything, [`docs/release-checklist.md`](docs/release-checklist.md)
-lists every gate with the command that checks it.
-
-## Tests
-
-Developed test-first; all four layers run fully offline (deterministic fake LLM and embedder — no key, no network):
+Contributions are welcome — bug reports, fixes, docs and new ideas. Read
+[`CONTRIBUTING.md`](CONTRIBUTING.md) for setup and conventions. In short:
 
 ```sh
-npm run test:server                                 # server + backup unit suites
-uv run --project brain pytest brain/tests -v        # brain unit tests
-uv run --with playwright python tests/e2e_test.py   # full e2e — starts everything itself
-npm run test:all                                    # all of the above
+node --test tests/*.test.js                         # server tests
+uv run --project brain pytest brain/tests           # assistant tests (offline)
+uv run --with playwright python tests/e2e_test.py   # end-to-end browser tests
 ```
+
+Please report security issues privately, as described in [`SECURITY.md`](SECURITY.md).
 
 ## License
 
-Proprietary — all rights reserved; published for portfolio and demonstration
-purposes only. See [`LICENSE`](LICENSE).
-
-**You may clone this repository and run it on your own machine**, exactly as
-*Run it* above describes. That permission is granted deliberately and it is the
-whole of it: a life dashboard you cannot run is a screenshot.
-
-**Everything else is reserved.** Not for use in another project, commercial or
-not; not to be modified, redistributed, or run as a service for anyone else.
-For anything beyond your own local copy, ask: s.moha.m.kashani@gmail.com
+[MIT](LICENSE) © 2026 Moha Kashani
