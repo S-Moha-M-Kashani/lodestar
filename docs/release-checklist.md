@@ -109,5 +109,5 @@ Open the repository's public URL and read the README as a stranger would.
 | --- | --- |
 | Every image renders | no broken-image icons |
 | Every link resolves | including the ones into `docs/decisions/` |
-| The licence wording matches `LICENSE` | both say all rights reserved, both grant the same local-use permission |
+| The licence wording matches `LICENSE` | both say MIT |
 | Nothing private is visible | no real names, no real card text, no chat content |

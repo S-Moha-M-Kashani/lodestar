@@ -1,8 +1,8 @@
 {
   "name": "lodestar",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "private": true,
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "MIT",
   "author": "Moha Kashani <s.moha.m.kashani@gmail.com>",
   "homepage": "https://github.com/S-Moha-M-Kashani/lodestar#readme",
   "repository": {
