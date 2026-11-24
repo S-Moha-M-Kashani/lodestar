@@ -10,6 +10,20 @@ Dates are the day the release point was built. Versions follow
 [semantic versioning](https://semver.org/) — a major number for a break, a
 minor for a capability, a patch for a fix.
 
+## [2.5.0] — 2026-11-24
+
+**Lodestar is open source under the MIT License, with one filter window.**
+
+Every filter now lives in one window, and each row in it takes several answers
+at once — for example two life areas and three card types together. The Matrix
+gains an *Unknown* corner for cards whose importance or urgency is not set yet,
+so they no longer drop out of sight.
+
+The README was rewritten for new visitors, with fresh screenshots of the demo
+board. A contributing guide, a feature-request form and a pull-request
+checklist were added, and `scripts/capture-screenshots.py` regenerates every
+screenshot from a throwaway board.
+
 ## [2.4.0] — 2026-11-21
 
 **The Assistant answers through Claude by default.**
@@ -649,6 +663,7 @@ back through, and the board travels as a JSON file.
 **The board exists.** Three columns you drag cards between, saved in the
 browser.
 
+[v2.5.0]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v2.4.0...v2.5.0
 [v2.4.0]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v2.3.2...v2.4.0
 [v2.3.2]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v2.3.1...v2.3.2
 [v2.3.1]: https://github.com/S-Moha-M-Kashani/lodestar/compare/v2.3.0...v2.3.1

@@ -35,15 +35,19 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { LENSES, lensFilters, lensOf } from '../js/core/lenses.js';
 
-// The six fields a lens is allowed to set. `search` and `category` are
+// The fields a lens is allowed to set. `search`, `category` and `tagMode` are
 // deliberately not among them (rule 4 above).
-const KEYS = ['type', 'prio', 'tags', 'column', 'nesting', 'range'];
+const KEYS = ['type', 'column', 'importance', 'urgency', 'effort', 'control', 'tags', 'nesting', 'range'];
+// A lens patch as the board holds it: every multi-answer field a Set.
+const asSet = (f) => Object.fromEntries(Object.entries(f).map(([k, v]) => [k, Array.isArray(v) ? new Set(v) : v]));
+const ANY = { type: [], column: [], importance: [], urgency: [], effort: [], control: [], tags: [], nesting: '' };
 
 // The filter state the app boots in, spelled out rather than imported:
 // js/core/state.js reaches ui/dom.js, so importing it would take this suite
 // off node. If these two ever disagree the check below is what says so.
 const DEFAULTS = {
-  type: '', prio: '', tags: new Set(), column: '', nesting: '',
+  type: new Set(), column: new Set(), importance: new Set(), urgency: new Set(), effort: new Set(),
+  control: new Set(), tags: new Set(), tagMode: 'all', nesting: '',
   range: { field: 'created', preset: '', from: '', to: '' },
 };
 
@@ -67,11 +71,11 @@ test('the five lenses, in a fixed order, each setting every field it can', () =>
   // a fortnight. It reads the deadline alone; a plan is a partial date the
   // rail already keeps its own section for.
   assert.deepEqual(lensFilters('today'), {
-    type: '', prio: '', tags: [], column: '', nesting: '',
+    ...ANY,
     range: { field: 'due', preset: 'through-today', from: '', to: '' },
   });
   assert.deepEqual(lensFilters('week'), {
-    type: '', prio: '', tags: [], column: '', nesting: '',
+    ...ANY,
     range: { field: 'due', preset: 'week', from: '', to: '' },
   });
   // 'Everything open' is every filter off — which is also the state the app
@@ -79,20 +83,20 @@ test('the five lenses, in a fixed order, each setting every field it can', () =>
   // That is the honest answer and not a special case: an unnarrowed board *is*
   // everything open.
   assert.deepEqual(lensFilters('open'), {
-    type: '', prio: '', tags: [], column: '', nesting: '',
+    ...ANY,
     range: { field: 'created', preset: '', from: '', to: '' },
   });
   // 'Waiting on me' is the In Progress column: work already begun and stalled
   // on nobody but the reader.
   assert.deepEqual(lensFilters('waiting'), {
-    type: '', prio: '', tags: [], column: 'in-progress', nesting: '',
+    ...ANY, column: ['in-progress'],
     range: { field: 'created', preset: '', from: '', to: '' },
   });
   // 'Finished' names the Done column *and* the month on `doneAt`, so the
   // hide-Done default stands down by the rule that already exists
   // (`askingAboutFinished`) rather than by a rule written for lenses.
   assert.deepEqual(lensFilters('done'), {
-    type: '', prio: '', tags: [], column: 'answered', nesting: '',
+    ...ANY, column: ['answered'],
     range: { field: 'done', preset: 'month', from: '', to: '' },
   });
 });
@@ -102,11 +106,11 @@ test('a lens hands out a fresh patch, never the table', () => {
   // Rule 3. Two presses of one lens must not be able to see each other's
   // edits, and neither may a caller that normalises the patch in place.
   const a = lensFilters('done');
-  a.column = 'inbox';
+  a.column.push('inbox');
   a.tags.push('berlin');
   a.range.preset = 'year';
   const b = lensFilters('done');
-  assert.equal(b.column, 'answered');
+  assert.deepEqual(b.column, ['answered']);
   assert.deepEqual(b.tags, []);
   assert.equal(b.range.preset, 'month');
   assert.notEqual(a.range, b.range);
@@ -129,7 +133,7 @@ test('which lens is pressed is read back off the filters, never stored', () => {
   // the state it produces, or the row can never light up.
   for (const lens of LENSES) {
     const f = lensFilters(lens.id);
-    assert.equal(lensOf({ ...f, tags: new Set(f.tags) }), lens.id, lens.id);
+    assert.equal(lensOf(asSet(f)), lens.id, lens.id);
   }
 
   // The board as it boots is 'Everything open'.
@@ -139,16 +143,16 @@ test('which lens is pressed is read back off the filters, never stored', () => {
   // goes. A button still lit over a board it no longer describes is the whole
   // failure this function exists to prevent.
   const today = lensFilters('today');
-  const asSet = (f) => ({ ...f, tags: new Set(f.tags) });
-  assert.equal(lensOf(asSet({ ...today, type: 'task' })), '');
+  assert.equal(lensOf(asSet({ ...today, type: ['task'] })), '');
   assert.equal(lensOf(asSet({ ...today, nesting: 'all' })), '');
-  assert.equal(lensOf(asSet({ ...today, prio: '1' })), '');
+  assert.equal(lensOf(asSet({ ...today, effort: ['low'] })), '');
+  assert.equal(lensOf(asSet({ ...today, column: ['inbox', 'on-hold'] })), '');
   assert.equal(lensOf({ ...today, tags: new Set(['berlin']) }), '');
   assert.equal(lensOf(asSet({ ...today, range: { ...today.range, preset: 'month' } })), '');
 
   // Rule 4: a lens is silent about the text search and the life area, so it
   // stays pressed while the reader searches inside it or stands in one area.
-  assert.equal(lensOf({ ...asSet(today), search: 'visa', category: 'work' }), 'today');
+  assert.equal(lensOf({ ...asSet(today), search: 'visa', category: new Set(['work']), tagMode: 'any' }), 'today');
 
   // A tag list is the same filter whichever order it was ticked in — otherwise
   // a lens could un-press itself when a Set is rebuilt from storage.

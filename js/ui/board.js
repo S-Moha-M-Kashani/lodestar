@@ -351,7 +351,7 @@ function renderCard(card) {
 // filters the board to that drawer; ✎ Edit manages the registry itself.
 export function renderCatRail() {
   const rail = $('#cat-rail');
-  if (filters.category && !catById(filters.category)) filters.category = '';
+  for (const id of [...filters.category]) if (!catById(id)) filters.category.delete(id);
   rail.hidden = false;
   rail.innerHTML = '';
 
@@ -360,10 +360,16 @@ export function renderCatRail() {
     tab.className = ('cat-tab ' + extraClass).trim();
     tab.dataset.cat = id;
     tab.style.setProperty('--cat', color);
-    tab.setAttribute('aria-pressed', String(filters.category === id));
+    // A tab stands in one area: pressed while the filter holds it (several
+    // areas are chosen in the filter window), and pressing it makes it the only
+    // one — or, when it already is, lifts the filter. "All" is pressed when
+    // nothing narrows by area.
+    const only = filters.category.size === 1 && filters.category.has(id);
+    tab.setAttribute('aria-pressed', String(id ? filters.category.has(id) : !filters.category.size));
     tab.textContent = label;
     tab.addEventListener('click', () => {
-      filters.category = filters.category === id ? '' : id;
+      filters.category.clear();
+      if (id && !only) filters.category.add(id);
       render();
     });
     return tab;
@@ -383,8 +389,7 @@ export function renderCatRail() {
 
 // The tag search box (#tag-search) is static markup in index.html, so this is
 // the one place that may write it — an imported binding is read-only
-// everywhere else. It narrows which tags are *listed*, in the bar and the
-// dropdown both; it never touches `filters` and so never narrows the board,
+// everywhere else. It narrows which tags are *listed* in the bar; it never touches `filters` and so never narrows the board,
 // which is why its handler in js/ui/toolbar.js calls renderTagBar() and not
 // render(). Module-level rather than on `filters`, for that same reason: it
 // is not a board filter, it is display state for this one control.
@@ -409,19 +414,6 @@ export function renderTagBar() {
   const q = tagQuery.trim().toLowerCase();
   const shown = allTags.filter((t) => !q || t.toLowerCase().includes(q) || filters.tags.has(t));
 
-  // The dropdown twin: same tags as the bar, one pick at a time. Repainted
-  // here because this is the one place that already knows every tag; its
-  // value mirrors the Set only when the Set is a single tag — the bar can
-  // build combinations the dropdown has no word for.
-  const dropdown = $('#tag-filter');
-  if (dropdown) {
-    dropdown.replaceChildren(
-      new Option('All tags', ''),
-      ...shown.map((t) => new Option('#' + t, t)),
-    );
-    dropdown.value = filters.tags.size === 1 ? [...filters.tags][0] : '';
-  }
-
   // Shown whenever there is a tag to search for, board-wide — not past some
   // count, which would be a control the reader can't rely on finding twice in
   // a row. A board with none at all shows neither this nor the bar it narrows.
@@ -438,11 +430,6 @@ export function renderTagBar() {
     bar.append(note);
     return;
   }
-
-  const label = document.createElement('span');
-  label.className = 'label';
-  label.textContent = 'Tags:';
-  bar.append(label);
 
   for (const tag of shown) {
     const chip = document.createElement('button');

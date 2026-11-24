@@ -28,7 +28,7 @@
 // moment it reaches ui/dom.js this file stops loading under node.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dayStart, rangeText, rangeVal, spanOf } from '../js/core/timespan.js';
+import { dayStart, rangeText, rangeVal, spanHint, spanOf } from '../js/core/timespan.js';
 
 // The Monday every span below is measured from, and the two neighbours the
 // boundaries are checked against.
@@ -84,6 +84,21 @@ test('each preset spans its own local period, end of day included', () => {
   const days30 = spanOf(range({ preset: 'days30' }), NOW);
   assert.equal(days30.from, at('2026-08-09T00:00:00.000'));
   assert.equal(days30.to, at('2026-09-07T23:59:59.999'));
+});
+
+// This is a unit test.
+test('each span stamp names the days it covers, from the same span maths', () => {
+  const hint = (r) => spanHint(range(r), NOW);
+  assert.equal(hint({ preset: '' }), '');
+  assert.equal(hint({ preset: 'through-today' }), '→ 7 Sep');
+  assert.equal(hint({ preset: 'week' }), '7–13 Sep');
+  assert.equal(hint({ preset: 'days30' }), '9 Aug – 7 Sep');
+  assert.equal(hint({ preset: 'year' }), '2026');
+  // Between: nothing until a day is chosen, then the span or its open end.
+  assert.equal(hint({ preset: 'custom' }), '');
+  assert.equal(hint({ preset: 'custom', from: '2026-03-03', to: '2026-03-03' }), '3 Mar');
+  assert.equal(hint({ preset: 'custom', from: '2026-03-03' }), '3 Mar →');
+  assert.equal(hint({ preset: 'custom', from: '2025-12-30', to: '2026-01-02' }), '30 Dec 2025 – 2 Jan 2026');
 });
 
 // This is a unit test.

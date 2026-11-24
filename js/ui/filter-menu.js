@@ -1,216 +1,246 @@
-import { catById } from '../core/categories.js';
-import { PRIO_TITLE } from '../core/constants.js';
-import { LENSES, lensFilters, lensOf } from '../core/lenses.js';
-import { filters } from '../core/state.js';
-import { rangeText, rangeVal, spanOf } from '../core/timespan.js';
+import { COMPASS_KEYS, askingAboutFinished, matchesFilters } from '../core/cards.js';
+import { catColor, catById, categories } from '../core/categories.js';
+import { COLUMNS, CONTROL_LABEL, TYPES, TYPE_META } from '../core/constants.js';
+import { isHabit } from '../core/habits.js';
+import { LENSES, lensFilters, lensOf, MULTI_KEYS } from '../core/lenses.js';
+import { filters, state, view } from '../core/state.js';
+import { RANGE_FIELDS, RANGE_PRESETS, rangeText, rangeVal, spanHint, spanOf } from '../core/timespan.js';
 import { $ } from './dom.js';
 import { render } from './render.js';
 
-// One button for every way of narrowing the board that is not a life area, and
-// one chip for each way that is in force.
+// The filter window behind `+ Filter`, and one chip for each filter in force.
 //
-// The header used to stand seven dropdowns, two date boxes, a read-back and a
-// bar of every tag on the board — before a single card was drawn. Five of the
-// dropdowns were switched off, and a control at rest that says "All types" is a
-// control whose whole visible state is a synonym for its own absence. The row
-// says nothing now until something is narrowing the board, and then it says
-// exactly that, in words, with an × on each. Behind the button is a list of the
-// facets the board offers, and one page per facet.
+// The window is the card dialog's property ledger turned into a question: a
+// row per field, and every answer a stamp pressed on or off, so a row holds
+// all, some or one of its answers. An empty Set on `filters` is "any". The
+// window changes the board as you press (there is no Apply), and its rows are
+// repainted in place on every render, so a stamp keeps its focus.
 //
-// **Nothing moved and nothing was renamed.** `#type-filter`, `#prio-filter`,
-// `#tag-filter`, `#column-filter`, `#nesting-filter` and the four range
-// controls are the same elements with the same ids, wired once at boot by
-// js/ui/toolbar.js; the panel is *where they are*, not *what they are*. So this
-// module owns three things only: whether the panel is open, which facet's page
-// is showing, and what the chips say. Nothing here writes a filter except a
-// facet's page — which writes it by setting the control's own value and firing
-// its own `change` — and a chip's own ×, which is the one thing the controls
-// themselves cannot offer: a control put back to its default is a different
-// gesture from a filter being lifted.
+// The tag, time and scope rows keep their own controls and ids, wired once at
+// boot by js/ui/toolbar.js and js/ui/board.js. This module must not import
+// toolbar.js (js/core/history.js's graph reaches this file, and toolbar.js
+// builds `<option>`s at evaluation): it writes those controls by setting a
+// value and dispatching `change`.
 
 const btn = $('#filter-btn');
 const panel = $('#filter-panel');
-const root = $('#filter-root');
-const page = $('#filter-page');
-const parked = $('#filter-rows');
 
 // --------------------------------------------------------------------------
-// The facets, and the two faces of the panel
-//
-// The panel was a flat stack of six labelled dropdowns — the header this button
-// was collapsed to end, one level in. It is a list of the facets the board
-// offers now, and pressing one opens that facet's own page.
-//
-// `pick` names the `<select>` a single-answer facet is chosen from: its page
-// lists that select's own `<option>`s as buttons and writes the choice back
-// with `value = …` plus a `change` event. So the option list stays the ONE
-// definition of a facet's choices *and* of its wording, every listener
-// js/ui/toolbar.js attached at boot fires unchanged, and the chips keep reading
-// their text off the option they came from. A second hand-kept table of the
-// same names is exactly the failure `EDITABLE_FIELDS` produced twice in 2026-09.
-//
-// The two facets with no `pick` bring controls of their own — a find box over a
-// chip list, and a field chooser with a span — so their page borrows the whole
-// row rather than re-describing it.
-const FACETS = [
-  { key: 'type', label: 'Type', row: '#filter-row-type', pick: '#type-filter' },
-  { key: 'prio', label: 'Priority', row: '#filter-row-prio', pick: '#prio-filter' },
-  {
-    key: 'tags',
-    label: 'Tags',
-    row: '#filter-row-tags',
-    // Stated in words, because the list IS the operator: the board asks for
-    // cards carrying *all* of them, and an AND/OR control would be a second way
-    // to say what ticking a second tag already says.
-    note: 'A card has to carry every tag chosen here, not just one of them.',
-  },
-  { key: 'column', label: 'Where it is filed', row: '#filter-row-column', pick: '#column-filter' },
-  { key: 'range', label: 'When', row: '#filter-row-range' },
-  { key: 'nesting', label: 'Child cards', row: '#filter-row-nesting', pick: '#nesting-filter' },
-];
+// What each row offers, in the words the card dialog already uses.
 
-// Which facet's page is open, or '' for the list. Panel state, not filter
-// state: nothing here narrows the board.
-let openFacet = '';
+const COMPASS_OPTIONS = {
+  importance: [['high', 'important'], ['low', 'not important'], ['', 'not set']],
+  urgency: [['high', 'urgent'], ['low', 'not urgent'], ['', 'not set']],
+  effort: [['low', 'light'], ['medium', 'medium'], ['high', 'heavy']],
+  control: Object.entries(CONTROL_LABEL),
+};
+const COMPASS_NAMES = { importance: 'Importance', urgency: 'Urgency', effort: 'Effort', control: 'Control' };
 
-/** The facets the panel may offer right now.
- *
- *  A facet whose row the board has hidden — the three Show switches, and the
- *  column filter on the Board — is not listed, because a label naming a control
- *  that is not there is the thing this panel exists to stop. The row's OWN
- *  computed `display` is what answers it, so the rule stays in styles.css where
- *  it was written, keyed by the row's id: a parked row is inside a hidden box
- *  and still reports the display its own rule gives it. */
-const liveFacets = () => FACETS.filter((f) => {
-  const row = $(f.row);
-  return row && getComputedStyle(row).display !== 'none';
-});
+const options = {
+  column: () => COLUMNS.map((c) => [c.id, c.title]),
+  type: () => TYPES.map((t) => [t, `${TYPE_META[t].glyph} ${TYPE_META[t].label}`]),
+  category: () => categories.map((c) => [c.id, c.label]),
+  // Keyed off the table above, not COMPASS_KEYS: cards.js may not have
+  // finished evaluating when this module does (the graph has cycles).
+  ...Object.fromEntries(Object.keys(COMPASS_OPTIONS).map((k) => [k, () => COMPASS_OPTIONS[k]])),
+};
 
-/** What a facet is set to, in the words its own control uses. */
-function facetValue(f) {
-  if (f.pick) {
-    const sel = $(f.pick);
-    return sel?.value ? sel.selectedOptions[0].textContent.trim() : '';
+const optionLabel = (facet, value) => (options[facet]().find(([v]) => v === value) || [value, value])[1];
+
+// The body class each Settings switch sets to take a column off the Board.
+const HIDDEN_BY = { 'inbox': 'hide-inbox-col', 'on-hold': 'hide-hold-col', 'answered': 'hide-done-col' };
+
+/** The columns an empty Where row stands for, on this view: every column the
+ *  Board paints, or the open ones (and Done while a finished span is asked)
+ *  everywhere else. What the row shows pressed before anything is chosen. */
+function defaultColumns() {
+  if (view === 'board') {
+    const body = document.body.classList;
+    return COLUMNS.map((c) => c.id).filter((id) => !body.contains(HIDDEN_BY[id]));
   }
-  if (f.key === 'tags') return [...filters.tags].map((t) => `#${t}`).join(' ');
-  return spanOf(filters.range) !== null ? rangeText(filters.range) : '';
+  const open = ['inbox', 'on-hold', 'in-progress'];
+  return askingAboutFinished() ? [...open, 'answered'] : open;
 }
 
-function renderRoot() {
-  root.replaceChildren();
-  for (const f of liveFacets()) {
-    const row = document.createElement('button');
-    row.type = 'button';
-    row.className = 'filter-facet';
-    row.dataset.facet = f.key;
-    const value = document.createElement('span');
-    value.className = 'filter-facet-value';
-    value.textContent = facetValue(f);
-    row.append(f.label, value);
-    row.addEventListener('click', () => setFacet(f.key));
-    root.append(row);
-  }
+const sameSet = (a, b) => a.size === b.size && [...a].every((v) => b.has(v));
+
+/** Press one Where stamp. The row starts from what it shows, so the first
+ *  press un-ticks one column rather than narrowing to it; ticking back to the
+ *  default empties the Set again, and the last column cannot be un-ticked. */
+function toggleColumn(id) {
+  const next = new Set(filters.column.size ? filters.column : defaultColumns());
+  if (next.has(id)) next.delete(id); else next.add(id);
+  if (!next.size) return;
+  filters.column.clear();
+  if (!sameSet(next, new Set(defaultColumns()))) for (const v of next) filters.column.add(v);
+  render();
 }
 
-function renderPage(f) {
-  page.replaceChildren();
-  const back = document.createElement('button');
-  back.type = 'button';
-  back.className = 'filter-back';
-  back.textContent = `‹ ${f.label}`;
-  back.setAttribute('aria-label', 'Back to all the ways of narrowing the board');
-  back.addEventListener('click', () => setFacet(''));
-  page.append(back);
+function toggle(facet, value) {
+  const set = filters[facet];
+  if (set.has(value)) set.delete(value); else set.add(value);
+  render();
+}
 
-  if (f.pick) {
-    const sel = $(f.pick);
-    const list = document.createElement('div');
-    list.className = 'filter-options';
-    list.setAttribute('role', 'radiogroup');
-    list.setAttribute('aria-label', f.label);
-    for (const opt of sel.options) {
-      const choice = document.createElement('button');
-      choice.type = 'button';
-      choice.className = 'filter-option';
-      choice.dataset.value = opt.value;
-      choice.setAttribute('role', 'radio');
-      choice.setAttribute('aria-checked', String(opt.value === sel.value));
-      choice.textContent = opt.textContent.trim();
-      choice.addEventListener('click', () => {
-        sel.value = opt.value;
-        sel.dispatchEvent(new Event('change'));
-        // One answer, so the question closes with it.
-        setFacet('');
-      });
-      list.append(choice);
+// --------------------------------------------------------------------------
+// Painting the rows
+
+/** Fill a row's stamps, rebuilding only when the answers themselves changed
+ *  (a category added, say) and otherwise updating `aria-pressed` in place.
+ *  `hint`, when given, writes a small second line under a stamp's name. */
+function paintStamps(box, list, isOn, onPress, cls, hint = null) {
+  const keys = list.map(([v]) => v).join('\u0000');
+  if (box.dataset.keys !== keys) {
+    box.dataset.keys = keys;
+    box.replaceChildren(...list.map(([value, label]) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = cls;
+      b.dataset.value = value;
+      b.textContent = label;
+      b.addEventListener('click', () => onPress(value));
+      return b;
+    }));
+  }
+  for (const b of box.children) {
+    b.setAttribute('aria-pressed', String(isOn(b.dataset.value)));
+    if (hint) {
+      let small = b.querySelector('.filter-hint');
+      if (!small) { small = document.createElement('small'); small.className = 'filter-hint'; b.append(small); }
+      small.textContent = hint(b.dataset.value);
     }
-    page.append(list);
-    return;
-  }
-
-  page.append($(f.row));
-  if (f.note) {
-    const said = document.createElement('p');
-    said.className = 'filter-note';
-    said.textContent = f.note;
-    page.append(said);
+    if (cls === 'filter-pill') b.style.setProperty('--cat', catColor(b.dataset.value));
   }
 }
 
-/** Show the list, or one facet's page. Every row is parked first, so a row can
- *  never be in two places or left behind in a page nobody is reading. */
-function setFacet(key) {
-  openFacet = FACETS.some((f) => f.key === key) ? key : '';
-  for (const f of FACETS) {
-    const row = $(f.row);
-    if (row && row.parentElement !== parked) parked.append(row);
+/** The small "any" link under a row's name, shown only while the row narrows. */
+function paintRowClear(rowId, text, active, onClear) {
+  const label = $(`#${rowId} .filter-label`);
+  if (!label) return;
+  let link = label.querySelector('.filter-row-clear');
+  if (!link) {
+    link = document.createElement('button');
+    link.type = 'button';
+    link.className = 'filter-row-clear';
+    link.addEventListener('click', (e) => { e.preventDefault(); onClear(); });
+    label.append(link);
   }
-  const facet = FACETS.find((f) => f.key === openFacet);
-  root.hidden = Boolean(facet);
-  page.hidden = !facet;
-  // Which page is showing, on the page itself: a reader never sees it, and it
-  // is what lets a check — or anything else outside this module — ask where the
-  // panel is without reading a heading's words.
-  if (facet) page.dataset.facet = facet.key;
-  else delete page.dataset.facet;
-  if (facet) renderPage(facet);
-  else renderRoot();
+  link.textContent = text;
+  link.hidden = !active;
+}
+
+const boardCards = () => state.cards.filter((c) => !isHabit(c));
+
+function renderPanel() {
+  const shownCols = filters.column.size ? filters.column : new Set(defaultColumns());
+  paintStamps($('#filter-row-column .filter-opts'), options.column(),
+    (v) => shownCols.has(v), toggleColumn, 'filter-stamp');
+  paintRowClear('filter-row-column', 'reset', filters.column.size > 0, () => clearFilter('column'));
+
+  paintStamps($('#filter-row-type .filter-opts'), options.type(),
+    (v) => filters.type.has(v), (v) => toggle('type', v), 'filter-stamp');
+  paintRowClear('filter-row-type', 'any type', filters.type.size > 0, () => clearFilter('type'));
+
+  paintStamps($('#filter-row-category .filter-opts'), options.category(),
+    (v) => filters.category.has(v), (v) => toggle('category', v), 'filter-pill');
+  paintRowClear('filter-row-category', 'any area', filters.category.size > 0, () => clearFilter('category'));
+
+  for (const k of COMPASS_KEYS) {
+    paintStamps($(`#filter-row-compass .filter-opts[data-facet="${k}"]`), options[k](),
+      (v) => filters[k].has(v), (v) => toggle(k, v), 'filter-stamp filter-stamp-soft');
+  }
+  paintRowClear('filter-row-compass', 'any', COMPASS_KEYS.some((k) => filters[k].size), () => {
+    for (const k of COMPASS_KEYS) filters[k].clear();
+    render();
+  });
+
+  paintRowClear('filter-row-tags', 'no tags', filters.tags.size > 0, () => {
+    filters.tags.clear();
+    render();
+  });
+  for (const b of panel.querySelectorAll('#tag-mode [data-mode]')) {
+    b.setAttribute('aria-checked', String(b.dataset.mode === filters.tagMode));
+  }
+  // The chosen tags read as the sentence they make: "#a and #b".
+  const said = $('#tag-readback');
+  said.hidden = !filters.tags.size;
+  said.textContent = [...filters.tags].map((t) => `#${t}`)
+    .join(filters.tagMode === 'any' ? ' or ' : ' and ');
+
+  // When: the date, then the span, each pressed through its own select so
+  // toolbar.js stays the one writer of the stored span.
+  const press = (sel, v) => {
+    $(sel).value = v;
+    $(sel).dispatchEvent(new Event('change'));
+  };
+  paintStamps($('#filter-row-range .filter-opts[data-facet="range-field"]'),
+    RANGE_FIELDS.map((f) => [f.id, f.label]),
+    (v) => v === filters.range.field, (v) => press('#range-field', v), 'filter-stamp filter-stamp-soft');
+  paintStamps($('#filter-row-range .filter-opts[data-facet="range-preset"]'),
+    RANGE_PRESETS.map((p) => [p.id, p.label]),
+    (v) => v === filters.range.preset, (v) => press('#range-preset', v), 'filter-stamp filter-stamp-soft',
+    (v) => spanHint({ ...filters.range, preset: v }) || (v === 'custom' ? 'pick days' : 'no limit'));
+  paintRowClear('filter-row-range', 'any time', spanOf(filters.range) !== null, () => clearFilter('range'));
+
+  const nesting = $('#nesting-filter');
+  paintStamps($('#filter-row-nesting .filter-opts'), [...nesting.options].map((o) => [o.value, o.textContent.trim()]),
+    (v) => v === filters.nesting, (v) => {
+      nesting.value = v;
+      nesting.dispatchEvent(new Event('change'));
+    }, 'filter-stamp filter-stamp-soft');
+
+  const all = boardCards();
+  const n = all.filter(matchesFilters).length;
+  $('#filter-count').textContent = `${n} of ${all.length} cards`;
+  $('#filter-done').textContent = n ? `Show ${n} card${n === 1 ? '' : 's'}` : 'No cards match';
+  $('#filter-clear-all').disabled = !activeFilters().length && !filters.category.size;
+
+}
+
+for (const b of panel.querySelectorAll('#tag-mode [data-mode]')) {
+  b.addEventListener('click', () => {
+    filters.tagMode = b.dataset.mode;
+    render();
+  });
 }
 
 export function setFilterMenuOpen(open) {
   panel.hidden = !open;
   btn.setAttribute('aria-expanded', String(open));
-  // Always back to the list: a panel reopened on the page somebody left is a
-  // menu that remembers a question rather than asking one. Closing parks the
-  // rows, which is also what keeps them out of the panel's own scroll height.
-  setFacet('');
+  // The Ask pill floats over the window's foot otherwise.
+  document.body.classList.toggle('filter-open', open);
+  if (!open) return;
+  renderPanel();
+  // Fixed, placed from the button's rectangle and kept inside the window, so
+  // a button near the right edge does not push the panel off screen. The
+  // phone's stylesheet overrides all three with a sheet against the bottom.
+  const r = btn.getBoundingClientRect();
+  const top = r.bottom + 6;
+  panel.style.setProperty('--fp-top', `${top}px`);
+  panel.style.setProperty('--fp-left', `${Math.max(16, Math.min(r.left, innerWidth - panel.offsetWidth - 16))}px`);
+  panel.style.setProperty('--fp-max-h', `${innerHeight - top - 16}px`);
 }
 
 btn.addEventListener('click', () => setFilterMenuOpen(panel.hidden));
+$('#filter-done').addEventListener('click', () => {
+  setFilterMenuOpen(false);
+  btn.focus();
+});
+$('#filter-clear-all').addEventListener('click', () => {
+  filters.category.clear();
+  filters.tagMode = 'all';
+  applyLens('open');
+});
 
-// A click inside is use — changing three filters must not mean opening the
-// panel three times, which is the rule the Menu's own switches already follow.
-//
-// **Capture phase, and that is load-bearing.** On the bubble phase this handler
-// runs *after* the clicked element's own, and a tag chip's own handler calls
-// render() — which repaints `#tag-bar` wholesale, so by the time the question
-// "did this click come from inside the panel?" was asked, the element it came
-// from was no longer in the document and `closest()` answered null. The panel
-// then dismissed itself on a press of its own contents, and the second tag was
-// unreachable. Capturing asks the question while the target is still attached.
+// A click inside is use, so changing three filters does not mean opening the
+// window three times. **Capture phase, and that is load-bearing**: a tag
+// chip's own handler repaints the tag bar, so on the bubble phase the clicked
+// element is already detached and `closest()` would call it outside.
 document.addEventListener('click', (e) => {
   if (!panel.hidden && !e.target.closest('.filter-menu')) setFilterMenuOpen(false);
 }, true);
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape' || panel.hidden) return;
-  // One Escape closes one thing, innermost first — the rule the chat row's
-  // actions and the drawer above them already follow. A facet's page is a layer
-  // inside the panel, so it goes before the panel does.
-  if (openFacet) {
-    setFacet('');
-    root.querySelector(`[data-facet="${openFacet}"]`)?.focus();
-    return;
-  }
   setFilterMenuOpen(false);
   btn.focus();
 });
@@ -218,44 +248,23 @@ document.addEventListener('keydown', (e) => {
 // --------------------------------------------------------------------------
 // The lens row
 //
-// A lens writes the same filters the panel writes — nothing here narrows the
-// board by a rule of its own — so the whole of it is: set six values, put the
-// six controls where those values say, repaint. What is *not* here is a stored
-// pressed state: `lensOf` reads it back off the filters every time, which is
-// what makes a control moved by hand un-press the row.
+// A lens writes the same filters the window writes. Which one is pressed is
+// read back off the filters by `lensOf` every time, never stored, so a stamp
+// pressed by hand un-presses the row.
 
 const lensRow = $('#lens-row');
 
-/** Press a lens: the six values, then the six controls that set them.
- *
- *  The controls are written too, and that is not bookkeeping — the chips are
- *  read off `filters` and the controls are read off nothing at all, so a select
- *  left holding its old value would put the old chip back on the next repaint.
- *
- *  The span and the scope are handed to their own handlers by dispatching
- *  `change` rather than assigned, exactly as `clearFilter` below does: both are
- *  remembered between visits, and toolbar.js owns writing them down. That is
- *  also why this module does not *import* toolbar.js — js/core/history.js's
- *  graph reaches this file, so a static import would pull a module that builds
- *  `<option>`s at evaluation into a plain-node test with no DOM
- *  (tests/history.test.js, which is what caught it). The dispatch is also what
- *  repaints, so nothing here calls render() itself. */
+/** Press a lens: every field it names, then the time and scope controls,
+ *  which are written through their own handlers (both are remembered between
+ *  visits, and toolbar.js owns writing them down). The range dispatch is also
+ *  what repaints, so nothing here calls render() itself. */
 export function applyLens(id) {
   const next = lensFilters(id);
   if (!next) return;
-  filters.type = next.type;
-  filters.prio = next.prio;
-  filters.column = next.column;
-  filters.nesting = next.nesting;
-  filters.tags.clear();
-  for (const tag of next.tags) filters.tags.add(tag);
-  $('#type-filter').value = next.type;
-  $('#prio-filter').value = next.prio;
-  $('#tag-filter').value = '';
-  $('#column-filter').value = next.column;
-  // The scope filter is remembered between visits, so it is written through
-  // its own handler rather than by hand — the same reason `clearFilter` below
-  // dispatches instead of assigning.
+  for (const k of MULTI_KEYS) {
+    filters[k].clear();
+    for (const v of next[k]) filters[k].add(v);
+  }
   const nesting = $('#nesting-filter');
   if (nesting.value !== next.nesting) {
     nesting.value = next.nesting;
@@ -266,104 +275,71 @@ export function applyLens(id) {
   $('#range-from').value = next.range.from;
   $('#range-to').value = next.range.to;
   // Last, and the one that lands: toolbar.js's handler re-reads the whole
-  // range off `filters`, so this single dispatch carries the field and the two
-  // dates set above with it — and brings the remembered span, the read-back
-  // sentence and the repaint that the lens itself must not own.
+  // range off `filters`, and brings the remembered span, the read-back and the
+  // repaint with it.
   $('#range-preset').value = next.range.preset;
   $('#range-preset').dispatchEvent(new Event('change'));
 }
 
-if (lensRow) {
-  for (const lens of LENSES) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'lens-btn';
-    btn.dataset.lens = lens.id;
-    btn.textContent = lens.label;
-    btn.title = lens.hint;
-    btn.setAttribute('aria-pressed', 'false');
-    btn.addEventListener('click', () => applyLens(lens.id));
-    lensRow.append(btn);
-  }
+// Once, on the header row: the window does not repeat them.
+for (const lens of LENSES) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'lens-btn';
+  b.dataset.lens = lens.id;
+  b.textContent = lens.label;
+  b.title = lens.hint;
+  b.setAttribute('aria-pressed', 'false');
+  b.addEventListener('click', () => applyLens(lens.id));
+  lensRow?.append(b);
 }
 
-/** Which lens the board is showing, repainted with it. Derived, so a filter
- *  moved by hand takes the press with it. */
+/** Which lens the board is showing, repainted with it. */
 export function renderLensRow() {
   if (!lensRow) return;
   const pressed = lensOf(filters);
-  for (const btn of lensRow.querySelectorAll('.lens-btn')) {
-    btn.setAttribute('aria-pressed', String(btn.dataset.lens === pressed));
+  for (const b of lensRow.querySelectorAll('.lens-btn')) {
+    b.setAttribute('aria-pressed', String(b.dataset.lens === pressed));
   }
 }
 
-/** What is in force, in words, and how to lift each one.
- *
- *  The wording is read off the control that set it wherever there is one — the
- *  selected `<option>`'s own text — so a chip cannot drift from the menu row it
- *  came from, and an option renamed in index.html renames its chip with it.
- *  The two that have no option to read are the tags (a Set, which no single
- *  option can name) and the time span (four controls saying one thing, which is
- *  what `rangeText` exists for). */
+// --------------------------------------------------------------------------
+// The chips
+
+/** What is in force, in words, and how to lift each one. A pressed lens is one
+ *  chip saying the lens, not one per value it wrote. The life area has no chip:
+ *  its tabs already say it. */
 function activeFilters() {
-  const out = [];
-  // A pressed lens is one chip saying the lens, not one chip per value it
-  // wrote: five chips spelling out a single press is the wall of controls the
-  // `+ Filter` button was collapsed to end. 'Everything open' narrows nothing,
-  // so it reaches here with no filters in force and says nothing at all.
   const lens = lensOf(filters);
   if (lens) {
     const found = LENSES.find((l) => l.id === lens);
     return found.id === 'open' ? [] : [{ key: 'lens', text: found.label, title: found.hint }];
   }
-  const optionText = (sel) => {
-    const el = $(sel);
-    return el?.selectedOptions?.[0]?.textContent?.trim() || '';
-  };
-
-  if (filters.type) out.push({ key: 'type', text: optionText('#type-filter') });
-  if (filters.prio) {
-    out.push({
-      key: 'prio',
-      text: optionText('#prio-filter'),
-      title: PRIO_TITLE[Number(filters.prio)] || '',
-    });
+  const out = [];
+  const list = (facet) => [...filters[facet]].map((v) => optionLabel(facet, v)).join(', ');
+  if (filters.column.size) out.push({ key: 'column', text: `Where: ${list('column')}` });
+  if (filters.type.size) out.push({ key: 'type', text: `Type: ${list('type')}` });
+  for (const k of COMPASS_KEYS) {
+    if (filters[k].size) out.push({ key: k, text: `${COMPASS_NAMES[k]}: ${list(k)}` });
   }
-  // One chip per tag, because each is separately liftable: the board asks for
-  // cards carrying *all* of them, so dropping one is a real and different
-  // question rather than a step back towards no filter at all.
+  // One chip per tag, because each is separately liftable.
   for (const tag of filters.tags) out.push({ key: `tag:${tag}`, text: `#${tag}` });
   if (spanOf(filters.range) !== null) out.push({ key: 'range', text: rangeText(filters.range) });
-  if (filters.column) out.push({ key: 'column', text: optionText('#column-filter') });
-  if (filters.nesting) out.push({ key: 'nesting', text: optionText('#nesting-filter') });
+  if (filters.nesting) {
+    out.push({ key: 'nesting', text: $('#nesting-filter').selectedOptions[0].textContent.trim() });
+  }
   return out;
 }
 
-/** Lift one filter, and put the control that set it back to its own default —
- *  or the chip would come back on the next repaint, since the chips are read
- *  off `filters` and the controls are read off nothing at all. */
+/** Lift one filter, and put the control that set it back to its default. */
 function clearFilter(key) {
-  // Lifting a lens is pressing the one that narrows nothing — which puts every
-  // control back where that lens says, through the single writer above, rather
-  // than clearing six filters one at a time and hoping the list stays in step.
   if (key === 'lens') { applyLens('open'); return; }
   if (key.startsWith('tag:')) {
     filters.tags.delete(key.slice(4));
-    const dropdown = $('#tag-filter');
-    if (dropdown) dropdown.value = filters.tags.size === 1 ? [...filters.tags][0] : '';
-  } else if (key === 'type') {
-    filters.type = '';
-    $('#type-filter').value = '';
-  } else if (key === 'prio') {
-    filters.prio = '';
-    $('#prio-filter').value = '';
-  } else if (key === 'column') {
-    filters.column = '';
-    $('#column-filter').value = '';
+  } else if (filters[key] instanceof Set) {
+    filters[key].clear();
   } else if (key === 'nesting') {
-    // The one filter with a memory: it is remembered between visits, so lifting
-    // it has to forget it too, exactly as the dropdown's own handler does.
-    filters.nesting = '';
+    // Remembered between visits, so lifted through its own handler.
     $('#nesting-filter').value = '';
     $('#nesting-filter').dispatchEvent(new Event('change'));
     return;
@@ -393,22 +369,20 @@ function chip({ key, text, title }) {
   return el;
 }
 
-/** The chips, repainted with the board. A `Clear` only from two up: with one
- *  chip on the row it is a second control for what the × beside it already
- *  does, in a row whose whole point is that it is empty until it is not. */
+/** The chips, repainted with the board, and the window with them.
+ *  A `Clear` only from two chips up. */
 export function renderFilterChips() {
   const slot = $('#filter-chips');
   if (!slot) return;
-  // A life area that has been deleted out from under the filter, the same
-  // guard renderCatRail() applies — the tabs paint the category filter and
-  // this row must not be the one place a dead id survives.
-  if (filters.category && !catById(filters.category)) filters.category = '';
+  // A life area deleted out from under the filter, the same guard
+  // renderCatRail() applies.
+  for (const id of [...filters.category]) if (!catById(id)) filters.category.delete(id);
   // The phone's Filters toggle names the life area, because the tabs that
-  // would otherwise say so are what it hides. Every other filter is a chip,
-  // and the chips stay on screen when the toggle is shut.
-  const toggle = $('#board-tools-toggle');
-  if (toggle) {
-    toggle.textContent = filters.category ? `Filters · ${catById(filters.category).label}` : 'Filters';
+  // would otherwise say so are what it hides.
+  const toggleBtn = $('#board-tools-toggle');
+  if (toggleBtn) {
+    const areas = [...filters.category].map((id) => catById(id).label).join(', ');
+    toggleBtn.textContent = areas ? `Filters · ${areas}` : 'Filters';
   }
   slot.replaceChildren();
 
@@ -427,4 +401,7 @@ export function renderFilterChips() {
     });
     slot.append(clear);
   }
+  btn.textContent = active.length ? `+ Filter · ${active.length}` : '+ Filter';
+  // Shut or open, so the window never holds a stale press for the next look.
+  renderPanel();
 }

@@ -174,3 +174,21 @@ export function rangeText(range) {
     days30: 'in the last 30 days', 'through-today': 'up to today' }[r.preset];
   return `${who} ${when}`;
 }
+
+/** The days a span stamp covers, short, for the hint under its name: "17–23
+ *  Nov", "→ 23 Nov", "2026". `''` for "Any time", and for `Between…` until a
+ *  day is chosen. The same `spanOf`, so a hint cannot disagree with the filter. */
+export function spanHint(range, now = new Date()) {
+  const r = rangeVal(range);
+  if (r.preset === 'year') return String(now.getFullYear());
+  const span = spanOf(r, now);
+  if (!span) return '';
+  const short = (t) => { const d = new Date(t); return { d: d.getDate(), m: MONTHS_SHORT[d.getMonth()], y: d.getFullYear() }; };
+  if (span.from === -Infinity) { const b = short(span.to); return `→ ${b.d} ${b.m}`; }
+  if (span.to === Infinity) { const a = short(span.from); return `${a.d} ${a.m} →`; }
+  const a = short(span.from);
+  const b = short(span.to);
+  if (a.y !== b.y) return `${a.d} ${a.m} ${a.y} – ${b.d} ${b.m} ${b.y}`;
+  if (a.m === b.m) return a.d === b.d ? `${a.d} ${a.m}` : `${a.d}–${b.d} ${a.m}`;
+  return `${a.d} ${a.m} – ${b.d} ${b.m}`;
+}
