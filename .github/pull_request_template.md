@@ -1,13 +1,13 @@
-<!--
-  Lodestar is a personal project under a proprietary licence, and it does not
-  take pull requests — not as a policy about your patch, but because the licence
-  reserves the right to modify and redistribute, so there is nothing I could do
-  with one.
+## What and why
 
-  If you found a bug or a claim in the documentation that is wrong, please open
-  an issue instead: those are genuinely welcome and they are how nearly every
-  outside correction has reached this project.
+<!-- What does this change, and what problem does it solve? Link the issue: Fixes #123 -->
 
-  If you want to use any of this in something of your own, email
-  s.moha.m.kashani@gmail.com and ask. The answer is usually yes.
--->
+## How it was tested
+
+<!-- Which suites you ran, and any tests you added. -->
+
+- [ ] `node --test tests/*.test.js`
+- [ ] `uv run --project brain pytest brain/tests` (if the assistant changed)
+- [ ] `uv run --with playwright python tests/e2e_test.py` (if the UI changed)
+- [ ] Docs updated where behaviour changed
+- [ ] No real board or chat content in the diff, screenshots or description
